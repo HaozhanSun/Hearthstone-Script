@@ -4,6 +4,20 @@
 
 <img src="static/favicon.png" alt="Image description" width="100" height="100">
 
+## 本分支当前开发范围 / Current fork development scope
+
+This checkout contains more than the packaged client. Keep the following active work together when preparing a source-control snapshot:
+
+- localized client/UI development and compatibility testing, including testing against the exact Hearthstone client language in use;
+- shared per-run random timing, including mode entry, mulligan, turn-start, action, attack, end-turn, and retry delays;
+- the `打一投一` control layer, which alternates the selected normal strategy with `秒投策略` without changing the normal strategy selection;
+- Windows administrator launch, UAC handling, deployment shortcuts, and crash/log triage;
+- the application, shared base utilities, card/strategy SDKs, built-in strategy plugins, and the `user-strategy-plugins` development tree.
+
+The source tree is a Maven superproject with Git submodules. A complete snapshot therefore needs both the superproject documentation and the corresponding commits/pointers for changed submodules; copying only the final EXE or JAR is not a complete source backup.
+
+The localization work is active development rather than a release guarantee. When testing it, record the game/client language, script UI language, mode, strategy, package revision, and the relevant log files so a language-specific failure can be reproduced.
+
 
 
 > 开源不等于义务支持。
@@ -133,6 +147,7 @@
 ## 📚 相关文档
 
 📖 **[常见问题](doc/常见问题.md)**  
+📖 **[运行与交互排障手册](doc/运行与交互排障.md)**<br>
 📖 **[插件开发文档](doc/插件开发文档.md)**  
 📖 **[项目文档](https://hearthstone-script-documentation.vercel.app/)**  
 📖 **[更新记录](doc/更新记录.md)**  
