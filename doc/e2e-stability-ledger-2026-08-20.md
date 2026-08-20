@@ -64,6 +64,21 @@ after relaunch. The supervisor is configured with unlimited retries (`0`) and
 only stops when its explicit stop flag is created or the user terminates the
 supervisor itself.
 
+The relaunched process also exercised the mulligan path again at
+`06:48:57`–`06:49:02`:
+
+```text
+换牌选择：换掉=TOY_330t11(cost=7), VAC_929(cost=4), MAW_008(cost=4), BT_355(cost=3)；保留=
+MULLIGAN_ACTION ... cost=7 ... target=MY_HAND_CARD
+MULLIGAN_ACTION ... cost=4 ... target=MY_HAND_CARD
+MULLIGAN_ACTION ... cost=4 ... target=MY_HAND_CARD
+MULLIGAN_ACTION ... cost=3 ... target=MY_HAND_CARD
+MULLIGAN_DECISION_SUBMITTED replace=4 keep=0 rule=cost>2-replace,cost<=2-keep
+```
+
+This second run confirms that the behavior survived the automatic relaunch,
+not merely the first Java process.
+
 ## Interpretation
 
 This checkpoint proves the five-minute live-process requirement, the normal
