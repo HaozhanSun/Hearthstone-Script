@@ -1,6 +1,6 @@
 [submodule "hs-script-card-sdk"]
 	path = hs-script-card-sdk
-	url = https://github.com/xjw580/hs-script-card-sdk.git
+	url = https://github.com/HaozhanSun/hs-script-card-sdk.git
 	branch = master
 [submodule "hs-script-plugin-sdk"]
 	path = hs-script-plugin-sdk
@@ -8,19 +8,19 @@
 	branch = master
 [submodule "hs-script-strategy-sdk"]
 	path = hs-script-strategy-sdk
-	url = https://github.com/xjw580/hs-script-strategy-sdk.git
+	url = https://github.com/HaozhanSun/hs-script-strategy-sdk.git
 	branch = master
 [submodule "hs-script-base"]
 	path = hs-script-base
-	url = https://github.com/xjw580/hs-script-base.git
+	url = https://github.com/HaozhanSun/hs-script-base.git
 	branch = master
 [submodule "hs-script-app"]
 	path = hs-script-app
-	url = https://github.com/xjw580/hs-script-app.git
+	url = https://github.com/HaozhanSun/hs-script-app.git
 	branch = master
 [submodule "hs-script-base-strategy-plugin"]
 	path = hs-script-base-strategy-plugin
-	url = https://github.com/xjw580/hs-script-base-strategy-plugin.git
+	url = https://github.com/HaozhanSun/hs-script-base-strategy-plugin.git
 	branch = master
 [submodule "hs-script-base-card-plugin"]
 	path = hs-script-base-card-plugin
