@@ -1,0 +1,94 @@
+diff --git a/WeightHanderStrategy/src/main/kotlin/lin/domain/ComboDomain.kt b/WeightHanderStrategy/src/main/kotlin/lin/domain/ComboDomain.kt
+index 0303142..4f89d7f 100644
+--- a/WeightHanderStrategy/src/main/kotlin/lin/domain/ComboDomain.kt
++++ b/WeightHanderStrategy/src/main/kotlin/lin/domain/ComboDomain.kt
+@@ -238,7 +238,7 @@ class ComboDomain(war: War) {
+             card.useAfterStrategy?.executeAfterAction(card, useStrategyUtils)
+             if (useResult) {
+                 myLog.info { "打出等待动画" }
+-                Thread.sleep(AwaitAnimationTime)
++                Thread.sleep(awaitAnimationTime())
+                 card
+             } else null
+         }
+diff --git a/WeightHanderStrategy/src/main/kotlin/lin/domain/combo/UseStrategy.kt b/WeightHanderStrategy/src/main/kotlin/lin/domain/combo/UseStrategy.kt
+index a8690d3..a339111 100644
+--- a/WeightHanderStrategy/src/main/kotlin/lin/domain/combo/UseStrategy.kt
++++ b/WeightHanderStrategy/src/main/kotlin/lin/domain/combo/UseStrategy.kt
+@@ -1,7 +1,7 @@
+ package lin.domain.combo
+ 
+ import lin.bean.ComboCard
+-import lin.domain.context.AwaitAnimationTime
++import lin.domain.context.awaitAnimationTime
+ import lin.myLog
+ 
+ 
+@@ -18,7 +18,7 @@ interface UseBeforeStrategy : UseStrategy {
+ object UseAfterLClick : UseAfterStrategy {
+     override fun afterExtAction(comboCard: ComboCard, useStrategyUtils: UseStrategyUtils) {
+         myLog.info { "等待地标动画" }
+-        Thread.sleep(AwaitAnimationTime)
++        Thread.sleep(awaitAnimationTime())
+         comboCard.card.action.lClick()
+     }
+ }
+diff --git a/WeightHanderStrategy/src/main/kotlin/lin/domain/combo/UseStrategyUtils.kt b/WeightHanderStrategy/src/main/kotlin/lin/domain/combo/UseStrategyUtils.kt
+index 553b8c7..a57049f 100644
+--- a/WeightHanderStrategy/src/main/kotlin/lin/domain/combo/UseStrategyUtils.kt
++++ b/WeightHanderStrategy/src/main/kotlin/lin/domain/combo/UseStrategyUtils.kt
+@@ -1,6 +1,6 @@
+ package lin.domain.combo
+ 
+-import lin.domain.context.FourAnimationTime
++import lin.domain.context.fourAnimationTime
+ import lin.myLog
+ import java.util.concurrent.CountDownLatch
+ import java.util.concurrent.TimeUnit
+@@ -21,11 +21,11 @@ class UseStrategyUtils {
+             countDownLatch?.run {
+                 if (count != 0L) {
+                     myLog.info { "进入同步,等待发现" }
+-                    await(FourAnimationTime, TimeUnit.MILLISECONDS)
++                    await(fourAnimationTime(), TimeUnit.MILLISECONDS)
+                 }
+                 myLog.info { "阻塞等待发现操作" }
+                 //等待发现动画
+-                Thread.sleep(FourAnimationTime)
++                Thread.sleep(fourAnimationTime())
+             }
+         }
+         clean()
+@@ -42,4 +42,4 @@ class UseStrategyUtils {
+         countDownLatch = null
+     }
+ 
+-}
++}
+diff --git a/WeightHanderStrategy/src/main/kotlin/lin/domain/context/ComboDefValue.kt b/WeightHanderStrategy/src/main/kotlin/lin/domain/context/ComboDefValue.kt
+index 798f620..0348eda 100644
+--- a/WeightHanderStrategy/src/main/kotlin/lin/domain/context/ComboDefValue.kt
++++ b/WeightHanderStrategy/src/main/kotlin/lin/domain/context/ComboDefValue.kt
+@@ -1,5 +1,7 @@
+ package lin.domain.context
+ 
++import club.xiaojiawei.hsscriptbase.util.RandomUtil
++
+ //一费10点权重
+ const val CostWeight = 10.0
+ const val HalfCostWeight = CostWeight / 2
+@@ -11,9 +13,11 @@ const val UseSkillWeight = -11.0
+ 
+ 
+ //每个人都不同 等待动作的操作 例如等待发现的动作
+-const val AwaitAnimationTime: Long = 1000
+-const val TwoAnimationTime: Long = 1000 * 2
+-const val FourAnimationTime: Long = AwaitAnimationTime * 4
++fun awaitAnimationTime(): Long = RandomUtil.getActionInterval(1_000).toLong()
++
++fun twoAnimationTime(): Long = RandomUtil.getActionInterval(2_000).toLong()
++
++fun fourAnimationTime(): Long = RandomUtil.getActionInterval(4_000).toLong()
+ 
+ 
+ const val MaxStackNum: Int = 10
