@@ -12,6 +12,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeNode
+import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -246,6 +247,31 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `coin is the only first action when it immediately unlocks cannon`() {
+        val war = testWar().apply { me.resources = 2 }
+        val cannon = testCard(PirateDemonHunterMctsExperimentModel.SHIPS_CANNON).apply { cost = 3 }
+        val coin = testCard("COIN").apply {
+            // TestCardAction's generic spell implementation intentionally
+            // exposes no play action.  Keep the fixture action-generatable
+            // while retaining the production coin marker.
+            cardType = CardTypeEnum.MINION
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 0
+            isCoinCard = true
+        }
+        val ordinary = testCard("ORDINARY_PIRATE").apply { cost = 1 }
+        war.addCard(cannon, war.me.handArea)
+        war.addCard(coin, war.me.handArea)
+        war.addCard(ordinary, war.me.handArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.isNotEmpty())
+        assertTrue(node.actions.all { it.creator?.isCoinCard == true })
+        assertTrue(PirateDemonHunterMctsExperimentModel.isMandatoryAction(node.actions.single(), war))
+    }
+
+    @Test
     fun `ragewing is deferred while an ordinary playable card remains`() {
         val war = testWar()
         val ragewing = testCard(PirateDemonHunterMctsExperimentModel.RAGEWING).apply {
@@ -287,6 +313,26 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         assertTrue(node.actions.any { it.creator?.cardId == ordinary.cardId })
         assertTrue(node.actions.none { it.javaClass.simpleName == "TurnOverAction" })
+    }
+
+    @Test
+    fun `experimental mcts returns a legal root action when the budget expires before expansion`() {
+        val war = testWar()
+        val cannon = testCard(PirateDemonHunterMctsExperimentModel.SHIPS_CANNON).apply { cost = 2 }
+        val ordinary = testCard("ORDINARY_PIRATE").apply { cost = 1 }
+        war.addCard(cannon, war.me.handArea)
+        war.addCard(ordinary, war.me.handArea)
+
+        val path = MonteCarloTreeSearch().searchBestNode(
+            war,
+            testMctsArg(experimentalSearch = true).copy(
+                endMillisTime = System.currentTimeMillis() - 1,
+            ),
+        )
+
+        assertTrue(path.isNotEmpty())
+        assertTrue(path.first().applyAction !== club.xiaojiawei.hsscriptcardsdk.bean.TurnOverAction)
+        assertEquals(cannon.cardId, path.first().applyAction.creator?.cardId)
     }
 
     private fun testWar(): War {

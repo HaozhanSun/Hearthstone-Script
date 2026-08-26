@@ -26,6 +26,9 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
     private var lastExperimentalTurnHadUnconfirmedDispatch = false
 
     @Volatile
+    private var lastExperimentalTurnProducedAction = false
+
+    @Volatile
     private var activeDecisionModel: MctsDecisionModel? = null
 
     private var experimentalTurnNumber: Int? = null
@@ -33,6 +36,15 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
 
     fun hasUnconfirmedExperimentalDispatch(): Boolean =
         lastExperimentalTurnHadUnconfirmedDispatch
+
+    /**
+     * The app-side turn-end guard must not resurrect stale residual creators
+     * after a fresh MCTS pass returned only EndTurn/no action.  In that case
+     * the strategy has already reconciled the live state and the guard may
+     * safely finish the turn.
+     */
+    fun hasLastExperimentalTurnProducedAction(): Boolean =
+        lastExperimentalTurnProducedAction
 
     /**
      * Creators whose last live dispatch produced no observable confirmation
@@ -50,6 +62,9 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
      * printed cost as actionable when MCTS has no action to dispatch.
      */
     fun actionableCreatorIds(war: War): Set<String> {
+        if (experimentalTurnNumber == war.me.turn && !lastExperimentalTurnProducedAction) {
+            return emptySet()
+        }
         val me = war.me
         val model = activeDecisionModel
         val suppressed = suppressedExperimentalCreatorIds()
@@ -199,6 +214,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
      */
     private fun executeExperimentalTurn(war: War, template: MCTSArg) {
         lastExperimentalTurnHadUnconfirmedDispatch = false
+        lastExperimentalTurnProducedAction = false
         synchronized(this) {
             if (experimentalTurnNumber != war.me.turn) {
                 experimentalTurnNumber = war.me.turn
@@ -289,6 +305,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 break
             }
             actionCount++
+            lastExperimentalTurnProducedAction = true
 
             if (!awaitStateChange(war, before, turnDeadline)) {
                 lastExperimentalTurnHadUnconfirmedDispatch = true

@@ -91,14 +91,21 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         val heroCanAttack = war.me.playArea.hero?.canAttack() == true
 
         val cannonReady = !war.me.playArea.cards.any { isCard(it, SHIPS_CANNON) && it.isAlive() } &&
-            war.me.handArea.cards.any {
-                isCard(it, SHIPS_CANNON) &&
-                    !it.isUncertain &&
-                    it.cost <= war.me.usableResource &&
-                    (!war.me.playArea.isFull || it.cardType !== CardTypeEnum.MINION)
-            }
+            war.me.handArea.cards.any { isCannonPlayableNow(it, war) }
         if (cannonReady) {
             return action is PlayAction && action.creator?.let { isCard(it, SHIPS_CANNON) } == true
+        }
+
+        // If the cannon is one mana short, the coin is its mandatory
+        // predecessor.  Without this bridge the generic MCTS prior can spend
+        // the two available mana on a different card first, making the
+        // already-established cannon-first rule ineffective in the common
+        // 2-mana + Coin + 3-mana-cannon opening.
+        val cannonNeedsCoin = !war.me.playArea.cards.any { isCard(it, SHIPS_CANNON) && it.isAlive() } &&
+            war.me.handArea.cards.any { isCannonPlayableWithCoin(it, war) } &&
+            war.me.handArea.cards.any { it.isCoinCard && !it.isUncertain }
+        if (cannonNeedsCoin) {
+            return action is PlayAction && action.creator?.isCoinCard == true
         }
 
         // After the first location click, the live game marks the location
@@ -116,6 +123,19 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                     card.canPower()
             } == true
     }
+
+    private fun isCannonPlayableNow(card: Card, war: War): Boolean =
+        isCard(card, SHIPS_CANNON) &&
+            !card.isUncertain &&
+            card.cost <= war.me.usableResource &&
+            (!war.me.playArea.isFull || card.cardType !== CardTypeEnum.MINION)
+
+    private fun isCannonPlayableWithCoin(card: Card, war: War): Boolean =
+        isCard(card, SHIPS_CANNON) &&
+            !card.isUncertain &&
+            card.cost > war.me.usableResource &&
+            card.cost <= war.me.usableResource + 1 &&
+            (!war.me.playArea.isFull || card.cardType !== CardTypeEnum.MINION)
 
     override fun isDeferredAction(action: Action, war: War): Boolean {
         // Blindeye Judge is a last-resort draw card. Remove it from the

@@ -352,7 +352,32 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
             }
         }
 
-        val finalResult = bestResult ?: mutableListOf()
+        var finalResult = bestResult ?: mutableListOf()
+        // Action generation can consume the complete experimental action
+        // budget (especially while the card parser is still warming up).
+        // In that case the root has legal actions but no expanded children,
+        // and the old empty path made the live turn-end guard re-plan the
+        // same turn until its safety cap was exhausted.  Preserve the
+        // model's mandatory/deferred filtering and return one deterministic
+        // legal root action so the receding-horizon executor can make real
+        // progress even when there was no time for a rollout.
+        if (arg.experimentalSearch && finalResult.isEmpty() && rootNode.actions.isNotEmpty()) {
+            val fallback = rootNode.actions
+                .filterNot { it === TurnOverAction }
+                .maxWithOrNull(
+                    compareBy<Action> { arg.decisionModel?.actionPrior(it, rootNode.state.war) ?: 0.0 }
+                        .thenBy { it.javaClass.simpleName },
+                ) ?: rootNode.actions.first()
+            rootNode.expand(fallback)?.let { expanded ->
+                finalResult = mutableListOf(expanded)
+                if (arg.debugName.isNotBlank()) {
+                    log.info {
+                        "MCTS_DEBUG_ROOT_FALLBACK strategy=${arg.debugName} " +
+                            "action=${describeAction(fallback)} reason=legal-root-action-without-expanded-child"
+                    }
+                }
+            }
+        }
         if (arg.debugName.isNotBlank()) {
             log.info {
                 "MCTS_DEBUG_BEST_PATH strategy=${arg.debugName} " +

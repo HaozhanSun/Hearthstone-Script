@@ -124,7 +124,14 @@ object MulliganScreenshot {
             }
             false
         }.getOrElse { error ->
-            log.warn(error) { "MULLIGAN_UI_READY_CHECK_FAILED cards=${cardCenters.size}" }
+            if (error is InterruptedException || Thread.currentThread().isInterrupted) {
+                log.info {
+                    "MULLIGAN_UI_READY_CANCELLED cards=${cardCenters.size} " +
+                        "reason=phase-transition"
+                }
+            } else {
+                log.error(error) { "MULLIGAN_UI_READY_CHECK_FAILED cards=${cardCenters.size}" }
+            }
             false
         }
     }
@@ -255,7 +262,11 @@ object MulliganScreenshot {
             }
             false
         }.getOrElse { error ->
-            log.warn(error) { "MULLIGAN_SELECTION_CHECK_FAILED center=$cardCenter" }
+            if (error is InterruptedException || Thread.currentThread().isInterrupted) {
+                log.info { "MULLIGAN_SELECTION_CHECK_CANCELLED center=$cardCenter reason=phase-transition" }
+            } else {
+                log.error(error) { "MULLIGAN_SELECTION_CHECK_FAILED center=$cardCenter" }
+            }
             false
         }
     }
