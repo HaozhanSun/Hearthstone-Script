@@ -138,7 +138,16 @@ class MonteCarloTreeNode(
         val deferredActions = arg.decisionModel
             ?.let { model -> result.filterNot { model.isDeferredAction(it, war) } }
             ?: result
-        return if (deferredActions.isNotEmpty()) deferredActions.toMutableList() else result
+        val filteredActions = if (deferredActions.isNotEmpty()) deferredActions else result
+        // In experimental/receding-horizon MCTS, EndTurn is a terminal
+        // control action, not a peer of a still-legal card, attack, or power.
+        // Keeping it in the root set lets UCT end the turn early; the live
+        // guard then sees the real action and exhausts its replan budget.
+        return if (arg.experimentalSearch && filteredActions.any { it !== TurnOverAction }) {
+            filteredActions.filterNot { it === TurnOverAction }.toMutableList()
+        } else {
+            filteredActions.toMutableList()
+        }
     }
 
     /**

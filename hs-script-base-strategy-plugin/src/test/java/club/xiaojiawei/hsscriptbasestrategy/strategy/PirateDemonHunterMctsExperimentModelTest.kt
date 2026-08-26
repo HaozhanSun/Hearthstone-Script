@@ -218,6 +218,62 @@ class PirateDemonHunterMctsExperimentModelTest {
         assertEquals(cliffside.entityId, afterHeroAttack.actions.single().creator?.entityId)
     }
 
+    @Test
+    fun `released pirate mcts strategy wires the dedicated model and live replanning`() {
+        val arg = HsPirateDemonHunterMctsDeckStrategy().executeMCTSOutCard(testWar()).single()
+
+        assertTrue(arg.experimentalSearch)
+        assertTrue(arg.decisionModel === PirateDemonHunterMctsExperimentModel)
+    }
+
+    @Test
+    fun `cannon is the only first action when ragewing and ordinary cards compete`() {
+        val war = testWar()
+        val cannon = testCard(PirateDemonHunterMctsExperimentModel.SHIPS_CANNON).apply { cost = 2 }
+        val ragewing = testCard(PirateDemonHunterMctsExperimentModel.RAGEWING).apply {
+            cost = 1
+            entityName = "狂暴邪翼蝠"
+        }
+        val ordinary = testCard("ORDINARY_PIRATE").apply { cost = 1 }
+        war.addCard(cannon, war.me.handArea)
+        war.addCard(ragewing, war.me.handArea)
+        war.addCard(ordinary, war.me.handArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.isNotEmpty())
+        assertTrue(node.actions.all { it.creator?.cardId == PirateDemonHunterMctsExperimentModel.SHIPS_CANNON })
+    }
+
+    @Test
+    fun `ragewing is deferred while an ordinary playable card remains`() {
+        val war = testWar()
+        val ragewing = testCard(PirateDemonHunterMctsExperimentModel.RAGEWING).apply {
+            cost = 1
+            entityName = "狂暴邪翼蝠"
+        }
+        val ordinary = testCard("ORDINARY_PIRATE").apply { cost = 1 }
+        war.addCard(ragewing, war.me.handArea)
+        war.addCard(ordinary, war.me.handArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it.creator?.cardId == ordinary.cardId })
+        assertTrue(node.actions.none { it.creator?.cardId == PirateDemonHunterMctsExperimentModel.RAGEWING })
+    }
+
+    @Test
+    fun `experimental mcts does not expose end turn beside a legal action`() {
+        val war = testWar()
+        val ordinary = testCard("ORDINARY_PIRATE").apply { cost = 1 }
+        war.addCard(ordinary, war.me.handArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it.creator?.cardId == ordinary.cardId })
+        assertTrue(node.actions.none { it.javaClass.simpleName == "TurnOverAction" })
+    }
+
     private fun testWar(): War {
         val war = War()
         val me = Player(playerId = "me", war = war)
@@ -231,6 +287,17 @@ class PirateDemonHunterMctsExperimentModelTest {
         me.resources = 10
         return war
     }
+
+    private fun testMctsArg(experimentalSearch: Boolean = false): MCTSArg = MCTSArg(
+        endMillisTime = Long.MAX_VALUE,
+        turnCount = 1,
+        turnFactor = 0.5,
+        countPerTurn = 1,
+        scoreCalculator = { 0.0 },
+        enableMultiThread = false,
+        decisionModel = PirateDemonHunterMctsExperimentModel,
+        experimentalSearch = experimentalSearch,
+    )
 
     private fun testCard(cardId: String): Card = Card(TestCardAction()).apply {
         entityId = cardId + "-test"

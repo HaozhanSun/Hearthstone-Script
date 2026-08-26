@@ -56,7 +56,8 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                         "MCTS_DEBUG_DECISION strategy=${name()} phase=${i + 1}/$size " +
                             "turn=${war.me.turn} mana=${war.me.usableResource}/${war.me.resources} " +
                             "hand=${war.me.handArea.cards.joinToString(prefix = "[", postfix = "]") { describeActionCard(it) }} " +
-                            "priority=合法动作→MCTS模拟→完整路径最终状态评分；固定海盗瞎出牌顺序=关闭"
+                            "priority=合法动作→MCTS模拟→完整路径最终状态评分；" +
+                                "专用动作时序模型=${if (arg.decisionModel != null) "开启" else "关闭"}"
                     }
                 }
                 val bestNodes = monteCarloTreeSearch.searchBestNode(war, arg).filter { it.applyAction !is EmptyAction }
@@ -175,7 +176,15 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
         val weapon = me.playArea.weapon?.let { "${it.cardId}:${it.durability}" }.orEmpty()
         val location = me.playArea.cards.filter { it.cardType === CardTypeEnum.LOCATION }
             .joinToString(",") { "${it.entityId}:${it.isLocationActionCooldown}:${it.damage}" }
-        return "${me.turn}|${me.usableResource}|$hand|$board|$hero|$weapon|$location"
+        val rivalBoard = war.rival.playArea.cards.joinToString(",") {
+            "${it.entityId}:${it.cardId}:${it.atc}:${it.health}:${it.damage}:${it.isExhausted}"
+        }
+        val rivalHero = war.rival.playArea.hero?.let {
+            "${it.atc}:${it.health}:${it.damage}:${it.isExhausted}"
+        }.orEmpty()
+        val rivalWeapon = war.rival.playArea.weapon?.let { "${it.cardId}:${it.durability}" }.orEmpty()
+        return "${me.turn}|${me.usableResource}|$hand|$board|$hero|$weapon|$location|" +
+            "$rivalBoard|$rivalHero|$rivalWeapon"
     }
 
     private fun describeActionCard(card: club.xiaojiawei.hsscriptcardsdk.bean.Card): String {

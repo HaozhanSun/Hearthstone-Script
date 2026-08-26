@@ -6,6 +6,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.MCTSArg
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
+import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.ScoreCalculator
 import club.xiaojiawei.hsscriptcardsdk.bean.War
@@ -14,6 +15,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.area.HandArea
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTriggerSimulator
+import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 import club.xiaojiawei.hsscriptcardsdk.util.CardUtil
 import kotlin.math.max
@@ -68,10 +70,11 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         card.cardId == id || card.cardId.startsWith("${id}t")
 
     override fun shouldDefer(card: Card, war: War): Boolean {
-        // These are soft timing decisions now. Keeping the actions legal lets
-        // the score compare the user's important exceptions: a 0-cost Ragewing,
-        // an immediate Zilliax aura, or a board-preserving play.
-        return false
+        if (CardTimingPolicy.shouldDefer(card, war)) return true
+
+        // VAC_925 is a setup card. Keep it behind ordinary board development,
+        // but allow it when it is the only useful remaining action.
+        return isCard(card, SIGIL_OF_SKYDIVING) && hasOtherPlayableAction(war, card)
     }
 
     override fun canCreateOpaqueAction(card: Card, war: War): Boolean =
@@ -86,6 +89,17 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
     override fun isMandatoryAction(action: Action, war: War): Boolean {
         val cliffside = war.me.playArea.cards.firstOrNull { isCard(it, DANGEROUS_CLIFFSIDE) && it.isAlive() }
         val heroCanAttack = war.me.playArea.hero?.canAttack() == true
+
+        val cannonReady = !war.me.playArea.cards.any { isCard(it, SHIPS_CANNON) && it.isAlive() } &&
+            war.me.handArea.cards.any {
+                isCard(it, SHIPS_CANNON) &&
+                    !it.isUncertain &&
+                    it.cost <= war.me.usableResource &&
+                    (!war.me.playArea.isFull || it.cardType !== CardTypeEnum.MINION)
+            }
+        if (cannonReady) {
+            return action is PlayAction && action.creator?.let { isCard(it, SHIPS_CANNON) } == true
+        }
 
         // After the first location click, the live game marks the location
         // cooldown. While it is cooling down, the only action we want the
