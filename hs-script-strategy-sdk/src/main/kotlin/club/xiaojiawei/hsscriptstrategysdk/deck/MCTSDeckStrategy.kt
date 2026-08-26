@@ -12,6 +12,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionEvidence
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 
@@ -154,12 +155,14 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             try {
                 action.exec.accept(war)
             } catch (error: Throwable) {
+                MctsActionEvidence.recordUnconfirmed(action, war)
                 log.error(error) { "MCTS_EXPERIMENT_ACTION_FAILED strategy=${name()} action=${describeAction(action)}" }
                 break
             }
             actionCount++
 
             if (!awaitStateChange(war, before, turnDeadline)) {
+                MctsActionEvidence.recordUnconfirmed(action, war)
                 log.warn {
                     "MCTS_EXPERIMENT_REPLAN_STOP strategy=${name()} reason=状态未确认变化 " +
                         "step=$actionCount"

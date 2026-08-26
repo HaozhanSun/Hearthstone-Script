@@ -12,12 +12,42 @@ import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeNode
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionEvidence
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class PirateDemonHunterMctsExperimentModelTest {
+
+    @Test
+    fun `unconfirmed action is excluded from the next MCTS tree for this turn`() {
+        MctsActionEvidence.clearForTests()
+        try {
+            val war = testWar()
+            val hero = testCard("HERO_ATTACK").apply {
+                cardType = CardTypeEnum.HERO
+                atc = 1
+                health = 30
+            }
+            val rivalHero = testCard("RIVAL_HERO").apply {
+                cardType = CardTypeEnum.HERO
+                atc = 0
+                health = 30
+            }
+            war.addCard(hero, war.me.playArea)
+            war.addCard(rivalHero, war.rival.playArea)
+
+            val firstTree = MonteCarloTreeNode(war, InitAction, testMctsArg())
+            val heroAttack = firstTree.actions.filterIsInstance<AttackAction>().single()
+            MctsActionEvidence.recordUnconfirmed(heroAttack, war)
+
+            val nextTree = MonteCarloTreeNode(war, InitAction, testMctsArg())
+            assertFalse(nextTree.actions.any { it is AttackAction && it.creator?.entityId == hero.entityId })
+        } finally {
+            MctsActionEvidence.clearForTests()
+        }
+    }
 
     @Test
     fun `captain and hozen are downranked without another pirate on board`() {

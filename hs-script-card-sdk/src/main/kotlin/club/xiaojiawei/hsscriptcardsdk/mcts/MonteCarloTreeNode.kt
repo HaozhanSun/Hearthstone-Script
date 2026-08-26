@@ -130,6 +130,17 @@ class MonteCarloTreeNode(
                 }
             }
         }
+        val rejectedActions = result.filter { MctsActionEvidence.isRejected(it, war) }
+        if (rejectedActions.isNotEmpty() && parent == null && arg.debugName.isNotBlank()) {
+            rejectedActions.forEach { action ->
+                log.info {
+                    "MCTS_DEBUG_ACTION_FILTER strategy=${arg.debugName} " +
+                        "action=${action.javaClass.simpleName}(${action.creator?.cardId ?: action.creator?.entityName}) " +
+                        "reason=本回合动作未被炉石确认，避免重复执行"
+                }
+            }
+        }
+        result.removeAll(rejectedActions.toSet())
         val mandatoryActions: List<Action> = arg.decisionModel
             ?.let { model -> result.filter { model.isMandatoryAction(it, war) } }
             ?: emptyList()
