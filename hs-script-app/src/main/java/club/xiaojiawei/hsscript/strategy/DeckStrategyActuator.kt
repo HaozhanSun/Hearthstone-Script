@@ -364,7 +364,10 @@ object DeckStrategyActuator {
         var replans = 0
         var clearYellowRetries = 0
         while (war.isMyTurn && !PauseStatus.isPause) {
-            val inspection = TurnEndActionGuard.inspectForMctsEndTurn(clearYellowRetries)
+            val inspection = TurnEndActionGuard.inspectForMctsEndTurn(
+                clearYellowRetries = clearYellowRetries,
+                decisionModel = strategy.currentTurnDecisionModel(),
+            )
             if (inspection.safeToEnd) {
                 clickEndTurnUntilTransition()
                 return

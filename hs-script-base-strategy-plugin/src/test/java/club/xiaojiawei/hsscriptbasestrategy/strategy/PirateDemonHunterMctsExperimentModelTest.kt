@@ -62,6 +62,54 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `ships cannon is the first mandatory play when it is available`() {
+        val war = testWar().apply { me.resources = 4 }
+        val cannon = testCard(PirateDemonHunterMctsExperimentModel.SHIPS_CANNON).apply {
+            cost = 2
+            cardType = CardTypeEnum.MINION
+        }
+        val pirate = testCard("PIRATE_AFTER_CANNON").apply { cost = 1 }
+        war.addCard(cannon, war.me.handArea)
+        war.addCard(pirate, war.me.handArea)
+
+        val arg = testMctsArg()
+        val node = MonteCarloTreeNode(war, InitAction, arg)
+
+        assertEquals(1, node.actions.size)
+        assertTrue(node.actions.single() is PlayAction)
+        assertEquals(PirateDemonHunterMctsExperimentModel.SHIPS_CANNON, node.actions.single().creator?.cardId)
+    }
+
+    @Test
+    fun `sigil of skydiving is deferred while another play exists but remains when alone`() {
+        val war = testWar().apply { me.resources = 4 }
+        val sigil = testCard(PirateDemonHunterMctsExperimentModel.SIGIL_OF_SKYDIVING).apply {
+            cost = 2
+            cardType = CardTypeEnum.SPELL
+        }
+        val pirate = testCard("PIRATE_BEFORE_SIGIL").apply { cost = 2 }
+        war.addCard(sigil, war.me.handArea)
+        war.addCard(pirate, war.me.handArea)
+
+        assertTrue(PirateDemonHunterMctsExperimentModel.shouldDefer(sigil, war))
+        val nodeWithOtherPlay = MonteCarloTreeNode(war, InitAction, testMctsArg())
+        assertFalse(nodeWithOtherPlay.actions.any { it.creator?.cardId == sigil.cardId })
+        assertTrue(nodeWithOtherPlay.actions.any { it.creator?.cardId == pirate.cardId })
+
+        war.me.handArea.removeByEntityId(pirate.entityId)
+        assertFalse(PirateDemonHunterMctsExperimentModel.shouldDefer(sigil, war))
+        val nodeWithOnlySigil = MonteCarloTreeNode(war, InitAction, testMctsArg())
+        assertTrue(nodeWithOnlySigil.actions.any { it.creator?.cardId == sigil.cardId })
+    }
+
+    @Test
+    fun `released pirate demon hunter mcts uses the dedicated timing model`() {
+        val arg = HsPirateDemonHunterMctsDeckStrategy().executeMCTSOutCard(testWar()).single()
+        assertEquals(PirateDemonHunterMctsExperimentModel, arg.decisionModel)
+        assertTrue(arg.experimentalSearch)
+    }
+
+    @Test
     fun `adrenaline fiend remains legal without an immediate attack`() {
         val card = testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND)
         val war = testWar()
@@ -231,6 +279,16 @@ class PirateDemonHunterMctsExperimentModelTest {
         me.resources = 10
         return war
     }
+
+    private fun testMctsArg(): MCTSArg = MCTSArg(
+        endMillisTime = Long.MAX_VALUE,
+        turnCount = 1,
+        turnFactor = 0.5,
+        countPerTurn = 1,
+        scoreCalculator = { 0.0 },
+        enableMultiThread = false,
+        decisionModel = PirateDemonHunterMctsExperimentModel,
+    )
 
     private fun testCard(cardId: String): Card = Card(TestCardAction()).apply {
         entityId = cardId + "-test"

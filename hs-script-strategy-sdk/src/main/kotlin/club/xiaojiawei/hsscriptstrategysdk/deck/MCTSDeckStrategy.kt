@@ -21,9 +21,22 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
  * @date 2025/1/22 17:04
  */
 abstract class MCTSDeckStrategy : DeckStrategy() {
+    @Volatile
+    private var activeTurnDecisionModel: club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel? = null
+
+    /**
+     * The app's final end-turn guard uses the same model that produced the
+     * current turn's actions.  This avoids treating an opaque/deferred card as
+     * a generic playable hand card after MCTS has intentionally left it for a
+     * later re-plan.
+     */
+    fun currentTurnDecisionModel(): club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel? =
+        activeTurnDecisionModel
+
     override fun executeOutCard() {
         val war = WAR
         val mctsArgList = executeMCTSOutCard(war)
+        activeTurnDecisionModel = mctsArgList.firstOrNull()?.decisionModel
         val experimentalArg = mctsArgList.firstOrNull { it.experimentalSearch }
         if (experimentalArg != null) {
             executeExperimentalTurn(war, experimentalArg)
@@ -56,7 +69,8 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                         "MCTS_DEBUG_DECISION strategy=${name()} phase=${i + 1}/$size " +
                             "turn=${war.me.turn} mana=${war.me.usableResource}/${war.me.resources} " +
                             "hand=${war.me.handArea.cards.joinToString(prefix = "[", postfix = "]") { describeActionCard(it) }} " +
-                            "priority=合法动作→MCTS模拟→完整路径最终状态评分；固定海盗瞎出牌顺序=关闭"
+                            "priority=合法动作→MCTS模拟→完整路径最终状态评分；" +
+                                "专用动作时序模型=${if (arg.decisionModel != null) "开启" else "关闭"}"
                     }
                 }
                 val bestNodes = monteCarloTreeSearch.searchBestNode(war, arg).filter { it.applyAction !is EmptyAction }

@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.data.CARD_DATA_TRIE
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import java.awt.Color
 import java.awt.Rectangle
@@ -94,7 +95,10 @@ object TurnEndActionGuard {
      * MCTS owns action selection. This method only observes live legality and
      * the end-turn affordance so the actuator can request a bounded replan.
      */
-    internal fun inspectForMctsEndTurn(clearYellowRetries: Int = 0): MctsTurnEndInspection {
+    internal fun inspectForMctsEndTurn(
+        clearYellowRetries: Int = 0,
+        decisionModel: MctsDecisionModel? = null,
+    ): MctsTurnEndInspection {
         if (!WAR.isMyTurn || PauseStatus.isPause) {
             return MctsTurnEndInspection(
                 TurnEndObservation(0, 0, false, false),
@@ -103,7 +107,7 @@ object TurnEndActionGuard {
             )
         }
 
-        val observation = observe()
+        val observation = observe(decisionModel)
         val buttonColor = if (observation.blocksEndTurn) {
             EndTurnButtonColor.UNKNOWN
         } else {
@@ -267,17 +271,12 @@ object TurnEndActionGuard {
         return false
     }
 
-    private fun observe(): TurnEndObservation {
+    private fun observe(decisionModel: MctsDecisionModel? = null): TurnEndObservation {
         val me = WAR.me
         return TurnEndObservation(
             attackableMinions = me.playArea.cards.count { it.canAttack() },
             playableHandCards = me.handArea.cards.count { card ->
-                isHandCardPlayable(
-                    cardType = card.cardType,
-                    cost = card.cost,
-                    usableMana = me.usableResource,
-                    boardFull = me.playArea.isFull,
-                )
+                isLiveHandActionable(card, me, decisionModel)
             },
             playableHeroPower = me.playArea.power?.let { power ->
                 isHeroPowerPlayable(
@@ -297,6 +296,37 @@ object TurnEndActionGuard {
                 )
             } == true,
         )
+    }
+
+    private fun isLiveHandActionable(
+        card: Card,
+        me: Player,
+        decisionModel: MctsDecisionModel?,
+    ): Boolean {
+        if (!isHandCardPlayable(
+                    cardType = card.cardType,
+                    cost = card.cost,
+                    usableMana = me.usableResource,
+                    boardFull = me.playArea.isFull,
+                )
+        ) return false
+
+        // A timing policy is an intentional "not yet" decision, not a reason
+        // to keep the turn-end replan loop alive.  The model-specific check
+        // covers opaque and deferred actions that the generic guard cannot
+        // infer from CardAction alone.
+        if (CardTimingPolicy.shouldDefer(card, WAR)) return false
+        if (decisionModel?.shouldDefer(card, WAR) == true) return false
+        if (decisionModel?.isDeferredAction(
+                club.xiaojiawei.hsscriptcardsdk.bean.PlayAction({}, {}, card), WAR,
+            ) == true
+        ) return false
+
+        val parsedActionAvailable = runCatching {
+            card.action.generatePlayActions(WAR, me).isNotEmpty()
+        }.getOrDefault(false)
+        val opaqueActionAvailable = decisionModel?.canCreateOpaqueAction(card, WAR) == true
+        return parsedActionAvailable || opaqueActionAvailable
     }
 
     private fun attackAvailableMinions(): Int {
