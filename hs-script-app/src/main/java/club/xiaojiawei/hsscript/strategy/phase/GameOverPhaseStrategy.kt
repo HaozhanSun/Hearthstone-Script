@@ -155,8 +155,12 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         val currentPlayerConceded = war.conceded.isNotBlank() || E2ETrace.surrenderRequested
         val scriptControlledGame = e2eEnabled &&
             (E2ETrace.isValidScriptControlledGame() || currentPlayerConceded)
-        val e2eOutcome = if (scriptControlledGame) readE2eOutcome() else null
-        if (scriptControlledGame && e2eOutcome == null) {
+        // GAME_OVER can be emitted a few seconds before the final PLAYSTATE
+        // line reaches the parser.  This is not E2E-only: the normal app used
+        // to capture the last attack frame as draw-or-unknown and let the
+        // MCTS worker submit one stale action during that same race.
+        val authoritativeOutcome = readAuthoritativeOutcome()
+        if (war.me.gameId.isNotBlank() && authoritativeOutcome == null) {
             val now = System.currentTimeMillis()
             val waitStartedAt = e2eResultWaitStartedAt
             if (waitStartedAt == 0L) {
@@ -179,7 +183,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
             return
         }
 
-        WarEx.endWar(e2eOutcome)
+        WarEx.endWar(authoritativeOutcome)
 
         val resultOutcome = if (resultScreenshotCaptured.compareAndSet(false, true)) {
             // In E2E mode a terminal PLAYSTATE is not enough to call the
@@ -269,6 +273,20 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         return modelOutcome ?: if (E2ETrace.surrenderRequested) {
             false
         } else E2ETrace.readPowerLogResult(
+            PowerLogListener.logFile?.path(),
+            war.me.gameId,
+        )
+    }
+
+    private fun readAuthoritativeOutcome(): Boolean? {
+        val modelOutcome = when {
+            war.won.isNotBlank() -> war.won == war.me.gameId
+            war.lost.isNotBlank() -> war.lost != war.me.gameId
+            war.conceded.isNotBlank() ->
+                if (war.me.gameId.isBlank()) false else war.conceded != war.me.gameId
+            else -> null
+        }
+        return modelOutcome ?: E2ETrace.readPowerLogResult(
             PowerLogListener.logFile?.path(),
             war.me.gameId,
         )

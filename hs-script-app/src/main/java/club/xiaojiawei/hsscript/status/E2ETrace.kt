@@ -122,7 +122,10 @@ object E2ETrace {
      * reached the in-memory model, especially after a watchdog replay.
      */
     fun readPowerLogResult(logPath: String?, playerGameId: String): Boolean? {
-        if (!enabled || logPath.isNullOrBlank() || playerGameId.isBlank()) return null
+        // This parser is also used by the normal result handler.  E2E mode
+        // controls milestone persistence, not whether Power.log is the
+        // authoritative source of the terminal result.
+        if (logPath.isNullOrBlank() || playerGameId.isBlank()) return null
         return runCatching {
             RandomAccessFile(logPath, "r").use { file ->
                 val start = (file.length() - 128 * 1024L).coerceAtLeast(0L)

@@ -12,6 +12,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 
@@ -21,11 +22,82 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
  * @date 2025/1/22 17:04
  */
 abstract class MCTSDeckStrategy : DeckStrategy() {
+    @Volatile
+    private var lastExperimentalTurnHadUnconfirmedDispatch = false
+
+    @Volatile
+    private var activeDecisionModel: MctsDecisionModel? = null
+
+    private var experimentalTurnNumber: Int? = null
+    private val suppressedExperimentalCreatorIds = mutableSetOf<String>()
+
+    fun hasUnconfirmedExperimentalDispatch(): Boolean =
+        lastExperimentalTurnHadUnconfirmedDispatch
+
+    /**
+     * Creators whose last live dispatch produced no observable confirmation
+     * in this turn.  The app-side MCTS end-turn observer uses this set to
+     * avoid re-planning an action that this strategy has already quarantined.
+     */
+    fun suppressedExperimentalCreatorIds(): Set<String> = synchronized(this) {
+        suppressedExperimentalCreatorIds.toSet()
+    }
+
+    /**
+     * Return only creators for which the same live action model used by MCTS
+     * can currently expose an executable action.  This prevents the app-side
+     * end-turn check from treating a partially parsed card with a fitting
+     * printed cost as actionable when MCTS has no action to dispatch.
+     */
+    fun actionableCreatorIds(war: War): Set<String> {
+        val me = war.me
+        val model = activeDecisionModel
+        val result = linkedSetOf<String>()
+        me.handArea.cards.forEach { card ->
+            if (card.isUncertain || card.cost > me.usableResource) return@forEach
+            if (me.playArea.isFull &&
+                (card.cardType === CardTypeEnum.MINION || card.cardType === CardTypeEnum.LOCATION)
+            ) return@forEach
+            val parsed = runCatching {
+                card.action.generatePlayActions(war, me).isNotEmpty()
+            }.getOrDefault(false)
+            if (parsed || model?.canCreateOpaqueAction(card, war) == true) {
+                result += card.entityId
+            }
+        }
+        me.playArea.cards.forEach { card ->
+            if (card.canAttack() && runCatching {
+                    card.action.generateAttackActions(war, me).isNotEmpty()
+                }.getOrDefault(false)
+            ) result += card.entityId
+            if (card.canPower() && runCatching {
+                    card.action.generatePowerActions(war, me).isNotEmpty()
+                }.getOrDefault(false)
+            ) result += card.entityId
+            if (model?.canCreateOpaquePowerAction(card, war) == true) result += card.entityId
+        }
+        me.playArea.hero?.let { hero ->
+            if (hero.canAttack() && runCatching {
+                    hero.action.generateAttackActions(war, me).isNotEmpty()
+                }.getOrDefault(false)
+            ) result += hero.entityId
+        }
+        me.playArea.power?.let { power ->
+            if (power.canPower() && runCatching {
+                    power.action.generatePowerActions(war, me).isNotEmpty()
+                }.getOrDefault(false)
+            ) result += power.entityId
+            if (model?.canCreateOpaquePowerAction(power, war) == true) result += power.entityId
+        }
+        return result
+    }
+
     override fun executeOutCard() {
         val war = WAR
         val mctsArgList = executeMCTSOutCard(war)
         val experimentalArg = mctsArgList.firstOrNull { it.experimentalSearch }
         if (experimentalArg != null) {
+            activeDecisionModel = experimentalArg.decisionModel
             executeExperimentalTurn(war, experimentalArg)
             return
         }
@@ -105,15 +177,27 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
      * board-space changes from invalidating a long simulated path.
      */
     private fun executeExperimentalTurn(war: War, template: MCTSArg) {
+        lastExperimentalTurnHadUnconfirmedDispatch = false
+        synchronized(this) {
+            if (experimentalTurnNumber != war.me.turn) {
+                experimentalTurnNumber = war.me.turn
+                suppressedExperimentalCreatorIds.clear()
+            }
+        }
         val turnDeadline = System.currentTimeMillis() + template.experimentalTurnBudgetMillis
         val search = MonteCarloTreeSearch()
         var actionCount = 0
+        val blockedCreatorIds = suppressedExperimentalCreatorIds().toMutableSet()
         while (war.isMyTurn && System.currentTimeMillis() < turnDeadline && actionCount < 16) {
             val searchStart = System.currentTimeMillis()
             val actionDeadline = minOf(
                 turnDeadline,
                 searchStart + template.experimentalActionBudgetMillis,
             )
+            val decisionModel = template.decisionModel?.let { model ->
+                if (blockedCreatorIds.isEmpty()) model
+                else TemporarilyBlockedActionModel(model, blockedCreatorIds)
+            }
             val arg = MCTSArg(
                 actionDeadline,
                 1,
@@ -122,7 +206,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 template.scoreCalculator,
                 false,
                 template.debugName,
-                template.decisionModel,
+                decisionModel,
                 true,
                 template.experimentalTurnBudgetMillis,
                 template.experimentalActionBudgetMillis,
@@ -138,16 +222,58 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 "MCTS_EXPERIMENT_STEP strategy=${name()} step=${actionCount + 1} " +
                     "action=${describeAction(action)} pathLength=${path.size}"
             }
+            // GAME_OVER can race with the action worker.  The phase handler
+            // has already cancelled tasks, but a search result may have been
+            // selected just before that cancellation became visible here.
+            // Do not send a stale click and do not report a normal terminal
+            // race as a strategy error.
+            if (!war.isMyTurn) {
+                log.info {
+                    "MCTS_EXPERIMENT_ACTION_IGNORED strategy=${name()} " +
+                        "action=${describeAction(action)} reason=turn-ended-before-dispatch"
+                }
+                break
+            }
             try {
                 action.exec.accept(war)
             } catch (error: Throwable) {
-                log.error(error) { "MCTS_EXPERIMENT_ACTION_FAILED strategy=${name()} action=${describeAction(action)}" }
+                if (!war.isMyTurn) {
+                    log.info {
+                        "MCTS_EXPERIMENT_ACTION_IGNORED strategy=${name()} " +
+                            "action=${describeAction(action)} reason=turn-ended-during-dispatch"
+                    }
+                } else {
+                    log.error(error) {
+                        "MCTS_EXPERIMENT_ACTION_FAILED strategy=${name()} action=${describeAction(action)}"
+                    }
+                }
                 break
             }
             actionCount++
 
             if (!awaitStateChange(war, before, turnDeadline)) {
-                log.warn {
+                lastExperimentalTurnHadUnconfirmedDispatch = true
+                val creatorId = action.creator?.entityId?.takeIf { it.isNotBlank() }
+                if (creatorId != null) {
+                    // A stale parser snapshot can expose an action that the
+                    // live Hearthstone client has already rejected (for
+                    // example a minion whose attack was spent in the prior
+                    // action).  Do not retry that same creator forever and
+                    // exhaust the outer turn-end guard; hide it only for the
+                    // remainder of this turn and let MCTS choose another
+                    // currently visible action.
+                    synchronized(this) {
+                        suppressedExperimentalCreatorIds += creatorId
+                    }
+                    blockedCreatorIds += creatorId
+                    log.info {
+                        "MCTS_EXPERIMENT_ACTION_SUPPRESSED strategy=${name()} " +
+                            "creator=${describeActionCard(action.creator!!)} step=$actionCount " +
+                            "reason=no-state-change-after-dispatch;replan-without-creator"
+                    }
+                    continue
+                }
+                log.info {
                     "MCTS_EXPERIMENT_REPLAN_STOP strategy=${name()} reason=状态未确认变化 " +
                         "step=$actionCount"
                 }
@@ -158,7 +284,12 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
     }
 
     private fun awaitStateChange(war: War, before: String, turnDeadline: Long): Boolean {
-        val waitDeadline = minOf(turnDeadline, System.currentTimeMillis() + 2_000L)
+        // Hearthstone can acknowledge the click visually before the matching
+        // Power.log entity updates reach the parser.  Two seconds was short
+        // enough to re-submit a successful hero attack and eventually exhaust
+        // the outer turn-end replan guard.  Keep this bounded by the turn
+        // budget, but allow a normal animation/logging round-trip to settle.
+        val waitDeadline = minOf(turnDeadline, System.currentTimeMillis() + 8_000L)
         while (war.isMyTurn && System.currentTimeMillis() < waitDeadline) {
             if (stateFingerprint(war) != before) return true
             Thread.sleep(80L)
@@ -203,6 +334,25 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             else -> action.javaClass.simpleName
         }
         return "$kind($card)"
+    }
+
+    /**
+     * Temporarily removes a creator whose last live dispatch produced no
+     * observable state change.  Delegation preserves every deck-specific
+     * timing, mandatory-chain, scoring, and opaque-action hook.
+     */
+    private class TemporarilyBlockedActionModel(
+        private val delegate: MctsDecisionModel,
+        private val blockedCreatorIds: Set<String>,
+    ) : MctsDecisionModel by delegate {
+        private fun isBlocked(action: Action): Boolean =
+            action.creator?.entityId?.let(blockedCreatorIds::contains) == true
+
+        override fun isMandatoryAction(action: Action, war: War): Boolean =
+            !isBlocked(action) && delegate.isMandatoryAction(action, war)
+
+        override fun isDeferredAction(action: Action, war: War): Boolean =
+            isBlocked(action) || delegate.isDeferredAction(action, war)
     }
 
     /**
