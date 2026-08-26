@@ -27,13 +27,15 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
     @Volatile
     private var lastDuplicateWarningAt = 0L
 
-    private fun warnDuplicateCallback() {
+    private fun recordDuplicateCallback() {
         val count = duplicateCallbacks.incrementAndGet()
         val now = System.currentTimeMillis()
         if (count == 1 || now - lastDuplicateWarningAt >= 5_000L) {
             lastDuplicateWarningAt = now
-            club.xiaojiawei.hsscriptbase.config.log.warn {
-                "GAME_OVER_DUPLICATE_CALLBACK count=$count phase=${war.currentPhase} " +
+            // Power.log repeats the terminal block.  Once the first result
+            // handler owns cleanup, later callbacks are deliberately ignored.
+            club.xiaojiawei.hsscriptbase.config.log.debug {
+                "GAME_OVER_DUPLICATE_CALLBACK_IGNORED count=$count phase=${war.currentPhase} " +
                     "step=${war.currentTurnStep} inWar=${WarEx.inWar}"
             }
         }
@@ -116,11 +118,11 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         cancelAllTask()
 
         if (resultHandlingStarted.get()) {
-            warnDuplicateCallback()
+            recordDuplicateCallback()
             return
         }
         if (e2eResultWaitStartedAt != 0L) {
-            warnDuplicateCallback()
+            recordDuplicateCallback()
         }
 
         // A watchdog restart replays the whole Power.log so the in-memory
@@ -132,7 +134,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         // untouched.
         if (PowerLogListener.replayingExistingLog) {
             if (!replayCleanupHandled.compareAndSet(false, true)) {
-                warnDuplicateCallback()
+                recordDuplicateCallback()
                 return
             }
             club.xiaojiawei.hsscriptbase.config.log.info {

@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscript.status.DebugScreenshotRing
+import club.xiaojiawei.hsscript.bean.single.WarEx
 
 /**
  * The point at which a surrender rule is evaluated.
@@ -262,12 +263,15 @@ object SurrenderPolicy {
     @Synchronized
     fun evaluateCurrentRankBeforeMulligan(): SurrenderRuleResult? {
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") return null
-        if (WAR.currentPhase !in setOf(
-                WarPhaseEnum.FILL_DECK,
-                WarPhaseEnum.DRAWN_INIT_CARD,
-                WarPhaseEnum.REPLACE_CARD,
-            )
-        ) return null
+        val phase = WAR.currentPhase
+        if (!isRankInspectionEligible(WarEx.inWar, phase)) {
+            if (phase == WarPhaseEnum.FILL_DECK || !WarEx.inWar) {
+                log.debug {
+                    "RANK_POLICY_SKIP reason=rank-screen-not-ready inWar=${WarEx.inWar} phase=${phase.name}"
+                }
+            }
+            return null
+        }
         if (rankCheckCompleted) return null
 
         val now = System.currentTimeMillis()
@@ -311,6 +315,23 @@ object SurrenderPolicy {
             reason = "current-rank=$rank",
         )
     }
+
+    private val PRE_MULLIGAN_PHASES = setOf(
+        WarPhaseEnum.DRAWN_INIT_CARD,
+        WarPhaseEnum.REPLACE_CARD,
+    )
+
+    /**
+     * Rank OCR is destructive because a resolved rank below ten immediately
+     * concedes.  A phase name alone is not proof that a real game exists:
+     * during deck selection, matchmaking, and initial entity creation the
+     * parser can still be left at FILL_DECK while Mode/WarEx have already
+     * switched to GAMEPLAY.  Only the initial-hand phases expose the stable
+     * rank HUD, and they must also have an active WarEx lifecycle flag, so
+     * transition-screen HUD numbers cannot become a surrender decision.
+     */
+    internal fun isRankInspectionEligible(inWar: Boolean, phase: WarPhaseEnum): Boolean =
+        inWar && phase in PRE_MULLIGAN_PHASES
 
     /**
      * Evaluate all turn-start rules and return the first surrender request.

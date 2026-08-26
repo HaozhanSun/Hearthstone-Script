@@ -84,10 +84,20 @@ object CurrentRankDetector {
         if (parsed.contains(10)) return 10
         if (visualTenHint && parsed.isNotEmpty() && parsed.all { it in 1 until MAX_RANK }) return 10
         val counts = parsed.groupingBy { it }.eachCount()
-        return counts.entries
+        val candidatesBelowTen = counts.entries
             .filter { (rank, count) -> rank in MIN_RANK until MAX_RANK && count >= 2 }
-            .maxByOrNull { it.value }
-            ?.key
+        if (candidatesBelowTen.isEmpty()) return null
+
+        // A transition frame or an unrelated HUD number can produce two
+        // agreeing OCR passes for one digit while other passes produce a
+        // different digit (for example 2|4|4|3 on the visible rank-10
+        // badge).  That is not enough evidence to surrender.  Lower-rank
+        // policy is destructive, so require a single unambiguous consensus.
+        val best = candidatesBelowTen.maxByOrNull { it.value } ?: return null
+        val highestCount = best.value
+        if (candidatesBelowTen.count { it.value == highestCount } > 1) return null
+        if (parsed.any { it != best.key }) return null
+        return best.key
     }
 
     /** Capture and OCR the rank badge without touching the Hearthstone input path. */

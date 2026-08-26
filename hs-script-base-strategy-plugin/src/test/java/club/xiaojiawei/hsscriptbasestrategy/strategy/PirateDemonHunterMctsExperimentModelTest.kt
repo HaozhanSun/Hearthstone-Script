@@ -304,6 +304,63 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `experimental mcts never returns deferred ragewing as the root action`() {
+        val war = testWar()
+        val ragewing = testCard(PirateDemonHunterMctsExperimentModel.RAGEWING).apply {
+            cost = 1
+            entityName = "狂暴邪翼蝠"
+        }
+        val ordinary = testCard("ORDINARY_PIRATE").apply { cost = 1 }
+        war.addCard(ragewing, war.me.handArea)
+        war.addCard(ordinary, war.me.handArea)
+
+        val path = MonteCarloTreeSearch().searchBestNode(
+            war,
+            testMctsArg(experimentalSearch = true).copy(
+                enableMultiThread = true,
+                countPerTurn = 8,
+            ),
+        )
+
+        assertTrue(path.isNotEmpty())
+        assertEquals(ordinary.cardId, path.first().applyAction.creator?.cardId)
+        assertTrue(path.none { it.applyAction.creator?.cardId == PirateDemonHunterMctsExperimentModel.RAGEWING })
+    }
+
+    @Test
+    fun `experimental mcts path keeps root action before its descendant`() {
+        val war = testWar()
+        val ordinary = testCard("ORDINARY_PIRATE").apply { cost = 1 }
+        val hero = testCard("HERO_TEST").apply {
+            cardType = CardTypeEnum.HERO
+            atc = 1
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("RIVAL_HERO_TEST").apply {
+            cardType = CardTypeEnum.HERO
+            atc = 0
+            health = 30
+        }
+        war.addCard(ordinary, war.me.handArea)
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+
+        val path = MonteCarloTreeSearch().searchBestNode(
+            war,
+            testMctsArg(experimentalSearch = true).copy(
+                enableMultiThread = true,
+                countPerTurn = 24,
+            ),
+        )
+
+        // The live executor consumes path.first().  A descendant must never
+        // be moved ahead of the root action by path reconstruction.
+        assertTrue(path.size >= 2)
+        assertEquals(InitAction, path.first().parent?.applyAction)
+    }
+
+    @Test
     fun `experimental mcts does not expose end turn beside a legal action`() {
         val war = testWar()
         val ordinary = testCard("ORDINARY_PIRATE").apply { cost = 1 }
@@ -332,6 +389,25 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         assertTrue(path.isNotEmpty())
         assertTrue(path.first().applyAction !== club.xiaojiawei.hsscriptcardsdk.bean.TurnOverAction)
+        assertEquals(cannon.cardId, path.first().applyAction.creator?.cardId)
+    }
+
+    @Test
+    fun `experimental mcts preserves mandatory root action in parallel search path`() {
+        val war = testWar()
+        val cannon = testCard(PirateDemonHunterMctsExperimentModel.SHIPS_CANNON).apply { cost = 2 }
+        val ordinary = testCard("ORDINARY_PIRATE").apply { cost = 1 }
+        war.addCard(cannon, war.me.handArea)
+        war.addCard(ordinary, war.me.handArea)
+
+        val path = MonteCarloTreeSearch().searchBestNode(
+            war,
+            testMctsArg(experimentalSearch = true).copy(
+                enableMultiThread = true,
+            ),
+        )
+
+        assertTrue(path.isNotEmpty())
         assertEquals(cannon.cardId, path.first().applyAction.creator?.cardId)
     }
 

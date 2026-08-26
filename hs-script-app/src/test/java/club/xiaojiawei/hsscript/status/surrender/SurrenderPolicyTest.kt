@@ -169,8 +169,51 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun rankResolverRejectsConflictingDigitsFromTransitionFrame() {
+        assertNull(
+            CurrentRankDetector.resolveRankCandidates(
+                listOf("", "2", "4", "4", "", "3"),
+            ),
+        )
+    }
+
+    @Test
     fun rankTenDoesNotRequestSurrender() {
         assertNull(SurrenderPolicy.evaluateCurrentRank(10))
+    }
+
+    @Test
+    fun rankInspectionRequiresAnActiveWarNotJustThePreMulliganPhase() {
+        assertFalse(
+            SurrenderPolicy.isRankInspectionEligible(
+                inWar = false,
+                phase = WarPhaseEnum.FILL_DECK,
+            ),
+        )
+        assertFalse(
+            SurrenderPolicy.isRankInspectionEligible(
+                inWar = true,
+                phase = WarPhaseEnum.FILL_DECK,
+            ),
+        )
+        assertTrue(
+            SurrenderPolicy.isRankInspectionEligible(
+                inWar = true,
+                phase = WarPhaseEnum.DRAWN_INIT_CARD,
+            ),
+        )
+        assertTrue(
+            SurrenderPolicy.isRankInspectionEligible(
+                inWar = true,
+                phase = WarPhaseEnum.REPLACE_CARD,
+            ),
+        )
+        assertFalse(
+            SurrenderPolicy.isRankInspectionEligible(
+                inWar = true,
+                phase = WarPhaseEnum.GAME_OVER,
+            ),
+        )
     }
 
     @Test

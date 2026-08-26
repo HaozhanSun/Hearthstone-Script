@@ -207,9 +207,13 @@ object PowerLogListener :
             stepBefore == StepEnum.FINAL_GAMEOVER &&
             war.currentPhase == WarPhaseEnum.GAME_OVER
         ) {
-            log.warn {
-                "PHASE_ANOMALY game-over callback left phase=GAME_OVER " +
-                "step=${war.currentTurnStep} inWar=${WarEx.inWar}"
+            // The result block contains repeated callbacks after the
+            // idempotent GAME_OVER handler has already completed.  This is
+            // expected tail traffic, not a phase transition failure.
+            log.debug {
+                "GAME_OVER_TAIL_CALLBACK_IGNORED " +
+                    "phase=GAME_OVER " +
+                    "step=${war.currentTurnStep} inWar=${WarEx.inWar}"
             }
         }
 

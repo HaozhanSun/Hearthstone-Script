@@ -128,12 +128,26 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
         val result = mutableListOf<MonteCarloTreeNode>()
 
         if (rootNode.arg.experimentalSearch) {
-            var node: MonteCarloTreeNode? = rootNode.children.maxWithOrNull(
-                compareBy<MonteCarloTreeNode> { it.state.visitCount }
-                    .thenBy { it.state.averageValue() },
-            )
+            // In the multi-threaded path the worker receives an already
+            // expanded root child.  Keep that worker root in the returned
+            // path; otherwise the mandatory root action (for example the
+            // cannon) is silently dropped and a later simulated action is
+            // dispatched first by the live executor.
+            var node: MonteCarloTreeNode? = if (rootNode.parent != null) {
+                rootNode
+            } else {
+                rootNode.children.maxWithOrNull(
+                    compareBy<MonteCarloTreeNode> { it.state.visitCount }
+                        .thenBy { it.state.averageValue() },
+                )
+            }
             while (node != null) {
-                result.addFirst(node)
+                // Experimental paths are walked from the live root toward
+                // descendants.  Preserve that order: the executor consumes
+                // path.first() as the next real action.  addFirst() reverses
+                // the path and can dispatch a deferred descendant (such as
+                // Ragewing) before the legal root action that led to it.
+                result.add(node)
                 node = node.children.maxWithOrNull(
                     compareBy<MonteCarloTreeNode> { it.state.visitCount }
                         .thenBy { it.state.averageValue() },
@@ -333,17 +347,26 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
 
         var maxScore = Int.MIN_VALUE.toDouble()
         var bestResult: MutableList<MonteCarloTreeNode>? = null
-        if (results.isEmpty()) {
+        if (arg.experimentalSearch) {
+            // The master root is the source of truth for the first action.
+            // Worker paths may contain a valid descendant path, but selecting
+            // one of those paths directly can make the returned first action
+            // disagree with the filtered/mandatory root candidates.  Rebuild
+            // the path from the selected master-root child so cannon-first,
+            // deferred-card, and location-chain constraints survive the
+            // worker merge.
+            val selectedRootChild = rootNode.children.maxWithOrNull(
+                compareBy<MonteCarloTreeNode> { it.state.visitCount }
+                    .thenBy { it.state.averageValue() },
+            )
+            bestResult = selectedRootChild?.let { buildBest(it) }
+                ?: if (results.isEmpty()) buildBest(rootNode) else null
+        } else if (results.isEmpty()) {
             bestResult = buildBest(rootNode)
         } else {
             for (result in results) {
                 if (result.isNotEmpty()) {
-                    val score = if (arg.experimentalSearch) {
-                        val first = result.first()
-                        first.state.visitCount * 1_000.0 + first.state.averageValue()
-                    } else {
-                        result.last().state.score
-                    }
+                    val score = result.last().state.score
                     if (score > maxScore) {
                         maxScore = score
                         bestResult = result
@@ -384,7 +407,7 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
                     "path=${finalResult.filter { it.applyAction !is club.xiaojiawei.hsscriptcardsdk.bean.EmptyAction }
                         .joinToString(" -> ") { describeAction(it.applyAction) }
                         .ifBlank { "(empty)" }} " +
-                    "selectionRule=best complete simulated path by final state score"
+                    "selectionRule=${if (arg.experimentalSearch) "best master-root action by visits/value, then descendant path" else "best complete simulated path by final state score"}"
             }
         }
         return finalResult

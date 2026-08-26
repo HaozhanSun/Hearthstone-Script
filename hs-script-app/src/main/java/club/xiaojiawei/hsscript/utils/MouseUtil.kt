@@ -539,7 +539,10 @@ object MouseUtil {
                     DRIVER_LOCK.tryLock(3000, TimeUnit.MILLISECONDS)
                 } catch (error: InterruptedException) {
                     Thread.currentThread().interrupt()
-                    log.error(error) { "E2E_INPUT_LOCK_INTERRUPTED pos=(${pos.x},${pos.y})" }
+                    // A phase transition cancels queued E2E clicks so a new
+                    // mode can own the driver.  The interruption is an
+                    // expected cancellation, not an input failure.
+                    log.info { "E2E_INPUT_LOCK_CANCELLED_PHASE_CHANGE pos=(${pos.x},${pos.y})" }
                     false
                 }
             } else {
@@ -548,7 +551,16 @@ object MouseUtil {
             }
             if (!lockAcquired) {
                 if (e2eInputEnabled()) {
-                    log.error { "E2E_INPUT_LOCK_TIMEOUT pos=(${pos.x},${pos.y})" }
+                    if (!WorkTimeListener.working ||
+                        Mode.currMode !== ModeEnum.GAMEPLAY ||
+                        !WarEx.war.isMyTurn
+                    ) {
+                        log.info {
+                            "E2E_INPUT_LOCK_SKIPPED_PHASE_CHANGED pos=(${pos.x},${pos.y})"
+                        }
+                    } else {
+                        log.warn { "E2E_INPUT_LOCK_TIMEOUT pos=(${pos.x},${pos.y})" }
+                    }
                 }
                 return
             }
