@@ -112,6 +112,21 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun rankResolverPrefersExplicitTenOverPartialOneReads() {
+        assertEquals(
+            10,
+            CurrentRankDetector.resolveRankCandidates(listOf("1", "", "10", "1")),
+        )
+    }
+
+    @Test
+    fun rankResolverRequiresAgreementBeforeSurrenderRank() {
+        assertNull(CurrentRankDetector.resolveRankCandidates(listOf("1", "", "")))
+        assertEquals(1, CurrentRankDetector.resolveRankCandidates(listOf("1", "1", "")))
+        assertEquals(9, CurrentRankDetector.resolveRankCandidates(listOf("9", "9", "19")))
+    }
+
+    @Test
     fun rankTenDoesNotRequestSurrender() {
         assertNull(SurrenderPolicy.evaluateCurrentRank(10))
     }

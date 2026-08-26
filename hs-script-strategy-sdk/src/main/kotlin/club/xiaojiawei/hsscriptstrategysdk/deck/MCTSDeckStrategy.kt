@@ -67,7 +67,11 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 card.action.generatePlayActions(war, me)
             }.getOrDefault(emptyList())
             val parsed = parsedActions.any { model?.isDeferredAction(it, war) != true }
-            if (parsed || model?.canCreateOpaqueAction(card, war) == true) {
+            // Match MonteCarloTreeNode exactly: an opaque action is only a
+            // fallback when the parser produced no action at all.  A parsed
+            // action that the model deliberately deferred (for example
+            // Blindeye Judge) must not be reintroduced by this fallback.
+            if (parsed || (parsedActions.isEmpty() && model?.canCreateOpaqueAction(card, war) == true)) {
                 result += card.entityId
             }
         }
@@ -233,6 +237,24 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             val node = path.firstOrNull() ?: break
             val action = node.applyAction
             if (action === TurnOverAction) break
+
+            // A search result can be built from the parser snapshot that was
+            // used at the start of this re-plan.  If the preceding dispatch
+            // was not confirmed, do not trust a stale path to return that
+            // same creator again.  The model hook hides it during expansion,
+            // but this final check is the dispatch boundary and protects the
+            // live client even if a concurrent/stale search result bypasses
+            // that filter.  Break so the caller can perform one fresh turn-
+            // end inspection instead of spinning on the same action.
+            val creatorId = action.creator?.entityId?.takeIf { it.isNotBlank() }
+            if (creatorId != null && creatorId in blockedCreatorIds) {
+                log.info {
+                    "MCTS_EXPERIMENT_ACTION_SKIPPED strategy=${name()} " +
+                        "action=${describeAction(action)} step=${actionCount + 1} " +
+                        "reason=blocked-after-unconfirmed-dispatch"
+                }
+                break
+            }
 
             val before = stateFingerprint(war)
             log.info {

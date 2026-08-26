@@ -27,6 +27,14 @@ object CurrentRankDetector {
     private const val RANK_REGION_TOP = 0.82
     private const val RANK_REGION_WIDTH = 0.075
     private const val RANK_REGION_HEIGHT = 0.13
+    private const val RANK_EXPANDED_LEFT = 0.0
+    private const val RANK_EXPANDED_TOP = 0.78
+    private const val RANK_EXPANDED_WIDTH = 0.12
+    private const val RANK_EXPANDED_HEIGHT = 0.20
+    private const val RANK_DIGIT_LEFT = 0.012
+    private const val RANK_DIGIT_TOP = 0.835
+    private const val RANK_DIGIT_WIDTH = 0.060
+    private const val RANK_DIGIT_HEIGHT = 0.105
 
     data class Detection(
         val rank: Int?,
@@ -54,6 +62,23 @@ object CurrentRankDetector {
         val digitsOnly = normalized.filter(Char::isDigit)
         if (digitsOnly.length != 1) return null
         return digitsOnly.toIntOrNull()?.takeIf { it in MIN_RANK until MAX_RANK }
+    }
+
+    /**
+     * Resolve several independent OCR passes conservatively.  Hearthstone's
+     * stylized two-digit "10" is sometimes read as just "1".  A lone
+     * one-digit result is therefore not strong enough to trigger surrender;
+     * rank 10 wins immediately when any pass sees it, while ranks 1..9 need
+     * two agreeing passes.
+     */
+    internal fun resolveRankCandidates(candidates: List<String>): Int? {
+        val parsed = candidates.mapNotNull(::parseRankText)
+        if (parsed.contains(10)) return 10
+        val counts = parsed.groupingBy { it }.eachCount()
+        return counts.entries
+            .filter { (rank, count) -> rank in MIN_RANK until MAX_RANK && count >= 2 }
+            .maxByOrNull { it.value }
+            ?.key
     }
 
     /** Capture and OCR the rank badge without touching the Hearthstone input path. */
@@ -91,18 +116,37 @@ object CurrentRankDetector {
             return null
         }
 
-        val ocrText = TesseractEx().apply {
-            setDatapath(tessData.absolutePath)
-            setLanguage(CHI_SIM_DATA)
-            setPageSegMode(11)
-            setVariable("tessedit_char_whitelist", "0123456789")
-            setVariable("user_defined_dpi", "200")
-        }.doOCR(scaleForOcr(rankRegion), "current-rank")
-            .replace(Regex("\\s+"), "")
-        val rank = parseRankText(ocrText)
+        val expandedRegion = crop(
+            screen,
+            RANK_EXPANDED_LEFT,
+            RANK_EXPANDED_TOP,
+            RANK_EXPANDED_WIDTH,
+            RANK_EXPANDED_HEIGHT,
+        )
+        val digitRegion = crop(
+            screen,
+            RANK_DIGIT_LEFT,
+            RANK_DIGIT_TOP,
+            RANK_DIGIT_WIDTH,
+            RANK_DIGIT_HEIGHT,
+        )
+        val ocrInputs = listOf(
+            rankRegion to 11,
+            rankRegion to 6,
+            expandedRegion to 11,
+            expandedRegion to 6,
+            digitRegion to 7,
+            digitRegion to 13,
+        )
+        val ocrTexts = ocrInputs.map { (image, pageSegMode) ->
+            ocrRank(image, tessData, pageSegMode)
+        }
+        val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
+        val rank = resolveRankCandidates(ocrTexts)
         log.info {
             "RANK_OCR bounds=$bounds region=${rankRegion.width}x${rankRegion.height} " +
-                "text=${ocrText.ifBlank { "<empty>" }} rank=${rank ?: "UNKNOWN"}"
+                "text=${ocrText.ifBlank { "<empty>" }} candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
+                "rank=${rank ?: "UNKNOWN"}"
         }
         Detection(rank, ocrText, bounds)
     }.getOrElse { error ->
@@ -111,14 +155,34 @@ object CurrentRankDetector {
     }
 
     private fun cropRankRegion(image: BufferedImage): BufferedImage {
-        val x = (image.width * RANK_REGION_LEFT).toInt().coerceIn(0, image.width - 1)
-        val y = (image.height * RANK_REGION_TOP).toInt().coerceIn(0, image.height - 1)
-        val width = (image.width * RANK_REGION_WIDTH).toInt().coerceAtLeast(1)
+        return crop(image, RANK_REGION_LEFT, RANK_REGION_TOP, RANK_REGION_WIDTH, RANK_REGION_HEIGHT)
+    }
+
+    private fun crop(
+        image: BufferedImage,
+        left: Double,
+        top: Double,
+        widthRatio: Double,
+        heightRatio: Double,
+    ): BufferedImage {
+        val x = (image.width * left).toInt().coerceIn(0, image.width - 1)
+        val y = (image.height * top).toInt().coerceIn(0, image.height - 1)
+        val width = (image.width * widthRatio).toInt().coerceAtLeast(1)
             .coerceAtMost(image.width - x)
-        val height = (image.height * RANK_REGION_HEIGHT).toInt().coerceAtLeast(1)
+        val height = (image.height * heightRatio).toInt().coerceAtLeast(1)
             .coerceAtMost(image.height - y)
         return image.getSubimage(x, y, width, height)
     }
+
+    private fun ocrRank(image: BufferedImage, tessData: File, pageSegMode: Int): String =
+        TesseractEx().apply {
+            setDatapath(tessData.absolutePath)
+            setLanguage(CHI_SIM_DATA)
+            setPageSegMode(pageSegMode)
+            setVariable("tessedit_char_whitelist", "0123456789")
+            setVariable("user_defined_dpi", "200")
+        }.doOCR(scaleForOcr(image), "current-rank-psm$pageSegMode")
+            .replace(Regex("\\s+"), "")
 
     private fun scaleForOcr(image: BufferedImage): BufferedImage {
         val width = (image.width * 2).coerceAtLeast(1)
