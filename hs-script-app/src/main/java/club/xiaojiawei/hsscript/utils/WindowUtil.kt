@@ -1,0 +1,545 @@
+package club.xiaojiawei.hsscript.utils
+
+import club.xiaojiawei.JavaFXUI
+import club.xiaojiawei.hsscript.bean.WindowConfig
+import club.xiaojiawei.hsscript.consts.COMMON_CSS_PATH
+import club.xiaojiawei.hsscript.consts.FXML_DIR
+import club.xiaojiawei.hsscript.consts.PROGRAM_NAME
+import club.xiaojiawei.hsscript.dll.CSystemDll
+import club.xiaojiawei.hsscript.enums.SCREEN_HEIGHT
+import club.xiaojiawei.hsscript.enums.SCREEN_WIDTH
+import club.xiaojiawei.hsscript.enums.WindowEnum
+import club.xiaojiawei.hsscript.interfaces.KeyHook
+import club.xiaojiawei.hsscript.interfaces.MouseHook
+import club.xiaojiawei.hsscript.interfaces.StageHook
+import club.xiaojiawei.hsscript.utils.SystemUtil.findHWND
+import club.xiaojiawei.hsscript.utils.SystemUtil.showWindow
+import club.xiaojiawei.hsscriptbase.config.log
+import club.xiaojiawei.hsscriptbase.util.isTrue
+import com.sun.javafx.tk.quantum.WindowStage
+import com.sun.jna.Pointer
+import com.sun.jna.platform.win32.WinDef.HWND
+import javafx.application.Platform
+import javafx.event.ActionEvent
+import javafx.event.EventHandler
+import javafx.fxml.FXMLLoader
+import javafx.geometry.Pos
+import javafx.scene.Node
+import javafx.scene.Scene
+import javafx.scene.control.Button
+import javafx.scene.control.Label
+import javafx.scene.image.Image
+import javafx.scene.input.KeyEvent
+import javafx.scene.input.MouseEvent
+import javafx.scene.layout.HBox
+import javafx.scene.layout.VBox
+import javafx.scene.paint.Paint
+import javafx.stage.*
+import java.io.IOException
+import java.lang.reflect.InvocationTargetException
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * 窗口工具类
+ * @author 肖嘉威
+ * @date 2023/2/10 19:42
+ */
+object WindowUtil {
+    private const val CONTROLLER_KEY = "controller"
+
+    private val STAGE_MAP: MutableMap<WindowEnum, Stage> = ConcurrentHashMap()
+
+    private val windowConfig by lazy {
+        ConfigExUtil.getWindowConfig().associateBy { it.windowEnum }.toMutableMap()
+    }
+
+    private fun addIcon(stage: Stage) {
+        stage.icons.add(
+            Image(
+                SystemUtil
+                    .getProgramIconFile()
+                    .toURI()
+                    .toURL()
+                    .toExternalForm(),
+            ),
+        )
+    }
+
+    fun createAlert(
+        headerText: String? = null,
+        contentText: String? = null,
+        okHandler: EventHandler<ActionEvent?>? = null,
+        cancelHandler: EventHandler<ActionEvent?>? = null,
+        windowEnum: WindowEnum,
+        okText: String = "确认",
+        cancelText: String = "取消",
+        distinguishButton: Boolean = true,
+    ): Stage {
+        return createAlert(
+            headerText,
+            contentText,
+            okHandler,
+            cancelHandler,
+            getStage(windowEnum), okText, cancelText, distinguishButton
+        )
+    }
+
+    /**
+     * 创建对话框
+     * @param headerText
+     * @param contentText
+     * @param okHandler
+     * @param cancelHandler
+     * @return
+     */
+    fun createAlert(
+        headerText: String? = null,
+        contentText: String? = null,
+        okHandler: EventHandler<ActionEvent?>? = null,
+        cancelHandler: EventHandler<ActionEvent?>? = null,
+        window: Window?,
+        okText: String = "确认",
+        cancelText: String = "取消",
+        distinguishButton: Boolean = true,
+    ): Stage {
+        val stage =
+            Stage().apply {
+                title = PROGRAM_NAME
+                isMaximized = false
+                isResizable = false
+                initModality(Modality.APPLICATION_MODAL)
+                initOwner(window)
+                onCloseRequest =
+                    EventHandler {
+                        cancelHandler?.handle(null)
+                    }
+            }
+        addIcon(stage)
+
+        val okBtn =
+            Button(okText).apply {
+                if (distinguishButton) {
+                    styleClass.addAll("btn-ui", "btn-ui-success")
+                } else styleClass.addAll("btn-ui")
+
+                onAction =
+                    EventHandler { actionEvent: ActionEvent? ->
+                        stage.hide()
+                        okHandler?.handle(actionEvent)
+                    }
+            }
+        val cancelBtn: Button? =
+            cancelHandler?.let {
+                Button(cancelText).apply {
+                    styleClass.addAll("btn-ui")
+                    onAction =
+                        EventHandler { actionEvent: ActionEvent? ->
+                            stage.hide()
+                            cancelHandler.handle(actionEvent)
+                        }
+                }
+            }
+        val head: HBox? =
+            headerText?.let {
+                HBox(
+                    Label(it).apply {
+                        style = "-fx-wrap-text: true"
+                    },
+                ).apply {
+                    alignment = Pos.CENTER_LEFT
+                    style = "-fx-padding: 15;-fx-font-weight: bold"
+                }
+            }
+        val center: HBox? =
+            contentText?.let {
+                HBox(
+                    Label(it).apply {
+                        style = "-fx-wrap-text: true"
+                    },
+                ).apply {
+                    alignment = Pos.CENTER_LEFT
+                    style = "-fx-padding: 10 30 10 30;-fx-font-size: 14"
+                }
+            }
+        val bottom =
+            HBox(okBtn).apply {
+                cancelBtn?.let {
+                    children.add(it)
+                }
+                alignment = Pos.CENTER_RIGHT
+                style = "-fx-padding: 10;-fx-spacing: 20"
+            }
+        val scene =
+            Scene(
+                VBox().apply {
+                    head?.let {
+                        children.add(it)
+                    }
+                    center?.let {
+                        children.add(it)
+                    }
+                    children.add(bottom)
+                },
+                400.0,
+                -1.0,
+            ).apply {
+                fill = Paint.valueOf("#FFFFFF00")
+            }
+        JavaFXUI.addjavafxUIStylesheet(scene)
+        stage.scene = scene
+
+        return stage
+    }
+
+    fun createAlert(
+        headerText: String?,
+        contentText: String?,
+        window: Window?,
+    ): Stage = createAlert(headerText, contentText, null, null, window)
+
+    fun getHWND(windowEnum: WindowEnum): Long {
+        return getHWND(getStage(windowEnum))
+    }
+
+    fun getHWND(window: Window?): Long {
+        if (window == null) return 0L
+        try {
+            val windowClass = Window::class.java
+            val declaredMethod = windowClass.getDeclaredMethod("getPeer")
+            declaredMethod.setAccessible(true)
+            val tkStage = declaredMethod.invoke(window)
+            if (tkStage is WindowStage) {
+                return tkStage.getPlatformWindow().getRawHandle()
+            }
+        } catch (e: NoSuchMethodException) {
+            log.error(e) {}
+        } catch (e: InvocationTargetException) {
+            log.error(e) {}
+        } catch (e: IllegalAccessException) {
+            log.error(e) {}
+        }
+        return 0L
+    }
+
+    fun findWindow(windowEnum: WindowEnum): HWND? = findHWND(null, windowEnum.title)
+
+    fun showStage(
+        windowEnum: WindowEnum,
+        owner: Window? = null,
+    ) {
+        runUI {
+            (getStage(windowEnum) ?: buildStage(windowEnum, owner)).run {
+                if (this.owner == null && owner != null) {
+                    initOwner(owner)
+                }
+                if (isShowing) {
+                    showWindow(findHWND(windowTitle = windowEnum.title))
+                    toFront()
+                    requestFocus()
+                } else {
+                    show()
+                    toFront()
+                    requestFocus()
+                }
+            }
+        }
+    }
+
+    fun hideStage(windowEnum: WindowEnum) {
+        runUI {
+            getStage(windowEnum)?.let {
+                it.isShowing.isTrue {
+                    it.hide()
+                }
+            }
+        }
+    }
+
+    fun hideAllStage(forceAll: Boolean = false) {
+        runUI {
+            val iterator = STAGE_MAP.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (forceAll || entry.key !== WindowEnum.GAME_WINDOW_CONTROL_MODAL) {
+                    runCatching {
+                        entry.value.hide()
+                    }.onFailure {
+                        log.debug { it }
+                    }
+                }
+            }
+        }
+    }
+
+    fun addEventHook(node: Node, controller: Any?) {
+        if (controller is KeyHook) {
+            node.addEventFilter(KeyEvent.ANY, controller::handleKeyEvent)
+        }
+        if (controller is MouseHook) {
+            node.addEventFilter(MouseEvent.ANY, controller::handleMouseEvent)
+        }
+    }
+
+    fun addEventHook(stage: Stage, controller: Any?) {
+        if (controller is KeyHook) {
+            stage.addEventFilter(KeyEvent.ANY, controller::handleKeyEvent)
+        }
+        if (controller is MouseHook) {
+            stage.addEventFilter(MouseEvent.ANY, controller::handleMouseEvent)
+        }
+    }
+
+    fun addWindowHook(stage: Stage, controller: Any?) {
+        if (controller is StageHook) {
+            stage.setOnShown {
+                controller.onShown()
+            }
+            stage.setOnShowing {
+                controller.onShowing()
+            }
+            stage.setOnHidden {
+                controller.onHidden()
+            }
+        }
+        stage.setOnHiding {
+            runCatching {
+                stage.isIconified = false
+            }.onFailure { log.error { it.message } }
+            val iterator = STAGE_MAP.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (entry.value.owner == stage) {
+                    entry.value.hide()
+                }
+            }
+            if (controller is StageHook) {
+                controller.onHiding()
+            }
+        }
+        stage.setOnCloseRequest { event ->
+            runCatching {
+                stage.isIconified = false
+            }.onFailure { log.error { it.message } }
+            val iterator = STAGE_MAP.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (entry.value.owner == stage) {
+                    entry.value.hide()
+                }
+            }
+            if (controller is StageHook) {
+                controller.onCloseRequest(event)
+            }
+        }
+    }
+
+    fun getController(windowEnum: WindowEnum): Any? =
+        getStage(windowEnum)?.let {
+            it.properties[CONTROLLER_KEY]
+        }
+
+    fun buildStage(
+        windowEnum: WindowEnum,
+        owner: Window? = null,
+    ): Stage = buildStage(windowEnum, true, owner)
+
+    fun buildStage(
+        windowEnum: WindowEnum,
+        createStage: Boolean,
+        owner: Window? = null,
+    ): Stage {
+        if (!Platform.isFxApplicationThread()) throw RuntimeException("禁止在非ui线程中创建窗口")
+        var stage = STAGE_MAP[windowEnum]
+        if (stage == null || createStage) {
+            stage = createStage(windowEnum)
+            owner?.let {
+                stage.initOwner(it)
+            }
+            STAGE_MAP[windowEnum] = stage
+            val controller = getController(windowEnum)
+            addEventHook(stage, controller)
+            addWindowHook(stage, controller)
+            stage.xProperty().addListener { _, _, newValue ->
+                windowConfig[windowEnum]?.let {
+                    it.x = newValue.toInt()
+                } ?: let {
+                    windowConfig[windowEnum] =
+                        WindowConfig(
+                            newValue.toInt(),
+                            stage.y.toInt(),
+                            stage.width.toInt(),
+                            stage.height.toInt(),
+                            windowEnum
+                        )
+                }
+            }
+            stage.yProperty().addListener { _, _, newValue ->
+                windowConfig[windowEnum]?.let {
+                    it.y = newValue.toInt()
+                } ?: let {
+                    windowConfig[windowEnum] =
+                        WindowConfig(
+                            newValue.toInt(),
+                            stage.y.toInt(),
+                            stage.width.toInt(),
+                            stage.height.toInt(),
+                            windowEnum
+                        )
+                }
+            }
+            stage.widthProperty().addListener { _, _, newValue ->
+                windowConfig[windowEnum]?.let {
+                    it.width = newValue.toInt()
+                } ?: let {
+                    windowConfig[windowEnum] =
+                        WindowConfig(
+                            newValue.toInt(),
+                            stage.y.toInt(),
+                            stage.width.toInt(),
+                            stage.height.toInt(),
+                            windowEnum
+                        )
+                }
+            }
+            stage.heightProperty().addListener { _, _, newValue ->
+                windowConfig[windowEnum]?.let {
+                    it.height = newValue.toInt()
+                } ?: let {
+                    windowConfig[windowEnum] =
+                        WindowConfig(
+                            newValue.toInt(),
+                            stage.y.toInt(),
+                            stage.width.toInt(),
+                            stage.height.toInt(),
+                            windowEnum
+                        )
+                }
+            }
+
+            if (!windowEnum.cache) {
+                stage.showingProperty().addListener { o, oldV, newV ->
+                    if (!newV) {
+                        STAGE_MAP.remove(windowEnum)
+                    }
+                }
+            }
+        }
+        stage.scene.stylesheets.add(COMMON_CSS_PATH)
+        return stage
+    }
+
+    fun saveConfig() {
+        ConfigExUtil.storeWindowConfig(windowConfig.map { it.value })
+    }
+
+    fun loadRoot(windowEnum: WindowEnum): Node {
+        try {
+            val fxmlLoader =
+                FXMLLoader(WindowUtil::class.java.getResource(FXML_DIR + windowEnum.fxmlName))
+            return fxmlLoader.load()
+        } catch (e: IOException) {
+            throw RuntimeException("加载fxml文件异常", e)
+        }
+    }
+
+    fun getLoader(windowEnum: WindowEnum): FXMLLoader {
+        return FXMLLoader(WindowUtil::class.java.getResource(FXML_DIR + windowEnum.fxmlName))
+    }
+
+    private fun createStage(windowEnum: WindowEnum): Stage {
+        val stage = Stage()
+        try {
+            val fxmlLoader =
+                FXMLLoader(WindowUtil::class.java.getResource(FXML_DIR + windowEnum.fxmlName))
+            val scene = Scene(fxmlLoader.load())
+            stage.properties[CONTROLLER_KEY] = fxmlLoader.getController()
+            scene.stylesheets.add(JavaFXUI.javafxUIStylesheet())
+            stage.scene = scene
+            stage.title = windowEnum.title
+            addIcon(stage)
+
+            windowConfig[windowEnum]?.let {
+                // Older releases stored the main window at 215 px.  That
+                // width is not enough for the log pane even when wrapping is
+                // enabled, so do a one-time safe migration to the current
+                // default instead of allowing a stale saved size to keep the
+                // new layout unusable.
+                val minimumWidth = if (windowEnum === WindowEnum.MAIN) {
+                    windowEnum.width
+                } else {
+                    0.0
+                }
+                stage.width = maxOf(it.width.toDouble(), minimumWidth)
+                if (minimumWidth > 0.0) stage.minWidth = minimumWidth
+                stage.height = it.height.toDouble()
+                stage.x = it.x.toDouble()
+                stage.y = it.y.toDouble()
+            } ?: let {
+                (windowEnum.width > 0).isTrue {
+                    stage.width = windowEnum.width
+                    stage.minWidth = windowEnum.width
+                }
+                (windowEnum.height > 0).isTrue {
+                    stage.height = windowEnum.height
+                    stage.minHeight = windowEnum.height
+                }
+                if (windowEnum.initXY && windowEnum.x == -1.0 && windowEnum.y == -1.0 && windowEnum.width > 0 && windowEnum.height > 0) {
+                    stage.x = (SCREEN_WIDTH - windowEnum.width) / 2.0
+                    stage.y = (SCREEN_HEIGHT - windowEnum.height) / 2.0
+                } else {
+                    if (windowEnum.x != -1.0) {
+                        stage.x = windowEnum.x
+                    }
+                    if (windowEnum.y != -1.0) {
+                        stage.y = windowEnum.y
+                    }
+                }
+            }
+
+            stage.isAlwaysOnTop = windowEnum.alwaysOnTop
+            stage.initStyle(windowEnum.initStyle)
+            if (windowEnum.initStyle === StageStyle.TRANSPARENT) {
+                scene.fill = null
+            }
+        } catch (e: IOException) {
+            throw RuntimeException("创建[$windowEnum]窗口异常", e)
+        }
+        return stage
+    }
+
+    /**
+     * 获取stage
+     * @param windowEnum
+     * @return
+     */
+    fun getStage(windowEnum: WindowEnum?): Stage? = if (windowEnum == null) null else STAGE_MAP[windowEnum]
+
+    fun hideLaunchPage() {
+        if (System.getProperty("hs.script.e2e") == "true") {
+            log.info { "E2E运行：跳过原生启动页关闭" }
+            return
+        }
+        findHWND("ZLaunch Class", null)?.let { launchWindow ->
+            CSystemDll.INSTANCE.quitWindow(launchWindow)
+        }
+    }
+
+    fun createMenuPopup(vararg labels: Label?): Popup {
+        val popup = Popup()
+
+        val vBox: VBox =
+            object : VBox() {
+                init {
+                    style =
+                        "-fx-effect: dropshadow(gaussian, rgba(128, 128, 128, 0.67), 10, 0, 3, 3);-fx-padding: 5 3 5 3;-fx-background-color: white"
+                }
+            }
+        vBox.styleClass.add("radius-ui")
+
+        popup.isAutoHide = true
+        popup.content.add(vBox)
+        return popup
+    }
+}
+
+fun Window.toHWND(): HWND = HWND(Pointer(WindowUtil.getHWND(this)))

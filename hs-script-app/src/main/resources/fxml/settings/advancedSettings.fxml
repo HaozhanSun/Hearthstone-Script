@@ -1,0 +1,304 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import club.xiaojiawei.controls.ico.EditIco?>
+<?import club.xiaojiawei.controls.ico.GiteeIco?>
+<?import club.xiaojiawei.controls.ico.GithubIco?>
+<?import club.xiaojiawei.controls.NotificationManager?>
+<?import club.xiaojiawei.factory.NotificationFactory?>
+<?import club.xiaojiawei.hsscript.component.*?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.util.Duration?>
+<?import java.lang.Double?>
+<StackPane xmlns="http://javafx.com/javafx"
+           xmlns:fx="http://javafx.com/fxml"
+           stylesheets="@../css/settings/advancedSettings.css"
+           fx:id="rootPane"
+           fx:controller="club.xiaojiawei.hsscript.controller.javafx.settings.AdvancedSettingsController">
+    <fx:define>
+        <Duration fx:id="tooltipDuration" fx:value="60s"/>
+        <Double fx:id="fieldWidth" fx:value="150"/>
+    </fx:define>
+    <StackPane>
+        <ScrollPane fx:id="scrollPane" VBox.vgrow="ALWAYS" styleClass="scroll-pane-item">
+            <VBox fx:id="titledRootPane" alignment="CENTER">
+                <Group fx:id="mousePane">
+                    <TitledPane fx:id="mouseTitled" text="鼠标"
+                                styleClass="titled-pane-ui, titled-pane-ui-big, titled-pane-ui-pure, item-titled-pane">
+                        <VBox styleClass="item-v-box">
+                            <SettingHBox name="鼠标控制模式" tabWindow="ADVANCED_SETTINGS" group="鼠标">
+                                <ComboBox fx:id="mouseControlModeComboBox"
+                                          styleClass="combo-box-ui, combo-box-ui-small, combo-box-ui-normal"/>
+                                <Button fx:id="refreshDriver" text="刷新驱动" onAction="#refreshDriver"
+                                        styleClass="btn-ui, btn-ui-small" visible="false" managed="false"/>
+                            </SettingHBox>
+                            <SettingHBox name="限制鼠标范围" tip="鼠标活动范围将限制在游戏窗口内"
+                                         tabWindow="ADVANCED_SETTINGS" group="鼠标">
+                                <ConfigSwitch notificationManager="${notificationManager}" config="LIMIT_MOUSE_RANGE"/>
+                            </SettingHBox>
+                            <SettingHBox name="鼠标整体移动速度" tabWindow="ADVANCED_SETTINGS" group="鼠标">
+                                <ConfigNumberField config="PAUSE_STEP"
+                                                   styleClass="text-field-ui, text-field-ui-small"
+                                                   hideIcon="true" prefWidth="${fieldWidth}"/>
+                            </SettingHBox>
+                        </VBox>
+                    </TitledPane>
+                </Group>
+                <Group fx:id="windowPane">
+                    <TitledPane fx:id="windowTitled" text="窗口"
+                                styleClass="titled-pane-ui, titled-pane-ui-big, titled-pane-ui-pure, item-titled-pane">
+                        <VBox styleClass="item-v-box">
+                            <SettingHBox name="游戏窗口不透明度" tip="不透明度为0时，鼠标将穿透游戏窗口"
+                                         tabWindow="ADVANCED_SETTINGS" group="窗口">
+                                <ConfigNumberField config="GAME_WINDOW_OPACITY"
+                                                   styleClass="text-field-ui, text-field-ui-small"
+                                                   minValue="0" maxValue="255" prefWidth="${fieldWidth}"/>
+                            </SettingHBox>
+                            <SettingHBox name="战网窗口不透明度" tip="不透明度为0时，鼠标将穿透战网窗口"
+                                         tabWindow="ADVANCED_SETTINGS" group="窗口">
+                                <ConfigNumberField config="PLATFORM_WINDOW_OPACITY"
+                                                   styleClass="text-field-ui, text-field-ui-small"
+                                                   minValue="0" maxValue="255" prefWidth="${fieldWidth}"/>
+                            </SettingHBox>
+                            <SettingHBox name="游戏窗口缩小倍数" tip="主显示器与游戏窗口高度之比"
+                                         tabWindow="ADVANCED_SETTINGS" group="窗口">
+                                <ConfigFloatNumberField decimalCount="1" config="GAME_WINDOW_REDUCTION_FACTOR"
+                                                        styleClass="text-field-ui, text-field-ui-small"
+                                                        minValue="0" maxValue="100" prefWidth="${fieldWidth}"/>
+                            </SettingHBox>
+                            <SettingHBox name="战网窗口缩小倍数" tip="主显示器与战网窗口高度之比"
+                                         tabWindow="ADVANCED_SETTINGS" group="窗口">
+                                <ConfigFloatNumberField decimalCount="1" config="PLATFORM_WINDOW_REDUCTION_FACTOR"
+                                                        styleClass="text-field-ui, text-field-ui-small"
+                                                        minValue="0" maxValue="100" prefWidth="${fieldWidth}"/>
+                            </SettingHBox>
+                            <SettingHBox name="置顶游戏窗口" tabWindow="ADVANCED_SETTINGS" group="窗口">
+                                <ConfigSwitch fx:id="topGameWindow" notificationManager="${notificationManager}"
+                                              config="TOP_GAME_WINDOW"/>
+                            </SettingHBox>
+                            <SettingHBox name="实时更新游戏窗口信息" tip="打开此项后软件可以感知到游戏窗口的变化"
+                                         tabWindow="ADVANCED_SETTINGS" group="窗口">
+                                <ConfigSwitch notificationManager="${notificationManager}" config="UPDATE_GAME_WINDOW"/>
+                            </SettingHBox>
+                        </VBox>
+                    </TitledPane>
+                </Group>
+                <Group fx:id="behaviorPane">
+                    <TitledPane fx:id="behaviorTitled" text="行为"
+                                styleClass="titled-pane-ui, titled-pane-ui-big, titled-pane-ui-pure, item-titled-pane">
+                        <VBox styleClass="item-v-box">
+                            <SettingHBox name="阻止游戏反作弊"
+                                         tip="阻止游戏加载本地反作弊插件，必须用本软件启动游戏才能生效" beta="true"
+                                         tabWindow="ADVANCED_SETTINGS" group="行为">
+                                <Button fx:id="refreshACBtn" text="刷新"
+                                        styleClass="btn-ui, btn-ui-normal, btn-ui-small" onAction="#checkACStatus"
+                                        contentDisplay="RIGHT"/>
+                                <ConfigSwitch notificationManager="${notificationManager}" config="PREVENT_AC"/>
+                            </SettingHBox>
+                            <SettingHBox name="退出软件后卸载注入" tip="只能卸载游戏的"
+                                         tabWindow="ADVANCED_SETTINGS" group="行为">
+                                <ConfigSwitch notificationManager="${notificationManager}"
+                                              config="UNINSTALL_DLL_AFTER_QUIT_SOFT"/>
+                            </SettingHBox>
+                            <SettingHBox name="自动刷新游戏任务" tip="每次进入游戏首页时检查" beta="true"
+                                         tabWindow="ADVANCED_SETTINGS" group="行为">
+                                <ConfigSwitch notificationManager="${notificationManager}"
+                                              config="AUTO_REFRESH_GAME_TASK"/>
+                            </SettingHBox>
+                            <SettingHBox name="启动游戏后"
+                                         tabWindow="ADVANCED_SETTINGS" group="行为">
+                                <Label text="置底战网窗口" contentDisplay="RIGHT">
+                                    <graphic>
+                                        <ConfigSwitch notificationManager="${notificationManager}"
+                                                      config="BOTTOM_PLACEMENT_PLATFORM_AFTER_START_GAME"/>
+                                    </graphic>
+                                </Label>
+                                <Label text="关闭战网" contentDisplay="RIGHT">
+                                    <graphic>
+                                        <ConfigSwitch notificationManager="${notificationManager}"
+                                                      config="CLOSE_PLATFORM_AFTER_START_GAME"/>
+                                    </graphic>
+                                </Label>
+                            </SettingHBox>
+                            <SettingHBox name="游戏启动方式偏好" tabWindow="ADVANCED_SETTINGS" group="行为">
+                                <ComboBox fx:id="gameStartupModeComboBox"
+                                          styleClass="combo-box-ui, combo-box-ui-small, combo-box-ui-normal"/>
+                            </SettingHBox>
+                            <SettingHBox name="避免以管理员权限启动游戏" tabWindow="ADVANCED_SETTINGS" group="行为">
+                                <ConfigSwitch notificationManager="${notificationManager}"
+                                              config="PREVENT_ADMIN_LAUNCH_GAME"/>
+                            </SettingHBox>
+                            <SettingHBox name="工作时最小化"
+                                         tip="工作时将关闭软件所有窗口仅保留托盘，此时只能检测到Java进程，推荐打开"
+                                         tabWindow="ADVANCED_SETTINGS" group="行为">
+                                <ConfigSwitch notificationManager="${notificationManager}" config="WORKING_MINIMIZE"/>
+                            </SettingHBox>
+                            <SettingHBox name="检查游戏响应超时" tip="游戏超过指定时间(秒)无响应将重启游戏"
+                                         tabWindow="ADVANCED_SETTINGS" group="行为">
+                                <ConfigNumberField notificationManager="${notificationManager}" config="GAME_TIMEOUT"
+                                                   promptText="秒" prefWidth="${fieldWidth}"
+                                                   styleClass="text-field-ui, text-field-ui-small"/>
+                            </SettingHBox>
+                            <SettingHBox name="单次匹配最长时间/s" tip="超过此值将重新匹配"
+                                         tabWindow="ADVANCED_SETTINGS" group="行为">
+                                <ConfigNumberField config="MATCH_MAXIMUM_TIME"
+                                                   styleClass="text-field-ui, text-field-ui-small"
+                                                   prefWidth="${fieldWidth}"
+                                                   notificationManager="${notificationManager}"/>
+                            </SettingHBox>
+                            <SettingHBox name="最长空闲时间/min" tip="软件工作时闲置时间超过此值将重启游戏"
+                                         tabWindow="ADVANCED_SETTINGS" group="行为">
+                                <ConfigNumberField config="IDLE_MAXIMUM_TIME"
+                                                   styleClass="text-field-ui, text-field-ui-small"
+                                                   prefWidth="${fieldWidth}"
+                                                   notificationManager="${notificationManager}"/>
+                            </SettingHBox>
+                            <SettingHBox name="游戏日志大小限制/KB"
+                                         tip="游戏日志文件超过此值将重启游戏。设为-1将禁用大小限制"
+                                         tabWindow="ADVANCED_SETTINGS" group="行为">
+                                <ConfigNumberField config="GAME_LOG_LIMIT"
+                                                   styleClass="text-field-ui, text-field-ui-small"
+                                                   prefWidth="${fieldWidth}"
+                                                   notificationManager="${notificationManager}"/>
+                            </SettingHBox>
+                        </VBox>
+                    </TitledPane>
+                </Group>
+                <Group fx:id="systemPane">
+                    <TitledPane fx:id="systemTitled" text="系统"
+                                styleClass="titled-pane-ui, titled-pane-ui-big, titled-pane-ui-pure, item-titled-pane">
+                        <VBox styleClass="item-v-box">
+                            <SettingHBox name="开机自启" tabWindow="ADVANCED_SETTINGS" group="系统">
+                                <ConfigSwitch fx:id="powerBootSwitch" notificationManager="${notificationManager}"
+                                              config="POWER_BOOT"/>
+                            </SettingHBox>
+                            <SettingHBox fx:id="autoStartPane" name="自启后自动开始" tabWindow="ADVANCED_SETTINGS"
+                                         group="系统">
+                                <ConfigSwitch notificationManager="${notificationManager}" config="AUTO_START"/>
+                            </SettingHBox>
+                            <SettingHBox name="发送Windows通知" tabWindow="ADVANCED_SETTINGS" group="系统">
+                                <ConfigSwitch notificationManager="${notificationManager}" config="SEND_NOTICE"/>
+                            </SettingHBox>
+                            <SettingHBox name="使用系统代理" tabWindow="ADVANCED_SETTINGS" group="系统">
+                                <ConfigSwitch notificationManager="${notificationManager}" config="USE_PROXY"/>
+                            </SettingHBox>
+                            <SettingHBox name="开始/暂停快捷键" tabWindow="ADVANCED_SETTINGS" group="系统">
+                                <TextField fx:id="pauseHotKey" styleClass="text-field-ui, text-field-ui-small"
+                                           prefWidth="${fieldWidth}" editable="false"/>
+                            </SettingHBox>
+                            <SettingHBox name="退出快捷键" tabWindow="ADVANCED_SETTINGS" group="系统">
+                                <TextField fx:id="exitHotKey" styleClass="text-field-ui, text-field-ui-small"
+                                           prefWidth="${fieldWidth}" editable="false"/>
+                            </SettingHBox>
+                            <SettingHBox name="软件保护" tip="软件所在目录无权限的程序和用户无法访问"
+                                         tabWindow="ADVANCED_SETTINGS" group="系统">
+                                <ComboBox fx:id="softProtectedModeComboBox"
+                                          styleClass="combo-box-ui, combo-box-ui-small, combo-box-ui-normal"/>
+                            </SettingHBox>
+                            <SettingHBox fx:id="onlyRuntimeProtectItem" name="仅软件运行时保护"
+                                         tabWindow="ADVANCED_SETTINGS" group="系统">
+                                <ConfigSwitch fx:id="onlyRuntimeProtectSwitch"
+                                              notificationManager="${notificationManager}"
+                                              config="ONLY_RUNTIME_PROTECT"/>
+                            </SettingHBox>
+                            <SettingHBox fx:id="aotPane" name="AOT缓存" tabWindow="ADVANCED_SETTINGS" group="系统">
+                                <Button fx:id="aotFlushBtn" text="刷新" onAction="#refreshAOTCache"
+                                        contentDisplay="RIGHT"
+                                        styleClass="btn-ui, btn-ui-normal, btn-ui-small"/>
+                                <Button text="打开" onAction="#openAOTCacheDir"
+                                        styleClass="btn-ui, btn-ui-normal, btn-ui-small"/>
+                                <HBox HBox.hgrow="ALWAYS"/>
+                                <Button text="创建AOT缓存" onAction="#createAOTCache" contentDisplay="RIGHT"
+                                        styleClass="btn-ui, btn-ui-normal, btn-ui-small">
+                                    <graphic>
+                                        <TipNode
+                                                text="用于加快软件启动速度,缓存会占用一定的磁盘空间,每次更新软件都需要重新创建"/>
+                                    </graphic>
+                                </Button>
+                            </SettingHBox>
+                        </VBox>
+                    </TitledPane>
+                </Group>
+                <Group fx:id="versionPane">
+                    <TitledPane fx:id="versionTitled" text="版本"
+                                styleClass="titled-pane-ui, titled-pane-ui-big, titled-pane-ui-pure, item-titled-pane">
+                        <VBox styleClass="item-v-box">
+                            <SettingHBox name="更新源" tabWindow="ADVANCED_SETTINGS" group="版本">
+                                <fx:define>
+                                    <Double fx:id="icoScale" fx:value="1.1"/>
+                                    <ToggleGroup fx:id="updateSourceToggle"/>
+                                </fx:define>
+                                <RadioButton fx:id="giteeUpdateSource" toggleGroup="$updateSourceToggle"
+                                             styleClass="radio-button-ui, radio-button-ui-main">
+                                    <graphic>
+                                        <GiteeIco scaleX="${icoScale}" scaleY="${icoScale}"/>
+                                    </graphic>
+                                    <tooltip>
+                                        <Tooltip text="没有魔法推荐选此，此更新源只有稳定版">
+                                            <showDuration>
+                                                <fx:reference source="tooltipDuration"/>
+                                            </showDuration>
+                                        </Tooltip>
+                                    </tooltip>
+                                </RadioButton>
+                                <RadioButton fx:id="githubUpdateSource" toggleGroup="$updateSourceToggle"
+                                             styleClass="radio-button-ui, radio-button-ui-main">
+                                    <graphic>
+                                        <GithubIco scaleX="${icoScale}" scaleY="${icoScale}"/>
+                                    </graphic>
+                                    <tooltip>
+                                        <Tooltip text="有魔法推荐选此，此更新源拥有所有版本">
+                                            <showDuration>
+                                                <fx:reference source="tooltipDuration"/>
+                                            </showDuration>
+                                        </Tooltip>
+                                    </tooltip>
+                                </RadioButton>
+                                <RadioButton fx:id="customUpdateSource" toggleGroup="$updateSourceToggle"
+                                             styleClass="radio-button-ui, radio-button-ui-main">
+                                    <graphic>
+                                        <EditIco scaleX="${icoScale}" scaleY="${icoScale}"
+                                                 onMouseClicked="#settingCustomUpdateSource"/>
+                                    </graphic>
+                                    <tooltip>
+                                        <Tooltip text="使用第三方更新源，需要遵循Github API风格">
+                                            <showDuration>
+                                                <fx:reference source="tooltipDuration"/>
+                                            </showDuration>
+                                        </Tooltip>
+                                    </tooltip>
+                                </RadioButton>
+                            </SettingHBox>
+                            <SettingHBox name="更新开发版" tabWindow="ADVANCED_SETTINGS" group="版本">
+                                <ConfigSwitch notificationManager="${notificationManager}" config="UPDATE_DEV"/>
+                            </SettingHBox>
+                            <SettingHBox name="自动更新" tabWindow="ADVANCED_SETTINGS" group="版本">
+                                <ConfigSwitch notificationManager="${notificationManager}" config="AUTO_UPDATE"/>
+                            </SettingHBox>
+                        </VBox>
+                    </TitledPane>
+                </Group>
+            </VBox>
+        </ScrollPane>
+        <VBox pickOnBounds="false" alignment="TOP_LEFT" style="-fx-padding: 40 0 0 20;-fx-spacing: 15"
+              translateY="-10">
+            <fx:define>
+                <ToggleGroup fx:id="navigationBarToggle"/>
+            </fx:define>
+            <ToggleButton fx:id="mouseNavigation" text="鼠标" selected="true" styleClass="navigationBar"
+                          toggleGroup="$navigationBarToggle" onAction="#scrollMouse"/>
+            <ToggleButton fx:id="windowNavigation" text="窗口" styleClass="navigationBar"
+                          toggleGroup="$navigationBarToggle" onAction="#scrollWindow"/>
+            <ToggleButton fx:id="behaviorNavigation" text="行为" styleClass="navigationBar"
+                          toggleGroup="$navigationBarToggle" onAction="#scrollBehavior"/>
+            <ToggleButton fx:id="systemNavigation" text="系统" styleClass="navigationBar"
+                          toggleGroup="$navigationBarToggle" onAction="#scrollSystem"/>
+            <ToggleButton fx:id="versionNavigation" text="版本" styleClass="navigationBar"
+                          toggleGroup="$navigationBarToggle" onAction="#scrollVersion"/>
+        </VBox>
+    </StackPane>
+    <NotificationManager fx:id="notificationManager" notificationPos="BOTTOM_CENTER">
+        <NotificationFactory showingCloseBtn="false" size="SMALL"/>
+    </NotificationManager>
+</StackPane>

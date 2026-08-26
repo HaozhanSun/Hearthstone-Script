@@ -1,0 +1,456 @@
+package club.xiaojiawei.hsscript.dll
+
+import club.xiaojiawei.hsscript.config.DRIVER_LOCK
+import club.xiaojiawei.hsscript.consts.ARG_PAUSE
+import club.xiaojiawei.hsscript.consts.PROGRAM_NAME
+import club.xiaojiawei.hsscript.consts.ROOT_PATH
+import club.xiaojiawei.hsscript.utils.SystemUtil
+import club.xiaojiawei.hsscript.status.RuntimeSafety
+import club.xiaojiawei.hsscriptbase.config.log
+import com.sun.jna.*
+import com.sun.jna.platform.win32.WinDef
+import com.sun.jna.platform.win32.WinDef.HWND
+import java.io.File
+import java.lang.reflect.Proxy
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.util.concurrent.CountDownLatch
+
+
+/**
+ * 系统相关功能
+ * @author 肖嘉威
+ * @date 2023/9/16 17:34
+ */
+interface CSystemDll : Library {
+    // ===================================mouse===================================
+
+    fun leftClick(
+        x: Long,
+        y: Long,
+        hwnd: HWND?,
+        mouseMode: Int,
+    )
+
+    fun rightClick(
+        x: Long,
+        y: Long,
+        hwnd: HWND?,
+        mouseMode: Int,
+    )
+
+    fun simulateHumanMoveMouse(
+        startX: Int,
+        startY: Int,
+        endX: Int,
+        endY: Int,
+        hwnd: HWND?,
+        pauseStep: Int,
+        mouseMode: Int,
+    )
+
+    fun clickPlatformLoginBtn(loginPlatformHWND: HWND?)
+
+    fun sendText(
+        hwnd: HWND?,
+        text: String?,
+        append: Boolean,
+    )
+
+    fun refreshDriver(): Int
+
+    fun loadDriver(): Int
+
+    fun releaseDriver(): Int
+
+    // ===================================system===================================
+
+    fun quitWindow(hwnd: HWND?)
+
+    fun frontWindow(hwnd: HWND?)
+
+    fun calmFrontWindow(hwnd: HWND?)
+
+    fun topWindow(
+        hwnd: HWND?,
+        isTop: Boolean,
+    ): Boolean
+
+    fun topWindowForTitle(
+        title: String?,
+        isTop: Boolean,
+    ): Boolean
+
+    fun moveWindow(
+        hwnd: HWND?,
+        x: Int,
+        y: Int,
+        w: Int,
+        h: Int,
+        ignoreSize: Boolean,
+    ): Boolean
+
+    fun moveWindowForTitle(
+        title: String?,
+        x: Int,
+        y: Int,
+        w: Int,
+        h: Int,
+        ignoreSize: Boolean,
+    ): Boolean
+
+    fun isRunAsAdministrator(): Boolean
+
+    fun messageBox(
+        hwnd: HWND?,
+        text: String?,
+        title: String?,
+        type: Int,
+    )
+
+    fun findWindowsByProcessName(processName: String?): HWND?
+
+    fun findProcessId(processName: String?, isTerminatable: Boolean): Long
+
+    fun getWindowsProxy(
+        proxyUrl: Pointer,
+        length: Int,
+    )
+
+    fun checkS3Support(): Boolean
+
+    fun enableWakeUpTimer(): Boolean
+
+    fun setWakeUpTimer(seconds: Int): Boolean
+
+    /**
+     * 睡眠系统
+     */
+    fun sleepSystem()
+
+    fun killProcessByName(processName: String)
+
+    fun isProcessRunning(processName: String): Boolean
+
+    /**
+     * 开机自启，不要在主线程中执行
+     */
+    fun enablePowerBoot(
+        enable: Boolean, processName: WString, programPath: WString, delaySec: Int,
+        arguments: WString?
+    ): Boolean
+
+    fun isTaskExists(processName: WString): Boolean
+
+    fun isDllLoadedInProcess(processId: Long, dllName: String): Boolean
+
+    fun activeWindowMove(hwnd: HWND?)
+
+    fun enableBlur(hwnd: HWND?)
+
+    fun isDebug(): Boolean
+
+    fun protectDirectory(directoryPath: WString, strongProtection: Boolean): Boolean
+
+    fun unprotectDirectory(directoryPath: WString): Boolean
+
+    fun isDirectoryProtected(directoryPath: WString): Boolean
+
+    fun isProcessElevated(pid: Long): Boolean
+
+    fun getProcessId(processName: String): Long
+
+    fun launchAsNormalUser(cmdLine: WString): Boolean
+
+    object SystemPart {
+
+        fun enablePowerBoot(enable: Boolean, start: Boolean = false): Boolean {
+            return File(ROOT_PATH).listFiles()
+                ?.find { it.name == "${PROGRAM_NAME}.exe" || it.name == "${PROGRAM_NAME}-native.exe" }
+                ?.let { latestJar ->
+                    val countDownLatch = CountDownLatch(1)
+                    var res = false
+                    Thread {
+                        runCatching {
+                            res =
+                                INSTANCE.enablePowerBoot(
+                                    enable,
+                                    WString(PROGRAM_NAME),
+                                    WString(latestJar.absolutePath),
+                                    10,
+                                    if (start) WString("${ARG_PAUSE}${false}") else null
+                                )
+                        }
+                        countDownLatch.countDown()
+                    }.start()
+                    countDownLatch.await()
+                    res
+                } ?: false
+        }
+
+        fun isTaskExists(): Boolean {
+            return INSTANCE.isTaskExists(WString(PROGRAM_NAME))
+        }
+    }
+
+    // ===================================message===================================
+
+    fun limitWindowResize(
+        gameHWND: HWND?,
+        enable: Boolean,
+    )
+
+    fun uninstall()
+
+    fun mouseHook(enable: Boolean)
+
+    fun logHook(enable: Boolean)
+
+    fun acHook(enable: Boolean)
+
+    fun resizeGameWindow(enable: Boolean)
+
+    fun limitMouseRange(enable: Boolean)
+
+    fun capture(enable: Boolean)
+
+    fun writeCapture()
+
+    fun saveCapture()
+
+    fun developer(enable: Boolean)
+
+    fun showMouseTrack(enable: Boolean)
+
+    fun presentDraw(enable: Boolean)
+
+    fun clearPresentDraw()
+
+    fun drawPresentRect(
+        x: Float,
+        y: Float,
+        width: Float,
+        height: Float,
+        thickness: Float,
+        filled: Boolean,
+        r: Float,
+        g: Float,
+        b: Float,
+        a: Float,
+    )
+
+    fun isConnected(): Boolean
+
+    // ===================================tray===================================
+
+    interface TrayCallback : Callback {
+        fun invoke()
+    }
+
+    @Structure.FieldOrder("id", "type", "text", "iconPath", "callback")
+    open class TrayItem : Structure() {
+        @JvmField
+        var id: Int = 0
+
+        @JvmField
+        var type: Int = 0
+
+        /**
+         * 对应wchar_t*
+         */
+        @JvmField
+        var text: Pointer? = null
+
+        /**
+         * 对应wchar_t*
+         */
+        @JvmField
+        var iconPath: Pointer? = null
+
+        @JvmField
+        var callback: TrayCallback? = null
+
+        // 嵌套类用于指针访问
+        class Reference :
+            TrayItem(),
+            ByReference
+
+        class Value :
+            TrayItem(),
+            ByValue
+    }
+
+    @Structure.FieldOrder("text", "iconPath", "trayItem", "itemCount", "clickCallback")
+    open class TrayMenu : Structure() {
+        /**
+         * 对应wchar_t*
+         */
+        @JvmField
+        var text: Pointer? = null
+
+        @JvmField
+        var iconPath: WString? = null
+
+        @JvmField
+        var trayItem: TrayItem.Reference? = null
+
+        @JvmField
+        var itemCount: Int = 0
+
+        @JvmField
+        var clickCallback: TrayCallback? = null
+
+        // 嵌套类用于指针访问
+        class Reference :
+            TrayMenu(),
+            ByReference
+
+        class Value :
+            TrayMenu(),
+            ByValue
+    }
+
+    fun addSystemTray(trayMenu: TrayMenu.Reference?): Boolean
+
+    fun removeSystemTray(): Boolean
+
+    // ex
+
+    companion object {
+        const val MB_ICONERROR: Int = 0x00000010
+
+        const val MB_TOPMOST: Int = 0x00040000
+
+        const val MB_OK: Int = 0x00000000
+
+        const val MB_ICONINFORMATION: Int = 0x00000040
+
+        const val MF_STRING: Int = 0x00000000
+
+        const val MF_SEPARATOR: Int = -0x80000000
+
+        const val MF_CHECKED: Int = 0x00000008
+
+        fun launchAsNormalUser(exePath: String, args: List<String> = emptyList()): Boolean {
+            val cmdLine = buildString {
+                append('"').append(exePath).append('"')
+                args.forEach { arg ->
+                    append(' ')
+                    append(arg)
+                }
+            }
+            return INSTANCE.launchAsNormalUser(WString(cmdLine))
+        }
+
+        fun isProcessElevated(processName: String): Boolean {
+            val pid = INSTANCE.getProcessId(processName)
+            if (pid > 0) {
+                return INSTANCE.isProcessElevated(pid)
+            }
+            return false
+        }
+
+
+        @Synchronized
+        fun setWakeUpTimer(seconds: Int): Boolean {
+            if (seconds > 0) {
+                log.info {
+                    "将于[${
+                        LocalDateTime.now().plusSeconds(seconds.toLong())
+                            .format(DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss"))
+                    }]唤醒电脑"
+                }
+            } else {
+                log.info { "取消定时唤醒电脑" }
+            }
+            return INSTANCE.setWakeUpTimer(seconds)
+        }
+
+        fun safeLoadDriver(): Int {
+            DRIVER_LOCK.lock()
+            try {
+                val res = INSTANCE.loadDriver()
+                if (res > 0) {
+                    log.info { "加载驱动成功" }
+                } else if (res < 0) {
+                    val text = "加载驱动失败"
+                    SystemUtil.notice(text)
+                    log.error { text }
+                }
+                return res
+            } finally {
+                DRIVER_LOCK.unlock()
+            }
+        }
+
+        fun safeRefreshDriver(): Int {
+            DRIVER_LOCK.lock()
+            try {
+                val res = INSTANCE.refreshDriver()
+                if (res > 0) {
+                    log.info { "刷新驱动成功" }
+                } else if (res < 0) {
+                    val text = "刷新驱动失败"
+                    SystemUtil.notice(text)
+                    log.error { text }
+                }
+                return res
+            } finally {
+                DRIVER_LOCK.unlock()
+            }
+        }
+
+        fun safeReleaseDriver(): Int {
+            DRIVER_LOCK.lock()
+            try {
+                val res = INSTANCE.releaseDriver()
+                if (res > 0) {
+                    log.info { "释放驱动成功" }
+                } else if (res < 0) {
+                    val text = "释放驱动失败"
+                    SystemUtil.notice(text)
+                    log.error { text }
+                }
+                return res
+            } finally {
+                DRIVER_LOCK.unlock()
+            }
+        }
+
+        /**
+         * The E2E harness must never load the native driver bridge.  The bridge
+         * pulls interception.dll into the JVM and a native process termination
+         * then looks like a clean Java exit (exit code 0, no Java exception).
+         * Return a no-op proxy in E2E mode so an unguarded legacy call cannot
+         * reintroduce that native dependency. Production mode still loads the
+         * real library unchanged.
+         */
+        val INSTANCE: CSystemDll by lazy {
+            if (RuntimeSafety.safeNative) {
+                System.err.println("SAFE_NATIVE_SKIP csystem")
+                Proxy.newProxyInstance(
+                    CSystemDll::class.java.classLoader,
+                    arrayOf(CSystemDll::class.java)
+                ) { _, method, _ ->
+                    when (method.returnType) {
+                        java.lang.Boolean.TYPE -> false
+                        java.lang.Byte.TYPE -> 0.toByte()
+                        java.lang.Short.TYPE -> 0.toShort()
+                        java.lang.Integer.TYPE -> 0
+                        java.lang.Long.TYPE -> 0L
+                        java.lang.Float.TYPE -> 0.0f
+                        java.lang.Double.TYPE -> 0.0
+                        java.lang.Character.TYPE -> '\u0000'
+                        else -> null
+                    }
+                } as CSystemDll
+            } else {
+                Native.load("dll/csystem", CSystemDll::class.java)
+            }
+        }
+    }
+}
+
+fun WinDef.RECT.width() = right - left
+
+fun WinDef.RECT.height() = bottom - top

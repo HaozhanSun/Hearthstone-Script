@@ -43,16 +43,15 @@ config.json
 /plugin
 /log
 /resource
-/config
+**/config
 *.db-journal
+*.db
+statistics-page-verified-v4.16.7*.jpg
+statistics-page-verified-v4.16.7*.png
 .pid
 /data
 
-cf
+/**/cf
 *.log
 plugin.dll
-/*.zip
-/.claude
-/nul
-/hs-script-native
-/.codegraph
+/src/main/resources/build/nul

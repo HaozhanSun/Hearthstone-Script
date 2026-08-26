@@ -1,0 +1,317 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.github.xjw580.Hearthstone-Script</groupId>
+        <artifactId>hs-script</artifactId>
+        <version>v4.16.8-local-20260825-213204PDT</version>
+    </parent>
+
+    <name>hs-script-app</name>
+    <description>鐐夌煶浼犺鑴氭湰</description>
+    <groupId>com.github.xjw580</groupId>
+    <artifactId>hs-script-app</artifactId>
+    <!--    <version>v4.16.0.1-DEV</version>-->
+
+    <repositories>
+        <repository>
+            <id>mavenCentral</id>
+            <url>https://repo1.maven.org/maven2/</url>
+        </repository>
+        <repository>
+            <id>jitpack.io</id>
+            <url>https://jitpack.io</url>
+        </repository>
+    </repositories>
+
+    <properties>
+        <maven.install.skip>true</maven.install.skip>
+
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <kotlin.code.style>official</kotlin.code.style>
+        <kotlin.compiler.jvmTarget>21</kotlin.compiler.jvmTarget>
+
+        <project.build.outputTimestamp>2025-12-08T00:00:00Z</project.build.outputTimestamp>
+    </properties>
+
+    <profiles>
+        <profile>
+            <id>native</id>
+            <properties>
+                <run.mode>native</run.mode>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.graalvm.buildtools</groupId>
+                        <artifactId>native-maven-plugin</artifactId>
+                        <version>0.10.5</version>
+                        <extensions>true</extensions>
+                        <executions>
+                            <execution>
+                                <id>build-native</id>
+                                <goals>
+                                    <goal>compile-no-fork</goal>
+                                </goals>
+                                <phase>package</phase>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <mainClass>club.xiaojiawei.hsscript.MainKt</mainClass>
+                            <outputDirectory>target/native</outputDirectory>
+                            <imageName>hs-script</imageName>
+                            <buildArgs>
+                                <buildArg>-H:NativeLinkerOption=/SUBSYSTEM:WINDOWS</buildArg>
+                                <buildArg>-H:NativeLinkerOption=/ENTRY:mainCRTStartup</buildArg>
+                                <buildArg>-H:NativeLinkerOption=${project.basedir}/src/main/resources/app.res</buildArg>
+                                <buildArg>-H:+AddAllCharsets</buildArg>
+                                <buildArg>
+                                    -H:ConfigurationFileDirectories=${project.basedir}/src/main/resources/META-INF/native-image
+                                </buildArg>
+                            </buildArgs>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>jvm</id>
+            <properties>
+                <run.mode>jar</run.mode>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-assembly-plugin</artifactId>
+                    </plugin>
+                </plugins>
+            </build>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+        </profile>
+    </profiles>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.github.xjw580</groupId>
+            <artifactId>javafx-md</artifactId>
+            <version>0.0.1</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.openjfx</groupId>
+                    <artifactId>javafx-web</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <!-- JSON 鏀寔 -->
+        <dependency>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-serialization-core</artifactId>
+            <version>1.6.3</version>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-serialization-json</artifactId>
+            <version>1.6.3</version>
+        </dependency>
+        <!-- ByteBuddy -->
+        <dependency>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+            <version>1.14.12</version>
+        </dependency>
+        <!--ocr-->
+        <dependency>
+            <groupId>com.github.nguyenq</groupId>
+            <artifactId>tess4j</artifactId>
+        </dependency>
+        <!--javafx鍥捐〃搴-->
+        <dependency>
+            <groupId>eu.hansolo</groupId>
+            <artifactId>tilesfx</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-compiler</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <!--INI閰嶇疆鏂囦欢璇诲啓-->
+        <dependency>
+            <groupId>org.ini4j</groupId>
+            <artifactId>ini4j</artifactId>
+        </dependency>
+        <!--鍗＄粍鎻掍欢-->
+        <dependency>
+            <groupId>com.github.xjw580</groupId>
+            <artifactId>hs-script-base-strategy-plugin</artifactId>
+        </dependency>
+        <!--鍗＄墝鎻掍欢-->
+        <dependency>
+            <groupId>com.github.xjw580</groupId>
+            <artifactId>hs-script-base-card-plugin</artifactId>
+        </dependency>
+        <!--妯℃澘鎻掍欢-->
+        <!--        <dependency>-->
+        <!--            <groupId>com.github.xjw580</groupId>-->
+        <!--            <artifactId>hs-card-plugin-template</artifactId>-->
+        <!--        </dependency>-->
+        <!--        <dependency>-->
+        <!--            <groupId>com.github.xjw580</groupId>-->
+        <!--            <artifactId>hs-strategy-plugin-template</artifactId>-->
+        <!--        </dependency>-->
+        <!--javafx-->
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-controls</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-fxml</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-graphics</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-swing</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-controls</artifactId>
+            <classifier>win</classifier>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-fxml</artifactId>
+            <classifier>win</classifier>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-graphics</artifactId>
+            <classifier>win</classifier>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-swing</artifactId>
+            <classifier>win</classifier>
+        </dependency>
+        <!--JavaFX缁勪欢UI搴-->
+        <dependency>
+            <groupId>com.github.xjw580</groupId>
+            <artifactId>javafx-ui</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.xjw580</groupId>
+            <artifactId>javafx-kt</artifactId>
+        </dependency>
+        <!--base-->
+        <dependency>
+            <groupId>com.github.xjw580</groupId>
+            <artifactId>hs-script-base</artifactId>
+        </dependency>
+        <!--sdk-->
+        <dependency>
+            <groupId>com.github.xjw580</groupId>
+            <artifactId>hs-script-strategy-sdk</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.xjw580</groupId>
+            <artifactId>hs-script-card-sdk</artifactId>
+        </dependency>
+        <!-- 鐩戝惉鍏ㄥ眬閿紶鍖?-->
+        <dependency>
+            <groupId>com.melloware</groupId>
+            <artifactId>jintellitype</artifactId>
+        </dependency>
+        <!--璁块棶绯荤粺鏈湴搴撲緷璧-->
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna</artifactId>
+        </dependency>
+        <!--璁块棶绯荤粺鏈湴搴撲緷璧-->
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna-platform</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-reflect</artifactId>
+        </dependency>
+        <!--璁块棶http闇€瑕-->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-web</artifactId>
+        </dependency>
+        <!--json搴忓垪鍖-->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.module</groupId>
+            <artifactId>jackson-module-kotlin</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!--        <sourceDirectory>src/main/kotlin</sourceDirectory>-->
+        <!--        <finalName>${project.artifactId}_${project.version}</finalName>-->
+        <finalName>hs-script_${project.version}</finalName>
+        <resources>
+            <resource>
+                <directory>src/main/resources-filtered</directory>
+                <filtering>true</filtering>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+        </resources>
+        <plugins>
+            <!-- 鎵撳寘鎴恓ar鍖咃紝骞舵寚瀹歭ib鍜宺esources鏂囦欢澶逛綅缃?-->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>bat/**</exclude>
+                        <exclude>exe/**</exclude>
+                        <exclude>build/**</exclude>
+                        <exclude>resources/img/**</exclude>
+                        <exclude>resources/tessdata/**</exclude>
+                        <exclude>dll/**</exclude>
+                        <exclude>logback.xml</exclude>
+                        <exclude>app.manifest</exclude>
+                        <exclude>app.rc</exclude>
+                        <exclude>app.res</exclude>
+                    </excludes>
+                    <archive>
+                        <manifest>
+                            <addDefaultImplementationEntries>false</addDefaultImplementationEntries>
+                            <addDefaultSpecificationEntries>false</addDefaultSpecificationEntries>
+                            <!-- 鍏ュ彛Main Class -->
+                            <mainClass>club.xiaojiawei.hsscript.MainKt</mainClass>
+                            <!-- 渚濊禆鐨刲ib -->
+                            <classpathPrefix>lib/</classpathPrefix>
+                            <addClasspath>true</addClasspath>
+                        </manifest>
+                        <manifestEntries>
+                            <!--                            <Class-Path>resources/</Class-Path>-->
+                            <Created-By>Maven</Created-By>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
+

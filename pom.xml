@@ -4,7 +4,7 @@
 
     <groupId>com.github.xjw580.Hearthstone-Script</groupId>
     <artifactId>hs-script</artifactId>
-    <version>v4.16.3-GA</version>
+        <version>v4.16.8-local-20260825-213204PDT</version>
     <packaging>pom</packaging>
 
     <name>Hearthstone-Script</name>
@@ -35,6 +35,9 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- This build contains local changes on top of the upstream GA baseline. -->
+        <upstream-baseline-version>v4.16.3-GA</upstream-baseline-version>
+        <local-build-timestamp-pacific>2026-08-25 21:32:04 PDT</local-build-timestamp-pacific>
 
         <!--java/fx-->
         <java.version>25</java.version>
@@ -69,7 +72,7 @@
         <byte-buddy-version>1.14.12</byte-buddy-version>
 
         <!--soft plugin-->
-        <hs-script-base-strategy-plugin-version>1.1.5</hs-script-base-strategy-plugin-version>
+        <hs-script-base-strategy-plugin-version>1.1.6</hs-script-base-strategy-plugin-version>
         <hs-script-base-card-plugin-version>1.1.4</hs-script-base-card-plugin-version>
         <hs-strategy-plugin-template-version>1.1.4</hs-strategy-plugin-template-version>
         <hs-card-plugin-template-version>1.1.3</hs-card-plugin-template-version>
@@ -83,6 +86,7 @@
         <!--plugin-->
         <maven-assembly-plugin-version>3.6.0</maven-assembly-plugin-version>
         <maven-jar-plugin-version>3.3.0</maven-jar-plugin-version>
+        <maven-surefire-plugin-version>3.2.5</maven-surefire-plugin-version>
         <maven-compiler-plugin-version>3.11.0</maven-compiler-plugin-version>
         <maven-resources-plugin-version>3.3.1</maven-resources-plugin-version>
         <build-helper-maven-plugin-version>3.4.0</build-helper-maven-plugin-version>
@@ -109,7 +113,7 @@
             <artifactId>logback-classic</artifactId>
             <version>${logback-version}</version>
         </dependency>
-        <!--kt日志封装-->
+        <!--kt鏃ュ織灏佽-->
         <dependency>
             <groupId>io.github.oshai</groupId>
             <artifactId>kotlin-logging-jvm</artifactId>
@@ -138,14 +142,14 @@
                 <version>${byte-buddy-version}</version>
             </dependency>
 
-            <!--ocr库-->
+            <!--ocr搴-->
             <dependency>
                 <groupId>com.github.nguyenq</groupId>
                 <artifactId>tess4j</artifactId>
                 <version>${tess4j-version}</version>
             </dependency>
 
-            <!--图表库-->
+            <!--鍥捐〃搴-->
             <dependency>
                 <groupId>eu.hansolo</groupId>
                 <artifactId>tilesfx</artifactId>
@@ -204,7 +208,7 @@
                 <artifactId>kotlin-reflect</artifactId>
                 <version>${kotlin.version}</version>
             </dependency>
-            <!--插件-->
+            <!--鎻掍欢-->
             <dependency>
                 <groupId>com.github.xjw580</groupId>
                 <artifactId>hs-script-base-card-plugin</artifactId>
@@ -302,13 +306,13 @@
                 <version>${javafx-version}</version>
                 <classifier>win</classifier>
             </dependency>
-            <!--JavaFX组件UI库-->
+            <!--JavaFX缁勪欢UI搴-->
             <dependency>
                 <groupId>com.github.xjw580</groupId>
                 <artifactId>javafx-ui</artifactId>
                 <version>${javafx-ui-version}</version>
             </dependency>
-            <!--JavaFX kt增强库-->
+            <!--JavaFX kt澧炲己搴-->
             <dependency>
                 <groupId>com.github.xjw580</groupId>
                 <artifactId>javafx-kt</artifactId>
@@ -319,25 +323,25 @@
             <!--                <artifactId>javafx-kt</artifactId>-->
             <!--                <version>${javafx-kt-version}</version>-->
             <!--            </dependency>-->
-            <!-- 监听全局键鼠包 -->
+            <!-- 鐩戝惉鍏ㄥ眬閿紶鍖?-->
             <dependency>
                 <groupId>com.melloware</groupId>
                 <artifactId>jintellitype</artifactId>
                 <version>${jintellitype-version}</version>
             </dependency>
-            <!--访问系统本地库依赖-->
+            <!--璁块棶绯荤粺鏈湴搴撲緷璧-->
             <dependency>
                 <groupId>net.java.dev.jna</groupId>
                 <artifactId>jna</artifactId>
                 <version>${jna-version}</version>
             </dependency>
-            <!--访问系统本地库依赖-->
+            <!--璁块棶绯荤粺鏈湴搴撲緷璧-->
             <dependency>
                 <groupId>net.java.dev.jna</groupId>
                 <artifactId>jna-platform</artifactId>
                 <version>${jna-version}</version>
             </dependency>
-            <!--ini配置读写-->
+            <!--ini閰嶇疆璇诲啓-->
             <dependency>
                 <groupId>org.ini4j</groupId>
                 <artifactId>ini4j</artifactId>
@@ -361,10 +365,10 @@
                     <configuration>
                         <appendAssemblyId>false</appendAssemblyId>
                         <descriptors>
-                            <!-- 读取assembly.xml文件 -->
+                            <!-- 璇诲彇assembly.xml鏂囦欢 -->
                             <descriptor>assembly.xml</descriptor>
                         </descriptors>
-                        <!-- 输出在target/目录下 -->
+                        <!-- 杈撳嚭鍦╰arget/鐩綍涓?-->
                         <outputDirectory>${project.build.directory}/</outputDirectory>
                     </configuration>
                     <executions>
@@ -384,7 +388,7 @@
                     <version>${maven-jar-plugin-version}</version>
                 </plugin>
 
-                <!-- 将模板写入生成源码目录 -->
+                <!-- 灏嗘ā鏉垮啓鍏ョ敓鎴愭簮鐮佺洰褰?-->
                 <plugin>
                     <artifactId>maven-resources-plugin</artifactId>
                     <version>${maven-resources-plugin-version}</version>
@@ -485,6 +489,11 @@
                 </configuration>
             </plugin>
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${maven-surefire-plugin-version}</version>
+            </plugin>
+            <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>build-helper-maven-plugin</artifactId>
                 <version>${build-helper-maven-plugin-version}</version>
@@ -506,3 +515,4 @@
         </plugins>
     </build>
 </project>
+

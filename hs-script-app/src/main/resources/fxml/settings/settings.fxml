@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import club.xiaojiawei.hsscript.component.SettingsSearchField?>
+<?import club.xiaojiawei.hsscript.component.TipNode?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.VBox?>
+<?import club.xiaojiawei.controls.ProgressModal?>
+<?import javafx.scene.layout.StackPane?>
+<StackPane xmlns="http://javafx.com/javafx"
+           xmlns:fx="http://javafx.com/fxml"
+           stylesheets="@../css/tableview.css, @../css/settings/settings.css"
+           fx:controller="club.xiaojiawei.hsscript.controller.javafx.settings.SettingsController"
+           fx:id="rootPane"
+           styleClass="settings-root">
+    <VBox alignment="CENTER">
+        <SettingsSearchField fx:id="searchField"/>
+        <TabPane fx:id="tabPane"
+                 tabClosingPolicy="UNAVAILABLE"
+                 VBox.vgrow="ALWAYS"
+                 styleClass="tab-pane-ui">
+            <Tab fx:id="initTab" text="初始设置"/>
+            <Tab fx:id="advancedTab" text="高级设置"/>
+            <Tab fx:id="strategyTab" text="策略设置"/>
+            <Tab fx:id="pluginTab" text="插件设置"/>
+            <Tab fx:id="cardGroupTab" text="卡牌组设置">
+                <graphic>
+                    <TipNode text="创建和管理卡牌组，包含卡牌信息和权重设置"/>
+                </graphic>
+            </Tab>
+            <Tab fx:id="developerTab" text="开发者选项"/>
+            <Tab fx:id="aboutTab" text="关于"/>
+        </TabPane>
+    </VBox>
+    <ProgressModal fx:id="progressModal"/>
+</StackPane>

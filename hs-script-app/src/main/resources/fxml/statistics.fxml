@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import club.xiaojiawei.controls.ProgressModal?>
+<?import club.xiaojiawei.controls.ico.OfflineIco?>
+<?import club.xiaojiawei.controls.ico.OnlineIco?>
+<?import javafx.scene.control.CheckBox?>
+<?import javafx.scene.control.ComboBox?>
+<?import javafx.scene.control.DatePicker?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.ScrollPane?>
+<?import javafx.scene.control.Separator?>
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.text.Text?>
+
+<StackPane xmlns="http://javafx.com/javafx"
+           xmlns:fx="http://javafx.com/fxml"
+           prefHeight="1200"
+           prefWidth="980"
+           fx:id="rootPane"
+           fx:controller="club.xiaojiawei.hsscript.controller.javafx.StatisticsController">
+    <ScrollPane fitToWidth="true" styleClass="scroll-pane-item">
+        <VBox alignment="TOP_CENTER" spacing="18" style="-fx-padding: 22;">
+            <VBox spacing="10" maxWidth="920" style="-fx-padding: 0 4 4 4;">
+                <Label text="统计范围" style="-fx-font-size: 18px; -fx-font-weight: bold;"/>
+                <GridPane hgap="10" vgap="8">
+                    <columnConstraints>
+                        <ColumnConstraints halignment="LEFT" hgrow="NEVER"/>
+                        <ColumnConstraints halignment="LEFT" hgrow="ALWAYS"/>
+                        <ColumnConstraints halignment="LEFT" hgrow="NEVER"/>
+                        <ColumnConstraints halignment="LEFT" hgrow="ALWAYS"/>
+                    </columnConstraints>
+                    <Label text="开始时间" GridPane.rowIndex="0" GridPane.columnIndex="0"/>
+                    <HBox spacing="6" alignment="CENTER_LEFT" GridPane.rowIndex="0" GridPane.columnIndex="1">
+                        <DatePicker fx:id="startDatePicker" prefWidth="145"/>
+                        <ComboBox fx:id="startHour" prefWidth="68" promptText="时"/>
+                        <Label text=":"/>
+                        <ComboBox fx:id="startMinute" prefWidth="68" promptText="分"/>
+                    </HBox>
+                    <Label text="结束时间" GridPane.rowIndex="0" GridPane.columnIndex="2"/>
+                    <HBox spacing="6" alignment="CENTER_LEFT" GridPane.rowIndex="0" GridPane.columnIndex="3">
+                        <DatePicker fx:id="endDatePicker" prefWidth="145"/>
+                        <ComboBox fx:id="endHour" prefWidth="68" promptText="时"/>
+                        <Label text=":"/>
+                        <ComboBox fx:id="endMinute" prefWidth="68" promptText="分"/>
+                    </HBox>
+                </GridPane>
+                <HBox alignment="CENTER" spacing="8">
+                    <OnlineIco fx:id="bindIco" style="-fx-cursor: hand" onMouseClicked="#changeStatus"/>
+                    <OfflineIco fx:id="unBindIco" style="-fx-cursor: hand" visible="false" onMouseClicked="#changeStatus"/>
+                    <Label text="日期联动：点击图标切换" style="-fx-text-fill: #666666;"/>
+                </HBox>
+            </VBox>
+
+            <VBox spacing="10" maxWidth="920" style="-fx-padding: 14; -fx-border-color: #d5d5d5; -fx-border-radius: 4;">
+                <Label text="统计选项" style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
+                <HBox spacing="24" alignment="CENTER_LEFT">
+                    <CheckBox fx:id="nonSurrenderOnly" text="只统计未投降对局"/>
+                    <Label text="用于查看实际进行过的对局胜率、时长和经验" style="-fx-text-fill: #666666;"/>
+                </HBox>
+                <HBox spacing="10" alignment="CENTER_LEFT">
+                    <Label text="策略"/>
+                    <ComboBox fx:id="strategyComboBox" prefWidth="180"/>
+                    <Label text="当前筛选会同步影响所有摘要和图表" style="-fx-text-fill: #666666;"/>
+                </HBox>
+            </VBox>
+
+            <VBox spacing="12" maxWidth="920" style="-fx-padding: 14; -fx-border-color: #d5d5d5; -fx-border-radius: 4;">
+                <Label text="摘要" style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
+                <GridPane hgap="34" vgap="12">
+                    <columnConstraints>
+                        <ColumnConstraints hgrow="ALWAYS"/>
+                        <ColumnConstraints hgrow="ALWAYS"/>
+                        <ColumnConstraints hgrow="ALWAYS"/>
+                    </columnConstraints>
+                    <VBox spacing="4" GridPane.columnIndex="0" GridPane.rowIndex="0">
+                        <Label text="当前局数"/>
+                        <Text fx:id="totalCount" style="-fx-font-size: 24px; -fx-font-weight: bold;"/>
+                    </VBox>
+                    <VBox spacing="4" GridPane.columnIndex="1" GridPane.rowIndex="0">
+                        <Label text="总体胜率"/>
+                        <Text fx:id="avgWR" style="-fx-font-size: 24px; -fx-font-weight: bold;"/>
+                    </VBox>
+                    <VBox spacing="4" GridPane.columnIndex="2" GridPane.rowIndex="0">
+                        <Label text="检测到的投降"/>
+                        <Text fx:id="surrenderedCount" style="-fx-font-size: 24px; -fx-font-weight: bold;"/>
+                    </VBox>
+                    <VBox spacing="4" GridPane.columnIndex="0" GridPane.rowIndex="1">
+                        <Label text="实战局数（已识别未投降）"/>
+                        <Text fx:id="playedCount" style="-fx-font-size: 24px; -fx-font-weight: bold;"/>
+                    </VBox>
+                    <VBox spacing="4" GridPane.columnIndex="1" GridPane.rowIndex="1">
+                        <Label text="实战胜率"/>
+                        <Text fx:id="playedWR" style="-fx-font-size: 24px; -fx-font-weight: bold;"/>
+                    </VBox>
+                    <VBox spacing="4" GridPane.columnIndex="2" GridPane.rowIndex="1">
+                        <Label text="总计经验"/>
+                        <Text fx:id="totalEXP" style="-fx-font-size: 24px; -fx-font-weight: bold;"/>
+                    </VBox>
+                    <VBox spacing="4" GridPane.columnIndex="0" GridPane.rowIndex="2">
+                        <Label text="总计时长"/>
+                        <Text fx:id="totalDuration" style="-fx-font-size: 20px;"/>
+                    </VBox>
+                    <VBox spacing="4" GridPane.columnIndex="1" GridPane.rowIndex="2">
+                        <Label text="平均对局时长"/>
+                        <Text fx:id="avgRoundDuration" style="-fx-font-size: 20px;"/>
+                    </VBox>
+                    <VBox spacing="4" GridPane.columnIndex="2" GridPane.rowIndex="2">
+                        <Label text="平均经验 / 局"/>
+                        <Text fx:id="avgEXPPerGame" style="-fx-font-size: 20px;"/>
+                    </VBox>
+                    <VBox spacing="4" GridPane.columnIndex="0" GridPane.rowIndex="3">
+                        <Label text="平均经验 / 分钟"/>
+                        <Text fx:id="avgEXPPerMinute" style="-fx-font-size: 20px;"/>
+                    </VBox>
+                    <VBox spacing="4" GridPane.columnIndex="1" GridPane.rowIndex="3">
+                        <Label text="投降状态未知（旧记录）"/>
+                        <Text fx:id="unknownSurrenderCount" style="-fx-font-size: 20px;"/>
+                    </VBox>
+                </GridPane>
+            </VBox>
+
+            <VBox spacing="10" maxWidth="920">
+                <Separator/>
+                <Label text="实验性统计" style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
+                <Label text="这些筛选用于验证数据质量和不同统计口径，默认不启用。" style="-fx-text-fill: #666666;"/>
+                <HBox spacing="28" alignment="CENTER_LEFT">
+                    <CheckBox fx:id="knownSurrenderOnly" text="只使用已识别投降状态的记录"/>
+                    <CheckBox fx:id="excludePractice" text="排除练习模式"/>
+                </HBox>
+            </VBox>
+
+            <GridPane hgap="18" vgap="18" maxWidth="920">
+                <columnConstraints>
+                    <ColumnConstraints percentWidth="50" hgrow="ALWAYS"/>
+                    <ColumnConstraints percentWidth="50" hgrow="ALWAYS"/>
+                </columnConstraints>
+                <rowConstraints>
+                    <RowConstraints prefHeight="310"/>
+                    <RowConstraints prefHeight="310"/>
+                    <RowConstraints prefHeight="310"/>
+                </rowConstraints>
+                <StackPane fx:id="wrPane" GridPane.rowIndex="0" GridPane.columnSpan="2"/>
+                <StackPane fx:id="timePane" GridPane.rowIndex="1" GridPane.columnIndex="0"/>
+                <StackPane fx:id="durationPane" GridPane.rowIndex="1" GridPane.columnIndex="1"/>
+                <StackPane fx:id="strategyPane" GridPane.rowIndex="2" GridPane.columnIndex="0"/>
+                <StackPane fx:id="runModePane" GridPane.rowIndex="2" GridPane.columnIndex="1"/>
+            </GridPane>
+        </VBox>
+    </ScrollPane>
+    <ProgressModal fx:id="mainProgressModal" tip="计算中"/>
+</StackPane>
