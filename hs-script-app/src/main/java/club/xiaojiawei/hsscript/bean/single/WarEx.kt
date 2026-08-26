@@ -172,9 +172,15 @@ object WarEx {
     @Synchronized
     fun endWar(resultOverride: Boolean? = null) {
         inWar = false
+        // Set the result before entering Player.safeRun.  Fast surrender and
+        // pre-mulligan GAME_OVER events can leave war.me as
+        // UNKNOWN_PLAYER; safeRun intentionally skips that placeholder and
+        // the old code then leaked the previous game's isWin value into the
+        // current result screenshot/statistics.
+        val finalResult = resultOverride ?: printResult()
+        isWin = finalResult
         war.run {
             me.safeRun {
-                isWin = resultOverride ?: printResult()
                 if (resultOverride != null) {
                     log.info { "本局游戏胜负采用Power.log最终PLAYSTATE：${if (isWin) "WON" else "LOST"}" }
                 }

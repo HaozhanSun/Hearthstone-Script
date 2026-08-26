@@ -82,7 +82,7 @@ object CurrentRankDetector {
     internal fun resolveRankCandidates(candidates: List<String>, visualTenHint: Boolean = false): Int? {
         val parsed = candidates.mapNotNull(::parseRankText)
         if (parsed.contains(10)) return 10
-        if (visualTenHint && parsed.all { it == 1 }) return 10
+        if (visualTenHint && parsed.isNotEmpty() && parsed.all { it in 1 until MAX_RANK }) return 10
         val counts = parsed.groupingBy { it }.eachCount()
         return counts.entries
             .filter { (rank, count) -> rank in MIN_RANK until MAX_RANK && count >= 2 }

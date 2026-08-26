@@ -132,10 +132,14 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun rankResolverUsesVisualTenHintWhenOcrDropsTheZero() {
+    fun rankResolverUsesVisualTenHintWhenOcrReadsOnlyOneDigit() {
         assertEquals(
             10,
-            CurrentRankDetector.resolveRankCandidates(listOf("", "1", "1", ""), visualTenHint = true),
+            CurrentRankDetector.resolveRankCandidates(listOf("", "2", "", ""), visualTenHint = true),
+        )
+        assertEquals(
+            10,
+            CurrentRankDetector.resolveRankCandidates(listOf("9", "1", "", "1"), visualTenHint = true),
         )
     }
 
