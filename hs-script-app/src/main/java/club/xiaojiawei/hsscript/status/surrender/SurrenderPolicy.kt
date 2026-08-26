@@ -60,7 +60,6 @@ object SurrenderPolicy {
     internal fun hasConfirmedGameState(mode: ModeEnum?, inWar: Boolean): Boolean =
         mode === ModeEnum.GAMEPLAY || inWar
 
-    private const val RIVAL_HEALTH_TO_SURRENDER = 40
     private const val NAME_RESOLUTION_TIMEOUT_MS = 3_000L
     private const val NAME_RESOLUTION_POLL_MS = 100L
     private const val RANK_RETRY_INTERVAL_MS = 750L
@@ -145,19 +144,6 @@ object SurrenderPolicy {
                     },
                 )
             }
-        },
-        SurrenderRule("rival-health-equals-40") { context ->
-            val matched = context.rivalHealth == RIVAL_HEALTH_TO_SURRENDER
-            SurrenderRuleResult(
-                ruleId = "rival-health-equals-40",
-                matched = matched,
-                shouldSurrender = matched,
-                reason = if (matched) {
-                    "opponent-health-equals-40"
-                } else {
-                    "opponent-health-is-not-40"
-                },
-            )
         },
     )
 
@@ -353,8 +339,9 @@ object SurrenderPolicy {
             rivalHeroNameResolved = heroNameResolved,
             rivalHeroCardId = rivalHero?.cardId?.trim().orEmpty(),
             rivalPlayerName = war.rival.gameId.trim(),
-            // Health and armor are separate Hearthstone values. Do not use
-            // Card.blood(), which includes armor, for the 40-health rule.
+            // Health and armor are separate Hearthstone values. Keep both in
+            // the diagnostic context, but do not use health as a surrender
+            // shortcut: rank and hero identity are the only policy gates.
             rivalHealth = rivalHero?.let { it.health - it.damage },
             rivalArmor = rivalHero?.armor,
         )

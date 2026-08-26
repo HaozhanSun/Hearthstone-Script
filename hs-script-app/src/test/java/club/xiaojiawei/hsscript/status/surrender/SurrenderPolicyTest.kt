@@ -97,6 +97,16 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun originalHeroAtFortyHealthDoesNotTriggerLegacyHealthSurrender() {
+        val war = warWithRivalHero("加尔鲁什").apply {
+            rival.playArea.hero!!.health = 40
+            rival.playArea.hero!!.damage = 0
+        }
+
+        assertNull(SurrenderPolicy.evaluateTurnStart(war))
+    }
+
+    @Test
     fun rankOcrParserAcceptsPlainAndLocalizedRankText() {
         assertEquals(10, CurrentRankDetector.parseRankText("白银10"))
         assertEquals(9, CurrentRankDetector.parseRankText("当前等级：9"))
