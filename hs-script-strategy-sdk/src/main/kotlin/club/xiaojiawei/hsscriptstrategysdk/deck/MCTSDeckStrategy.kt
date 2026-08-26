@@ -52,37 +52,54 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
     fun actionableCreatorIds(war: War): Set<String> {
         val me = war.me
         val model = activeDecisionModel
+        val suppressed = suppressedExperimentalCreatorIds()
         val result = linkedSetOf<String>()
         me.handArea.cards.forEach { card ->
+            if (card.entityId in suppressed) return@forEach
             if (card.isUncertain || card.cost > me.usableResource) return@forEach
             if (me.playArea.isFull &&
                 (card.cardType === CardTypeEnum.MINION || card.cardType === CardTypeEnum.LOCATION)
             ) return@forEach
-            val parsed = runCatching {
-                card.action.generatePlayActions(war, me).isNotEmpty()
-            }.getOrDefault(false)
+            // Mirror MonteCarloTreeNode: a card filtered by a deck timing
+            // hook is not an actionable residual for the end-turn guard.
+            if (model?.shouldDefer(card, war) == true) return@forEach
+            val parsedActions = runCatching {
+                card.action.generatePlayActions(war, me)
+            }.getOrDefault(emptyList())
+            val parsed = parsedActions.any { model?.isDeferredAction(it, war) != true }
             if (parsed || model?.canCreateOpaqueAction(card, war) == true) {
                 result += card.entityId
             }
         }
         me.playArea.cards.forEach { card ->
-            if (card.canAttack() && runCatching {
-                    card.action.generateAttackActions(war, me).isNotEmpty()
-                }.getOrDefault(false)
-            ) result += card.entityId
-            if (card.canPower() && runCatching {
-                    card.action.generatePowerActions(war, me).isNotEmpty()
-                }.getOrDefault(false)
-            ) result += card.entityId
+            if (card.entityId in suppressed) return@forEach
+            if (card.canAttack()) {
+                val attackActions = runCatching {
+                    card.action.generateAttackActions(war, me)
+                }.getOrDefault(emptyList())
+                if (attackActions.any { model?.isDeferredAction(it, war) != true }) {
+                    result += card.entityId
+                }
+            }
+            if (card.canPower()) {
+                val powerActions = runCatching {
+                    card.action.generatePowerActions(war, me)
+                }.getOrDefault(emptyList())
+                if (powerActions.any { model?.isDeferredAction(it, war) != true }) {
+                    result += card.entityId
+                }
+            }
             if (model?.canCreateOpaquePowerAction(card, war) == true) result += card.entityId
         }
         me.playArea.hero?.let { hero ->
+            if (hero.entityId in suppressed) return@let
             if (hero.canAttack() && runCatching {
                     hero.action.generateAttackActions(war, me).isNotEmpty()
                 }.getOrDefault(false)
             ) result += hero.entityId
         }
         me.playArea.power?.let { power ->
+            if (power.entityId in suppressed) return@let
             if (power.canPower() && runCatching {
                     power.action.generatePowerActions(war, me).isNotEmpty()
                 }.getOrDefault(false)
