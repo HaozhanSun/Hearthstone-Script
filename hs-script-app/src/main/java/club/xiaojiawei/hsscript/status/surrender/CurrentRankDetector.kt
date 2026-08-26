@@ -35,6 +35,14 @@ object CurrentRankDetector {
     private const val RANK_DIGIT_TOP = 0.835
     private const val RANK_DIGIT_WIDTH = 0.060
     private const val RANK_DIGIT_HEIGHT = 0.105
+    // The stylized 10 badge is frequently OCR'd as a lone 1.  This narrow
+    // inner window excludes the shield border and the player name, leaving
+    // only the numeral row for a conservative two-digit layout check.
+    private const val RANK_VISUAL_LEFT = 0.26
+    private const val RANK_VISUAL_TOP = 0.32
+    private const val RANK_VISUAL_WIDTH = 0.30
+    private const val RANK_VISUAL_HEIGHT = 0.25
+    private const val RANK_TWO_DIGIT_MIN_SPAN = 24
 
     data class Detection(
         val rank: Int?,
@@ -71,9 +79,10 @@ object CurrentRankDetector {
      * rank 10 wins immediately when any pass sees it, while ranks 1..9 need
      * two agreeing passes.
      */
-    internal fun resolveRankCandidates(candidates: List<String>): Int? {
+    internal fun resolveRankCandidates(candidates: List<String>, visualTenHint: Boolean = false): Int? {
         val parsed = candidates.mapNotNull(::parseRankText)
         if (parsed.contains(10)) return 10
+        if (visualTenHint && parsed.all { it == 1 }) return 10
         val counts = parsed.groupingBy { it }.eachCount()
         return counts.entries
             .filter { (rank, count) -> rank in MIN_RANK until MAX_RANK && count >= 2 }
@@ -142,11 +151,12 @@ object CurrentRankDetector {
             ocrRank(image, tessData, pageSegMode)
         }
         val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
-        val rank = resolveRankCandidates(ocrTexts)
+        val visualTenHint = looksLikeTwoDigitRank(rankRegion)
+        val rank = resolveRankCandidates(ocrTexts, visualTenHint)
         log.info {
             "RANK_OCR bounds=$bounds region=${rankRegion.width}x${rankRegion.height} " +
                 "text=${ocrText.ifBlank { "<empty>" }} candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
-                "rank=${rank ?: "UNKNOWN"}"
+                "visualTenHint=$visualTenHint rank=${rank ?: "UNKNOWN"}"
         }
         Detection(rank, ocrText, bounds)
     }.getOrElse { error ->
@@ -156,6 +166,38 @@ object CurrentRankDetector {
 
     private fun cropRankRegion(image: BufferedImage): BufferedImage {
         return crop(image, RANK_REGION_LEFT, RANK_REGION_TOP, RANK_REGION_WIDTH, RANK_REGION_HEIGHT)
+    }
+
+    /**
+     * Detect the two-digit width of the rank-10 numeral when OCR drops the
+     * right-hand zero.  This is deliberately only a ten hint: it never turns
+     * an arbitrary one-digit OCR result into a lower rank.
+     */
+    internal fun looksLikeTwoDigitRank(image: BufferedImage): Boolean {
+        val left = (image.width * RANK_VISUAL_LEFT).toInt().coerceIn(0, image.width - 1)
+        val top = (image.height * RANK_VISUAL_TOP).toInt().coerceIn(0, image.height - 1)
+        val right = (image.width * (RANK_VISUAL_LEFT + RANK_VISUAL_WIDTH))
+            .toInt().coerceAtMost(image.width)
+        val bottom = (image.height * (RANK_VISUAL_TOP + RANK_VISUAL_HEIGHT))
+            .toInt().coerceAtMost(image.height)
+        val occupiedColumns = (left until right).filter { x ->
+            var foregroundPixels = 0
+            for (y in top until bottom) {
+                val color = image.getRGB(x, y)
+                val red = color shr 16 and 0xff
+                val green = color shr 8 and 0xff
+                val blue = color and 0xff
+                val brightest = maxOf(red, green, blue)
+                val darkest = minOf(red, green, blue)
+                if (brightest >= 180 && brightest - darkest <= 70) {
+                    foregroundPixels++
+                }
+            }
+            foregroundPixels >= 2
+        }
+        if (occupiedColumns.isEmpty()) return false
+        val span = occupiedColumns.last() - occupiedColumns.first() + 1
+        return span >= RANK_TWO_DIGIT_MIN_SPAN && occupiedColumns.size >= RANK_TWO_DIGIT_MIN_SPAN / 2
     }
 
     private fun crop(

@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
+import java.awt.Color
+import java.awt.image.BufferedImage
 
 class SurrenderPolicyTest {
 
@@ -127,6 +129,32 @@ class SurrenderPolicyTest {
             10,
             CurrentRankDetector.resolveRankCandidates(listOf("1", "", "10", "1")),
         )
+    }
+
+    @Test
+    fun rankResolverUsesVisualTenHintWhenOcrDropsTheZero() {
+        assertEquals(
+            10,
+            CurrentRankDetector.resolveRankCandidates(listOf("", "1", "1", ""), visualTenHint = true),
+        )
+    }
+
+    @Test
+    fun rankVisualHintDistinguishesTwoDigitBadgeFromSingleDigitBadge() {
+        val ten = BufferedImage(144, 140, BufferedImage.TYPE_INT_RGB)
+        val tenGraphics = ten.createGraphics()
+        tenGraphics.color = Color.WHITE
+        tenGraphics.fillRect(40, 45, 10, 35)
+        tenGraphics.fillRect(56, 45, 18, 35)
+        tenGraphics.dispose()
+        assertTrue(CurrentRankDetector.looksLikeTwoDigitRank(ten))
+
+        val one = BufferedImage(144, 140, BufferedImage.TYPE_INT_RGB)
+        val oneGraphics = one.createGraphics()
+        oneGraphics.color = Color.WHITE
+        oneGraphics.fillRect(53, 45, 12, 35)
+        oneGraphics.dispose()
+        assertFalse(CurrentRankDetector.looksLikeTwoDigitRank(one))
     }
 
     @Test
