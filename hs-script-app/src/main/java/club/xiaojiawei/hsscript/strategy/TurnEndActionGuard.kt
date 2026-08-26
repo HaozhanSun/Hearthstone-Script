@@ -94,7 +94,11 @@ object TurnEndActionGuard {
      * MCTS owns action selection. This method only observes live legality and
      * the end-turn affordance so the actuator can request a bounded replan.
      */
-    internal fun inspectForMctsEndTurn(clearYellowRetries: Int = 0): MctsTurnEndInspection {
+    internal fun inspectForMctsEndTurn(
+        clearYellowRetries: Int = 0,
+        ignoredCreatorIds: Set<String> = emptySet(),
+        mctsActionableCreatorIds: Set<String>? = null,
+    ): MctsTurnEndInspection {
         if (!WAR.isMyTurn || PauseStatus.isPause) {
             return MctsTurnEndInspection(
                 TurnEndObservation(0, 0, false, false),
@@ -103,7 +107,7 @@ object TurnEndActionGuard {
             )
         }
 
-        val observation = observe()
+        val observation = observe(ignoredCreatorIds, mctsActionableCreatorIds)
         val buttonColor = if (observation.blocksEndTurn) {
             EndTurnButtonColor.UNKNOWN
         } else {
@@ -116,7 +120,9 @@ object TurnEndActionGuard {
             "MCTS_TURN_END_OBSERVE turn=${WAR.me.turn} actions=${observation.blocksEndTurn} " +
                 "minions=${observation.attackableMinions} hand=${observation.playableHandCards} " +
                 "hero=${observation.attackableHero} heroPower=${observation.playableHeroPower} " +
-                "buttonColor=$buttonColor clearYellowRetries=$clearYellowRetries safe=$safe"
+                "buttonColor=$buttonColor clearYellowRetries=$clearYellowRetries " +
+                "ignoredCreators=${ignoredCreatorIds.size} " +
+                "mctsActionableCreators=${mctsActionableCreatorIds?.size ?: -1} safe=$safe"
         }
         return MctsTurnEndInspection(observation, buttonColor, safe)
     }
@@ -267,11 +273,27 @@ object TurnEndActionGuard {
         return false
     }
 
-    private fun observe(): TurnEndObservation {
+    internal fun isMctsActionableCreator(
+        entityId: String,
+        mctsActionableCreatorIds: Set<String>?,
+        ignoredCreatorIds: Set<String> = emptySet(),
+    ): Boolean = entityId !in ignoredCreatorIds &&
+        (mctsActionableCreatorIds == null || entityId in mctsActionableCreatorIds)
+
+    private fun observe(
+        ignoredCreatorIds: Set<String> = emptySet(),
+        mctsActionableCreatorIds: Set<String>? = null,
+    ): TurnEndObservation {
         val me = WAR.me
         return TurnEndObservation(
-            attackableMinions = me.playArea.cards.count { it.canAttack() },
+            attackableMinions = me.playArea.cards.count {
+                isMctsActionableCreator(it.entityId, mctsActionableCreatorIds, ignoredCreatorIds) &&
+                    it.canAttack()
+            },
             playableHandCards = me.handArea.cards.count { card ->
+                if (!isMctsActionableCreator(card.entityId, mctsActionableCreatorIds, ignoredCreatorIds)) {
+                    return@count false
+                }
                 isHandCardPlayable(
                     cardType = card.cardType,
                     cost = card.cost,
@@ -280,6 +302,9 @@ object TurnEndActionGuard {
                 )
             },
             playableHeroPower = me.playArea.power?.let { power ->
+                if (!isMctsActionableCreator(power.entityId, mctsActionableCreatorIds, ignoredCreatorIds)) {
+                    return@let false
+                }
                 isHeroPowerPlayable(
                     powerCost = power.cost,
                     usableMana = me.usableResource,
@@ -287,6 +312,9 @@ object TurnEndActionGuard {
                 )
             } == true,
             attackableHero = me.playArea.hero?.let { hero ->
+                if (!isMctsActionableCreator(hero.entityId, mctsActionableCreatorIds, ignoredCreatorIds)) {
+                    return@let false
+                }
                 val modelSaysAttackable = hero.canAttack() || hasWeaponBackedHeroAttack(
                     weaponAttack = me.playArea.weapon?.atc ?: 0,
                     heroCanAttackIgnoringAttack = hero.canAttack(ignoreAtc = true),

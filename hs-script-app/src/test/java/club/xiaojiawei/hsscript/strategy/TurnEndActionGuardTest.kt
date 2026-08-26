@@ -169,6 +169,29 @@ class TurnEndActionGuardTest {
     }
 
     @Test
+    fun `mcts probe ignores parser-only cards and quarantined creators`() {
+        assertTrue(
+            TurnEndActionGuard.isMctsActionableCreator(
+                entityId = "parsed-action",
+                mctsActionableCreatorIds = setOf("parsed-action"),
+            ),
+        )
+        assertFalse(
+            TurnEndActionGuard.isMctsActionableCreator(
+                entityId = "parser-only-card",
+                mctsActionableCreatorIds = setOf("parsed-action"),
+            ),
+        )
+        assertFalse(
+            TurnEndActionGuard.isMctsActionableCreator(
+                entityId = "parsed-action",
+                mctsActionableCreatorIds = setOf("parsed-action"),
+                ignoredCreatorIds = setOf("parsed-action"),
+            ),
+        )
+    }
+
+    @Test
     fun `hand action is not confirmed while the same card remains in hand`() {
         assertFalse(
             TurnEndActionGuard.handCardActionConfirmed(

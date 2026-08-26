@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.listener.log
 
 import club.xiaojiawei.hsscript.consts.GAME_MODE_LOG_NAME
+import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.Mode
@@ -66,15 +67,31 @@ object ScreenLogListener :
             // Its last historical scene is not proof that the current pixels
             // are in that scene. The live listener will accept only a fresh
             // scene event.
-            Mode.reset()
-            log.info {
-                "忽略LoadingScreen历史模式状态：避免将旧日志误当成当前界面 " +
-                    "historicalCurr=${finalCurrMode ?: "NONE"} " +
-                    "historicalNext=${finalNextMode ?: "NONE"}"
+            if (shouldPreserveActiveGameMode(WarEx.inWar)) {
+                // Power.log is the authoritative source for an already active
+                // game.  During startup recovery it may finish after this
+                // listener has read LoadingScreen.log; resetting Mode here
+                // would erase the recovered GAMEPLAY state and leave MCTS
+                // permanently gated by mode=NONE.
+                Mode.recover(ModeEnum.GAMEPLAY, "active-power-log-game", enterStrategy = false)
+                log.info {
+                    "忽略LoadingScreen历史模式状态：保留Power.log确认的活跃对局 " +
+                        "historicalCurr=${finalCurrMode ?: "NONE"} " +
+                        "historicalNext=${finalNextMode ?: "NONE"}"
+                }
+            } else {
+                Mode.reset()
+                log.info {
+                    "忽略LoadingScreen历史模式状态：避免将旧日志误当成当前界面 " +
+                        "historicalCurr=${finalCurrMode ?: "NONE"} " +
+                        "historicalNext=${finalNextMode ?: "NONE"}"
+                }
             }
         }
 
     }
+
+    internal fun shouldPreserveActiveGameMode(inWar: Boolean): Boolean = inWar
 
     private var dealing = false
 

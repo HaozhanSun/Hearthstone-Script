@@ -287,9 +287,16 @@ object DeckStrategyActuator {
             return
         }
 
-
         if (Mode.currMode !== ModeEnum.GAMEPLAY) {
-            log.warn { "没有处于${ModeEnum.GAMEPLAY.comment}，但试图执行出牌方法，如脚本运行不正常请提交issue并附带游戏日志【${PowerLogListener.logFile?.path()}】" }
+            // A replayed/stale Power.log can leave WarEx.inWar=true while the
+            // visible client is on another screen or another live match. Do
+            // not let a stale model send MCTS clicks into that screen.
+            log.info {
+                "MCTS_INPUT_DEFERRED reason=mode-not-gameplay " +
+                    "mode=${Mode.currMode?.name ?: "NONE"} " +
+                    "powerLog=${PowerLogListener.logFile?.path()}"
+            }
+            return
         }
 
         val surrenderNumber = ConfigUtil.getInt(ConfigEnum.OVER_TURN_SURRENDER)
@@ -364,7 +371,18 @@ object DeckStrategyActuator {
         var replans = 0
         var clearYellowRetries = 0
         while (war.isMyTurn && !PauseStatus.isPause) {
-            val inspection = TurnEndActionGuard.inspectForMctsEndTurn(clearYellowRetries)
+            if (Mode.currMode !== ModeEnum.GAMEPLAY || PowerLogListener.replayingExistingLog) {
+                log.info {
+                    "MCTS_TURN_END_DEFERRED turn=${war.me.turn} " +
+                        "reason=mode-or-replay-boundary"
+                }
+                return
+            }
+            val inspection = TurnEndActionGuard.inspectForMctsEndTurn(
+                clearYellowRetries = clearYellowRetries,
+                ignoredCreatorIds = strategy.suppressedExperimentalCreatorIds(),
+                mctsActionableCreatorIds = strategy.actionableCreatorIds(war),
+            )
             if (inspection.safeToEnd) {
                 clickEndTurnUntilTransition()
                 return

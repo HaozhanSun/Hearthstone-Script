@@ -263,6 +263,21 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `ragewing remains legal when it is the only playable hand action`() {
+        val war = testWar()
+        val ragewing = testCard(PirateDemonHunterMctsExperimentModel.RAGEWING).apply {
+            cost = 1
+            entityName = "狂暴邪翼蝠"
+        }
+        war.addCard(ragewing, war.me.handArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it.creator?.cardId == PirateDemonHunterMctsExperimentModel.RAGEWING })
+        assertTrue(node.actions.none { it.javaClass.simpleName == "TurnOverAction" })
+    }
+
+    @Test
     fun `experimental mcts does not expose end turn beside a legal action`() {
         val war = testWar()
         val ordinary = testCard("ORDINARY_PIRATE").apply { cost = 1 }

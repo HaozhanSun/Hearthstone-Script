@@ -33,5 +33,5 @@ New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
 Add-Content -LiteralPath $selectionLog -Value ("{0} selected={1} replacedPids={2}" -f (Get-Date -Format o), $jar.FullName, ($replaced -join ','))
 
 $arguments = '-Dhs.script.launch.source=shortcut -Djna.library.path="' +
-    $scriptDirectory + '" -jar "' + $jar.FullName + '" --pause=true'
+    $scriptDirectory + '" -jar "' + $jar.FullName + '" --pause=false'
 Start-Process -FilePath $javaPath -ArgumentList $arguments -WorkingDirectory $scriptDirectory

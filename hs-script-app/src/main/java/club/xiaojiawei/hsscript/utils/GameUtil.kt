@@ -594,8 +594,8 @@ object GameUtil {
      * 游戏里投降
      */
     fun surrender(skipEndTurn: Boolean = false) {
-        if (System.getProperty("hs.script.e2e") == "true" && PowerLogListener.replayingExistingLog) {
-            log.info { "E2E恢复回放：跳过历史投降请求" }
+        if (PowerLogListener.replayingExistingLog) {
+            log.info { "Power.log恢复回放：跳过历史投降请求" }
             return
         }
 //        SystemUtil.frontWindow(ScriptStaticData.getGameHWND());

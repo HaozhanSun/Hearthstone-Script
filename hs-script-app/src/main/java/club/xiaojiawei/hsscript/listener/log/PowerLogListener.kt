@@ -14,6 +14,7 @@ import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.StepEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
@@ -48,15 +49,20 @@ object PowerLogListener :
         terminalTailFence = false
 
         logFile?.let {
-            if (System.getProperty("hs.script.e2e") == "true") {
-                // A watchdog restart must reconstruct the current game before
-                // consuming new lines; otherwise the phase machine starts at
-                // DRAWN_INIT_CARD with no player mapping and never reaches
-                // the live turn handler. The actuator guards below make this
-                // replay state-only and prevent duplicate UI clicks.
+            val replayExistingGame = hasUnfinishedGame(it.path())
+            if (replayExistingGame || System.getProperty("hs.script.e2e") == "true") {
+                // A restart or late attach must reconstruct an already active
+                // game before consuming new lines; otherwise the phase machine
+                // starts at FILL_DECK with no player mapping and the bot can
+                // observe the board without reaching the live turn handler.
+                // Replay guards make this state-only and prevent historical UI
+                // clicks.
                 replayingExistingLog = true
                 try {
-                    log.info { "E2E恢复：从Power.log开头回放当前对局状态" }
+                    log.info {
+                        "Power.log恢复：从开头回放当前未结束对局 " +
+                            "reason=${if (replayExistingGame) "active-game-detected" else "e2e-watchdog"}"
+                    }
                     it.seek(0)
                     dealNewLog()
                 } finally {
@@ -75,6 +81,44 @@ object PowerLogListener :
                 it.seek(it.length())
             }
         }
+    }
+
+    /**
+     * Detect whether the newest CREATE_GAME block is still live.  Starting a
+     * listener after Hearthstone has already entered a match otherwise seeks
+     * directly to EOF and loses the in-memory card model.  A completed match
+     * is fenced by its authoritative WON/LOST PLAYSTATE, so result/home/deck
+     * screens do not trigger an unsafe historical replay.
+     */
+    private fun hasUnfinishedGame(path: String): Boolean = runCatching {
+        val active = File(path).bufferedReader(Charsets.UTF_8).useLines { lines ->
+            hasUnfinishedGame(lines)
+        }
+        log.info {
+            "POWER_LOG_ATTACH_PROBE path=$path replayExistingGame=$active"
+        }
+        active
+    }.getOrElse { error ->
+        log.warn(error) { "POWER_LOG_ATTACH_PROBE_FAILED path=$path" }
+        false
+    }
+
+    internal fun hasUnfinishedGame(lines: Sequence<String>): Boolean {
+        var sawCreateGame = false
+        var terminal = false
+        lines.forEach { line ->
+            when {
+                line.contains("CREATE_GAME") -> {
+                    sawCreateGame = true
+                    terminal = false
+                }
+                sawCreateGame && (
+                    line.contains("tag=PLAYSTATE value=WON") ||
+                        line.contains("tag=PLAYSTATE value=LOST")
+                    ) -> terminal = true
+            }
+        }
+        return sawCreateGame && !terminal
     }
 
     /**

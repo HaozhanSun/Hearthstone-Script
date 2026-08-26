@@ -337,7 +337,11 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 !isCard(card, BLINDEYE_JUDGE) &&
                 !card.isUncertain &&
                 card.cost <= me.usableResource &&
-                (card.cardType !== CardTypeEnum.MINION || !me.playArea.isFull)
+                (card.cardType !== CardTypeEnum.MINION || !me.playArea.isFull) &&
+                (
+                    card.action.generatePlayActions(war, me).isNotEmpty() ||
+                        canCreateOpaqueAction(card, war)
+                    )
         }
         val boardAction = me.playArea.cards.any { it.canAttack() || it.canPower() }
         val heroAttack = me.playArea.hero?.canAttack() == true
