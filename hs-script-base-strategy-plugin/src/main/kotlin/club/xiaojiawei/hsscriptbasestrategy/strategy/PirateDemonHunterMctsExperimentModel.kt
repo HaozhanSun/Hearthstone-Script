@@ -15,6 +15,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.area.HandArea
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTriggerSimulator
+import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 import club.xiaojiawei.hsscriptcardsdk.util.CardUtil
 import kotlin.math.max
@@ -69,6 +70,12 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         card.cardId == id || card.cardId.startsWith("${id}t")
 
     override fun shouldDefer(card: Card, war: War): Boolean {
+        // Keep the dedicated Pirate DH model aligned with the shared timing
+        // policy.  The previous override handled VAC_925 only, which meant
+        // YOD_032 / 狂暴邪翼蝠 and TOY_330 / 奇莉亚斯 bypassed the generic
+        // end-of-turn reduction rule and could be selected immediately.
+        if (CardTimingPolicy.shouldDefer(card, war)) return true
+
         // VAC_925 / 伞降咒符 is a setup card: when another useful action is
         // available, keep it in hand so the board and attacks happen first.
         // It is still legal when it is the only remaining useful action.

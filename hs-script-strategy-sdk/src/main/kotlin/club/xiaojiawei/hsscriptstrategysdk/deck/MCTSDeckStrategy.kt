@@ -192,7 +192,19 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
         val weapon = me.playArea.weapon?.let { "${it.cardId}:${it.durability}" }.orEmpty()
         val location = me.playArea.cards.filter { it.cardType === CardTypeEnum.LOCATION }
             .joinToString(",") { "${it.entityId}:${it.isLocationActionCooldown}:${it.damage}" }
-        return "${me.turn}|${me.usableResource}|$hand|$board|$hero|$weapon|$location"
+        // Combat confirmation must include the opponent side.  The previous
+        // fingerprint only tracked our hand/board/hero, so a successful attack
+        // that killed an enemy minion could look unchanged and trigger the
+        // replan-exhausted path even though Hearthstone accepted the action.
+        val rivalBoard = war.rival.playArea.cards.joinToString(",") {
+            "${it.entityId}:${it.cardId}:${it.atc}:${it.health}:${it.damage}:${it.isExhausted}"
+        }
+        val rivalHero = war.rival.playArea.hero?.let {
+            "${it.atc}:${it.health}:${it.damage}:${it.isExhausted}"
+        }.orEmpty()
+        val rivalWeapon = war.rival.playArea.weapon?.let { "${it.cardId}:${it.durability}" }.orEmpty()
+        return "${me.turn}|${me.usableResource}|$hand|$board|$hero|$weapon|$location|" +
+            "$rivalBoard|$rivalHero|$rivalWeapon"
     }
 
     private fun describeActionCard(card: club.xiaojiawei.hsscriptcardsdk.bean.Card): String {

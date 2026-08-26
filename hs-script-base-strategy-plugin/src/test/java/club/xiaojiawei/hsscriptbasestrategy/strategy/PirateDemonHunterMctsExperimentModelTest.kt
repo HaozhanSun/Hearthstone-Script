@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
+import club.xiaojiawei.hsscriptcardsdk.bean.TurnOverAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
@@ -130,6 +131,94 @@ class PirateDemonHunterMctsExperimentModelTest {
         assertFalse(PirateDemonHunterMctsExperimentModel.shouldDefer(sigil, war))
         val nodeWithOnlySigil = MonteCarloTreeNode(war, InitAction, testMctsArg())
         assertTrue(nodeWithOnlySigil.actions.any { it.creator?.cardId == sigil.cardId })
+    }
+
+    @Test
+    fun `ragewing and zilliax stay behind ordinary actions in the dedicated model`() {
+        val war = testWar().apply { me.resources = 10 }
+        val ragewing = testCard(PirateDemonHunterMctsExperimentModel.RAGEWING).apply {
+            cost = 4
+            cardType = CardTypeEnum.MINION
+            cardRace = CardRaceEnum.PET
+        }
+        val zilliax = testCard(PirateDemonHunterMctsExperimentModel.ZILLIAX_T7).apply {
+            cost = 7
+            cardType = CardTypeEnum.MINION
+            cardRace = CardRaceEnum.MECHANICAL
+        }
+        val ordinaryPirate = testCard("ORDINARY_PIRATE").apply {
+            cost = 1
+            cardType = CardTypeEnum.MINION
+            cardRace = CardRaceEnum.PIRATE
+        }
+        war.addCard(ragewing, war.me.handArea)
+        war.addCard(zilliax, war.me.handArea)
+        war.addCard(ordinaryPirate, war.me.handArea)
+
+        assertTrue(PirateDemonHunterMctsExperimentModel.shouldDefer(ragewing, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.shouldDefer(zilliax, war))
+
+        val nodeWithOrdinaryAction = MonteCarloTreeNode(war, InitAction, testMctsArg())
+        assertTrue(nodeWithOrdinaryAction.actions.any { it.creator?.cardId == ordinaryPirate.cardId })
+        assertFalse(nodeWithOrdinaryAction.actions.any { it.creator?.cardId == ragewing.cardId })
+        assertFalse(nodeWithOrdinaryAction.actions.any { it.creator?.cardId == zilliax.cardId })
+
+        war.me.handArea.removeByEntityId(ordinaryPirate.entityId)
+        assertFalse(PirateDemonHunterMctsExperimentModel.shouldDefer(ragewing, war))
+        assertFalse(PirateDemonHunterMctsExperimentModel.shouldDefer(zilliax, war))
+        val nodeWithOnlyTimingActions = MonteCarloTreeNode(war, InitAction, testMctsArg())
+        assertTrue(nodeWithOnlyTimingActions.actions.any { it.creator?.cardId == ragewing.cardId })
+        assertTrue(nodeWithOnlyTimingActions.actions.any { it.creator?.cardId == zilliax.cardId })
+    }
+
+    @Test
+    fun `ships cannon remains the only first action even when timing cards are in hand`() {
+        val war = testWar().apply { me.resources = 10 }
+        val cannon = testCard(PirateDemonHunterMctsExperimentModel.SHIPS_CANNON).apply {
+            cost = 2
+            cardType = CardTypeEnum.MINION
+        }
+        val ragewing = testCard(PirateDemonHunterMctsExperimentModel.RAGEWING).apply {
+            cost = 4
+            cardType = CardTypeEnum.MINION
+            cardRace = CardRaceEnum.PET
+        }
+        val zilliax = testCard(PirateDemonHunterMctsExperimentModel.ZILLIAX_T7).apply {
+            cost = 7
+            cardType = CardTypeEnum.MINION
+            cardRace = CardRaceEnum.MECHANICAL
+        }
+        war.addCard(cannon, war.me.handArea)
+        war.addCard(ragewing, war.me.handArea)
+        war.addCard(zilliax, war.me.handArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg())
+
+        assertEquals(1, node.actions.size)
+        assertTrue(node.actions.single() is PlayAction)
+        assertEquals(PirateDemonHunterMctsExperimentModel.SHIPS_CANNON, node.actions.single().creator?.cardId)
+    }
+
+    @Test
+    fun `experimental MCTS cannot end the turn while a legal ordinary action remains`() {
+        val emptyNode = MonteCarloTreeNode(testWar(), InitAction, testMctsArg())
+        assertTrue(emptyNode.actions.any { it === TurnOverAction })
+
+        val war = testWar().apply { me.resources = 2 }
+        val pirate = testCard("ORDINARY_ACTION").apply {
+            cost = 1
+            cardType = CardTypeEnum.MINION
+            cardRace = CardRaceEnum.PIRATE
+        }
+        war.addCard(pirate, war.me.handArea)
+        val actionableNode = MonteCarloTreeNode(
+            war,
+            InitAction,
+            testMctsArg(experimentalSearch = true),
+        )
+
+        assertTrue(actionableNode.actions.any { it.creator?.cardId == pirate.cardId })
+        assertFalse(actionableNode.actions.any { it === TurnOverAction })
     }
 
     @Test
@@ -310,7 +399,7 @@ class PirateDemonHunterMctsExperimentModelTest {
         return war
     }
 
-    private fun testMctsArg(): MCTSArg = MCTSArg(
+    private fun testMctsArg(experimentalSearch: Boolean = false): MCTSArg = MCTSArg(
         endMillisTime = Long.MAX_VALUE,
         turnCount = 1,
         turnFactor = 0.5,
@@ -318,6 +407,7 @@ class PirateDemonHunterMctsExperimentModelTest {
         scoreCalculator = { 0.0 },
         enableMultiThread = false,
         decisionModel = PirateDemonHunterMctsExperimentModel,
+        experimentalSearch = experimentalSearch,
     )
 
     private fun testCard(cardId: String): Card = Card(TestCardAction()).apply {

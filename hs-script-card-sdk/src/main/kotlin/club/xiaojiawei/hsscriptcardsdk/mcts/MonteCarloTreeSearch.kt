@@ -128,10 +128,21 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
         val result = mutableListOf<MonteCarloTreeNode>()
 
         if (rootNode.arg.experimentalSearch) {
-            var node: MonteCarloTreeNode? = rootNode.children.maxWithOrNull(
-                compareBy<MonteCarloTreeNode> { it.state.visitCount }
-                    .thenBy { it.state.averageValue() },
-            )
+            // In the multi-threaded path the worker receives an already
+            // expanded root child.  The old reconstruction started at that
+            // child's children, silently dropping the mandatory root action
+            // (for example GVG_075) from the returned path.  The executor
+            // then played a later attack first even though the root had only
+            // exposed the cannon.  Keep the worker root itself in the path;
+            // for the normal root, choose its best child as before.
+            var node: MonteCarloTreeNode? = if (rootNode.parent != null) {
+                rootNode
+            } else {
+                rootNode.children.maxWithOrNull(
+                    compareBy<MonteCarloTreeNode> { it.state.visitCount }
+                        .thenBy { it.state.averageValue() },
+                )
+            }
             while (node != null) {
                 result.addFirst(node)
                 node = node.children.maxWithOrNull(

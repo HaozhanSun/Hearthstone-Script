@@ -149,7 +149,21 @@ class MonteCarloTreeNode(
         val deferredActions = arg.decisionModel
             ?.let { model -> result.filterNot { model.isDeferredAction(it, war) } }
             ?: result
-        return if (deferredActions.isNotEmpty()) deferredActions.toMutableList() else result
+        val filteredActions = if (deferredActions.isNotEmpty()) deferredActions else result
+
+        // In receding-horizon MCTS, End Turn is a terminal control decision,
+        // not a peer of a still-legal card/attack/power action.  If it remains
+        // in the root action set, rollout scores can choose it early; the live
+        // turn-end guard then sees the unplayed action, requests a re-plan, and
+        // eventually emits MCTS_TURN_END_REPLAN_EXHAUSTED without an owner for
+        // that action.  Keep the legacy search unchanged, but make the
+        // experimental action contract explicit: expose End Turn only after
+        // all non-deferred actions are exhausted.
+        return if (arg.experimentalSearch && filteredActions.any { it !== TurnOverAction }) {
+            filteredActions.filterNot { it === TurnOverAction }.toMutableList()
+        } else {
+            filteredActions.toMutableList()
+        }
     }
 
     /**
