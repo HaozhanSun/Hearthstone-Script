@@ -22,6 +22,7 @@ import javafx.beans.value.ChangeListener
 import javafx.stage.Stage
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.ZonedDateTime
 import java.util.Random
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
@@ -50,17 +51,36 @@ object WorkTimeListener {
     private var jitterCacheObservedToday: LocalDate? = null
     private val startupRunWindow = StartupRunWindow()
     private var startupWorkTimeRule: WorkTimeRule? = null
+    private var currentScheduleWindow: WorkTimeJitter.Window? = null
+    private var currentScheduleRuleSetId: String? = null
+    private var currentScheduleRuleIndex: Int? = null
+    private var lastScheduleDecision: String? = null
+
+    private fun timestamp(): String = ZonedDateTime.now().toString()
+
+    private fun scheduleWindowDescription(): String {
+        val window = currentScheduleWindow
+        if (window == null) {
+            return startupRunWindow.deadline()?.let { "startup-override deadline=$it" } ?: "none"
+        }
+        return "ruleSet=${currentScheduleRuleSetId ?: "?"} " +
+            "ruleIndex=${currentScheduleRuleIndex ?: "?"} " +
+            "effective=${window.start}-${window.end} " +
+            "offsets=${window.startOffsetSeconds},${window.endOffsetSeconds}s"
+    }
 
     private fun jitteredWindow(
         ruleSetId: String,
         ruleIndex: Int,
         rule: WorkTimeRule,
         date: LocalDate,
-        endIncludesMinute: Boolean = false,
     ): WorkTimeJitter.Window? {
         val baseStart = rule.workTime.parseStartTime()?.withSecond(0) ?: return null
         val parsedEnd = rule.workTime.parseEndTime() ?: return null
-        val baseEnd = if (endIncludesMinute) parsedEnd.withSecond(59) else parsedEnd
+        // A configured end minute includes the whole minute.  Keep this
+        // canonical value for every caller so cached jitter never differs
+        // between schedule checks and next-period display.
+        val baseEnd = parsedEnd.withSecond(59)
         val jitterSeconds = WorkTimeJitter.normalizeSeconds(
             WorkTimeStatus.readOnlyWorkTimeRuleSet()
                 .toList()
@@ -86,12 +106,20 @@ object WorkTimeListener {
                 jitterCacheObservedToday = today
             }
             return jitterCache.getOrPut(key) {
-                WorkTimeJitter.jitterWindow(
+                val window = WorkTimeJitter.jitterWindow(
                     start = baseStart,
                     end = baseEnd,
                     maxSeconds = jitterSeconds,
                     random = Random(),
                 )
+                log.info {
+                    "SCHEDULE_EFFECTIVE_WINDOW timestamp=${timestamp()} date=$date " +
+                        "ruleSet=$ruleSetId ruleIndex=$ruleIndex " +
+                        "planned=$baseStart-$baseEnd effective=${window.start}-${window.end} " +
+                        "offsets=${window.startOffsetSeconds},${window.endOffsetSeconds}s " +
+                        "maxJitterSeconds=$jitterSeconds"
+                }
+                window
             }
         }
     }
@@ -107,6 +135,17 @@ object WorkTimeListener {
                 30,
                 TimeUnit.SECONDS,
             )
+        workingProperty.addListener { _, oldValue, newValue ->
+            if (oldValue != newValue) {
+                log.info {
+                    "SCHEDULE_RUNTIME timestamp=${timestamp()} " +
+                        "event=${if (newValue) "STARTED" else "STOPPED"} " +
+                        "normalScheduleActive=$isDuringWorkDate " +
+                        "startupOverrideActive=${startupRunWindow.isActive()} " +
+                        "window=${scheduleWindowDescription()}"
+                }
+            }
+        }
         WarEx.inWarProperty.addListener { _, _, newValue ->
             if (!newValue && PauseStatus.isStart) {
                 checkWork()
@@ -272,7 +311,7 @@ object WorkTimeListener {
 
             // 寻找当前时间所在的工作时间段
             timeRules.withIndex().find { (index, rule) ->
-                val window = jitteredWindow(id, index, rule, LocalDate.now(), endIncludesMinute = true)
+                val window = jitteredWindow(id, index, rule, LocalDate.now())
                     ?: return@find false
                 nowTime in window.start..window.end
             }?.value
@@ -310,7 +349,7 @@ object WorkTimeListener {
 
             // 检查是否有在当前结束时间后立即开始的工作时间段
             timeRules.withIndex().any { (index, rule) ->
-                val window = jitteredWindow(id, index, rule, LocalDate.now(), endIncludesMinute = true)
+                val window = jitteredWindow(id, index, rule, LocalDate.now())
                     ?: return@any false
                 val startTime = window.start
                 // 允许少量时间间隔（比如1分钟内）认为是连续的
@@ -324,6 +363,9 @@ object WorkTimeListener {
     fun checkWork() {
         var canWork = false
         var closestWorkTimeRule: WorkTimeRule? = null
+        var activeScheduleWindow: WorkTimeJitter.Window? = null
+        var activeScheduleRuleSetId: String? = null
+        var activeScheduleRuleIndex: Int? = null
 
         val readOnlyWorkTimeSetting = WorkTimeStatus.readOnlyWorkTimeSetting()
         val dayIndex = LocalDate.now().dayOfWeek.value - 1
@@ -346,7 +388,7 @@ object WorkTimeListener {
             currentWorkTimeRule = null
 
             for ((index, rule) in timeRules.withIndex()) {
-                val window = jitteredWindow(id, index, rule, LocalDate.now(), endIncludesMinute = true)
+                val window = jitteredWindow(id, index, rule, LocalDate.now())
                     ?: continue
                 val startTime = window.start
                 val endTime = window.end
@@ -362,6 +404,9 @@ object WorkTimeListener {
                     closestWorkTimeRule = rule
                     currentWorkTimeRule = rule // 设置当前工作时间规则
                     this.closestWorkTimeRule = rule
+                    activeScheduleWindow = window
+                    activeScheduleRuleSetId = id
+                    activeScheduleRuleIndex = index
                     break
                 } else {
                     // 找出最近刚结束的工作时间段（用于执行收尾操作）
@@ -375,11 +420,31 @@ object WorkTimeListener {
         }
 
         isDuringWorkDate = canWork
+        currentScheduleWindow = activeScheduleWindow
+        currentScheduleRuleSetId = activeScheduleRuleSetId
+        currentScheduleRuleIndex = activeScheduleRuleIndex
         if (canWork) {
             startupRunWindow.clear()
             startupWorkTimeRule = null
         }
         prevClosestWorkTimeRule = closestWorkTimeRule
+
+        val startupOverrideActive = startupRunWindow.isActive()
+        val decision = if (canWork) {
+            "ACTIVE:${currentScheduleRuleSetId ?: "?"}:${currentScheduleRuleIndex ?: "?"}"
+        } else if (startupOverrideActive) {
+            "STARTUP_OVERRIDE"
+        } else {
+            "OUTSIDE"
+        }
+        if (decision != lastScheduleDecision) {
+            lastScheduleDecision = decision
+            log.info {
+                "SCHEDULE_DECISION timestamp=${timestamp()} decision=$decision " +
+                    "normalScheduleActive=$canWork startupOverrideActive=$startupOverrideActive " +
+                    "window=${scheduleWindowDescription()}"
+            }
+        }
 
         // 调试日志
         if (!canWork && prevClosestWorkTimeRule != null) {
