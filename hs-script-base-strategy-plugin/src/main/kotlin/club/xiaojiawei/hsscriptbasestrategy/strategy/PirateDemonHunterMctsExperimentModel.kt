@@ -47,8 +47,55 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
     const val RAGEWING = "YOD_032"
     const val BLINDEYE_JUDGE = "MAW_008"
     const val WEAPONS_ATTENDANT = "VAC_924"
+    const val PIGGY = "TOY_642"
     const val ZILLIAX_T7 = "TOY_330t7"
     const val ETERNAL_AMALGAM = "WON_143"
+
+    /**
+     * Card ids for which this model has an intentional, hand-reviewed rule
+     * or simulation hook.  The app uses this set when it compares the live
+     * deck code with the cards we actually know how to value.  It is a
+     * tuning inventory, not a claim that every card in the deck is always
+     * present in every user's current list.
+     */
+    val knownTunedCardIds: Set<String> = setOf(
+        PATCHES_THE_PIRATE,
+        "BT_355",
+        PUFFERFIST,
+        PRINCE_RENATHAL,
+        "CORE_BT_187",
+        "TOY_330",
+        WEAPONS_ATTENDANT,
+        PATCHES_THE_PILOT,
+        CUSTOMS_ENFORCER,
+        INSECT_CLAW,
+        "CS2_146",
+        SHIPS_CANNON,
+        PARACHUTE_BRIGAND,
+        RAGEWING,
+        WATCHPOST_OBSERVER,
+        "CORE_NEW1_027",
+        "NEW1_027",
+        MAGNIFYING_GLAIVE,
+        BLINDEYE_JUDGE,
+        TREASURE_DISTRIBUTOR,
+        PIGGY,
+        SIGIL_OF_SKYDIVING,
+        ADRENALINE_FIEND,
+        DANGEROUS_CLIFFSIDE,
+        HOZEN_ROUGHHOUSER,
+        "VAC_430",
+        ETERNAL_AMALGAM,
+    )
+
+    fun isKnownTunedCardId(cardId: String): Boolean {
+        if (cardId.isBlank()) return false
+        return knownTunedCardIds.any { known ->
+            cardId == known || cardId.startsWith("${known}t") ||
+                (known.startsWith("CORE_") && cardId == known.removePrefix("CORE_")) ||
+                (cardId.startsWith("CORE_") && cardId.removePrefix("CORE_") == known)
+        }
+    }
 
     private val opaqueCards = setOf(
         PATCHES_THE_PILOT,
@@ -60,6 +107,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         DANGEROUS_CLIFFSIDE,
         BLINDEYE_JUDGE,
         WEAPONS_ATTENDANT,
+        PIGGY,
         ETERNAL_AMALGAM,
     )
 
@@ -67,18 +115,39 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         card.cardRace === CardRaceEnum.PIRATE || card.cardRace === CardRaceEnum.ALL
 
     fun isCard(card: Card, id: String): Boolean =
-        card.cardId == id || card.cardId.startsWith("${id}t")
+        card.cardId == id ||
+            card.cardId.startsWith("${id}t") ||
+            card.cardId == "CORE_$id" ||
+            card.cardId.startsWith("CORE_${id}t") ||
+            (id.startsWith("CORE_") && card.cardId == id.removePrefix("CORE_")) ||
+            (id.startsWith("CORE_") && card.cardId.startsWith("${id.removePrefix("CORE_")}t"))
 
     override fun shouldDefer(card: Card, war: War): Boolean {
+        // A Cliffside play needs one slot for the location and two more for
+        // its immediate pirate summons.  Keep it in the MCTS search, but do
+        // not let a low-space play create a misleading candidate that cannot
+        // realize the card's actual value.
+        if (isCard(card, DANGEROUS_CLIFFSIDE) && card.area is HandArea && freeSlots(war) < 3) {
+            return true
+        }
         if (CardTimingPolicy.shouldDefer(card, war)) return true
 
-        // VAC_925 is a setup card. Keep it behind ordinary board development,
-        // but allow it when it is the only useful remaining action.
-        return isCard(card, SIGIL_OF_SKYDIVING) && hasOtherPlayableAction(war, card)
+        // The Sigil is a delayed board-development card, but its next-turn
+        // two charge Pirates are valuable enough that it must remain in the
+        // search whenever it is playable.  Its prior below still lets the
+        // state evaluator choose a more urgent answer (for example lethal or
+        // a required clear); hiding it here made it look like a dead card.
+        return false
     }
 
     override fun canCreateOpaqueAction(card: Card, war: War): Boolean =
-        card.cardId in opaqueCards && card.entityId.isNotBlank()
+        card.entityId.isNotBlank() &&
+            (
+                card.cardId in opaqueCards ||
+                    CardTimingPolicy.isPatchesThePirate(card) ||
+                    CardTimingPolicy.isOpponentDamageReductionCard(card) ||
+                    CardTimingPolicy.isZilliaxDeluxe3000(card)
+                )
 
     override fun canCreateOpaquePowerAction(card: Card, war: War): Boolean =
         isCard(card, DANGEROUS_CLIFFSIDE) &&
@@ -112,7 +181,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         // cooldown. While it is cooling down, the only action we want the
         // MCTS branch to expose is the Demon Hunter hero attack. The attack
         // unlocks the location again; the next re-plan then sees PowerAction.
-        if (cliffside?.isLocationActionCooldown == true && heroCanAttack) {
+        if (cliffside?.isLocationActionCooldown == true && heroCanAttack && freeSlots(war) >= 2) {
             return action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO
         }
 
@@ -120,7 +189,8 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             action.creator?.let { card ->
                 isCard(card, DANGEROUS_CLIFFSIDE) &&
                     card.cardType === CardTypeEnum.LOCATION &&
-                    card.canPower()
+                    card.canPower() &&
+                    freeSlots(war) >= 2
             } == true
     }
 
@@ -161,6 +231,22 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 if (otherPirates == 0) -24.0 else 7.0 + otherPirates * 2.0
             isCard(card, HOZEN_ROUGHHOUSER) ->
                 if (otherPirates == 0) -24.0 else 6.0 + attackablePirates * 1.5
+            isCard(card, WEAPONS_ATTENDANT) -> {
+                val otherPirateOnBoard = me.playArea.cards.any { isPirate(it) }
+                val currentWeapon = me.playArea.weapon
+                when {
+                    !otherPirateOnBoard -> -22.0
+                    currentWeapon == null -> 14.0 + attackablePirates
+                    // Replacing a healthy weapon is usually a destructive
+                    // random roll.  Allow the MCTS to consider replacement
+                    // once the current weapon is nearly spent, but do not
+                    // silently force it over a good weapon.
+                    currentWeapon.durability <= 1 -> 8.0 + attackablePirates
+                    else -> -10.0
+                }
+            }
+            isCard(card, SIGIL_OF_SKYDIVING) ->
+                if (freeSlots(war) >= 2) 16.0 + futurePirates * 1.5 else -16.0
             isCard(card, BATTLEFIELD) ->
                 if (friendlyMinions == 0) -22.0 else 4.0 + friendlyMinions
             isCard(card, ADRENALINE_FIEND) ->
@@ -168,10 +254,23 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 // attack is valuable, but its absence must not turn the card
                 // into a dead action: the body can enable the next Pirate.
                 if (attackablePirates == 0 && futurePirates == 0) 1.0 else 7.0 + attackablePirates
+            isCard(card, PIGGY) -> {
+                val lowHealthTargets = lowHealthEnemyMinions(me, 3)
+                val oneHealthTargets = oneHealthEnemyMinions(me)
+                // Piggy's battlecry/deathrattle deals a deterministic 3
+                // damage.  Prefer it strongly when it can immediately hit a
+                // real target, without making it an unconditional top pick.
+                16.0 + lowHealthTargets * 5.0 + oneHealthTargets * 3.0
+            }
             isCard(card, PUFFERFIST) -> {
                 val oneHealthTargets = oneHealthEnemyMinions(me)
+                val lowHealthTargets = lowHealthEnemyMinions(me, 3)
                 val canFollowWithHeroPower = canFollowWithHeroPower(war, card)
-                10.0 + oneHealthTargets * 6.0 +
+                // A <=3-health enemy is exactly in the Piggy's deterministic
+                // 3-damage range.  This is a very strong prior, but remains
+                // below mandatory action hooks and can still lose to a
+                // direct lethal/clear found by the MCTS rollout.
+                16.0 + lowHealthTargets * 5.0 + oneHealthTargets * 3.0 +
                     if (canFollowWithHeroPower || me.playArea.hero?.canAttack() == true) 8.0 else 0.0
             }
             isCard(card, MAGNIFYING_GLAIVE) -> {
@@ -181,14 +280,15 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             isCard(card, BLINDEYE_JUDGE) ->
                 if (hasOtherPlayableAction(war, card)) -28.0 else -2.0
             isCard(card, DANGEROUS_CLIFFSIDE) -> when {
-                action is PowerAction -> 40.0
-                freeSlots(war) < 2 -> -18.0
-                else -> 14.0 + attackablePirates
+                action is PlayAction && freeSlots(war) < 3 -> -30.0
+                action is PowerAction && freeSlots(war) >= 2 -> 60.0 + attackablePirates * 2.0
+                action is PowerAction -> -30.0
+                freeSlots(war) < 3 -> -30.0
+                else -> 24.0 + attackablePirates * 2.0
             }
-            isCard(card, ZILLIAX_T7) ->
+            isZilliax(card) ->
                 if (friendlyMinions == 0) -6.0 else 6.0 + attackablePirates
             isCard(card, RAGEWING) -> if (card.cost <= 1) 12.0 else 1.0
-            isCard(card, SIGIL_OF_SKYDIVING) -> if (freeSlots(war) >= 2) 5.0 else -12.0
             else -> 0.0
         }
     }
@@ -306,6 +406,9 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         val pirates = me.playArea.cards.count(::isPirate)
         val otherPirates = me.playArea.cards.count(::isPirate) - 1
         val attackablePirates = me.playArea.cards.count { isPirate(it) && it.canAttack() }
+        val effectivePirateAttack = me.playArea.cards
+            .filter { isPirate(it) && it.canAttack() }
+            .sumOf { effectivePirateAttack(it, war).toDouble() }
         val futurePirates = futurePirateSummons(war)
         val minions = me.playArea.cards.count { it.cardType === CardTypeEnum.MINION }
         val slots = freeSlots(war)
@@ -317,6 +420,10 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             (2.0 + attackablePirates * 1.5)
         score += me.playArea.cards.count { isCard(it, HOZEN_ROUGHHOUSER) && it.isAlive() } *
             if (otherPirates <= 0) -6.0 else otherPirates * 1.5
+        // Keep the Hozen trigger visible to the state evaluator as well as
+        // the combat simulation.  Otherwise a board with a ready Pirate and
+        // a Hozen looks one attack point weaker than the live game.
+        score += effectivePirateAttack * 0.35
         score += me.playArea.cards.count { isCard(it, SOUTHSEA_CAPTAIN) && it.isAlive() } *
             if (otherPirates <= 0) -7.0 else otherPirates * 2.0
 
@@ -374,6 +481,20 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
     private fun oneHealthEnemyMinions(me: Player): Int =
         me.war.rival.playArea.cards.count { it.cardType === CardTypeEnum.MINION && it.isAlive() && it.blood() <= 1 }
 
+    private fun lowHealthEnemyMinions(me: Player, maxHealth: Int): Int =
+        me.war.rival.playArea.cards.count {
+            it.cardType === CardTypeEnum.MINION && it.isAlive() && it.blood() <= maxHealth
+        }
+
+    /** Effective attack for a Pirate combat calculation in the current state. */
+    fun effectivePirateAttack(card: Card, war: War): Int {
+        if (!isPirate(card)) return card.atc
+        val hozenCount = war.me.playArea.cards.count {
+            isCard(it, HOZEN_ROUGHHOUSER) && it.isAlive() && it.entityId != card.entityId
+        }
+        return card.atc + hozenCount
+    }
+
     private fun canFollowWithHeroPower(war: War, card: Card): Boolean {
         val power = war.me.playArea.power ?: return false
         val remainingMana = war.me.usableResource - card.cost
@@ -409,7 +530,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         me.war.rival.playArea.cards.any { it.isTaunt || it.atc >= 5 || it.health >= 6 }
 
     private fun confirmedZilliaxAuraCount(war: War): Int =
-        war.me.playArea.cards.count { it.cardId == ZILLIAX_T7 && it.isAlive() }
+        war.me.playArea.cards.count { isZilliax(it) && it.isAlive() }
 
     private fun summonPatchesFromDeck(war: War) {
         if (war.me.playArea.isFull) return
@@ -484,9 +605,12 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 .forEach { it.cost = (it.cost - damageDelta).coerceAtLeast(0) }
         }
         val minionCount = after.me.playArea.cards.count { it.cardType === CardTypeEnum.MINION }
-        after.me.handArea.cards.filter { it.cardId == ZILLIAX_T7 }
+        after.me.handArea.cards.filter(::isZilliax)
             .forEach { it.cost = (7 - minionCount).coerceAtLeast(0) }
     }
+
+    private fun isZilliax(card: Card): Boolean =
+        CardTimingPolicy.isZilliaxDeluxe3000(card)
 }
 
 /** Generic score plus Pirate DH-specific engine, timing and dead-card penalties. */

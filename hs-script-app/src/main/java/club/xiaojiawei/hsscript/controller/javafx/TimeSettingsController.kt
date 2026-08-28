@@ -16,6 +16,7 @@ import club.xiaojiawei.hsscript.interfaces.StageHook
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.WorkTimeStatus
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
+import club.xiaojiawei.hsscript.utils.WorkTimeJitter
 import club.xiaojiawei.hsscript.utils.go
 import club.xiaojiawei.hsscript.utils.runUI
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
@@ -127,6 +128,9 @@ class TimeSettingsController :
     protected lateinit var selectedEnableCol: TableColumn<WorkTimeRule, Boolean>
 
     @FXML
+    protected lateinit var jitterSecondsField: TextField
+
+    @FXML
     protected lateinit var rootPane: Pane
 
     private var progress: DoubleProperty? = null
@@ -136,6 +140,8 @@ class TimeSettingsController :
     private val dateComboBoxList = mutableListOf<ComboBox<WorkTimeRuleSet?>>()
 
     private var isInit = false
+
+    private var updatingJitterField = false
 
     private val EDIT_STYLE =
         "-fx-border-radius:10;-fx-background-color: transparent;-fx-border-width: 1;-fx-border-color:gray;-fx-background-insets: 0"
@@ -150,6 +156,20 @@ class TimeSettingsController :
     ) {
         progress = progressModal.show()
         workTimeRuleSet = workTimeRuleSetTable.items
+        jitterSecondsField.textFormatter =
+            TextFormatter<String> { change ->
+                if (change.controlNewText.matches(Regex("\\d{0,5}"))) change else null
+            }
+        jitterSecondsField.textProperty().addListener { _, _, newValue ->
+            if (updatingJitterField) return@addListener
+            workTimeRuleSetTable.selectionModel.selectedItem?.let { selected ->
+                selected.jitterSeconds = newValue.toIntOrNull() ?: 0
+            }
+        }
+        jitterSecondsField.focusedProperty().addListener { _, _, focused ->
+            if (!focused) commitJitterSeconds()
+        }
+        jitterSecondsField.setOnAction { commitJitterSeconds() }
     }
 
     fun reloadData() {
@@ -175,6 +195,7 @@ class TimeSettingsController :
         }
         runModeListener.clear()
         runModeMap.clear()
+        timePaneMap.clear()
     }
 
     override fun onShowing() {
@@ -273,9 +294,11 @@ class TimeSettingsController :
         workTimeRuleSetTable.selectionModel.selectedItemProperty().addListener { _, _, newValue ->
             if (newValue == null) {
                 selectedWorkTimeRuleTable.items.clear()
+                updateJitterField(null)
                 return@addListener
             }
             selectedWorkTimeRuleTable.items.setAll(newValue.getTimeRules())
+            updateJitterField(newValue)
         }
         noSetCol.cellValueFactory = NumCallback()
         nameSetCol.isEditable = true
@@ -322,9 +345,30 @@ class TimeSettingsController :
     private fun loadWorkTimeRuleSet() {
         val workTimeRuleSet = WorkTimeStatus.readOnlyWorkTimeRuleSet().get()
         val selectedItem = workTimeRuleSetTable.selectionModel.selectedItem
+        // The table is rebuilt from the persisted model.  Drop cell graphics
+        // from the previous model so controls cannot display stale values.
+        timePaneMap.clear()
         this.workTimeRuleSet.setAll(workTimeRuleSet)
         workTimeRuleSetTable.selectionModel.select(selectedItem)
         workTimeRuleSetTable.refresh()
+        updateJitterField(workTimeRuleSetTable.selectionModel.selectedItem)
+    }
+
+    private fun updateJitterField(ruleSet: WorkTimeRuleSet?) {
+        updatingJitterField = true
+        try {
+            jitterSecondsField.text = ruleSet?.jitterSeconds?.toString() ?: ""
+            jitterSecondsField.isDisable = ruleSet == null
+        } finally {
+            updatingJitterField = false
+        }
+    }
+
+    private fun commitJitterSeconds() {
+        val selected = workTimeRuleSetTable.selectionModel.selectedItem ?: return
+        val normalized = WorkTimeJitter.normalizeSeconds(jitterSecondsField.text.toIntOrNull() ?: 0)
+        selected.jitterSeconds = normalized
+        updateJitterField(selected)
     }
 
     private fun loadWorkTimeSetting() {
@@ -401,16 +445,7 @@ class TimeSettingsController :
     private var timePaneMap = mutableMapOf<WorkTimeRule, HBox>()
 
     private fun buildTimePane(item: WorkTimeRule): HBox {
-        timePaneMap[item]?.let {
-            for ((index, node) in it.children.withIndex()) {
-                if (node is Time) {
-                    if (index == 0) {
-                        node.localTime
-                    }
-                }
-            }
-            return it
-        }
+        timePaneMap[item]?.let { return it }
         val startTime = Time()
         val endTime = Time()
         val pane =
@@ -672,6 +707,7 @@ class TimeSettingsController :
 
     @FXML
     protected fun save() {
+        commitJitterSeconds()
         saveSetRule()
         saveApplyRule()
         notificationManager.showSuccess("保存成功", 2)
@@ -718,7 +754,7 @@ class TimeSettingsController :
         }
         val workTimeRule =
             WorkTimeRule(
-                DEFAULT_WORK_TIME,
+                DEFAULT_WORK_TIME.clone(),
                 DEFAULT_OPERATIONS.toSet(),
                 DEFAULT_RUN_MODE_ENUM,
                 DEFAULT_DECK_STRATEGY_ID,

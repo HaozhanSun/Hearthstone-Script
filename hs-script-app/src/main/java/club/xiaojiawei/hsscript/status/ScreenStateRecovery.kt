@@ -135,11 +135,47 @@ object ScreenStateRecovery {
                 "evidence=${detection?.evidence ?: "none"}"
         }
 
+        // Keep one durable, categorized copy for every 30-second recovery
+        // inspection.  The existing DebugScreenshotRing remains the compact
+        // 60-file timeline; this copy is the post-mortem evidence and is
+        // retained per category/day by UnknownStateScreenshot.
+        val evidenceCategory = if (detection == null || detection.confidence < 85) {
+            UnknownStateScreenshot.CATEGORY_SCREEN_RECOVERY_UNRESOLVED
+        } else {
+            UnknownStateScreenshot.CATEGORY_STUCK_STATE
+        }
+        val evidence = UnknownStateScreenshot.save(
+            image = capture.image,
+            regions = listOf(
+                UnknownStateScreenshot.UnknownRegion(
+                    Rectangle(0, 0, capture.image.width, capture.image.height),
+                    if (evidenceCategory == UnknownStateScreenshot.CATEGORY_STUCK_STATE) {
+                        "stuck-state-observation"
+                    } else {
+                        "unidentified-screen"
+                    },
+                ),
+            ),
+            category = evidenceCategory,
+            trigger = "screen-recovery-observation",
+            state = stateFingerprint,
+            phase = "stuck-screen-recovery",
+            ocrText = ocrText,
+            visual = capture.visual.toString(),
+        )
+        log.warn {
+            "SCREEN_RECOVERY_EVIDENCE category=$evidenceCategory " +
+                "path=${evidence?.file?.absolutePath ?: "not-saved"} " +
+                "link=${evidence?.link ?: "none"}"
+        }
+
         if (detection == null || detection.confidence < 85) {
             log.warn {
                 "SCREEN_RECOVERY_UNRESOLVED confidence=${detection?.confidence ?: 0} " +
                     "screenshot=${capture.file?.absolutePath ?: "not-saved"} " +
-                    "screenshotLink=${capture.file?.toURI()?.toString() ?: "none"}"
+                    "screenshotLink=${capture.file?.toURI()?.toString() ?: "none"} " +
+                    "unknownStateScreenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
+                    "unknownStateScreenshotLink=${evidence?.link ?: "none"}"
             }
             return false
         }

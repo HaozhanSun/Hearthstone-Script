@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.data.CARD_DATA_TRIE
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsReplayTrace
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import java.awt.Color
 import java.awt.Rectangle
@@ -108,6 +109,45 @@ object TurnEndActionGuard {
         }
 
         val observation = observe(ignoredCreatorIds, mctsActionableCreatorIds)
+        val liveMana = WAR.me.usableResource
+        val liveFreeSlots = (WAR.me.playArea.maxSize - WAR.me.playArea.cards.size).coerceAtLeast(0)
+        val playableMinions = WAR.me.handArea.cards
+            .filter { card ->
+                !card.isUncertain &&
+                    card.cardType === CardTypeEnum.MINION &&
+                    card.cost <= liveMana &&
+                    liveFreeSlots > 0
+            }
+            .map { card ->
+                mapOf(
+                    "cardId" to card.cardId,
+                    "name" to displayName(card),
+                    "entityId" to card.entityId,
+                    "cost" to card.cost,
+                    "actionableByMcts" to isMctsActionableCreator(card.entityId, mctsActionableCreatorIds, ignoredCreatorIds),
+                )
+            }
+        MctsReplayTrace.record(
+            WAR,
+            "turn_end_full_rescan",
+            "full live mana, hand, board, attack, and hero-power scan completed before EndTurn",
+            mapOf(
+                "mana" to liveMana,
+                "resources" to WAR.me.resources,
+                "usedResources" to WAR.me.usedResources,
+                "boardSlotsFree" to liveFreeSlots,
+                "playableMinions" to playableMinions,
+                "observation" to mapOf(
+                    "attackableMinions" to observation.attackableMinions,
+                    "playableHandCards" to observation.playableHandCards,
+                    "attackableHero" to observation.attackableHero,
+                    "playableHeroPower" to observation.playableHeroPower,
+                    "blocksEndTurn" to observation.blocksEndTurn,
+                ),
+                "ignoredCreatorIds" to ignoredCreatorIds,
+                "mctsActionableCreatorIds" to mctsActionableCreatorIds,
+            ),
+        )
         val buttonColor = if (observation.blocksEndTurn) {
             EndTurnButtonColor.UNKNOWN
         } else {

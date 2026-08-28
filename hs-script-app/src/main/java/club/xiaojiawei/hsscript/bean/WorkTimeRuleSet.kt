@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.bean
 
 import javafx.beans.property.ObjectProperty
 import javafx.beans.property.SimpleObjectProperty
+import club.xiaojiawei.hsscript.utils.WorkTimeJitter
 import java.util.*
 
 /**
@@ -10,6 +11,12 @@ import java.util.*
  */
 class WorkTimeRuleSet : Cloneable {
     var id: String = ""
+
+    /** Maximum independent +/- offset applied to every schedule endpoint. */
+    var jitterSeconds: Int = 0
+        set(value) {
+            field = WorkTimeJitter.normalizeSeconds(value)
+        }
 
     private val name: ObjectProperty<String> = SimpleObjectProperty("")
 
@@ -59,6 +66,7 @@ class WorkTimeRuleSet : Cloneable {
     public override fun clone(): WorkTimeRuleSet {
         val clone = WorkTimeRuleSet()
         clone.id = this.id
+        clone.jitterSeconds = this.jitterSeconds
         clone.name.set(this.name.get())
         clone.workTimeRules.set(
             this.workTimeRules

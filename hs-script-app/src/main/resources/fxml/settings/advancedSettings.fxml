@@ -154,6 +154,14 @@
                                                    prefWidth="${fieldWidth}"
                                                    notificationManager="${notificationManager}"/>
                             </SettingHBox>
+                            <SettingHBox name="启动后强制运行/min"
+                                         tip="启动或点击开始时，即使当前不在工作时间也先运行指定分钟数；到期后恢复正常时间表。设为0禁用，默认30分钟。"
+                                         tabWindow="ADVANCED_SETTINGS" group="行为">
+                                <ConfigNumberField config="STARTUP_RUN_WINDOW_MINUTES"
+                                                   styleClass="text-field-ui, text-field-ui-small"
+                                                   prefWidth="${fieldWidth}"
+                                                   notificationManager="${notificationManager}"/>
+                            </SettingHBox>
                             <SettingHBox name="游戏日志大小限制/KB"
                                          tip="游戏日志文件超过此值将重启游戏。设为-1将禁用大小限制"
                                          tabWindow="ADVANCED_SETTINGS" group="行为">

@@ -64,6 +64,10 @@ object WarEx {
      */
     var aEXP = 0L
 
+    /** True once this process has requested surrender for the current game. */
+    @Volatile
+    var surrenderRequested = false
+
     /**
      * 已挂胜场
      */
@@ -138,6 +142,7 @@ object WarEx {
         isWin = false
         inWar = false
         aEXP = 0L
+        surrenderRequested = false
         print.isTrue {
             log.info { "已重置游戏状态" }
         }

@@ -100,6 +100,10 @@
                                             <CopyIco scaleX="$icoScale" scaleY="$icoScale" color="black"/>
                                         </graphic>
                                     </Button>
+                                    <Label text="时间抖动 ±秒:"/>
+                                    <TextField fx:id="jitterSecondsField" prefWidth="65" maxWidth="65"
+                                               styleClass="text-field-ui, text-field-ui-small"
+                                               promptText="0"/>
                                 </HBox>
                             </VBox>
                         </SplitPane>

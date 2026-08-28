@@ -39,8 +39,7 @@ object Core {
                     runUI { WindowUtil.getStage(WindowEnum.MAIN)?.show() }
                     log.info { "当前处于【暂停】状态" }
                 }.isFalse {
-                    WorkTimeListener.checkWork()
-                    if (WorkTimeListener.canWork()) {
+                    if (WorkTimeListener.requestStart()) {
                         start()
                     } else {
                         WorkTimeListener.cannotWorkLog()

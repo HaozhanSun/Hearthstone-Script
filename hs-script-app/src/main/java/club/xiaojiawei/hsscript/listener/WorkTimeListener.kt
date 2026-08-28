@@ -2,11 +2,15 @@ package club.xiaojiawei.hsscript.listener
 
 import club.xiaojiawei.hsscript.bean.WorkTimeRule
 import club.xiaojiawei.hsscript.bean.single.WarEx
+import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.WindowEnum
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.WorkTimeStatus
+import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscript.utils.WindowUtil
+import club.xiaojiawei.hsscript.utils.WorkTimeJitter
+import club.xiaojiawei.hsscript.utils.StartupRunWindow
 import club.xiaojiawei.hsscript.utils.go
 import club.xiaojiawei.hsscript.utils.runUI
 import club.xiaojiawei.hsscriptbase.bean.LRunnable
@@ -18,6 +22,7 @@ import javafx.beans.value.ChangeListener
 import javafx.stage.Stage
 import java.time.LocalDate
 import java.time.LocalTime
+import java.util.Random
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -30,6 +35,66 @@ import java.util.concurrent.atomic.AtomicReference
  */
 object WorkTimeListener {
     private var checkWorkTask: ScheduledFuture<*>? = null
+
+    private data class JitterKey(
+        val ruleSetId: String,
+        val date: LocalDate,
+        val ruleIndex: Int,
+        val startSeconds: Int,
+        val endSeconds: Int,
+        val jitterSeconds: Int,
+    )
+
+    private val jitterCacheLock = Any()
+    private val jitterCache = mutableMapOf<JitterKey, WorkTimeJitter.Window>()
+    private var jitterCacheObservedToday: LocalDate? = null
+    private val startupRunWindow = StartupRunWindow()
+    private var startupWorkTimeRule: WorkTimeRule? = null
+
+    private fun jitteredWindow(
+        ruleSetId: String,
+        ruleIndex: Int,
+        rule: WorkTimeRule,
+        date: LocalDate,
+        endIncludesMinute: Boolean = false,
+    ): WorkTimeJitter.Window? {
+        val baseStart = rule.workTime.parseStartTime()?.withSecond(0) ?: return null
+        val parsedEnd = rule.workTime.parseEndTime() ?: return null
+        val baseEnd = if (endIncludesMinute) parsedEnd.withSecond(59) else parsedEnd
+        val jitterSeconds = WorkTimeJitter.normalizeSeconds(
+            WorkTimeStatus.readOnlyWorkTimeRuleSet()
+                .toList()
+                .find { it.id == ruleSetId }
+                ?.jitterSeconds
+                ?: 0,
+        )
+        val key = JitterKey(
+            ruleSetId = ruleSetId,
+            date = date,
+            ruleIndex = ruleIndex,
+            startSeconds = baseStart.toSecondOfDay(),
+            endSeconds = baseEnd.toSecondOfDay(),
+            jitterSeconds = jitterSeconds,
+        )
+        synchronized(jitterCacheLock) {
+            // Keep plans for today and future schedule days.  getNextWorkPeriodInfo
+            // queries several future dates in one pass, so clearing whenever the
+            // requested date changes would reroll those plans on every poll.
+            val today = LocalDate.now()
+            if (jitterCacheObservedToday == null || !jitterCacheObservedToday!!.equals(today)) {
+                jitterCache.entries.removeIf { it.key.date.isBefore(today.minusDays(1)) }
+                jitterCacheObservedToday = today
+            }
+            return jitterCache.getOrPut(key) {
+                WorkTimeJitter.jitterWindow(
+                    start = baseStart,
+                    end = baseEnd,
+                    maxSeconds = jitterSeconds,
+                    random = Random(),
+                )
+            }
+        }
+    }
 
     val launch: Unit by lazy {
         checkWorkTask =
@@ -143,13 +208,43 @@ object WorkTimeListener {
         workingProperty.removeListener(listener)
     }
 
-    fun canWork(): Boolean = isDuringWorkDate
+    fun canWork(): Boolean = startupRunWindow.shouldWork(isDuringWorkDate)
 
-    fun cannotWork(): Boolean = !isDuringWorkDate
+    fun cannotWork(): Boolean = !canWork()
+
+    /**
+     * Handles an explicit start request.  When the schedule is closed, it
+     * opens the configured temporary startup window instead of showing the
+     * sleep prompt.  The regular schedule remains authoritative after the
+     * temporary window expires.
+     */
+    @Synchronized
+    fun requestStart(): Boolean {
+        checkWork()
+        if (!isDuringWorkDate) {
+            val durationMinutes = ConfigUtil.getInt(ConfigEnum.STARTUP_RUN_WINDOW_MINUTES).coerceAtLeast(0)
+            if (startupRunWindow.beginIfOutsideSchedule(durationMinutes, inSchedule = false)) {
+                startupWorkTimeRule = closestWorkTimeRule ?: getTodayWorkTimeRules().firstOrNull()
+                if (startupWorkTimeRule != null) {
+                    closestWorkTimeRule = startupWorkTimeRule
+                }
+                log.info {
+                    "启动后强制运行已开始：${durationMinutes}分钟，截止=${startupRunWindow.deadline()}；到期后恢复正常时间表"
+                }
+            }
+        } else {
+            startupRunWindow.clear()
+            startupWorkTimeRule = null
+        }
+        return canWork()
+    }
 
     fun tryWork() {
         if (canWork() && PauseStatus.isStart) {
             workingProperty.set(true)
+        } else if (!canWork() && working && !WarEx.inWar) {
+            workingProperty.set(false)
+            execOperate(prevClosestWorkTimeRule)
         }
     }
 
@@ -158,7 +253,7 @@ object WorkTimeListener {
      * @return 如果当前处于工作时间内，返回对应的WorkTimeRule；否则返回null
      */
     fun getCurrentWorkTimeRule(): WorkTimeRule? {
-        return if (isDuringWorkDate) currentWorkTimeRule else null
+        return if (isDuringWorkDate) currentWorkTimeRule else if (startupRunWindow.isActive()) startupWorkTimeRule else null
     }
 
     /**
@@ -172,17 +267,15 @@ object WorkTimeListener {
 
         val id = readOnlyWorkTimeSetting[dayIndex]
         return WorkTimeStatus.readOnlyWorkTimeRuleSet().toList().find { it.id == id }?.let { ruleSet ->
-            val timeRules = ruleSet.getTimeRules().toList()
+            val timeRules = ruleSet.getTimeRules().filter { it.enable }
             val nowTime = LocalTime.now()
 
             // 寻找当前时间所在的工作时间段
-            timeRules.find { rule ->
-                if (!rule.enable) return@find false
-                val workTime = rule.workTime
-                val startTime = workTime.parseStartTime()?.withSecond(0) ?: return@find false
-                val endTime = workTime.parseEndTime()?.withSecond(59) ?: return@find false
-                nowTime in startTime..endTime
-            }
+            timeRules.withIndex().find { (index, rule) ->
+                val window = jitteredWindow(id, index, rule, LocalDate.now(), endIncludesMinute = true)
+                    ?: return@find false
+                nowTime in window.start..window.end
+            }?.value
         }
     }
 
@@ -216,9 +309,10 @@ object WorkTimeListener {
             val timeRules = ruleSet.getTimeRules().filter { it.enable }
 
             // 检查是否有在当前结束时间后立即开始的工作时间段
-            timeRules.any { rule ->
-                val workTime = rule.workTime
-                val startTime = workTime.parseStartTime()?.withSecond(0) ?: return@any false
+            timeRules.withIndex().any { (index, rule) ->
+                val window = jitteredWindow(id, index, rule, LocalDate.now(), endIncludesMinute = true)
+                    ?: return@any false
+                val startTime = window.start
                 // 允许少量时间间隔（比如1分钟内）认为是连续的
                 val timeDiff = startTime.toSecondOfDay() - currentEndTime.toSecondOfDay()
                 timeDiff in 0..60 // 60秒内的间隔认为是连续的
@@ -251,10 +345,11 @@ object WorkTimeListener {
             // 重置当前工作时间规则
             currentWorkTimeRule = null
 
-            for (rule in timeRules) {
-                val workTime = rule.workTime
-                val startTime = workTime.parseStartTime()?.withSecond(0) ?: continue
-                val endTime = workTime.parseEndTime()?.withSecond(59) ?: continue
+            for ((index, rule) in timeRules.withIndex()) {
+                val window = jitteredWindow(id, index, rule, LocalDate.now(), endIncludesMinute = true)
+                    ?: continue
+                val startTime = window.start
+                val endTime = window.end
 
                 // 检查时间有效性
                 if (startTime > endTime) {
@@ -280,6 +375,10 @@ object WorkTimeListener {
         }
 
         isDuringWorkDate = canWork
+        if (canWork) {
+            startupRunWindow.clear()
+            startupWorkTimeRule = null
+        }
         prevClosestWorkTimeRule = closestWorkTimeRule
 
         // 调试日志
@@ -341,10 +440,14 @@ object WorkTimeListener {
 
             var minDiffSec: Long = Long.MAX_VALUE
 
-            for (rule in timeRules) {
-                val workTime = rule.workTime
-                val startTime = workTime.parseStartTime() ?: continue
-                val startSecondOfDay = startTime.toSecondOfDay().toLong()
+            for ((index, rule) in timeRules.withIndex()) {
+                val window = jitteredWindow(
+                    id,
+                    index,
+                    rule,
+                    LocalDate.now().plusDays(dayOffset.toLong()),
+                ) ?: continue
+                val startSecondOfDay = window.start.toSecondOfDay().toLong()
 
                 val diffSec: Long = if (dayOffset == 0) {
                     // 今天：只考虑未来的时间
@@ -368,7 +471,7 @@ object WorkTimeListener {
      * @return Pair<WorkTimeRule?, Long> - 工作规则和距离开始的秒数
      */
     fun getNextWorkPeriodInfo(): Pair<WorkTimeRule?, Long> {
-        if (working) return Pair(currentWorkTimeRule, 0L)
+        if (working) return Pair(getCurrentWorkTimeRule() ?: startupWorkTimeRule, 0L)
 
         val readOnlyWorkTimeSetting = WorkTimeStatus.readOnlyWorkTimeSetting()
         val currentDayIndex = LocalDate.now().dayOfWeek.value - 1
@@ -389,10 +492,14 @@ object WorkTimeListener {
             WorkTimeStatus.readOnlyWorkTimeRuleSet().toList().find { it.id == id }?.let { ruleSet ->
                 val timeRules = ruleSet.getTimeRules().filter { it.enable }
 
-                for (rule in timeRules) {
-                    val workTime = rule.workTime
-                    val startTime = workTime.parseStartTime() ?: continue
-                    val startSecondOfDay = startTime.toSecondOfDay().toLong()
+                for ((index, rule) in timeRules.withIndex()) {
+                    val window = jitteredWindow(
+                        id,
+                        index,
+                        rule,
+                        LocalDate.now().plusDays(dayOffset.toLong()),
+                    ) ?: continue
+                    val startSecondOfDay = window.start.toSecondOfDay().toLong()
 
                     val diffSec: Long = if (dayOffset == 0) {
                         startSecondOfDay - nowSecondOfDay

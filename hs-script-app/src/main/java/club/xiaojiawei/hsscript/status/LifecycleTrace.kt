@@ -170,7 +170,19 @@ object LifecycleTrace {
                         !WarEx.inWar
                 }
             } catch (error: Throwable) {
+                val evidence = UnknownStateScreenshot.capture(
+                    category = UnknownStateScreenshot.CATEGORY_SCREEN_RECOVERY_UNRESOLVED,
+                    trigger = "screen-recovery-worker-failure",
+                    state = fingerprint,
+                    phase = "stuck-screen-recovery-worker",
+                    label = "screen-recovery-worker-failure",
+                )
                 log.warn(error) { "SCREEN_RECOVERY_FAILED reason=worker-exception" }
+                log.warn {
+                    "SCREEN_RECOVERY_FAILURE_SCREENSHOT " +
+                        "path=${evidence?.file?.absolutePath ?: "not-saved"} " +
+                        "link=${evidence?.link ?: "none"}"
+                }
             } finally {
                 stateRecoveryInFlight.set(false)
             }

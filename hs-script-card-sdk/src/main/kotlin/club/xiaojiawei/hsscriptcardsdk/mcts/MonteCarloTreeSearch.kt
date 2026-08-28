@@ -229,6 +229,53 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
         )
         val endTime = arg.endMillisTime
         val rootNode = MonteCarloTreeNode(newWar, InitAction, newArg)
+        if (arg.debugName.isNotBlank()) {
+            val hasNonEndTurnRootAction = rootNode.actions.any { it !== TurnOverAction }
+            val rootClassification = when {
+                rootNode.actions.isEmpty() -> "NO_LEGAL_ACTION"
+                !hasNonEndTurnRootAction && rootNode.actions.any { it === TurnOverAction } -> "END_TURN_ONLY"
+                hasNonEndTurnRootAction && rootNode.actions.any { it === TurnOverAction } -> "ACTIONS_AND_END_TURN"
+                else -> "ACTIONS_ONLY"
+            }
+            MctsReplayTrace.record(
+                war,
+                "search_started",
+                "MCTS created a root from the current live state",
+                mapOf(
+                    "strategy" to arg.debugName,
+                    "experimentalSearch" to arg.experimentalSearch,
+                    "turnCount" to arg.turnCount,
+                    "turnFactor" to arg.turnFactor,
+                    "countPerTurn" to arg.countPerTurn,
+                    "enableMultiThread" to arg.enableMultiThread,
+                    "maxDepth" to maxDepth,
+                    "legalActionCount" to rootNode.actions.size,
+                    "legalActions" to rootNode.actions.map(::describeAction),
+                    "hasEndTurn" to rootNode.actions.any { it === TurnOverAction },
+                    "rootClassification" to rootClassification,
+                ),
+            )
+            MctsReplayTrace.record(
+                war,
+                "search_root_classified",
+                "root legal-action set classified before MCTS expansion",
+                mapOf(
+                    "strategy" to arg.debugName,
+                    "classification" to rootClassification,
+                    "legalActionCount" to rootNode.actions.size,
+                    "nonEndTurnActionCount" to rootNode.actions.count { it !== TurnOverAction },
+                    "actions" to rootNode.actions.map(::describeAction),
+                ),
+            )
+            if (rootNode.actions.isEmpty()) {
+                MctsReplayTrace.record(
+                    war,
+                    "search_no_legal_action",
+                    "root action generation returned no legal action",
+                    mapOf("strategy" to arg.debugName),
+                )
+            }
+        }
         val results = Collections.synchronizedList(mutableListOf<MutableList<MonteCarloTreeNode>>())
         val tasks = mutableListOf<CompletableFuture<Void>>()
         val tasker = Function<MonteCarloTreeNode, MutableList<MonteCarloTreeNode>> { newRootNode ->
@@ -307,10 +354,19 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
                 CompletableFuture.allOf(*tasks.toTypedArray()).get(totalMillisTime, TimeUnit.MILLISECONDS)
             } catch (e: TimeoutException) {
                 log.warn(e) { "计算超时" }
+                if (arg.debugName.isNotBlank()) {
+                    MctsReplayTrace.record(war, "search_runtime_branch", "parallel-search-timeout", mapOf("strategy" to arg.debugName, "error" to e::class.java.simpleName))
+                }
             } catch (e: InterruptedException) {
                 log.warn(e) { "计算中断" }
+                if (arg.debugName.isNotBlank()) {
+                    MctsReplayTrace.record(war, "search_runtime_branch", "parallel-search-interrupted", mapOf("strategy" to arg.debugName, "error" to e::class.java.simpleName))
+                }
             } catch (e: Exception) {
                 log.error(e) { "计算异常" }
+                if (arg.debugName.isNotBlank()) {
+                    MctsReplayTrace.record(war, "search_runtime_branch", "parallel-search-error", mapOf("strategy" to arg.debugName, "error" to e::class.java.simpleName))
+                }
             }
         }
 
@@ -342,6 +398,28 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
                                 "${summon.card.cardId.ifBlank { summon.card.entityName }}(${summon.reason})"
                             }.ifBlank { "none" })
                     }
+                    MctsReplayTrace.record(
+                        war,
+                        "search_candidate",
+                        "root candidate ranked by immediate score then visit count",
+                        mapOf(
+                            "strategy" to arg.debugName,
+                            "rank" to index + 1,
+                            "action" to describeAction(child.applyAction),
+                            "stateScore" to child.state.score,
+                            "visits" to visits,
+                            "wins" to child.state.winCount,
+                            "winRate" to winRate,
+                            "ucb" to ucb,
+                            "simulatedFreeSummons" to child.simulatedFreeSummons.map {
+                                mapOf(
+                                    "cardId" to it.card.cardId,
+                                    "name" to it.card.entityName,
+                                    "reason" to it.reason,
+                                )
+                            },
+                        ),
+                    )
             }
         }
 
@@ -361,6 +439,18 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
             )
             bestResult = selectedRootChild?.let { buildBest(it) }
                 ?: if (results.isEmpty()) buildBest(rootNode) else null
+            if (arg.debugName.isNotBlank()) {
+                MctsReplayTrace.record(
+                    war,
+                    "search_selection_branch",
+                    when {
+                        selectedRootChild != null -> "experimental-master-root-child-selected"
+                        results.isEmpty() -> "experimental-root-fallback-because-no-worker-result"
+                        else -> "experimental-no-root-child-and-worker-results-present"
+                    },
+                    mapOf("strategy" to arg.debugName, "hasSelectedRootChild" to (selectedRootChild != null), "workerResultCount" to results.size),
+                )
+            }
         } else if (results.isEmpty()) {
             bestResult = buildBest(rootNode)
         } else {
@@ -400,6 +490,14 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
                     }
                 }
             }
+            if (arg.debugName.isNotBlank() && finalResult.isEmpty()) {
+                MctsReplayTrace.record(
+                    war,
+                    "search_runtime_branch",
+                    "experimental-root-fallback-could-not-expand",
+                    mapOf("strategy" to arg.debugName, "rootLegalActions" to rootNode.actions.map(::describeAction)),
+                )
+            }
         }
         if (arg.debugName.isNotBlank()) {
             log.info {
@@ -409,6 +507,27 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
                         .ifBlank { "(empty)" }} " +
                     "selectionRule=${if (arg.experimentalSearch) "best master-root action by visits/value, then descendant path" else "best complete simulated path by final state score"}"
             }
+            MctsReplayTrace.record(
+                war,
+                "search_selected",
+                if (finalResult.isEmpty()) {
+                    "search returned no executable path; the caller must inspect whether only EndTurn or no legal action remained"
+                } else {
+                    "selected the best path using the configured MCTS selection rule"
+                },
+                mapOf(
+                    "strategy" to arg.debugName,
+                    "experimentalSearch" to arg.experimentalSearch,
+                    "path" to finalResult
+                        .filter { it.applyAction !is club.xiaojiawei.hsscriptcardsdk.bean.EmptyAction }
+                        .map { describeAction(it.applyAction) },
+                    "pathLength" to finalResult.size,
+                    "rootLegalActionCount" to rootNode.actions.size,
+                    "rootLegalActions" to rootNode.actions.map(::describeAction),
+                    "selectedRootAction" to finalResult.firstOrNull()?.let { describeAction(it.applyAction) },
+                    "selectedFinalScore" to finalResult.lastOrNull()?.state?.score,
+                ),
+            )
         }
         return finalResult
     }

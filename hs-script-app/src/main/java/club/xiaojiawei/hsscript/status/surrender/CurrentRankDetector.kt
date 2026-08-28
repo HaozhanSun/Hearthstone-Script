@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscript.bean.TesseractEx
 import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.status.ScriptStatus
+import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
 import club.xiaojiawei.hsscriptbase.config.log
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
@@ -11,6 +12,7 @@ import java.awt.RenderingHints
 import java.awt.Robot
 import java.awt.image.BufferedImage
 import java.io.File
+import java.util.Locale
 
 /**
  * Reads the player's constructed-game rank from the lower-left Hearthstone
@@ -18,6 +20,17 @@ import java.io.File
  * behavior can be tested without a live game window.
  */
 object CurrentRankDetector {
+
+    /** Ordered from below the configured Silver 10 floor to above it. */
+    enum class RankTier(val order: Int) {
+        UNKNOWN(-1),
+        BRONZE(0),
+        SILVER(1),
+        GOLD(2),
+        PLATINUM(3),
+        DIAMOND(4),
+        LEGEND(5),
+    }
 
     private const val MIN_RANK = 1
     private const val MAX_RANK = 10
@@ -46,6 +59,7 @@ object CurrentRankDetector {
 
     data class Detection(
         val rank: Int?,
+        val tier: RankTier,
         val ocrText: String,
         val captureBounds: Rectangle,
     )
@@ -70,6 +84,20 @@ object CurrentRankDetector {
         val digitsOnly = normalized.filter(Char::isDigit)
         if (digitsOnly.length != 1) return null
         return digitsOnly.toIntOrNull()?.takeIf { it in MIN_RANK until MAX_RANK }
+    }
+
+    /** Parse an explicit localized/English league name when it is visible. */
+    internal fun parseTierText(rawText: String): RankTier {
+        val text = rawText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+        return when {
+            text.contains("白银") || text.contains("白銀") || text.contains("silver") -> RankTier.SILVER
+            text.contains("黄金") || text.contains("黃金") || text.contains("gold") -> RankTier.GOLD
+            text.contains("青铜") || text.contains("青銅") || text.contains("bronze") -> RankTier.BRONZE
+            text.contains("白金") || text.contains("platinum") -> RankTier.PLATINUM
+            text.contains("钻石") || text.contains("鑽石") || text.contains("diamond") -> RankTier.DIAMOND
+            text.contains("传说") || text.contains("傳說") || text.contains("legend") -> RankTier.LEGEND
+            else -> RankTier.UNKNOWN
+        }
     }
 
     /**
@@ -163,12 +191,52 @@ object CurrentRankDetector {
         val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
         val visualTenHint = looksLikeTwoDigitRank(rankRegion)
         val rank = resolveRankCandidates(ocrTexts, visualTenHint)
+        val tierOcrTexts = listOf(rankRegion, expandedRegion).map { image ->
+            ocrTier(image, tessData)
+        }
+        val tierFromOcr = tierOcrTexts
+            .asSequence()
+            .map(::parseTierText)
+            .firstOrNull { it !== RankTier.UNKNOWN }
+            ?: RankTier.UNKNOWN
+        val tier = if (tierFromOcr !== RankTier.UNKNOWN) {
+            tierFromOcr
+        } else {
+            detectTierVisual(rankRegion)
+        }
         log.info {
             "RANK_OCR bounds=$bounds region=${rankRegion.width}x${rankRegion.height} " +
                 "text=${ocrText.ifBlank { "<empty>" }} candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
-                "visualTenHint=$visualTenHint rank=${rank ?: "UNKNOWN"}"
+                "tierCandidates=${tierOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
+                "visualTenHint=$visualTenHint tier=${tier.name} rank=${rank ?: "UNKNOWN"}"
         }
-        Detection(rank, ocrText, bounds)
+        if (tier === RankTier.UNKNOWN || rank == null) {
+            val evidence = UnknownStateScreenshot.save(
+                image = screen,
+                regions = listOf(
+                    UnknownStateScreenshot.UnknownRegion(
+                        Rectangle(
+                            0,
+                            (screen.height * RANK_REGION_TOP).toInt(),
+                            (screen.width * RANK_REGION_WIDTH).toInt(),
+                            (screen.height * RANK_REGION_HEIGHT).toInt(),
+                        ),
+                        "rank-badge-unresolved",
+                    ),
+                ),
+                category = "rank-detection",
+                trigger = "rank-ocr-unresolved",
+                state = "rank=${rank ?: "UNKNOWN"}|tier=${tier.name}",
+                phase = "pre-mulligan-rank-check",
+                ocrText = (ocrTexts + tierOcrTexts).joinToString("|") { it.ifBlank { "<empty>" } },
+            )
+            log.warn {
+                "RANK_OCR_EVIDENCE rank=${rank ?: "UNKNOWN"} tier=${tier.name} " +
+                    "path=${evidence?.file?.absolutePath ?: "not-saved"} " +
+                    "link=${evidence?.link ?: "none"}"
+            }
+        }
+        Detection(rank, tier, ocrText, bounds)
     }.getOrElse { error ->
         log.warn(error) { "RANK_OCR_FAILED" }
         null
@@ -210,6 +278,44 @@ object CurrentRankDetector {
         return span >= RANK_TWO_DIGIT_MIN_SPAN && occupiedColumns.size >= RANK_TWO_DIGIT_MIN_SPAN / 2
     }
 
+    /**
+     * The in-game HUD normally shows only the numeric badge, not the league
+     * word. Gold uses a warm yellow metal frame while Silver is near-neutral;
+     * sample the badge perimeter and ignore the portrait/number interior.
+     */
+    internal fun detectTierVisual(image: BufferedImage): RankTier {
+        val right = (image.width * 0.72).toInt().coerceAtMost(image.width)
+        val bottom = (image.height * 0.82).toInt().coerceAtMost(image.height)
+        val insetX = (image.width * 0.18).toInt()
+        val insetY = (image.height * 0.18).toInt()
+        var gold = 0
+        var silver = 0
+        var metal = 0
+        for (y in 0 until bottom) {
+            for (x in 0 until right) {
+                if (x in insetX until right - insetX && y in insetY until bottom - insetY) continue
+                val rgb = image.getRGB(x, y)
+                val red = rgb shr 16 and 0xff
+                val green = rgb shr 8 and 0xff
+                val blue = rgb and 0xff
+                val maximum = maxOf(red, green, blue)
+                val minimum = minOf(red, green, blue)
+                if (maximum < 130) continue
+                if (red >= 135 && green >= 95 && blue <= 105 && red > blue * 1.35 && green > blue * 1.15) {
+                    gold++
+                    metal++
+                } else if (maximum - minimum <= 32) {
+                    silver++
+                    metal++
+                }
+            }
+        }
+        if (metal < 12) return RankTier.UNKNOWN
+        if (gold >= 12 && gold >= silver * 1.25) return RankTier.GOLD
+        if (silver >= 12 && silver >= gold * 1.25) return RankTier.SILVER
+        return RankTier.UNKNOWN
+    }
+
     private fun crop(
         image: BufferedImage,
         left: Double,
@@ -234,6 +340,15 @@ object CurrentRankDetector {
             setVariable("tessedit_char_whitelist", "0123456789")
             setVariable("user_defined_dpi", "200")
         }.doOCR(scaleForOcr(image), "current-rank-psm$pageSegMode")
+            .replace(Regex("\\s+"), "")
+
+    private fun ocrTier(image: BufferedImage, tessData: File): String =
+        TesseractEx().apply {
+            setDatapath(tessData.absolutePath)
+            setLanguage(CHI_SIM_DATA)
+            setPageSegMode(11)
+            setVariable("user_defined_dpi", "200")
+        }.doOCR(scaleForOcr(image), "current-tier")
             .replace(Regex("\\s+"), "")
 
     private fun scaleForOcr(image: BufferedImage): BufferedImage {

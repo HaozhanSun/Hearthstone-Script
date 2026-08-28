@@ -614,6 +614,10 @@ object GameUtil {
             }
             return
         }
+        // Keep a process-local ownership signal for statistics. A fast
+        // surrender can reach GAME_OVER before PLAYSTATE=CONCEDED is parsed
+        // or before war.me has been assigned its game id.
+        WarEx.surrenderRequested = true
         if (System.getProperty("hs.script.e2e") == "true") {
             E2ETrace.markSurrenderRequested()
         }
@@ -778,7 +782,11 @@ object GameUtil {
 
                 runCatching {
                     log.info { "E2E恢复：尝试关闭旧结算页面 #$number" }
-                    GAME_END_CONTINUE_RECT.lClick(false)
+                    // The result label's clickable hitbox is narrower than
+                    // the decorative banner.  Use the stable center point so
+                    // OCR-free stale-result recovery does not repeatedly land
+                    // on non-interactive pixels near the banner edges.
+                    GAME_END_CONTINUE_RECT.lClickCenter(false)
                 }.onFailure { error ->
                     log.warn(error) { "E2E恢复：关闭旧结算页面尝试失败 #$number" }
                 }

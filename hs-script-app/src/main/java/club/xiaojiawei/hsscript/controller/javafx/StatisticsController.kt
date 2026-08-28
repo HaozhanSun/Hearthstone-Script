@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.statistics.Record
 import club.xiaojiawei.hsscript.statistics.RecordDaoEx
 import club.xiaojiawei.hsscript.utils.runUI
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
+import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
 import javafx.beans.property.DoubleProperty
 import javafx.fxml.FXML
@@ -88,7 +89,9 @@ class StatisticsController : Initializable, StageHook {
     private val minuteItems = (0..59).map { "%02d".format(it) }
 
     override fun initialize(location: URL?, resources: ResourceBundle?) {
-        progress = mainProgressModal.show()
+        // Do not show the modal during FXML initialization. The controls are
+        // not ready yet, and onShowing() is responsible for starting the first
+        // load and owning its completion handle.
     }
 
     override fun onShowing() {
@@ -170,18 +173,35 @@ class StatisticsController : Initializable, StageHook {
         if (!start.isBefore(endExclusive)) {
             allRecords = emptyList()
             render(emptyList())
+            mainProgressModal.hide(progress)
+            progress = null
             return
         }
 
-        progress = mainProgressModal.show()
+        val loadProgress = mainProgressModal.show()
+        progress = loadProgress
         EXTRA_THREAD_POOL.submit {
-            val records = RecordDaoEx.queryRecord(start, endExclusive)
-            runUI {
-                if (generation != loadGeneration) return@runUI
-                allRecords = records
-                populateStrategies(records)
-                render(filteredRecords())
-                mainProgressModal.hide(progress)
+            try {
+                val records = RecordDaoEx.queryRecord(start, endExclusive)
+                runUI {
+                    if (generation != loadGeneration) return@runUI
+                    try {
+                        allRecords = records
+                        populateStrategies(records)
+                        render(filteredRecords())
+                    } finally {
+                        mainProgressModal.hide(loadProgress)
+                        if (progress === loadProgress) progress = null
+                    }
+                }
+            } catch (error: Throwable) {
+                log.error(error) { "读取统计数据失败：$start -> $endExclusive" }
+                runUI {
+                    if (generation == loadGeneration) {
+                        mainProgressModal.hide(loadProgress)
+                        if (progress === loadProgress) progress = null
+                    }
+                }
             }
         }
     }

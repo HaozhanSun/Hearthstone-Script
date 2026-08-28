@@ -1,0 +1,46 @@
+{
+  "format": "hearthstone-script-work-time-schedule-v1",
+  "source": "sanitized snapshot of the active runtime schedule",
+  "weekdayRuleSetIds": [
+    "presets-one",
+    "presets-one",
+    "presets-one",
+    "presets-one",
+    "presets-one",
+    "presets-one",
+    "presets-one"
+  ],
+  "highPriorityRuleSelection": true,
+  "ruleSets": [
+    {
+      "id": "presets-one",
+      "name": "预设1",
+      "timeRules": [
+        { "workTime": { "startTime": "02:02", "endTime": "06:58" }, "enable": true, "runMode": "WILD", "deckPos": [1], "strategyId": "e71234fa-7-pirate-demon-hunter-mcts-trial-97e9-1f4e126cd33b", "operates": ["CLOSE_PLATFORM", "CLOSE_GAME"] },
+        { "workTime": { "startTime": "04:41", "endTime": "06:58" }, "enable": true, "runMode": "WILD", "deckPos": [1], "strategyId": "e71234fa-7-pirate-demon-hunter-mcts-trial-97e9-1f4e126cd33b", "operates": ["CLOSE_PLATFORM", "CLOSE_GAME"] },
+        { "workTime": { "startTime": "07:13", "endTime": "09:32" }, "enable": true, "runMode": "WILD", "deckPos": [1], "strategyId": "e71234fa-7-pirate-demon-hunter-mcts-trial-97e9-1f4e126cd33b", "operates": ["CLOSE_PLATFORM", "CLOSE_GAME"] },
+        { "workTime": { "startTime": "09:51", "endTime": "12:01" }, "enable": true, "runMode": "WILD", "deckPos": [1], "strategyId": "e71234fa-7-pirate-demon-hunter-mcts-trial-97e9-1f4e126cd33b", "operates": ["CLOSE_PLATFORM", "CLOSE_GAME"] },
+        { "workTime": { "startTime": "12:16", "endTime": "14:34" }, "enable": true, "runMode": "WILD", "deckPos": [1], "strategyId": "e71234fa-7-pirate-demon-hunter-mcts-trial-97e9-1f4e126cd33b", "operates": ["CLOSE_PLATFORM", "CLOSE_GAME"] },
+        { "workTime": { "startTime": "14:49", "endTime": "17:12" }, "enable": true, "runMode": "WILD", "deckPos": [1], "strategyId": "e71234fa-7-pirate-demon-hunter-mcts-trial-97e9-1f4e126cd33b", "operates": ["CLOSE_PLATFORM", "CLOSE_GAME"] },
+        { "workTime": { "startTime": "17:31", "endTime": "19:45" }, "enable": true, "runMode": "WILD", "deckPos": [1], "strategyId": "e71234fa-7-pirate-demon-hunter-mcts-trial-97e9-1f4e126cd33b", "operates": ["CLOSE_PLATFORM", "CLOSE_GAME"] },
+        { "workTime": { "startTime": "19:57", "endTime": "22:17" }, "enable": true, "runMode": "WILD", "deckPos": [1], "strategyId": "e71234fa-7-pirate-demon-hunter-mcts-trial-97e9-1f4e126cd33b", "operates": ["CLOSE_PLATFORM", "CLOSE_GAME"] },
+        { "workTime": { "startTime": "22:32", "endTime": "23:59" }, "enable": true, "runMode": "STANDARD", "deckPos": [1], "strategyId": "e71234fa-7-pirate-demon-hunter-mcts-trial-97e9-1f4e126cd33b", "operates": ["CLOSE_PLATFORM", "CLOSE_GAME"] },
+        { "workTime": { "startTime": "00:09", "endTime": "01:53" }, "enable": true, "runMode": "WILD", "deckPos": [1], "strategyId": "e71234fa-7-pirate-demon-hunter-mcts-trial-97e9-1f4e126cd33b", "operates": ["CLOSE_GAME", "CLOSE_PLATFORM"] }
+      ]
+    },
+    {
+      "id": "presets-two",
+      "name": "预设2",
+      "timeRules": [
+        { "workTime": { "startTime": "00:00", "endTime": "23:59" }, "enable": true, "runMode": "STANDARD", "deckPos": [1], "strategyId": "e71234fa-1-radical-deck-97e9-1f4e126cd33b", "operates": ["CLOSE_PLATFORM", "CLOSE_GAME"] },
+        { "workTime": { "startTime": "00:00", "endTime": "08:00" }, "enable": false, "runMode": "STANDARD", "deckPos": [1], "strategyId": "e71234fa-1-radical-deck-97e9-1f4e126cd33b", "operates": ["CLOSE_PLATFORM", "CLOSE_GAME"] },
+        { "workTime": { "startTime": "18:00", "endTime": "23:59" }, "enable": false, "runMode": "STANDARD", "deckPos": [1], "strategyId": "e71234fa-1-radical-deck-97e9-1f4e126cd33b", "operates": ["CLOSE_PLATFORM", "CLOSE_GAME"] }
+      ]
+    },
+    {
+      "id": "",
+      "name": "空",
+      "timeRules": []
+    }
+  ]
+}

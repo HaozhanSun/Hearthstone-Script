@@ -63,6 +63,71 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `sigil stays visible and receives a strong setup prior beside another playable card`() {
+        val war = testWar()
+        val sigil = testCard(PirateDemonHunterMctsExperimentModel.SIGIL_OF_SKYDIVING).apply {
+            cardType = CardTypeEnum.SPELL
+            cost = 2
+        }
+        val ordinary = testCard("ORDINARY_PIRATE").apply { cost = 1 }
+        war.addCard(sigil, war.me.handArea)
+        war.addCard(ordinary, war.me.handArea)
+
+        assertFalse(PirateDemonHunterMctsExperimentModel.shouldDefer(sigil, war))
+        assertTrue(
+            PirateDemonHunterMctsExperimentModel.actionPrior(
+                PlayAction({}, {}, sigil),
+                war,
+            ) > PirateDemonHunterMctsExperimentModel.actionPrior(PlayAction({}, {}, ordinary), war),
+        )
+    }
+
+    @Test
+    fun `weapon attendant is favored when a pirate is present and no weapon is equipped`() {
+        val war = testWar()
+        val pirate = testCard("PIRATE_ON_BOARD")
+        val attendant = testCard(PirateDemonHunterMctsExperimentModel.WEAPONS_ATTENDANT).apply {
+            cardType = CardTypeEnum.MINION
+            cost = 2
+        }
+        war.addCard(pirate, war.me.playArea)
+        war.addCard(attendant, war.me.handArea)
+
+        val prior = PirateDemonHunterMctsExperimentModel.actionPrior(PlayAction({}, {}, attendant), war)
+        assertTrue(prior >= 14.0)
+    }
+
+    @Test
+    fun `piggy receives a high but conditional prior against enemies in three damage range`() {
+        val war = testWar()
+        val piggy = testCard(PirateDemonHunterMctsExperimentModel.PIGGY).apply { cost = 2 }
+        val normal = testCard("ORDINARY_PIRATE").apply { cost = 2 }
+        war.addCard(piggy, war.me.handArea)
+        war.addCard(normal, war.me.handArea)
+        war.addCard(testCard("THREE_HEALTH_ENEMY").apply {
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 3
+            atc = 4
+        }, war.rival.playArea)
+
+        val piggyPrior = PirateDemonHunterMctsExperimentModel.actionPrior(PlayAction({}, {}, piggy), war)
+        val normalPrior = PirateDemonHunterMctsExperimentModel.actionPrior(PlayAction({}, {}, normal), war)
+        assertTrue(piggyPrior > normalPrior)
+        assertTrue(piggyPrior >= 20.0)
+    }
+
+    @Test
+    fun `hozen is included in effective pirate attack calculation`() {
+        val war = testWar()
+        val hozen = testCard(PirateDemonHunterMctsExperimentModel.HOZEN_ROUGHHOUSER)
+        val pirate = testCard("PIRATE_ATTACKER").apply { atc = 2 }
+        war.addCard(hozen, war.me.playArea)
+        war.addCard(pirate, war.me.playArea)
+
+        assertEquals(3, PirateDemonHunterMctsExperimentModel.effectivePirateAttack(pirate, war))
+    }
+
+    @Test
     fun `adrenaline fiend remains legal without an immediate attack`() {
         val card = testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND)
         val war = testWar()
@@ -301,6 +366,54 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         assertTrue(node.actions.any { it.creator?.cardId == PirateDemonHunterMctsExperimentModel.RAGEWING })
         assertTrue(node.actions.none { it.javaClass.simpleName == "TurnOverAction" })
+    }
+
+    @Test
+    fun `known parser-light pirate dh minions are eligible for opaque replanning`() {
+        val war = testWar()
+        val patches = testCard(PirateDemonHunterMctsExperimentModel.PATCHES_THE_PIRATE)
+        val ragewing = testCard(PirateDemonHunterMctsExperimentModel.RAGEWING)
+        val zilliax = testCard("TOY_330t11")
+        val piggy = testCard(PirateDemonHunterMctsExperimentModel.PIGGY)
+
+        assertTrue(PirateDemonHunterMctsExperimentModel.canCreateOpaqueAction(patches, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.canCreateOpaqueAction(ragewing, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.canCreateOpaqueAction(zilliax, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.canCreateOpaqueAction(piggy, war))
+    }
+
+    @Test
+    fun `cliffside in hand waits when three slots cannot be reserved`() {
+        val war = testWar()
+        val cliffside = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {
+            cardType = CardTypeEnum.LOCATION
+            cost = 4
+        }
+        repeat(5) {
+            war.addCard(testCard("BOARD_$it"), war.me.playArea)
+        }
+        war.addCard(cliffside, war.me.handArea)
+
+        assertEquals(2, war.me.playArea.maxSize - war.me.playArea.cards.size)
+        assertTrue(PirateDemonHunterMctsExperimentModel.shouldDefer(cliffside, war))
+    }
+
+    @Test
+    fun `cliffside activation waits when fewer than two summon slots remain`() {
+        val war = testWar()
+        val cliffside = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {
+            cardType = CardTypeEnum.LOCATION
+            cost = 4
+            isLocationActionCooldown = false
+        }
+        repeat(6) {
+            war.addCard(testCard("BOARD_$it"), war.me.playArea)
+        }
+        war.addCard(cliffside, war.me.playArea)
+
+        val activation = PowerAction({}, {}, cliffside)
+        assertEquals(0, war.me.playArea.maxSize - war.me.playArea.cards.size)
+        assertFalse(PirateDemonHunterMctsExperimentModel.isMandatoryAction(activation, war))
     }
 
     @Test

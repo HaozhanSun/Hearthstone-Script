@@ -13,6 +13,7 @@ import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsReplayTrace
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 
@@ -61,76 +62,151 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
      * end-turn check from treating a partially parsed card with a fitting
      * printed cost as actionable when MCTS has no action to dispatch.
      */
-    fun actionableCreatorIds(war: War): Set<String> {
-        if (experimentalTurnNumber == war.me.turn && !lastExperimentalTurnProducedAction) {
-            return emptySet()
-        }
+    fun actionableCreatorIds(war: War, purpose: String = "mcts-live-scan"): Set<String> {
         val me = war.me
         val model = activeDecisionModel
         val suppressed = suppressedExperimentalCreatorIds()
         val result = linkedSetOf<String>()
+        val decisions = mutableListOf<Map<String, Any?>>()
+        fun decision(details: Map<String, Any?>) {
+            decisions += details
+        }
         me.handArea.cards.forEach { card ->
-            if (card.entityId in suppressed) return@forEach
-            if (card.isUncertain || card.cost > me.usableResource) return@forEach
+            if (card.entityId in suppressed) {
+                decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "suppressed-after-unconfirmed-dispatch"))
+                return@forEach
+            }
+            if (card.isUncertain) {
+                decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "uncertain-card"))
+                return@forEach
+            }
+            if (card.cost > me.usableResource) {
+                decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "cost" to card.cost, "mana" to me.usableResource, "outcome" to "FILTERED", "reason" to "insufficient-mana"))
+                return@forEach
+            }
             if (me.playArea.isFull &&
                 (card.cardType === CardTypeEnum.MINION || card.cardType === CardTypeEnum.LOCATION)
-            ) return@forEach
+            ) {
+                decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "board-full-for-permanent"))
+                return@forEach
+            }
             // Mirror MonteCarloTreeNode: a card filtered by a deck timing
             // hook is not an actionable residual for the end-turn guard.
-            if (model?.shouldDefer(card, war) == true) return@forEach
-            val parsedActions = runCatching {
-                card.action.generatePlayActions(war, me)
-            }.getOrDefault(emptyList())
+            if (model?.shouldDefer(card, war) == true) {
+                decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "decision-model-should-defer"))
+                return@forEach
+            }
+            val parsedResult = runCatching { card.action.generatePlayActions(war, me) }
+            val parsedActions = parsedResult.getOrElse {
+                decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "play-action-generation-error:${it::class.java.simpleName}"))
+                emptyList()
+            }
+            if (parsedResult.isFailure) return@forEach
             val parsed = parsedActions.any { model?.isDeferredAction(it, war) != true }
+            val deferredParsed = parsedActions.count { model?.isDeferredAction(it, war) == true }
+            val opaque = parsedActions.isEmpty() && model?.canCreateOpaqueAction(card, war) == true
             // Match MonteCarloTreeNode exactly: an opaque action is only a
             // fallback when the parser produced no action at all.  A parsed
             // action that the model deliberately deferred (for example
             // Blindeye Judge) must not be reintroduced by this fallback.
-            if (parsed || (parsedActions.isEmpty() && model?.canCreateOpaqueAction(card, war) == true)) {
+            if (parsed || opaque) {
                 result += card.entityId
             }
+            decision(
+                mapOf(
+                    "kind" to "HAND_CARD",
+                    "cardId" to card.cardId,
+                    "entityId" to card.entityId,
+                    "cost" to card.cost,
+                    "mana" to me.usableResource,
+                    "rawPlayActions" to parsedActions.size,
+                    "modelDeferredActions" to deferredParsed,
+                    "opaqueFallback" to opaque,
+                    "outcome" to if (parsed || opaque) "ACTIONABLE" else "FILTERED",
+                    "reason" to when {
+                        parsed -> "parsed-play-action"
+                        opaque -> "opaque-fallback"
+                        else -> "no-live-play-action"
+                    },
+                ),
+            )
         }
         me.playArea.cards.forEach { card ->
-            if (card.entityId in suppressed) return@forEach
+            if (card.entityId in suppressed) {
+                decision(mapOf("kind" to "BOARD_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "suppressed-after-unconfirmed-dispatch"))
+                return@forEach
+            }
             if (card.canAttack()) {
-                val attackActions = runCatching {
-                    card.action.generateAttackActions(war, me)
-                }.getOrDefault(emptyList())
+                val attackResult = runCatching { card.action.generateAttackActions(war, me) }
+                val attackActions = attackResult.getOrElse { emptyList() }
                 if (attackActions.any { model?.isDeferredAction(it, war) != true }) {
                     result += card.entityId
                 }
+                decision(mapOf("kind" to "BOARD_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "rawAttackActions" to attackActions.size, "outcome" to if (attackActions.any { model?.isDeferredAction(it, war) != true }) "ACTIONABLE" else "FILTERED", "reason" to if (attackResult.isFailure) "attack-action-generation-error:${attackResult.exceptionOrNull()!!::class.java.simpleName}" else "attack-actions"))
             }
             if (card.canPower()) {
-                val powerActions = runCatching {
-                    card.action.generatePowerActions(war, me)
-                }.getOrDefault(emptyList())
+                val powerResult = runCatching { card.action.generatePowerActions(war, me) }
+                val powerActions = powerResult.getOrElse { emptyList() }
                 if (powerActions.any { model?.isDeferredAction(it, war) != true }) {
                     result += card.entityId
                 }
+                decision(mapOf("kind" to "BOARD_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "rawPowerActions" to powerActions.size, "outcome" to if (powerActions.any { model?.isDeferredAction(it, war) != true }) "ACTIONABLE" else "FILTERED", "reason" to if (powerResult.isFailure) "power-action-generation-error:${powerResult.exceptionOrNull()!!::class.java.simpleName}" else "power-actions"))
             }
-            if (model?.canCreateOpaquePowerAction(card, war) == true) result += card.entityId
+            val opaquePower = model?.canCreateOpaquePowerAction(card, war) == true
+            if (opaquePower) result += card.entityId
+            if (opaquePower) decision(mapOf("kind" to "BOARD_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "ACTIONABLE", "reason" to "opaque-power-fallback"))
         }
         me.playArea.hero?.let { hero ->
-            if (hero.entityId in suppressed) return@let
+            if (hero.entityId in suppressed) {
+                decision(mapOf("kind" to "HERO", "entityId" to hero.entityId, "outcome" to "FILTERED", "reason" to "suppressed-after-unconfirmed-dispatch"))
+                return@let
+            }
             if (hero.canAttack() && runCatching {
                     hero.action.generateAttackActions(war, me).isNotEmpty()
                 }.getOrDefault(false)
             ) result += hero.entityId
+            decision(mapOf("kind" to "HERO", "entityId" to hero.entityId, "outcome" to if (hero.entityId in result) "ACTIONABLE" else "FILTERED", "reason" to if (hero.entityId in result) "attack-actions" else "no-attack-actions-or-not-attackable"))
         }
         me.playArea.power?.let { power ->
-            if (power.entityId in suppressed) return@let
+            if (power.entityId in suppressed) {
+                decision(mapOf("kind" to "HERO_POWER", "entityId" to power.entityId, "outcome" to "FILTERED", "reason" to "suppressed-after-unconfirmed-dispatch"))
+                return@let
+            }
             if (power.canPower() && runCatching {
                     power.action.generatePowerActions(war, me).isNotEmpty()
                 }.getOrDefault(false)
             ) result += power.entityId
-            if (model?.canCreateOpaquePowerAction(power, war) == true) result += power.entityId
+            val opaquePower = model?.canCreateOpaquePowerAction(power, war) == true
+            if (opaquePower) result += power.entityId
+            decision(mapOf("kind" to "HERO_POWER", "entityId" to power.entityId, "outcome" to if (power.entityId in result) "ACTIONABLE" else "FILTERED", "reason" to if (opaquePower) "opaque-power-fallback" else "power-actions-or-not-powerable"))
         }
+        MctsReplayTrace.record(
+            war,
+            "live_actionability_scan",
+            "full live action scan completed before end-turn decision",
+            mapOf(
+                "strategy" to name(),
+                "purpose" to purpose,
+                "mana" to me.usableResource,
+                "resources" to me.resources,
+                "usedResources" to me.usedResources,
+                "boardSlotsFree" to (me.playArea.maxSize - me.playArea.cards.size).coerceAtLeast(0),
+                "actionableCreatorIds" to result,
+                "decisions" to decisions,
+            ),
+        )
         return result
     }
 
     override fun executeOutCard() {
         val war = WAR
         val mctsArgList = executeMCTSOutCard(war)
+        MctsReplayTrace.record(
+            war,
+            "turn_controller_started",
+            "MCTS began planning from the live turn state",
+            mapOf("strategy" to name(), "argumentCount" to mctsArgList.size),
+        )
         val experimentalArg = mctsArgList.firstOrNull { it.experimentalSearch }
         if (experimentalArg != null) {
             activeDecisionModel = experimentalArg.decisionModel
@@ -170,6 +246,19 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 }
                 val bestNodes = monteCarloTreeSearch.searchBestNode(war, arg).filter { it.applyAction !is EmptyAction }
                 log.info { "思考耗时：${System.currentTimeMillis() - start}ms，执行动作数：${bestNodes.size}，得分：${bestNodes.lastOrNull()?.state?.score?:"--"}" }
+                if (bestNodes.isEmpty()) {
+                    MctsReplayTrace.record(
+                        war,
+                        "turn_end_candidate",
+                        "the search returned an empty executable path",
+                        mapOf(
+                            "strategy" to name(),
+                            "phase" to i + 1,
+                            "mana" to war.me.usableResource,
+                            "handSize" to war.me.handArea.cards.size,
+                        ),
+                    )
+                }
                 if (arg.debugName.isNotBlank()) {
                     log.info {
                         "MCTS_DEBUG_SELECTED strategy=${name()} phase=${i + 1}/$size " +
@@ -186,7 +275,32 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 var continueCurrent = false
                 for (action in bestNodes) {
                     val applyAction = action.applyAction
+                    val before = stateFingerprint(war)
+                    MctsReplayTrace.record(
+                        war,
+                        "action_dispatched",
+                        "live executor dispatched the selected MCTS path action",
+                        mapOf(
+                            "strategy" to name(),
+                            "phase" to i + 1,
+                            "action" to describeAction(applyAction),
+                            "pathLength" to bestNodes.size,
+                            "pathIndex" to bestNodes.indexOf(action) + 1,
+                            "stateBefore" to before,
+                        ),
+                    )
                     applyAction.exec.accept(war)
+                    MctsReplayTrace.record(
+                        war,
+                        "action_dispatch_returned",
+                        "live action callback returned; the next search will re-read state",
+                        mapOf(
+                            "strategy" to name(),
+                            "phase" to i + 1,
+                            "action" to describeAction(applyAction),
+                            "stateChangedImmediately" to (stateFingerprint(war) != before),
+                        ),
+                    )
                     if (applyAction.recalculate) {
                         Thread.sleep(RandomUtil.getActionInterval(1500).toLong())
                         continueCurrent = true
@@ -250,9 +364,42 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             )
             val path = search.searchBestNode(war, arg)
                 .filter { it.applyAction !is EmptyAction }
-            val node = path.firstOrNull() ?: break
+            val node = path.firstOrNull() ?: run {
+                MctsReplayTrace.record(
+                    war,
+                    "turn_end_candidate",
+                    "experimental search returned no executable action after root filtering",
+                    mapOf(
+                        "strategy" to name(),
+                        "step" to actionCount + 1,
+                        "mana" to war.me.usableResource,
+                        "hand" to war.me.handArea.cards.map { describeActionCard(it) },
+                    ),
+                )
+                MctsReplayTrace.record(
+                    war,
+                    "controller_branch",
+                    "no-executable-path-returned",
+                    mapOf("strategy" to name(), "step" to actionCount + 1, "turnDeadlineReached" to (System.currentTimeMillis() >= turnDeadline)),
+                )
+                break
+            }
             val action = node.applyAction
-            if (action === TurnOverAction) break
+            if (action === TurnOverAction) {
+                MctsReplayTrace.record(
+                    war,
+                    "turn_end_candidate",
+                    "experimental search selected the explicit EndTurn action",
+                    mapOf("strategy" to name(), "step" to actionCount + 1),
+                )
+                MctsReplayTrace.record(
+                    war,
+                    "controller_branch",
+                    "explicit-end-turn-action-returned",
+                    mapOf("strategy" to name(), "step" to actionCount + 1),
+                )
+                break
+            }
 
             // A search result can be built from the parser snapshot that was
             // used at the start of this re-plan.  If the preceding dispatch
@@ -269,10 +416,28 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                         "action=${describeAction(action)} step=${actionCount + 1} " +
                         "reason=blocked-after-unconfirmed-dispatch"
                 }
+                MctsReplayTrace.record(
+                    war,
+                    "controller_branch",
+                    "action-skipped-after-unconfirmed-dispatch",
+                    mapOf("strategy" to name(), "step" to actionCount + 1, "creatorId" to creatorId, "action" to describeAction(action)),
+                )
                 break
             }
 
             val before = stateFingerprint(war)
+            MctsReplayTrace.record(
+                war,
+                "action_dispatched",
+                "experimental MCTS selected and dispatched one receding-horizon action",
+                mapOf(
+                    "strategy" to name(),
+                    "step" to actionCount + 1,
+                    "action" to describeAction(action),
+                    "path" to path.map { describeAction(it.applyAction) },
+                    "stateBefore" to before,
+                ),
+            )
             log.info {
                 "MCTS_EXPERIMENT_STEP strategy=${name()} step=${actionCount + 1} " +
                     "action=${describeAction(action)} pathLength=${path.size}"
@@ -287,10 +452,27 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                     "MCTS_EXPERIMENT_ACTION_IGNORED strategy=${name()} " +
                         "action=${describeAction(action)} reason=turn-ended-before-dispatch"
                 }
+                MctsReplayTrace.record(
+                    war,
+                    "controller_branch",
+                    "turn-ended-before-dispatch",
+                    mapOf("strategy" to name(), "step" to actionCount + 1, "action" to describeAction(action)),
+                )
                 break
             }
             try {
                 action.exec.accept(war)
+                MctsReplayTrace.record(
+                    war,
+                    "action_dispatch_returned",
+                    "experimental action callback returned",
+                    mapOf(
+                        "strategy" to name(),
+                        "step" to actionCount + 1,
+                        "action" to describeAction(action),
+                        "stateChangedImmediately" to (stateFingerprint(war) != before),
+                    ),
+                )
             } catch (error: Throwable) {
                 if (!war.isMyTurn) {
                     log.info {
@@ -302,6 +484,12 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                         "MCTS_EXPERIMENT_ACTION_FAILED strategy=${name()} action=${describeAction(action)}"
                     }
                 }
+                MctsReplayTrace.record(
+                    war,
+                    "controller_branch",
+                    if (!war.isMyTurn) "action-failed-after-turn-ended" else "action-dispatch-exception",
+                    mapOf("strategy" to name(), "step" to actionCount + 1, "action" to describeAction(action), "error" to error::class.java.simpleName),
+                )
                 break
             }
             actionCount++
@@ -309,6 +497,17 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
 
             if (!awaitStateChange(war, before, turnDeadline)) {
                 lastExperimentalTurnHadUnconfirmedDispatch = true
+                MctsReplayTrace.record(
+                    war,
+                    "action_unconfirmed",
+                    "no observable state change arrived before the bounded re-plan deadline",
+                    mapOf(
+                        "strategy" to name(),
+                        "step" to actionCount,
+                        "action" to describeAction(action),
+                        "stateBefore" to before,
+                    ),
+                )
                 val creatorId = action.creator?.entityId?.takeIf { it.isNotBlank() }
                 if (creatorId != null) {
                     // A stale parser snapshot can expose an action that the
@@ -327,15 +526,60 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                             "creator=${describeActionCard(action.creator!!)} step=$actionCount " +
                             "reason=no-state-change-after-dispatch;replan-without-creator"
                     }
+                    MctsReplayTrace.record(
+                        war,
+                        "controller_branch",
+                        "action-unconfirmed-creator-suppressed-and-replanned",
+                        mapOf("strategy" to name(), "step" to actionCount, "creatorId" to creatorId, "action" to describeAction(action)),
+                    )
                     continue
                 }
                 log.info {
                     "MCTS_EXPERIMENT_REPLAN_STOP strategy=${name()} reason=状态未确认变化 " +
                         "step=$actionCount"
                 }
+                MctsReplayTrace.record(
+                    war,
+                    "controller_branch",
+                    "action-unconfirmed-without-creator-stopped-replan",
+                    mapOf("strategy" to name(), "step" to actionCount, "action" to describeAction(action)),
+                )
                 break
             }
+            MctsReplayTrace.record(
+                war,
+                "action_confirmed",
+                "Power.log/state fingerprint confirmed the dispatched action",
+                mapOf(
+                    "strategy" to name(),
+                    "step" to actionCount,
+                    "action" to describeAction(action),
+                    "stateChanged" to (stateFingerprint(war) != before),
+                ),
+            )
         }
+        MctsReplayTrace.record(
+            war,
+            "turn_controller_done",
+            "MCTS finished its bounded action loop; app-side guard decides whether ending the turn is safe",
+            mapOf(
+                "strategy" to name(),
+                "actions" to actionCount,
+                "remainingMana" to war.me.usableResource,
+                "remainingHand" to war.me.handArea.cards.map { describeActionCard(it) },
+            ),
+        )
+        MctsReplayTrace.record(
+            war,
+            "controller_branch",
+            when {
+                !war.isMyTurn -> "turn-ended-during-controller-loop"
+                System.currentTimeMillis() >= turnDeadline -> "turn-budget-expired"
+                actionCount >= 16 -> "action-count-cap-reached"
+                else -> "controller-loop-exited-without-terminal-condition"
+            },
+            mapOf("strategy" to name(), "actions" to actionCount, "remainingMana" to war.me.usableResource),
+        )
         log.info { "MCTS_EXPERIMENT_TURN_DONE strategy=${name()} actions=$actionCount" }
     }
 

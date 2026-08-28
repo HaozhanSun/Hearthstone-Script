@@ -9,6 +9,9 @@ import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscript.status.DebugScreenshotRing
 import club.xiaojiawei.hsscript.bean.single.WarEx
+import club.xiaojiawei.hsscript.statistics.Record
+import club.xiaojiawei.hsscript.statistics.RecordDaoEx
+import club.xiaojiawei.hsscript.status.DeckStrategyManager
 
 /**
  * The point at which a surrender rule is evaluated.
@@ -65,6 +68,8 @@ object SurrenderPolicy {
     private const val NAME_RESOLUTION_POLL_MS = 100L
     private const val RANK_RETRY_INTERVAL_MS = 750L
     private const val MAX_RANK_INSPECTION_ATTEMPTS = 8
+    private const val WIN_RATE_GUARD_THRESHOLD_PERCENT = 45.0
+    private const val WIN_RATE_GUARD_MIN_GAMES = 5
 
     /**
      * Early opponent-hero checks run once per resolved identity.  Keeping the
@@ -256,9 +261,11 @@ object SurrenderPolicy {
     }
 
     /**
-     * Use the visible rank as the only statistical surrender gate. Rank 10
-     * plays continuously; ranks 1..9 surrender before mulligan. Unknown OCR
-     * is fail-safe and lets the game continue.
+     * The rank gate is the primary policy: Silver 10 is the floor, so Silver
+     * 9..1 and every tier above Silver surrender before mulligan. The old
+     * 45% win-rate gate is a secondary insurance and is evaluated from known
+     * non-surrendered games for the selected strategy. It cannot replace a
+     * rank decision, and a small/empty sample is ignored.
      */
     @Synchronized
     fun evaluateCurrentRankBeforeMulligan(): SurrenderRuleResult? {
@@ -279,8 +286,17 @@ object SurrenderPolicy {
         lastRankInspectionAt = now
         rankInspectionAttempts++
 
-        val rank = CurrentRankDetector.detect()?.rank
+        val detection = CurrentRankDetector.detect()
+        val rank = detection?.rank
         if (rank == null) {
+            evaluateWinRateGuard()?.let { result ->
+                rankCheckCompleted = true
+                log.warn {
+                    "WIN_RATE_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                        "rule=${result.ruleId} reason=${result.reason} fallback=rank-unresolved"
+                }
+                return result
+            }
             if (rankInspectionAttempts >= MAX_RANK_INSPECTION_ATTEMPTS) {
                 rankCheckCompleted = true
                 log.warn {
@@ -292,21 +308,42 @@ object SurrenderPolicy {
         }
 
         rankCheckCompleted = true
-        val result = evaluateCurrentRank(rank) ?: run {
+        val result = evaluateCurrentRank(rank, detection.tier) ?: run {
+            evaluateWinRateGuard()?.let { winRateResult ->
+                rankCheckCompleted = true
+                log.warn {
+                    "WIN_RATE_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                        "rule=${winRateResult.ruleId} reason=${winRateResult.reason} " +
+                        "rank=$rank tier=${detection.tier.name}"
+                }
+                return winRateResult
+            }
             log.info {
                 "RANK_POLICY_CONTINUE stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                    "rank=$rank reason=rank-is-10"
+                    "rank=$rank tier=${detection.tier.name} reason=rank-is-safe-and-win-rate-guard-clear"
             }
             return null
         }
         log.warn {
             "SURRENDER_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                "rank=$rank rule=${result.ruleId} reason=${result.reason}"
+            "rank=$rank tier=${detection.tier.name} rule=${result.ruleId} reason=${result.reason}"
         }
         return result
     }
 
-    internal fun evaluateCurrentRank(rank: Int): SurrenderRuleResult? {
+    internal fun evaluateCurrentRank(
+        rank: Int,
+        tier: CurrentRankDetector.RankTier = CurrentRankDetector.RankTier.UNKNOWN,
+    ): SurrenderRuleResult? {
+        if (tier.order > CurrentRankDetector.RankTier.SILVER.order) {
+            return SurrenderRuleResult(
+                ruleId = "current-tier-above-silver-10",
+                matched = false,
+                shouldSurrender = true,
+                reason = "current-tier=${tier.name.lowercase()}-rank=$rank",
+            )
+        }
+        if (tier === CurrentRankDetector.RankTier.BRONZE) return null
         if (rank !in 1..10 || rank == 10) return null
         return SurrenderRuleResult(
             ruleId = "current-rank-is-not-10",
@@ -314,6 +351,55 @@ object SurrenderPolicy {
             shouldSurrender = true,
             reason = "current-rank=$rank",
         )
+    }
+
+    data class WinRateSnapshot(
+        val games: Int,
+        val wins: Int,
+    ) {
+        val percent: Double
+            get() = if (games <= 0) 0.0 else wins * 100.0 / games
+    }
+
+    /** Pure policy helper kept package-visible so threshold behavior is testable. */
+    internal fun evaluateWinRate(snapshot: WinRateSnapshot): SurrenderRuleResult? {
+        if (snapshot.games < WIN_RATE_GUARD_MIN_GAMES) return null
+        // Historical runtime behavior is a ceiling guard: once the completed,
+        // non-surrendered win rate reaches 45%, prepare to surrender.  Keep the
+        // boundary inclusive so 9/20 is treated exactly like the old policy.
+        if (snapshot.percent < WIN_RATE_GUARD_THRESHOLD_PERCENT) return null
+        return SurrenderRuleResult(
+            ruleId = "win-rate-at-least-45-percent",
+            matched = false,
+            shouldSurrender = true,
+            reason = "win-rate=${"%.2f".format(java.util.Locale.ROOT, snapshot.percent)}% " +
+                "reached-threshold=${WIN_RATE_GUARD_THRESHOLD_PERCENT}% " +
+                "wins=${snapshot.wins}/${snapshot.games}",
+        )
+    }
+
+    /** Read only completed, explicitly non-surrendered games for the active strategy. */
+    private fun evaluateWinRateGuard(): SurrenderRuleResult? = runCatching {
+        val strategy = DeckStrategyManager.currentDeckStrategy ?: return null
+        val strategyId = strategy.id().takeIf { it.isNotBlank() } ?: return null
+        val records = RecordDaoEx.RECORD_DAO.query(Record(strategyId = strategyId))
+        val played = records.filter { it.surrendered == false && it.result != null }
+        val snapshot = WinRateSnapshot(
+            games = played.size,
+            wins = played.count { it.result == true },
+        )
+        val result = evaluateWinRate(snapshot)
+        if (result == null) {
+            log.info {
+                "WIN_RATE_POLICY_CLEAR strategy=$strategyId games=${snapshot.games} " +
+                    "wins=${snapshot.wins} rate=${"%.2f".format(java.util.Locale.ROOT, snapshot.percent)}% " +
+                    "threshold=${WIN_RATE_GUARD_THRESHOLD_PERCENT}% minGames=$WIN_RATE_GUARD_MIN_GAMES"
+            }
+        }
+        result
+    }.getOrElse { error ->
+        log.warn(error) { "WIN_RATE_POLICY_UNAVAILABLE reason=statistics-read-failed" }
+        null
     }
 
     private val PRE_MULLIGAN_PHASES = setOf(

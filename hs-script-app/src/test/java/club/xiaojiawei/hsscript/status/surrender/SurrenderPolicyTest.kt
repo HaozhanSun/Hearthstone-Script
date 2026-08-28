@@ -124,6 +124,14 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun rankTierParserRecognizesLocalizedLeagueNames() {
+        assertEquals(CurrentRankDetector.RankTier.SILVER, CurrentRankDetector.parseTierText("白银10"))
+        assertEquals(CurrentRankDetector.RankTier.GOLD, CurrentRankDetector.parseTierText("黄金10"))
+        assertEquals(CurrentRankDetector.RankTier.BRONZE, CurrentRankDetector.parseTierText("青铜9"))
+        assertEquals(CurrentRankDetector.RankTier.UNKNOWN, CurrentRankDetector.parseTierText("Kenneth Sun"))
+    }
+
+    @Test
     fun rankResolverPrefersExplicitTenOverPartialOneReads() {
         assertEquals(
             10,
@@ -162,6 +170,25 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun rankTierVisualClassifierDistinguishesWarmGoldFromNeutralSilver() {
+        val gold = BufferedImage(144, 140, BufferedImage.TYPE_INT_RGB)
+        val goldGraphics = gold.createGraphics()
+        goldGraphics.color = Color(220, 165, 65)
+        goldGraphics.drawRect(6, 6, 90, 100)
+        goldGraphics.drawRect(10, 10, 82, 92)
+        goldGraphics.dispose()
+        assertEquals(CurrentRankDetector.RankTier.GOLD, CurrentRankDetector.detectTierVisual(gold))
+
+        val silver = BufferedImage(144, 140, BufferedImage.TYPE_INT_RGB)
+        val silverGraphics = silver.createGraphics()
+        silverGraphics.color = Color(185, 185, 185)
+        silverGraphics.drawRect(6, 6, 90, 100)
+        silverGraphics.drawRect(10, 10, 82, 92)
+        silverGraphics.dispose()
+        assertEquals(CurrentRankDetector.RankTier.SILVER, CurrentRankDetector.detectTierVisual(silver))
+    }
+
+    @Test
     fun rankResolverRequiresAgreementBeforeSurrenderRank() {
         assertNull(CurrentRankDetector.resolveRankCandidates(listOf("1", "", "")))
         assertEquals(1, CurrentRankDetector.resolveRankCandidates(listOf("1", "1", "")))
@@ -180,6 +207,48 @@ class SurrenderPolicyTest {
     @Test
     fun rankTenDoesNotRequestSurrender() {
         assertNull(SurrenderPolicy.evaluateCurrentRank(10))
+    }
+
+    @Test
+    fun silverTenIsTheSafeFloorButGoldTenRequestsSurrender() {
+        assertNull(
+            SurrenderPolicy.evaluateCurrentRank(
+                rank = 10,
+                tier = CurrentRankDetector.RankTier.SILVER,
+            ),
+        )
+        val result = SurrenderPolicy.evaluateCurrentRank(
+            rank = 10,
+            tier = CurrentRankDetector.RankTier.GOLD,
+        )
+        assertTrue(result != null)
+        assertTrue(result!!.shouldSurrender)
+        assertEquals("current-tier-above-silver-10", result.ruleId)
+    }
+
+    @Test
+    fun silverNineRequestsSurrender() {
+        val result = SurrenderPolicy.evaluateCurrentRank(
+            rank = 9,
+            tier = CurrentRankDetector.RankTier.SILVER,
+        )
+        assertTrue(result != null)
+        assertTrue(result!!.shouldSurrender)
+    }
+
+    @Test
+    fun winRateGuardNeedsFivePlayedGamesAndSurrendersAtOrAboveFortyFivePercent() {
+        assertNull(SurrenderPolicy.evaluateWinRate(SurrenderPolicy.WinRateSnapshot(games = 4, wins = 0)))
+        assertNull(SurrenderPolicy.evaluateWinRate(SurrenderPolicy.WinRateSnapshot(games = 5, wins = 2)))
+        val boundary = SurrenderPolicy.evaluateWinRate(SurrenderPolicy.WinRateSnapshot(games = 20, wins = 9))
+        assertTrue(boundary != null)
+        assertTrue(boundary!!.shouldSurrender)
+        assertEquals("win-rate-at-least-45-percent", boundary.ruleId)
+        val result = SurrenderPolicy.evaluateWinRate(SurrenderPolicy.WinRateSnapshot(games = 5, wins = 3))
+        assertTrue(result != null)
+        assertTrue(result!!.shouldSurrender)
+        assertEquals("win-rate-at-least-45-percent", result.ruleId)
+        assertTrue(result!!.reason.orEmpty().contains("reached-threshold=45.0%"))
     }
 
     @Test

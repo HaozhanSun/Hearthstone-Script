@@ -7,6 +7,7 @@ import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
@@ -227,7 +228,18 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                 }
                 attempts++
                 if (attempts > 20) {
-                    log.info { "匹配入口弹窗恢复结束：未再检测到可处理对话框" }
+                    val evidence = UnknownStateScreenshot.capture(
+                        category = UnknownStateScreenshot.CATEGORY_POPUP_RECOVERY,
+                        trigger = "matchmaking-popup-recovery-exhausted",
+                        state = "mode=${Mode.currMode?.name ?: "NONE"}|attempts=$attempts",
+                        phase = "tournament-matchmaking",
+                        label = "popup-recovery-exhausted",
+                    )
+                    log.warn {
+                        "匹配入口弹窗恢复结束：未再检测到可处理对话框 " +
+                            "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
+                            "screenshotLink=${evidence?.link ?: "none"}"
+                    }
                     recoveryTask.cancel(false)
                     return@LRunnable
                 }

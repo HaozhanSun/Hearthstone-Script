@@ -50,7 +50,9 @@ class WorkTimeRule : Cloneable {
         deckPos: Set<Int>,
         enable: Boolean
     ) {
-        this.workTime = workTime
+        // Each schedule row owns its editable time range.  In particular, do
+        // not retain the mutable DEFAULT_WORK_TIME singleton used by the UI.
+        this.workTime = workTime.clone()
         this.operates = operates
         this.runMode = runMode
         this.strategyId = strategyId

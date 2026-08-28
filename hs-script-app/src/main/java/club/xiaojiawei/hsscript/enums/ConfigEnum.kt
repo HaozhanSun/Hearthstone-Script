@@ -367,6 +367,12 @@ enum class ConfigEnum(
     START_ON_OPEN(group = BEHAVIOR_CONFIG_GROUP, defaultValueInitializer = { TRUE_STR }),
 
     /**
+     * 启动时不在工作时间也先运行指定时长；到期后重新交给工作时间表。
+     * 设为0可禁用，默认30分钟。
+     */
+    STARTUP_RUN_WINDOW_MINUTES(group = BEHAVIOR_CONFIG_GROUP, defaultValueInitializer = { "30" }),
+
+    /**
      * 自动刷新游戏每日任务
      */
     AUTO_REFRESH_GAME_TASK(

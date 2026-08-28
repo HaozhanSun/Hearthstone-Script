@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscriptcardsdk.mcts
 
 import club.xiaojiawei.hsscriptcardsdk.bean.Action
+import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
 import club.xiaojiawei.hsscriptcardsdk.bean.MCTSArg
 import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
@@ -72,6 +73,54 @@ class MonteCarloTreeNode(
      */
     private fun generateActions(war: War): MutableList<Action> {
         val result = mutableListOf<Action>()
+        val rootScan = if (parent == null && arg.debugName.isNotBlank()) mutableListOf<Map<String, Any?>>() else null
+
+        fun addScan(details: Map<String, Any?>) {
+            rootScan?.add(details)
+        }
+
+        fun cardDescription(card: Card): String =
+            "${card.cardId.ifBlank { "NO_ID" }}:${card.entityName.ifBlank { "UNKNOWN" }}"
+
+        fun actionDescription(action: Action): String {
+            if (action === TurnOverAction) return "结束回合"
+            val card = action.creator?.let(::cardDescription) ?: "NO_CREATOR"
+            val kind = when (action) {
+                is PlayAction -> "PLAY"
+                is AttackAction -> "ATTACK"
+                is PowerAction -> "POWER"
+                else -> action.javaClass.simpleName
+            }
+            return "$kind($card,entity=${action.creator?.entityId ?: ""})"
+        }
+
+        fun scanCard(
+            card: Card,
+            outcome: String,
+            reason: String,
+            rawPlayActions: Int? = null,
+            addedActions: Int = 0,
+            opaqueFallback: Boolean = false,
+        ) {
+            addScan(
+                linkedMapOf(
+                    "kind" to "HAND_CARD",
+                    "cardId" to card.cardId,
+                    "name" to card.entityName,
+                    "entityId" to card.entityId,
+                    "type" to card.cardType.name,
+                    "cost" to card.cost,
+                    "mana" to war.me.usableResource,
+                    "uncertain" to card.isUncertain,
+                    "outcome" to outcome,
+                    "reason" to reason,
+                    "rawPlayActions" to rawPlayActions,
+                    "addedActions" to addedActions,
+                    "opaqueFallback" to opaqueFallback,
+                ),
+            )
+        }
+
         if (applyAction !== TurnOverAction) {
             val me = war.me
             val handArea = me.handArea
@@ -81,6 +130,7 @@ class MonteCarloTreeNode(
                 val shouldDefer = arg.decisionModel?.shouldDefer(card, war)
                     ?: CardTimingPolicy.shouldDefer(card, war)
                 if (shouldDefer) {
+                    scanCard(card, "FILTERED", "decision-model-should-defer")
                     if (parent == null && arg.debugName.isNotBlank()) {
                         log.info {
                             "MCTS_DEBUG_ACTION_FILTER strategy=${arg.debugName} " +
@@ -91,6 +141,7 @@ class MonteCarloTreeNode(
                     continue
                 }
                 if (card.isCoinCard && !hasCoinPayoff(war)) {
+                    scanCard(card, "FILTERED", "coin-has-no-immediate-payoff")
                     if (parent == null && arg.debugName.isNotBlank()) {
                         log.info {
                             "MCTS_DEBUG_ACTION_FILTER strategy=${arg.debugName} " +
@@ -100,54 +151,135 @@ class MonteCarloTreeNode(
                     }
                     continue
                 }
-                if (!card.isUncertain && me.usableResource >= card.cost && (!playArea.isFull || card.cardType === CardTypeEnum.HERO || card.cardType === CardTypeEnum.SPELL || card.cardType === CardTypeEnum.WEAPON)) {
-                    val playActions = card.action.generatePlayActions(war, me)
-                    result.addAll(playActions)
-                    if (playActions.isEmpty() && arg.decisionModel?.canCreateOpaqueAction(card, war) == true) {
-                        result.add(createOpaquePlayAction(card))
-                    }
+                if (card.isUncertain) {
+                    scanCard(card, "FILTERED", "uncertain-card")
+                    continue
                 }
+                if (me.usableResource < card.cost) {
+                    scanCard(card, "FILTERED", "insufficient-mana")
+                    continue
+                }
+                if (playArea.isFull && card.cardType !== CardTypeEnum.HERO && card.cardType !== CardTypeEnum.SPELL && card.cardType !== CardTypeEnum.WEAPON) {
+                    scanCard(card, "FILTERED", "board-full-for-permanent")
+                    continue
+                }
+                val playActionsResult = runCatching { card.action.generatePlayActions(war, me) }
+                val playActions = playActionsResult.getOrElse {
+                    scanCard(card, "FILTERED", "play-action-generation-error:${it::class.java.simpleName}")
+                    emptyList()
+                }
+                if (playActionsResult.isFailure) continue
+                result.addAll(playActions)
+                val opaqueAllowed = playActions.isEmpty() && arg.decisionModel?.canCreateOpaqueAction(card, war) == true
+                if (opaqueAllowed) {
+                    result.add(createOpaquePlayAction(card))
+                }
+                scanCard(
+                    card,
+                    if (playActions.isNotEmpty() || opaqueAllowed) "ADDED" else "FILTERED",
+                    when {
+                        playActions.isNotEmpty() -> "parsed-play-actions"
+                        opaqueAllowed -> "opaque-fallback"
+                        else -> "no-play-action-and-no-opaque-fallback"
+                    },
+                    rawPlayActions = playActions.size,
+                    addedActions = playActions.size + if (opaqueAllowed) 1 else 0,
+                    opaqueFallback = opaqueAllowed,
+                )
             }
             for (card in playArea.cards) {
-                if (card.canAttack()) {
-                    result.addAll(card.action.generateAttackActions(war, me))
-                } else if (card.canPower()) {
-                    val powerActions = card.action.generatePowerActions(war, me)
-                    result.addAll(powerActions)
-                    if (powerActions.isEmpty() && arg.decisionModel?.canCreateOpaquePowerAction(card, war) == true) {
-                        result.add(createOpaquePowerAction(card))
+                val attackActions = if (card.canAttack()) {
+                    runCatching { card.action.generateAttackActions(war, me) }.getOrElse {
+                        addScan(mapOf("kind" to "BOARD_CARD", "entityId" to card.entityId, "cardId" to card.cardId, "outcome" to "FILTERED", "reason" to "attack-action-generation-error:${it::class.java.simpleName}"))
+                        emptyList()
                     }
+                } else emptyList()
+                if (attackActions.isNotEmpty()) {
+                    result.addAll(attackActions)
+                    addScan(mapOf("kind" to "BOARD_CARD", "entityId" to card.entityId, "cardId" to card.cardId, "outcome" to "ADDED", "reason" to "attack-actions", "rawActions" to attackActions.size))
+                } else if (card.canPower()) {
+                    val powerActions = runCatching { card.action.generatePowerActions(war, me) }.getOrElse {
+                        addScan(mapOf("kind" to "BOARD_CARD", "entityId" to card.entityId, "cardId" to card.cardId, "outcome" to "FILTERED", "reason" to "power-action-generation-error:${it::class.java.simpleName}"))
+                        emptyList()
+                    }
+                    result.addAll(powerActions)
+                    val opaquePower = powerActions.isEmpty() && arg.decisionModel?.canCreateOpaquePowerAction(card, war) == true
+                    if (opaquePower) result.add(createOpaquePowerAction(card))
+                    addScan(mapOf("kind" to "BOARD_CARD", "entityId" to card.entityId, "cardId" to card.cardId, "outcome" to if (powerActions.isNotEmpty() || opaquePower) "ADDED" else "FILTERED", "reason" to when { powerActions.isNotEmpty() -> "power-actions"; opaquePower -> "opaque-power-fallback"; else -> "no-power-action-and-no-opaque-fallback" }, "rawActions" to powerActions.size, "opaqueFallback" to opaquePower))
+                } else {
+                    addScan(mapOf("kind" to "BOARD_CARD", "entityId" to card.entityId, "cardId" to card.cardId, "outcome" to "FILTERED", "reason" to "not-attackable-and-not-powerable"))
                 }
             }
             playArea.hero?.let { myHero ->
                 if (myHero.canAttack()) {
-                    result.addAll(myHero.action.generateAttackActions(war, me))
+                    val actions = runCatching { myHero.action.generateAttackActions(war, me) }.getOrElse {
+                        addScan(mapOf("kind" to "HERO", "entityId" to myHero.entityId, "outcome" to "FILTERED", "reason" to "attack-action-generation-error:${it::class.java.simpleName}"))
+                        emptyList()
+                    }
+                    result.addAll(actions)
+                    addScan(mapOf("kind" to "HERO", "entityId" to myHero.entityId, "outcome" to if (actions.isNotEmpty()) "ADDED" else "FILTERED", "reason" to if (actions.isNotEmpty()) "attack-actions" else "no-attack-actions", "rawActions" to actions.size))
+                } else {
+                    addScan(mapOf("kind" to "HERO", "entityId" to myHero.entityId, "outcome" to "FILTERED", "reason" to "hero-cannot-attack"))
                 }
             }
             playArea.power?.let { myPower ->
                 if (me.usableResource >= myPower.cost && myPower.canPower()) {
-                    result.addAll(myPower.action.generatePowerActions(war, me))
+                    val actions = runCatching { myPower.action.generatePowerActions(war, me) }.getOrElse {
+                        addScan(mapOf("kind" to "HERO_POWER", "entityId" to myPower.entityId, "outcome" to "FILTERED", "reason" to "power-action-generation-error:${it::class.java.simpleName}"))
+                        emptyList()
+                    }
+                    result.addAll(actions)
+                    addScan(mapOf("kind" to "HERO_POWER", "entityId" to myPower.entityId, "outcome" to if (actions.isNotEmpty()) "ADDED" else "FILTERED", "reason" to if (actions.isNotEmpty()) "power-actions" else "no-power-actions", "rawActions" to actions.size))
+                } else {
+                    addScan(mapOf("kind" to "HERO_POWER", "entityId" to myPower.entityId, "outcome" to "FILTERED", "reason" to if (me.usableResource < myPower.cost) "insufficient-mana" else "cannot-power"))
                 }
             }
         }
         val mandatoryActions: List<Action> = arg.decisionModel
             ?.let { model -> result.filter { model.isMandatoryAction(it, war) } }
             ?: emptyList()
-        if (mandatoryActions.isNotEmpty()) return mandatoryActions.toMutableList()
+        if (mandatoryActions.isNotEmpty()) {
+            addScan(mapOf("kind" to "TREE_FILTER", "outcome" to "MANDATORY_ONLY", "reason" to "decision-model-mandatory-actions", "actions" to mandatoryActions.map(::actionDescription)))
+            rootScan?.let { scan ->
+                MctsReplayTrace.record(
+                    war,
+                    "action_scan",
+                    "root action scan completed with mandatory-action restriction",
+                    mapOf("strategy" to arg.debugName, "phase" to "root", "preFilterActionCount" to result.size, "mandatoryActionCount" to mandatoryActions.size, "finalActionCount" to mandatoryActions.size, "decisions" to scan),
+                )
+            }
+            return mandatoryActions.toMutableList()
+        }
 
-        val deferredActions = arg.decisionModel
-            ?.let { model -> result.filterNot { model.isDeferredAction(it, war) } }
-            ?: result
+        val deferredDecisions = result.map { action ->
+            action to (arg.decisionModel?.isDeferredAction(action, war) == true)
+        }
+        val deferredActions = if (arg.decisionModel != null) {
+            deferredDecisions.filterNot { it.second }.map { it.first }
+        } else result
+        deferredDecisions.filter { it.second }.forEach { (action, _) ->
+            addScan(mapOf("kind" to "ACTION_FILTER", "outcome" to "FILTERED", "reason" to "decision-model-deferred-action", "action" to actionDescription(action)))
+        }
         val filteredActions = if (deferredActions.isNotEmpty()) deferredActions else result
         // In experimental/receding-horizon MCTS, EndTurn is a terminal
         // control action, not a peer of a still-legal card, attack, or power.
         // Keeping it in the root set lets UCT end the turn early; the live
         // guard then sees the real action and exhausts its replan budget.
-        return if (arg.experimentalSearch && filteredActions.any { it !== TurnOverAction }) {
+        val finalActions = if (arg.experimentalSearch && filteredActions.any { it !== TurnOverAction }) {
             filteredActions.filterNot { it === TurnOverAction }.toMutableList()
         } else {
             filteredActions.toMutableList()
         }
+        addScan(mapOf("kind" to "TREE_FILTER", "outcome" to "FINAL", "reason" to if (arg.experimentalSearch && filteredActions.any { it !== TurnOverAction }) "experimental-end-turn-removed" else "end-turn-retained", "preFilterActionCount" to result.size, "deferredActionCount" to deferredActions.size, "finalActionCount" to finalActions.size, "finalActions" to finalActions.map(::actionDescription)))
+        rootScan?.let { scan ->
+            MctsReplayTrace.record(
+                war,
+                "action_scan",
+                "root action scan completed with per-branch telemetry",
+                mapOf("strategy" to arg.debugName, "phase" to "root", "preFilterActionCount" to result.size, "mandatoryActionCount" to mandatoryActions.size, "deferredActionCount" to deferredActions.size, "finalActionCount" to finalActions.size, "decisions" to scan),
+            )
+        }
+        return finalActions
     }
 
     /**

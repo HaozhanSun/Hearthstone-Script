@@ -6,11 +6,14 @@ import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.E2ETrace
+import club.xiaojiawei.hsscript.status.MctsDeckProfileTelemetry
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.MulliganScreenshot
+import club.xiaojiawei.hsscript.utils.MctsRoundScreenshot
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscript.utils.go
 import club.xiaojiawei.hsscriptbase.config.log
@@ -24,6 +27,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.isValid
 import club.xiaojiawei.hsscriptcardsdk.bean.safeRun
 import club.xiaojiawei.hsscriptcardsdk.data.COIN_CARD_ID
 import club.xiaojiawei.hsscriptcardsdk.data.BaseData
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsReplayTrace
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import club.xiaojiawei.hsscriptstrategysdk.TimelineEvent
 import club.xiaojiawei.hsscriptstrategysdk.DeckStrategy
@@ -324,6 +328,9 @@ object DeckStrategyActuator {
         try {
             val strategy = DeckStrategyManager.currentDeckStrategy
             strategyForTurn = strategy
+            if (strategy is MCTSDeckStrategy) {
+                MctsDeckProfileTelemetry.observe(war, strategy)
+            }
             war.me.safeRun {
                 log.info {
                     "决策：${strategy?.name() ?: "无策略"}，水晶=${it.usableResource}，手牌=${it.handArea.cards.size}"
@@ -341,6 +348,17 @@ object DeckStrategyActuator {
                     log.info { "回合已在策略执行期间结束，跳过剩余出牌动作" }
                 } else {
                     log.error(t) { "执行出牌策略异常，继续执行回合收尾" }
+                    val evidence = UnknownStateScreenshot.capture(
+                        category = UnknownStateScreenshot.CATEGORY_ACTION_FAILURE,
+                        trigger = "deck-strategy-exception",
+                        state = "mode=${Mode.currMode?.name ?: "NONE"}|turn=${war.me.turn}",
+                        phase = "game-turn",
+                        label = "action-failure-screen",
+                    )
+                    log.warn {
+                        "ACTION_FAILURE_SCREENSHOT path=${evidence?.file?.absolutePath ?: "not-saved"} " +
+                            "link=${evidence?.link ?: "none"}"
+                    }
                 }
             }
         } finally {
@@ -378,12 +396,37 @@ object DeckStrategyActuator {
                 }
                 return
             }
+            // Re-read every live action immediately before End Turn.  This is
+            // intentionally a second, independent pass after MCTS returns:
+            // animations, random summons, dynamic costs, and stale parser
+            // entities can all change the action set during the handoff.
+            val liveActionableCreatorIds = strategy.actionableCreatorIds(
+                war,
+                purpose = "turn-end-full-rescan",
+            )
             val inspection = TurnEndActionGuard.inspectForMctsEndTurn(
                 clearYellowRetries = clearYellowRetries,
                 ignoredCreatorIds = strategy.suppressedExperimentalCreatorIds(),
-                mctsActionableCreatorIds = strategy.actionableCreatorIds(war),
+                mctsActionableCreatorIds = liveActionableCreatorIds,
             )
             if (inspection.safeToEnd) {
+                val completedTurn = war.me.turn
+                MctsReplayTrace.record(
+                    war,
+                    "turn_end_selected",
+                    "the app-side guard accepted EndTurn after MCTS exhausted or deferred live actions",
+                    mapOf(
+                        "strategy" to strategy.name(),
+                        "safeToEnd" to inspection.safeToEnd,
+                        "requiresReplan" to inspection.requiresReplan,
+                        "buttonColor" to inspection.buttonColor.name,
+                        "mctsActionableCreatorIds" to liveActionableCreatorIds,
+                        "fullRescan" to true,
+                        "remainingMana" to war.me.usableResource,
+                        "hand" to war.me.handArea.cards.map { "${it.cardId}:${it.entityName}(cost=${it.cost})" },
+                    ),
+                )
+                MctsRoundScreenshot.capture(war, completedTurn)
                 clickEndTurnUntilTransition()
                 return
             }
@@ -397,9 +440,18 @@ object DeckStrategyActuator {
             }
 
             if (replans >= MAX_MCTS_TURN_END_REPLANS) {
+                val evidence = UnknownStateScreenshot.capture(
+                    category = UnknownStateScreenshot.CATEGORY_TURN_END_STUCK,
+                    trigger = "mcts-turn-end-replan-exhausted",
+                    state = "mode=${Mode.currMode?.name ?: "NONE"}|turn=${war.me.turn}",
+                    phase = "game-turn-end",
+                    label = "turn-end-replan-exhausted",
+                )
                 log.error {
                     "MCTS_TURN_END_REPLAN_EXHAUSTED turn=${war.me.turn} replans=$replans " +
-                        "remainingActions=true; no legacy fallback action was dispatched"
+                        "remainingActions=true; no legacy fallback action was dispatched " +
+                        "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
+                        "screenshotLink=${evidence?.link ?: "none"}"
                 }
                 return
             }

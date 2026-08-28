@@ -4,7 +4,9 @@ import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.statistics.Record
 import club.xiaojiawei.hsscript.statistics.RecordDaoEx
+import club.xiaojiawei.hsscript.statistics.SurrenderClassifier
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
+import club.xiaojiawei.hsscriptbase.config.log
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -23,17 +25,26 @@ object StatisticsListener {
                 val recordDao = RecordDaoEx.RECORD_DAO
                 val deckStrategy = DeckStrategyManager.currentDeckStrategy ?: return@run
                 val runModeEnum = currentRunMode ?: return@run
+                val surrendered = SurrenderClassifier.classify(
+                    concededPlayerId = conceded,
+                    ourGameId = me.gameId,
+                    opponentGameId = rival.gameId,
+                    surrenderRequestedByUs = WarEx.surrenderRequested ||
+                            club.xiaojiawei.hsscript.status.E2ETrace.surrenderRequested,
+                )
+                log.info {
+                    "STATISTICS_SURRENDER_LABEL conceded=${conceded.ifBlank { "<blank>" }} " +
+                            "ourGameId=${me.gameId.ifBlank { "<blank>" }} " +
+                            "opponentGameId=${rival.gameId.ifBlank { "<blank>" }} " +
+                            "requestByUs=${WarEx.surrenderRequested} label=${surrendered ?: "UNKNOWN"}"
+                }
                 recordDao.insert(
                     Record(
                         strategyId = deckStrategy.id(),
                         strategyName = deckStrategy.name(),
                         runMode = runModeEnum,
                         result = WarEx.isWin,
-                        // PLAYSTATE writes the conceding player's game id. Only count
-                        // our own concession as a surrendered round; an opponent
-                        // conceding is still a played win for us.
-                        surrendered = WarEx.war.conceded.isNotBlank() &&
-                                WarEx.war.conceded == WarEx.war.me.gameId,
+                        surrendered = surrendered,
                         experience = WarEx.aEXP.toInt(),
                         startTime = startDateTime,
                         endTime = endDateTime,
