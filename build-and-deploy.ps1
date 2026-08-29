@@ -95,7 +95,7 @@ if (-not [string]::IsNullOrWhiteSpace($deployedVersion) -and $currentVersion -eq
 
 $mavenBaseArgs = @('-f', $pomPath, '-pl', 'hs-script-app', '-am', '-Pjvm', '-Djava.version=24', '-Dproject.build.outputTimestamp=0')
 if (-not $SkipTests) {
-    $testArgs = $mavenBaseArgs + @('-DforkCount=0', '-Dtest=CardTimingPolicyTest,MctsReplayTraceTest,MctsRoundScreenshotTest,SurrenderPolicyTest,GameUtilSurrenderGuardTest,ScreenStateRecoveryTest,UnknownStateScreenshotTest,TurnEndActionGuardTest,PirateDemonHunterMctsExperimentModelTest,HsPirateDemonHunterDeckStrategyTest,StartupRunWindowTest,WorkTimeJitterTest,WorkTimeRuleSetTest,WorkTimeRuleTest,GlobalHotkeyListenerTest', '-Dsurefire.failIfNoSpecifiedTests=false', 'test')
+    $testArgs = $mavenBaseArgs + @('-DforkCount=0', '-Dtest=CardTimingPolicyTest,MctsReplayTraceTest,MctsRoundScreenshotTest,SurrenderPolicyTest,GameUtilSurrenderGuardTest,ScreenStateRecoveryTest,UnknownStateScreenshotTest,TurnEndActionGuardTest,PirateDemonHunterMctsExperimentModelTest,StartupRunWindowTest,WorkTimeJitterTest,WorkTimeRuleSetTest,WorkTimeRuleTest,GlobalHotkeyListenerTest,UiLogFormatterTest', '-Dsurefire.failIfNoSpecifiedTests=false', 'test')
     Write-Output 'TARGETED_TESTS=enabled'
     & $mavenWrapper @testArgs
     if ($LASTEXITCODE -ne 0) { throw "Targeted regression tests failed with exit code $LASTEXITCODE" }

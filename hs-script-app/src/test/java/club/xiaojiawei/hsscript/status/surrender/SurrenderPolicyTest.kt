@@ -211,13 +211,15 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun rankResolverUsesVisualTenHintWhenOcrReadsOnlyOneDigit() {
+    fun rankResolverDoesNotPromoteARealLowerRankFromAVisualHint() {
         assertEquals(
-            10,
+            7,
+            CurrentRankDetector.resolveRankCandidates(listOf("7", "7", "7"), visualTenHint = true),
+        )
+        assertNull(
             CurrentRankDetector.resolveRankCandidates(listOf("", "2", "", ""), visualTenHint = true),
         )
-        assertEquals(
-            10,
+        assertNull(
             CurrentRankDetector.resolveRankCandidates(listOf("9", "1", "", "1"), visualTenHint = true),
         )
     }
@@ -319,6 +321,7 @@ class SurrenderPolicyTest {
     fun rankResolverRequiresAgreementAndTreatsRepeatedOneAsAmbiguous() {
         assertNull(CurrentRankDetector.resolveRankCandidates(listOf("1", "", "")))
         assertNull(CurrentRankDetector.resolveRankCandidates(listOf("1", "1", "")))
+        assertNull(CurrentRankDetector.resolveRankCandidates(listOf("1", "1", ""), visualTenHint = true))
         assertEquals(2, CurrentRankDetector.resolveRankCandidates(listOf("2", "2", "")))
         assertEquals(9, CurrentRankDetector.resolveRankCandidates(listOf("9", "9", "19")))
     }

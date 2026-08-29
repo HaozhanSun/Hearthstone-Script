@@ -3,6 +3,7 @@ package club.xiaojiawei.hsscript.appender
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.UnsynchronizedAppenderBase
+import club.xiaojiawei.hsscript.utils.UiLogFormatter
 import java.util.concurrent.ArrayBlockingQueue
 
 /**
@@ -37,6 +38,7 @@ class ExtraLogAppender : UnsynchronizedAppenderBase<ILoggingEvent>() {
 
     private fun shouldShowInUi(event: ILoggingEvent): Boolean {
         val message = event.formattedMessage ?: ""
+        if (UiLogFormatter.isHiddenFromUi(message)) return false
         if (message.contains("E2E_INPUT_")) return false
         if (message.contains("行为类-解析卡牌") && event.level.levelInt <= Level.WARN_INT) return false
 

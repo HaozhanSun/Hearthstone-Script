@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.strategy.mode.LoginModeStrategy
 import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil
+import club.xiaojiawei.hsscript.utils.MouseUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
@@ -512,6 +513,28 @@ object ScreenStateRecovery {
             resultBannerLowSaturationRatio >= RESULT_BANNER_LOW_SATURATION_MIN
 
     /**
+     * Re-check the actual desktop after a result-page input was sent.
+     *
+     * `MouseUtil` can report that an event was queued even when the client did
+     * not consume it. The caller needs a tri-state result: false means a
+     * different known screen is visible, true means the result page remains,
+     * and null means capture/OCR was inconclusive. A null must never be
+     * treated as proof that the result was dismissed.
+     */
+    internal fun isResultVisibleForRecovery(): Boolean? = runCatching {
+        val capture = captureScreen() ?: return@runCatching null
+        val detection = detect(runOCR(capture.image), capture.visual)
+        when {
+            detection == null || detection.confidence < 85 -> null
+            detection.kind == ScreenKind.RESULT -> true
+            else -> false
+        }
+    }.getOrElse { error ->
+        log.warn(error) { "SCREEN_RECOVERY_RESULT_POSTCHECK_FAILED" }
+        null
+    }
+
+    /**
      * The reconnect page is not a normal login page.  In particular, the
      * current client often OCRs the button as "重新接..." while retaining
      * the exact "连接中断" message.  Require both the disconnected message
@@ -589,8 +612,13 @@ object ScreenStateRecovery {
                             // This is the upstream reconnect input primitive;
                             // skip the pre-click right-click because the
                             // offline page is not a card/targeting state.
-                            GameUtil.RECONNECT_RECT.lClick(false)
-                            log.info { "SCREEN_RECOVERY_RECONNECT_DISPATCHED" }
+                            val accepted = MouseUtil.leftButtonClickForRecovery(
+                                GameUtil.RECONNECT_RECT.getCenterClickPos(),
+                            )
+                            log.info {
+                                "SCREEN_RECOVERY_RECONNECT_DISPATCHED input=recovery-sendinput " +
+                                    "accepted=$accepted"
+                            }
                         } else {
                             log.info { "SCREEN_RECOVERY_RECONNECT_SKIPPED reason=state-changed" }
                         }

@@ -57,6 +57,56 @@ class MonteCarloTreeNodeDeferredActionTest {
         assertTrue(node.actions.none { it.javaClass.simpleName == "TurnOverAction" })
     }
 
+    @Test
+    fun `weapon-backed hero attack is exposed even before weapon attack merges into hero`() {
+        val war = War()
+        val me = Player(playerId = "me", war = war)
+        val rival = Player(playerId = "rival", war = war)
+        war.me = me
+        war.rival = rival
+        war.player1 = me
+        war.player2 = rival
+        war.currentPlayer = me
+        war.isMyTurn = true
+
+        val hero = card("HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+        }
+        val rivalHero = card("RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+        }
+        val weapon = card("WEAPON").apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 2
+            durability = 2
+        }
+        war.addCard(hero, me.playArea)
+        war.addCard(weapon, me.playArea)
+        war.addCard(rivalHero, rival.playArea)
+
+        val node = MonteCarloTreeNode(
+            war,
+            InitAction,
+            MCTSArg(
+                endMillisTime = Long.MAX_VALUE,
+                turnCount = 1,
+                turnFactor = 0.5,
+                countPerTurn = 1,
+                scoreCalculator = { 0.0 },
+                enableMultiThread = false,
+            ),
+        )
+
+        assertTrue(node.actions.any { it.creator?.entityId == hero.entityId })
+    }
+
     private fun card(cardId: String): Card = Card(TestCardAction()).apply {
         entityId = "$cardId-entity"
         this.cardId = cardId

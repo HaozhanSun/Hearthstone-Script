@@ -46,8 +46,10 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object WindowUtil {
     private const val CONTROLLER_KEY = "controller"
+    /** Keep the overlay narrow enough that the Hearthstone end-turn control remains reachable. */
     private const val MAIN_DEFAULT_WIDTH = 300.0
-    private const val MAIN_MIN_WIDTH = 220.0
+    private const val MAIN_MIN_WIDTH = 280.0
+    private const val MAIN_PREVIOUS_DEFAULT_WIDTH = 430.0
     private const val MAIN_RIGHT_MARGIN = 12.0
 
     private val STAGE_MAP: MutableMap<WindowEnum, Stage> = ConcurrentHashMap()
@@ -468,7 +470,13 @@ object WindowUtil {
                     // layout its wider starting size once, while preserving
                     // any user-selected size from a newer build.
                     val savedWidth = it.width.toDouble()
-                    val initialWidth = if (savedWidth <= MAIN_MIN_WIDTH) MAIN_DEFAULT_WIDTH else savedWidth
+                    // Migrate the temporary wide default introduced for the statistics/log UI once.
+                    // Other user-selected widths remain unchanged, subject to the new minimum.
+                    val initialWidth = when {
+                        savedWidth <= MAIN_MIN_WIDTH -> MAIN_DEFAULT_WIDTH
+                        kotlin.math.abs(savedWidth - MAIN_PREVIOUS_DEFAULT_WIDTH) <= 1.0 -> MAIN_DEFAULT_WIDTH
+                        else -> savedWidth.coerceAtLeast(MAIN_MIN_WIDTH)
+                    }
                     stage.width = initialWidth
                     stage.minWidth = MAIN_MIN_WIDTH
                 } else {

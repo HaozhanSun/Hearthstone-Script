@@ -2,6 +2,16 @@
 
 These rules apply to every Codex session that changes or builds this project.
 
+## Completion requires forced installation
+
+For every user-requested code or configuration change that is reported as complete,
+run the checked-in `build-and-deploy.ps1` release path after validation. This means
+creating a new version, installing it into the canonical runtime directory, updating
+the manifest, and replacing/verifying the Desktop, Start Menu, and Taskbar shortcuts.
+Do not report the change as complete while any of those installation or verification
+steps are unfinished. A user request that explicitly limits the work to offline/read-
+only investigation is the exception; in that case do not build or install.
+
 ## Release and Windows shortcut rule
 
 Every build that can be used to run the application is a new build and must:

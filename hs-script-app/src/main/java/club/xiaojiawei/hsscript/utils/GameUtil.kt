@@ -15,6 +15,7 @@ import club.xiaojiawei.hsscript.status.RuntimeSafety
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.E2ETrace
+import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.utils.GameUtil.CHOOSE_ONE_RECTS
 import club.xiaojiawei.hsscript.utils.SystemUtil.delay
@@ -35,7 +36,6 @@ import com.sun.jna.platform.win32.WinUser
 import com.sun.jna.platform.win32.WinUser.SWP_NOMOVE
 import com.sun.jna.platform.win32.WinUser.SWP_NOZORDER
 import java.awt.Point
-import java.awt.event.KeyEvent
 import java.io.File
 import java.io.IOException
 import java.nio.file.Path
@@ -737,9 +737,9 @@ object GameUtil {
                         } else if (Mode.currMode !== ModeEnum.GAMEPLAY) {
                             cancelGameEndTask()
                         } else {
-                            if (System.getProperty("hs.script.e2e") == "true") {
-                                log.info { "E2E结算页：点击继续，清理上一局结算状态" }
-                                GAME_END_CONTINUE_RECT.lClick(false)
+                            if (isE2ERun()) {
+                                log.info { "结算页：使用前台确认的真实输入点击继续，清理上一局结算状态" }
+                                MouseUtil.leftButtonClickForRecovery(GAME_END_CONTINUE_RECT.getCenterClickPos())
                             } else {
                                 END_TURN_RECT.lClick()
                             }
@@ -780,9 +780,32 @@ object GameUtil {
                 if (
                     PauseStatus.isPause ||
                     WarEx.inWar ||
-                    Mode.currMode !== ModeEnum.GAMEPLAY ||
-                    number > 5
+                    Mode.currMode !== ModeEnum.GAMEPLAY
                 ) {
+                    future.cancel(false)
+                    gameEndTasks.remove(future)
+                    return@scheduleWithFixedDelay
+                }
+
+                // An input call returning only means that Robot queued a
+                // desktop event. Probe the visible client before each retry so
+                // a successful transition stops the task, while a still-live
+                // result page remains diagnosable instead of being reported as
+                // recovered merely because five events were sent.
+                if (number > 1) {
+                    when (ScreenStateRecovery.isResultVisibleForRecovery()) {
+                        false -> {
+                            log.info { "E2E恢复：结果页关闭已确认，停止重试" }
+                            future.cancel(false)
+                            gameEndTasks.remove(future)
+                            return@scheduleWithFixedDelay
+                        }
+                        null -> log.warn { "E2E恢复：结果页后置检查未知，保留有界重试" }
+                        true -> Unit
+                    }
+                }
+                if (number > 5) {
+                    log.error { "E2E恢复：结果页关闭未确认，停止无效重试" }
                     future.cancel(false)
                     gameEndTasks.remove(future)
                     return@scheduleWithFixedDelay
@@ -799,17 +822,22 @@ object GameUtil {
                     // to receive the input.
                     if (shouldUseStaleResultCenterClick(number)) {
                         log.info { "E2E恢复：结果页使用稳定中心点" }
-                        GAME_END_CONTINUE_RECT.lClickCenter(false)
+                        MouseUtil.leftButtonClickForRecovery(GAME_END_CONTINUE_RECT.getCenterClickPos())
                     } else if (number == 2) {
                         // Some Unity client builds expose the result control
                         // visually but do not consume the first mouse event.
                         // The focused result page also accepts Return; keep
                         // this as one bounded fallback before returning to the
                         // existing randomized click attempts.
-                        log.info { "E2E恢复：结果页鼠标无效，使用一次 Return 后备输入" }
-                        SystemUtil.sendKey(KeyEvent.VK_ENTER)
+                        val focused = MouseUtil.focusWindowForInput(ScriptStatus.gameHWND)
+                        if (focused) {
+                            log.info { "E2E恢复：结果页鼠标无效，已确认炉石前台，使用一次 SendInput Enter 后备输入" }
+                            MouseUtil.pressEnterForRecovery()
+                        } else {
+                            log.warn { "E2E恢复：无法确认炉石前台，跳过 Return 后备输入" }
+                        }
                     } else {
-                        GAME_END_CONTINUE_RECT.lClick(false)
+                        MouseUtil.leftButtonClickForRecovery(GAME_END_CONTINUE_RECT.getClickPos())
                     }
                 }.onFailure { error ->
                     log.warn(error) { "E2E恢复：关闭旧结算页面尝试失败 #$number" }

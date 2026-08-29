@@ -8,15 +8,18 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.MouseControlModeEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.Mode
+import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import com.sun.jna.platform.win32.WinDef.HWND
+import com.sun.jna.Pointer
 import com.sun.jna.platform.win32.User32
 import com.sun.jna.platform.win32.WinDef
 import com.sun.jna.platform.win32.WinUser
 import com.sun.jna.platform.win32.WinUser.SW_RESTORE
+import com.sun.jna.platform.win32.Kernel32
 import java.awt.Robot
 import java.awt.MouseInfo
 import java.awt.event.InputEvent
@@ -88,14 +91,192 @@ object MouseUtil {
      * coordinates.
      */
     private fun focusE2EWindow(hwnd: HWND): Boolean = runCatching {
+        if (!User32.INSTANCE.IsWindow(hwnd)) {
+            log.warn { "E2E_INPUT_ROBOT_FOREGROUND_UNAVAILABLE hwnd=$hwnd reason=invalid-window" }
+            return@runCatching false
+        }
+
         User32.INSTANCE.ShowWindow(hwnd, SW_RESTORE)
-        User32.INSTANCE.BringWindowToTop(hwnd)
-        val focused = User32.INSTANCE.SetForegroundWindow(hwnd)
-        log.info { "E2E_INPUT_ROBOT_FOREGROUND_RESULT hwnd=$hwnd focused=$focused" }
-        focused
+
+        // Windows may reject SetForegroundWindow from a worker thread when
+        // another application currently owns the foreground lock. Temporarily
+        // attach this thread to that foreground thread, request activation,
+        // then verify the actual foreground HWND before sending input.
+        val foreground = User32.INSTANCE.GetForegroundWindow()
+        val currentThread = Kernel32.INSTANCE.GetCurrentThreadId()
+        val foregroundThread = if (foreground != null) {
+            User32.INSTANCE.GetWindowThreadProcessId(foreground, null)
+        } else {
+            0
+        }
+        val attached = foregroundThread != 0 &&
+            foregroundThread != currentThread &&
+            User32.INSTANCE.AttachThreadInput(
+                WinDef.DWORD(currentThread.toLong()),
+                WinDef.DWORD(foregroundThread.toLong()),
+                true,
+            )
+        try {
+            User32.INSTANCE.BringWindowToTop(hwnd)
+            val requested = User32.INSTANCE.SetForegroundWindow(hwnd)
+            SystemUtil.delay(35)
+            val actual = User32.INSTANCE.GetForegroundWindow()
+            val focused = actual != null &&
+                Pointer.nativeValue(actual.pointer) == Pointer.nativeValue(hwnd.pointer)
+            log.info {
+                "E2E_INPUT_ROBOT_FOREGROUND_RESULT hwnd=$hwnd requested=$requested " +
+                    "focused=$focused actual=$actual foregroundThread=$foregroundThread attached=$attached"
+            }
+            focused
+        } finally {
+            if (attached) {
+                User32.INSTANCE.AttachThreadInput(
+                    WinDef.DWORD(currentThread.toLong()),
+                    WinDef.DWORD(foregroundThread.toLong()),
+                    false,
+                )
+            }
+        }
     }.getOrElse { error ->
         log.warn(error) { "E2E_INPUT_ROBOT_FOREGROUND_FAILED hwnd=$hwnd" }
         false
+    }
+
+    /**
+     * Focus the game before a keyboard fallback. Keyboard events are sent to
+     * the real foreground window, so calling Robot.keyPress without this
+     * check can silently deliver Return to the script UI or another app.
+     */
+    internal fun focusWindowForInput(hwnd: HWND?): Boolean =
+        hwnd?.let(::focusE2EWindow) ?: false
+
+    /**
+     * Send Enter through the same real desktop input path as recovery clicks.
+     * AWT Robot can report a successful key event while a full-screen Unity
+     * client does not consume it; keep the fallback target explicit and
+     * observable for stale result pages.
+     */
+    internal fun pressEnterForRecovery(): Boolean {
+        if (!e2eInputEnabled()) {
+            SystemUtil.sendKey(java.awt.event.KeyEvent.VK_ENTER)
+            return true
+        }
+        val hwnd = ScriptStatus.gameHWND ?: run {
+            log.warn { "E2E_RECOVERY_KEY_SKIPPED key=ENTER reason=game-window-missing" }
+            return false
+        }
+        if (!hwndIsValid(hwnd) || !WorkTimeListener.working || PauseStatus.isPause) {
+            log.warn {
+                "E2E_RECOVERY_KEY_SKIPPED key=ENTER hwnd=$hwnd " +
+                    "valid=${hwndIsValid(hwnd)} working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+            }
+            return false
+        }
+        val lockAcquired = try {
+            DRIVER_LOCK.tryLock(3000, TimeUnit.MILLISECONDS)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!lockAcquired) {
+            log.warn { "E2E_RECOVERY_KEY_SKIPPED key=ENTER reason=input-lock-timeout" }
+            return false
+        }
+        try {
+            synchronized(e2eRobotLock) {
+                if (!focusE2EWindow(hwnd)) {
+                    log.warn { "E2E_RECOVERY_KEY_SKIPPED key=ENTER hwnd=$hwnd reason=foreground-unconfirmed" }
+                    return false
+                }
+                @Suppress("UNCHECKED_CAST")
+                val inputs = WinUser.INPUT().toArray(2) as Array<WinUser.INPUT>
+                inputs.forEachIndexed { index, input ->
+                    input.type = WinDef.DWORD(WinUser.INPUT.INPUT_KEYBOARD.toLong())
+                    input.input.setType(WinUser.KEYBDINPUT::class.java)
+                    input.input.ki = WinUser.KEYBDINPUT().apply {
+                        wVk = WinDef.WORD(0x0D)
+                        wScan = WinDef.WORD(0)
+                        dwFlags = WinDef.DWORD(if (index == 0) 0L else 0x0002L)
+                        time = WinDef.DWORD(0)
+                        dwExtraInfo = com.sun.jna.platform.win32.BaseTSD.ULONG_PTR(0)
+                    }
+                    input.input.write()
+                    input.write()
+                }
+                val sent = User32.INSTANCE.SendInput(
+                    WinDef.DWORD(inputs.size.toLong()),
+                    inputs,
+                    inputs[0].size(),
+                ).toInt()
+                val accepted = sent == inputs.size
+                log.info { "E2E_RECOVERY_KEY_SENT key=ENTER hwnd=$hwnd accepted=$accepted input=SendInput" }
+                return accepted
+            }
+        } catch (error: Throwable) {
+            log.warn(error) { "E2E_RECOVERY_KEY_FAILED key=ENTER hwnd=$hwnd" }
+            return false
+        } finally {
+            DRIVER_LOCK.unlock()
+        }
+    }
+
+    /**
+     * Click a recovery control with a real desktop input event.  Recovery is
+     * used when the client has already drifted away from the event-driven
+     * state machine, so the normal injected/message path is not a reliable
+     * proof that Hearthstone consumed the click.  Keep this method bounded
+     * and require the game to be the verified foreground window first.
+     */
+    internal fun leftButtonClickForRecovery(pos: Point): Boolean {
+        val hwnd = ScriptStatus.gameHWND
+        if (!e2eInputEnabled() || hwnd == null) {
+            leftButtonClick(pos, hwnd)
+            return true
+        }
+        if (!hwndIsValid(hwnd) || !WorkTimeListener.working || PauseStatus.isPause) {
+            log.warn {
+                "E2E_RECOVERY_CLICK_SKIPPED pos=(${pos.x},${pos.y}) hwnd=$hwnd " +
+                    "valid=${hwndIsValid(hwnd)} working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+            }
+            return false
+        }
+        val lockAcquired = try {
+            DRIVER_LOCK.tryLock(3000, TimeUnit.MILLISECONDS)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!lockAcquired) {
+            log.warn { "E2E_RECOVERY_CLICK_SKIPPED pos=(${pos.x},${pos.y}) reason=input-lock-timeout" }
+            return false
+        }
+        try {
+            synchronized(e2eRobotLock) {
+                val focused = focusE2EWindow(hwnd)
+                if (!focused) {
+                    log.warn {
+                        "E2E_RECOVERY_CLICK_SKIPPED pos=(${pos.x},${pos.y}) hwnd=$hwnd " +
+                            "reason=foreground-unconfirmed"
+                    }
+                    return false
+                }
+                // In safe-native mode the client is deliberately borderless
+                // and fills the desktop.  GameRect coordinates are therefore
+                // already screen coordinates, matching the existing Robot
+                // conversion used by this runtime.
+                val accepted = sendE2eWindowsClick(Point(pos.x, pos.y))
+                log.info {
+                    "E2E_RECOVERY_CLICK_SENT pos=(${pos.x},${pos.y}) hwnd=$hwnd " +
+                        "accepted=$accepted input=SendInput"
+                }
+                return accepted
+            }
+        } catch (error: Throwable) {
+            log.warn(error) { "E2E_RECOVERY_CLICK_FAILED pos=(${pos.x},${pos.y}) hwnd=$hwnd" }
+            return false
+        } finally {
+            DRIVER_LOCK.unlock()
+        }
     }
 
     /**

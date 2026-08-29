@@ -5,18 +5,17 @@ import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.MCTSArg
 import club.xiaojiawei.hsscriptcardsdk.bean.MctsRootSelectionPolicy
 import club.xiaojiawei.hsscriptcardsdk.bean.War
+import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptstrategysdk.deck.MCTSDeckStrategy
 
 /**
- * A/B-test strategy for global turn planning. It searches a complete
+ * The released Pirate Demon Hunter strategy. It searches a complete
  * discovered turn plan, then the executor still dispatches one action and
  * re-reads the live game before continuing.
  */
 class HsPirateDemonHunterMctsGlobalPlanDeckStrategy : MCTSDeckStrategy() {
 
-    private val pirateDemonHunterMulligan = HsPirateDemonHunterDeckStrategy()
-
-    override fun name(): String = "海盗瞎MCTS全局规划试验"
+    override fun name(): String = "海盗瞎 MCTS"
 
     override fun description(): String =
         "海盗瞎全局规划MCTS：按整回合可达资源评估动作序列，执行时仍逐步重扫描"
@@ -37,7 +36,11 @@ class HsPirateDemonHunterMctsGlobalPlanDeckStrategy : MCTSDeckStrategy() {
     override fun referCardInfo(): Boolean = true
 
     override fun executeChangeCard(cards: HashSet<Card>) {
-        pirateDemonHunterMulligan.executeChangeCard(cards)
+        // Keep the established Pirate DH mulligan baseline in the one
+        // released strategy: replace Patches and every 3+ cost card.
+        cards.removeIf { card ->
+            CardTimingPolicy.isPatchesThePirate(card) || card.cost > 2
+        }
     }
 
     override fun executeMCTSOutCard(war: War): List<MCTSArg> {

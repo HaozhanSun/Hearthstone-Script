@@ -9,6 +9,7 @@ import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscript.status.DebugScreenshotRing
 import club.xiaojiawei.hsscript.bean.single.WarEx
+import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.statistics.Record
 import club.xiaojiawei.hsscript.statistics.RecordDaoEx
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
@@ -366,6 +367,14 @@ object SurrenderPolicy {
     @Synchronized
     fun evaluateCurrentRankBeforeMulligan(): SurrenderRuleResult? {
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") return null
+        // Historical Power.log replay reconstructs the in-memory model but
+        // does not represent the pixels of the current game.  In particular,
+        // rank OCR during replay can inspect a matchmaking/mulligan frame and
+        // must never produce a destructive surrender decision.
+        if (PowerLogListener.replayingExistingLog) {
+            log.debug { "RANK_POLICY_SKIP reason=historical-power-log-replay" }
+            return null
+        }
         if (enforcePersistentStreakGuard()) return null
         val phase = WAR.currentPhase
         if (!isRankInspectionEligible(WarEx.inWar, phase)) {

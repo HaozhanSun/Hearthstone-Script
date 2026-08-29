@@ -13,6 +13,7 @@
 <?import club.xiaojiawei.hsscript.component.TipNode?>
 <?import club.xiaojiawei.hsscript.component.ConfigCheckBox?>
 <StackPane xmlns:fx="http://javafx.com/fxml"
+           minWidth="280.0" prefWidth="300.0"
            stylesheets="@css/main.css"
            fx:id="rootPane"
            fx:controller="club.xiaojiawei.hsscript.controller.javafx.MainController">

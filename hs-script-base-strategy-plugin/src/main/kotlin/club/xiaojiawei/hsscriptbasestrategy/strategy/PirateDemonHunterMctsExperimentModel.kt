@@ -304,8 +304,41 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             isZilliax(card) ->
                 if (friendlyMinions == 0) -6.0 else 6.0 + attackablePirates
             isCard(card, RAGEWING) -> if (card.cost <= 1) 12.0 else 1.0
-            else -> 0.0
+            else -> if (action is AttackAction && isPirate(card)) {
+                // A Pirate attack is also a hero-attack resource while a
+                // Fiend is alive.  Keep this as a soft prior: the rollout
+                // still decides whether attacking now is better than a
+                // target-specific trade or another hand play.
+                2.0 + expectedAdrenalineHeroAttack(war) * 0.75 +
+                    effectivePirateAttack(card, war) * 0.2
+            } else 0.0
         }
+    }
+
+    /**
+     * Expected hero-attack points still available in this state from the
+     * Pirate attack opportunities on board.  The live card effect is a
+     * trigger on Pirate attacks while a Fiend is present; therefore every
+     * surviving Fiend contributes once for each attack opportunity.  Windfury
+     * is counted as two opportunities.  This is deliberately an expectation
+     * feature, not a forced action: the tree may still trade, clear a Taunt,
+     * or preserve a minion when the rollout says that is better.
+     *
+     * The value includes a Fiend's own attack opportunity as requested by the
+     * deck review.  With multiple Fiends, an attack by one Fiend is also an
+     * "another Pirate" event for the other Fiends, so multiplying by the
+     * number of surviving Fiends is the useful approximation at this model
+     * boundary.
+     */
+    fun expectedAdrenalineHeroAttack(war: War): Int {
+        val fiends = war.me.playArea.cards.count {
+            isCard(it, ADRENALINE_FIEND) && it.isAlive()
+        }
+        if (fiends == 0) return 0
+        val pirateAttackOpportunities = war.me.playArea.cards
+            .filter { isPirate(it) && it.canAttack() }
+            .sumOf { if (it.isWindFury) 2 else 1 }
+        return fiends * pirateAttackOpportunities
     }
 
     override fun beforeSimulatedAction(war: War, action: Action): MctsDecisionModel.SimulationResult {
@@ -435,6 +468,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         val effectivePirateAttack = me.playArea.cards
             .filter { isPirate(it) && it.canAttack() }
             .sumOf { effectivePirateAttack(it, war).toDouble() }
+        val expectedHeroAttack = expectedAdrenalineHeroAttack(war)
         val futurePirates = futurePirateSummons(war)
         val minions = me.playArea.cards.count { it.cardType === CardTypeEnum.MINION }
         val slots = freeSlots(war)
@@ -444,6 +478,10 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         score += me.playArea.cards.count { isCard(it, TREASURE_DISTRIBUTOR) && it.isAlive() } * (4.0 + futurePirates * 1.4)
         score += me.playArea.cards.count { isCard(it, ADRENALINE_FIEND) && it.isAlive() } *
             (2.0 + attackablePirates * 1.5)
+        // Do not value Fiend only as a body.  A board with a ready Pirate
+        // attack can create immediate hero attack, which is exactly the
+        // resource the live executor must revisit before EndTurn.
+        score += expectedHeroAttack * 1.25
         score += me.playArea.cards.count { isCard(it, HOZEN_ROUGHHOUSER) && it.isAlive() } *
             if (otherPirates <= 0) -6.0 else otherPirates * 1.5
         // Keep the Hozen trigger visible to the state evaluator as well as
@@ -497,11 +535,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 )
         }
         val boardAction = me.playArea.cards.any { hasGeneratedBoardAction(it, war) }
-        val heroAttack = me.playArea.hero?.let { hero ->
-            hero.canAttack() && runCatching {
-                hero.action.generateAttackActions(war, me).isNotEmpty()
-            }.getOrDefault(false)
-        } == true
+        val heroAttack = canUseHeroAttack(war)
         val heroPower = me.playArea.power?.let { power ->
             me.usableResource >= power.cost && power.canPower() && runCatching {
                 power.action.generatePowerActions(war, me)
@@ -526,11 +560,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 )
         }
         val boardAction = me.playArea.cards.any { hasGeneratedBoardAction(it, war) }
-        val heroAttack = me.playArea.hero?.let { hero ->
-            hero.canAttack() && runCatching {
-                hero.action.generateAttackActions(war, me).isNotEmpty()
-            }.getOrDefault(false)
-        } == true
+        val heroAttack = canUseHeroAttack(war)
         // Treat Coin as a planning bridge when it unlocks a non-power card.
         // At the current mana total that card is not yet a legal hand action,
         // but using the hero power first would still consume the resource that
@@ -559,6 +589,23 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                         canCreateOpaqueAction(card, war)
                 )
         }
+    }
+
+    /**
+     * The hero's attack stat can arrive one parser update after the weapon or
+     * a Fiend trigger.  Keep MCTS's own deferral checks aligned with the
+     * app-side end-turn guard so a freshly available weapon-backed attack is
+     * not mistaken for an exhausted state.
+     */
+    private fun canUseHeroAttack(war: War): Boolean {
+        val me = war.me
+        val hero = me.playArea.hero ?: return false
+        val weaponBacked = (me.playArea.weapon?.atc ?: 0) > 0 &&
+            hero.canAttack(ignoreAtc = true)
+        if (!hero.canAttack() && !weaponBacked) return false
+        return runCatching {
+            hero.action.generateAttackActions(war, me).isNotEmpty()
+        }.getOrDefault(false)
     }
 
     private fun isHeroPowerAction(action: Action): Boolean =

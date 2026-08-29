@@ -166,11 +166,33 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 decision(mapOf("kind" to "HERO", "entityId" to hero.entityId, "outcome" to "FILTERED", "reason" to "suppressed-after-unconfirmed-dispatch"))
                 return@let
             }
-            if (hero.canAttack() && runCatching {
-                    hero.action.generateAttackActions(war, me).isNotEmpty()
-                }.getOrDefault(false)
-            ) result += hero.entityId
-            decision(mapOf("kind" to "HERO", "entityId" to hero.entityId, "outcome" to if (hero.entityId in result) "ACTIONABLE" else "FILTERED", "reason" to if (hero.entityId in result) "attack-actions" else "no-attack-actions-or-not-attackable"))
+            val weaponAttack = me.playArea.weapon?.atc ?: 0
+            val heroCanAttackIgnoringAttack = hero.canAttack(ignoreAtc = true)
+            val weaponBackedAttack = weaponAttack > 0 && heroCanAttackIgnoringAttack
+            val attackableByState = hero.canAttack() || weaponBackedAttack
+            val attackResult = if (attackableByState) {
+                runCatching { hero.action.generateAttackActions(war, me) }
+            } else null
+            val attackActions = attackResult?.getOrElse { emptyList() }.orEmpty()
+            if (attackActions.isNotEmpty()) result += hero.entityId
+            decision(
+                mapOf(
+                    "kind" to "HERO",
+                    "entityId" to hero.entityId,
+                    "outcome" to if (hero.entityId in result) "ACTIONABLE" else "FILTERED",
+                    "reason" to when {
+                        attackResult?.isFailure == true -> "attack-action-generation-error:${attackResult.exceptionOrNull()!!::class.java.simpleName}"
+                        hero.entityId in result && weaponBackedAttack && !hero.canAttack() -> "weapon-backed-attack-actions"
+                        hero.entityId in result -> "attack-actions"
+                        weaponBackedAttack -> "weapon-backed-no-generated-attack-actions"
+                        else -> "no-attack-actions-or-not-attackable"
+                    },
+                    "heroAttack" to hero.atc,
+                    "weaponAttack" to weaponAttack,
+                    "heroCanAttackIgnoringAttack" to heroCanAttackIgnoringAttack,
+                    "rawAttackActions" to attackActions.size,
+                ),
+            )
         }
         me.playArea.power?.let { power ->
             if (power.entityId in suppressed) {
@@ -207,6 +229,17 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 "usedResources" to me.usedResources,
                 "boardSlotsFree" to (me.playArea.maxSize - me.playArea.cards.size).coerceAtLeast(0),
                 "actionableCreatorIds" to result,
+                "clickableLocations" to me.playArea.cards
+                    .filter { it.cardType === CardTypeEnum.LOCATION }
+                    .map {
+                        mapOf(
+                            "cardId" to it.cardId,
+                            "entityId" to it.entityId,
+                            "cooldown" to it.isLocationActionCooldown,
+                            "canPower" to it.canPower(),
+                            "actionable" to (it.entityId in result),
+                        )
+                    },
                 "decisions" to decisions,
             ),
         )

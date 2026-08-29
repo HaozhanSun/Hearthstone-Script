@@ -228,15 +228,44 @@ class MonteCarloTreeNode(
                 }
             }
             playArea.hero?.let { myHero ->
-                if (myHero.canAttack()) {
+                val weaponAttack = playArea.weapon?.atc ?: 0
+                val weaponBackedAttack = weaponAttack > 0 && myHero.canAttack(ignoreAtc = true)
+                val heroAttackable = myHero.canAttack() || weaponBackedAttack
+                if (heroAttackable) {
                     val actions = runCatching { myHero.action.generateAttackActions(war, me) }.getOrElse {
                         addScan(mapOf("kind" to "HERO", "entityId" to myHero.entityId, "outcome" to "FILTERED", "reason" to "attack-action-generation-error:${it::class.java.simpleName}"))
                         emptyList()
                     }
                     result.addAll(actions)
-                    addScan(mapOf("kind" to "HERO", "entityId" to myHero.entityId, "outcome" to if (actions.isNotEmpty()) "ADDED" else "FILTERED", "reason" to if (actions.isNotEmpty()) "attack-actions" else "no-attack-actions", "rawActions" to actions.size))
+                    addScan(
+                        mapOf(
+                            "kind" to "HERO",
+                            "entityId" to myHero.entityId,
+                            "outcome" to if (actions.isNotEmpty()) "ADDED" else "FILTERED",
+                            "reason" to when {
+                                actions.isNotEmpty() && weaponBackedAttack && !myHero.canAttack() -> "weapon-backed-attack-actions"
+                                actions.isNotEmpty() -> "attack-actions"
+                                weaponBackedAttack -> "weapon-backed-no-attack-actions"
+                                else -> "no-attack-actions"
+                            },
+                            "heroAttack" to myHero.atc,
+                            "weaponAttack" to weaponAttack,
+                            "heroCanAttackIgnoringAttack" to myHero.canAttack(ignoreAtc = true),
+                            "rawActions" to actions.size,
+                        ),
+                    )
                 } else {
-                    addScan(mapOf("kind" to "HERO", "entityId" to myHero.entityId, "outcome" to "FILTERED", "reason" to "hero-cannot-attack"))
+                    addScan(
+                        mapOf(
+                            "kind" to "HERO",
+                            "entityId" to myHero.entityId,
+                            "outcome" to "FILTERED",
+                            "reason" to "hero-cannot-attack",
+                            "heroAttack" to myHero.atc,
+                            "weaponAttack" to weaponAttack,
+                            "heroCanAttackIgnoringAttack" to myHero.canAttack(ignoreAtc = true),
+                        ),
+                    )
                 }
             }
             playArea.power?.let { myPower ->

@@ -24,6 +24,7 @@ import club.xiaojiawei.hsscript.utils.ConfigUtil.getString
 import club.xiaojiawei.hsscript.utils.ConfigUtil.putString
 import club.xiaojiawei.hsscript.utils.FXUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil.copyToClipboard
+import club.xiaojiawei.hsscript.utils.UiLogFormatter
 import club.xiaojiawei.hsscript.utils.WindowUtil
 import club.xiaojiawei.hsscript.utils.go
 import club.xiaojiawei.hsscript.utils.runUI
@@ -44,6 +45,9 @@ import javafx.event.EventHandler
 import javafx.fxml.FXML
 import javafx.scene.control.Label
 import javafx.scene.control.OverrunStyle
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import javafx.scene.control.Toggle
 import javafx.scene.control.Tooltip
 import javafx.scene.input.MouseButton
@@ -65,6 +69,8 @@ import java.util.*
 private const val LOG_CONTENT_PADDING = 10.0
 
 class MainController : MainView() {
+
+    private val uiLogTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     private var isNotHoverLog = true
 
     private val runModeMap: MutableMap<RunModeEnum, MutableList<DeckStrategy>> = EnumMap(RunModeEnum::class.java)
@@ -214,22 +220,27 @@ class MainController : MainView() {
             }
             val label = CopyLabel()
             label.notificationManager = notificationManger
+            label.styleClass.add("logEntry")
             label.isWrapText = true
             label.textOverrun = OverrunStyle.CLIP
             bindLogWidth(label)
 
             val levelInt = event.level.levelInt
-            var message = event.formattedMessage
+            val rawMessage = event.formattedMessage.orEmpty()
+            var message = UiLogFormatter.format(rawMessage)
             //                处理需要复制的文本
-            if (message != null && message.startsWith("$")) {
-                message = message.substring(1)
-                label.text = message
+            if (rawMessage.startsWith("$")) {
+                label.text = rawMessage.substring(1)
                 label.styleClass.add("copyLog")
                 val anchorPane = wrapLabel(label)
                 bindLogWidth(anchorPane)
                 list.add(anchorPane)
                 return@runUI
             }
+            val timestamp = uiLogTimeFormatter.format(
+                Instant.ofEpochMilli(event.timeStamp).atZone(ZoneId.systemDefault())
+            )
+            message = "[$timestamp] $message"
             // 为日志上颜色
             if (event.throwableProxy == null && levelInt <= Level.INFO_INT) {
                 label.text = message

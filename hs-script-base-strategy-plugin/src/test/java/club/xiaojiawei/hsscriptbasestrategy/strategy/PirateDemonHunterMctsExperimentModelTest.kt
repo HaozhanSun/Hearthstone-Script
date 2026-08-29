@@ -130,6 +130,48 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `adrenaline fiend values every pirate attack opportunity as hero attack`() {
+        val war = testWar()
+        val fiend = testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND)
+        val pirate = testCard("READY_PIRATE")
+        val windfuryPirate = testCard("WINDFURY_PIRATE").apply { isWindFury = true }
+        war.addCard(fiend, war.me.playArea)
+        war.addCard(pirate, war.me.playArea)
+        war.addCard(windfuryPirate, war.me.playArea)
+
+        // One Fiend attack, one ordinary attack, and two Windfury attacks,
+        // multiplied by the one Fiend trigger.  This is the future
+        // hero-attack resource the evaluator must see before EndTurn.
+        assertEquals(
+            4,
+            PirateDemonHunterMctsExperimentModel.expectedAdrenalineHeroAttack(war),
+        )
+    }
+
+    @Test
+    fun `adrenaline fiend makes a pirate attack and resulting board score more valuable`() {
+        val withoutFiend = testWar()
+        val pirate = testCard("READY_PIRATE")
+        withoutFiend.addCard(pirate, withoutFiend.me.playArea)
+
+        val withFiend = testWar()
+        withFiend.addCard(testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND), withFiend.me.playArea)
+        val samePirate = testCard("READY_PIRATE")
+        withFiend.addCard(samePirate, withFiend.me.playArea)
+
+        val attackWithout = AttackAction({}, {}, pirate)
+        val attackWith = AttackAction({}, {}, samePirate)
+        assertTrue(
+            PirateDemonHunterMctsExperimentModel.actionPrior(attackWith, withFiend) >
+                PirateDemonHunterMctsExperimentModel.actionPrior(attackWithout, withoutFiend),
+        )
+        assertTrue(
+            PirateDemonHunterMctsExperimentModel.scoreAdjustment(withFiend) >
+                PirateDemonHunterMctsExperimentModel.scoreAdjustment(withoutFiend),
+        )
+    }
+
+    @Test
     fun `playing hozen immediately gives existing pirates one health`() {
         val war = testWar()
         val hozen = testCard(PirateDemonHunterMctsExperimentModel.HOZEN_ROUGHHOUSER).apply {
@@ -152,7 +194,7 @@ class PirateDemonHunterMctsExperimentModelTest {
         val card = testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND)
         val war = testWar()
         assertFalse(PirateDemonHunterMctsExperimentModel.shouldDefer(card, war))
-        assertEquals("海盗瞎MCTS试验", HsPirateDemonHunterMctsExperimentDeckStrategy().name())
+        assertEquals("海盗瞎 MCTS", HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name())
     }
 
     @Test
@@ -472,22 +514,33 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
-    fun `released pirate mcts strategy wires the dedicated model and live replanning`() {
-        val arg = HsPirateDemonHunterMctsDeckStrategy().executeMCTSOutCard(testWar()).single()
+    fun `released pirate mcts strategy wires the global plan model and live replanning`() {
+        val arg = HsPirateDemonHunterMctsGlobalPlanDeckStrategy().executeMCTSOutCard(testWar()).single()
 
         assertTrue(arg.experimentalSearch)
-        assertTrue(arg.decisionModel === PirateDemonHunterMctsExperimentModel)
+        assertTrue(arg.decisionModel === PirateDemonHunterMctsGlobalPlanModel)
     }
 
     @Test
-    fun `global plan strategy opts into plan selection without changing the baseline strategy`() {
-        val baseline = HsPirateDemonHunterMctsDeckStrategy().executeMCTSOutCard(testWar()).single()
+    fun `released pirate mcts strategy opts into global plan selection`() {
         val global = HsPirateDemonHunterMctsGlobalPlanDeckStrategy().executeMCTSOutCard(testWar()).single()
 
-        assertEquals(MctsRootSelectionPolicy.VISITS_THEN_VALUE, baseline.rootSelectionPolicy)
         assertEquals(MctsRootSelectionPolicy.GLOBAL_TURN_PLAN, global.rootSelectionPolicy)
         assertTrue(global.decisionModel === PirateDemonHunterMctsGlobalPlanModel)
-        assertEquals("海盗瞎MCTS全局规划试验", HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name())
+        assertEquals("海盗瞎 MCTS", HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name())
+    }
+
+    @Test
+    fun `released pirate mcts strategy keeps the established mulligan baseline`() {
+        val strategy = HsPirateDemonHunterMctsGlobalPlanDeckStrategy()
+        val patches = testCard(PirateDemonHunterMctsExperimentModel.PATCHES_THE_PIRATE).apply { cost = 1 }
+        val cheap = testCard("CHEAP_KEEP").apply { cost = 2 }
+        val expensive = testCard("EXPENSIVE_REPLACE").apply { cost = 3 }
+        val cards = hashSetOf(patches, cheap, expensive)
+
+        strategy.executeChangeCard(cards)
+
+        assertEquals(setOf(cheap), cards)
     }
 
     @Test

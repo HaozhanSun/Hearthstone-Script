@@ -123,7 +123,11 @@ object CurrentRankDetector {
         // rank.  Keep the numeric-evidence requirement so an empty/blank
         // screen cannot become rank 10 from the visual hint alone.
         if (visualTenHint && parsed.isEmpty() && candidates.any { it.any(Char::isDigit) }) return 10
-        if (visualTenHint && parsed.isNotEmpty() && parsed.all { it in 1 until MAX_RANK }) return 10
+        // A visual hint is only allowed to recover rank 10 when OCR produced
+        // no valid rank at all.  If OCR consistently sees a real lower rank
+        // (for example 7/8/9), promoting it to 10 is a dangerous false safe
+        // result: the surrender policy would then refuse a surrender.  The
+        // explicit "10" branch above remains authoritative.
         val counts = parsed.groupingBy { it }.eachCount()
         val candidatesBelowTen = counts.entries
             .filter { (rank, count) -> rank in MIN_RANK until MAX_RANK && count >= 2 }
@@ -139,10 +143,12 @@ object CurrentRankDetector {
         if (candidatesBelowTen.count { it.value == highestCount } > 1) return null
         if (parsed.any { it != best.key }) return null
         // A stylized rank-10 badge is commonly read as "1" by every OCR
-        // pass when the zero is faint or cropped.  Without a resolved tier or
-        // a positive two-digit visual hint, that evidence is ambiguous with
-        // rank 1 and must not cause an irreversible surrender.
-        if (best.key == 1 && !visualTenHint) return null
+        // pass when the zero is faint or cropped.  A visual-width hint can
+        // also be produced by badge artwork when the numeral is absent (as
+        // on the matchmaking/mulligan screen).  Neither case is sufficient
+        // to distinguish rank 1 from rank 10, so repeated one-only OCR must
+        // remain unresolved and must never cause an irreversible surrender.
+        if (best.key == 1) return null
         return best.key
     }
 
