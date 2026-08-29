@@ -35,6 +35,7 @@ import com.sun.jna.platform.win32.WinUser
 import com.sun.jna.platform.win32.WinUser.SWP_NOMOVE
 import com.sun.jna.platform.win32.WinUser.SWP_NOZORDER
 import java.awt.Point
+import java.awt.event.KeyEvent
 import java.io.File
 import java.io.IOException
 import java.nio.file.Path
@@ -70,6 +71,13 @@ object GameUtil {
 
     internal fun isSurrenderStateConfirmed(mode: ModeEnum?, inWar: Boolean): Boolean =
         SurrenderPolicy.hasConfirmedGameState(mode, inWar)
+
+    /**
+     * The first stale-result recovery click is deliberately deterministic so
+     * the center of the visible continue control is exercised before the
+     * bounded, humanized retry points are used.
+     */
+    internal fun shouldUseStaleResultCenterClick(attempt: Int): Boolean = attempt == 1
 
     /**
      * Safe-native mode deliberately avoids the injected/native window helper.
@@ -782,12 +790,27 @@ object GameUtil {
 
                 runCatching {
                     log.info { "E2E恢复：尝试关闭旧结算页面 #$number" }
-                    // Preserve the known-working upstream click behavior for
-                    // the localized result label.  The result banner can be
-                    // shifted by client scaling, so the rectangle's sampled
-                    // point is more reliable than assuming its mathematical
-                    // center is the interactive glyph.
-                    GAME_END_CONTINUE_RECT.lClick(false)
+                    // First use the stable center of the localized result
+                    // control.  The live client can render the glyph inside
+                    // a transparent/animated hit area, and a randomized edge
+                    // point may land on the banner without being actionable.
+                    // Keep the bounded retry task and use the historical
+                    // randomized point only after the center has had a chance
+                    // to receive the input.
+                    if (shouldUseStaleResultCenterClick(number)) {
+                        log.info { "E2E恢复：结果页使用稳定中心点" }
+                        GAME_END_CONTINUE_RECT.lClickCenter(false)
+                    } else if (number == 2) {
+                        // Some Unity client builds expose the result control
+                        // visually but do not consume the first mouse event.
+                        // The focused result page also accepts Return; keep
+                        // this as one bounded fallback before returning to the
+                        // existing randomized click attempts.
+                        log.info { "E2E恢复：结果页鼠标无效，使用一次 Return 后备输入" }
+                        SystemUtil.sendKey(KeyEvent.VK_ENTER)
+                    } else {
+                        GAME_END_CONTINUE_RECT.lClick(false)
+                    }
                 }.onFailure { error ->
                     log.warn(error) { "E2E恢复：关闭旧结算页面尝试失败 #$number" }
                 }
