@@ -44,6 +44,14 @@ config.json
 /log
 /resource
 **/config
+!/hs-script-base/src/main/kotlin/**/config/
+!/hs-script-base/src/main/kotlin/**/config/**
+!/hs-script-plugin-sdk/src/main/kotlin/**/config/
+!/hs-script-plugin-sdk/src/main/kotlin/**/config/**
+!/hs-script-card-sdk/src/main/kotlin/**/config/
+!/hs-script-card-sdk/src/main/kotlin/**/config/**
+!/hs-script-app/src/main/java/**/config/
+!/hs-script-app/src/main/java/**/config/**
 *.db-journal
 *.db
 statistics-page-verified-v4.16.7*.jpg

@@ -44,6 +44,8 @@ config.json
 /log
 /resource
 **/config
+!src/main/java/**/config/
+!src/main/java/**/config/**
 *.db-journal
 .pid
 /data
