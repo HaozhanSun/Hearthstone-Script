@@ -8,8 +8,13 @@ import club.xiaojiawei.hsscript.dll.User32ExDll
 import club.xiaojiawei.hsscript.dll.User32ExDll.Companion.HWND_BOTTOM
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.status.Mode
+import club.xiaojiawei.hsscript.status.LifecycleTrace
+import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
+import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.utils.*
+import club.xiaojiawei.hsscript.listener.WorkTimeListener
+import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.LAUNCH_PROGRAM_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
@@ -20,6 +25,7 @@ import com.sun.jna.platform.win32.User32
 import com.sun.jna.platform.win32.WinDef.HWND
 import com.sun.jna.platform.win32.WinUser.*
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 
 /**
@@ -37,6 +43,8 @@ class GameStarter : AbstractStarter() {
      */
     @Volatile
     private var platformCloseRequested = false
+
+    private val startupProbeScheduled = AtomicBoolean(false)
 
     public override fun execStart() {
         log.info { "开始检查$GAME_CN_NAME" }
@@ -126,6 +134,7 @@ class GameStarter : AbstractStarter() {
 
     private fun next(gameHWND: HWND) {
         updateGameMsg(gameHWND)
+        scheduleStartupScreenProbe()
         closePlatformAfterGameIsReady()
         if (ConfigEnum.PREVENT_ADMIN_LAUNCH_GAME.getBoolean() && GameUtil.getGameProgramPermission()
                 .isAdministration()
@@ -159,6 +168,63 @@ class GameStarter : AbstractStarter() {
         }
 
         startNextStarter()
+    }
+
+    /**
+     * A restart can find Hearthstone already on a usable non-login page.  At
+     * this point the game window has been discovered and its bounds have been
+     * refreshed, so screen recovery can inspect the real client instead of
+     * racing JavaFX initialization.  Keep the probe bounded and retry while
+     * the log listeners finish attaching; normal lifecycle recovery remains
+     * the long-stall fallback.
+     */
+    private fun scheduleStartupScreenProbe() {
+        if (!startupProbeScheduled.compareAndSet(false, true)) return
+        log.info {
+            "STARTUP_SCREEN_PROBE_SCHEDULED gameWindow=${ScriptStatus.gameHWND != null} " +
+                "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+        }
+        EXTRA_THREAD_POOL.execute {
+            var attempt = 0
+            try {
+                // The starter chain discovers Hearthstone before the log listeners
+                // attach. Give those listeners a short head start, but do not wait
+                // for the 30-second stale-screen fallback.
+                Thread.sleep(2_500L)
+                val deadline = System.currentTimeMillis() + 15_000L
+                while (System.currentTimeMillis() < deadline && !PauseStatus.isPause) {
+                    attempt++
+                    log.info {
+                        "STARTUP_SCREEN_PROBE attempt=$attempt " +
+                            "gameWindow=${ScriptStatus.gameHWND != null} " +
+                            "working=${WorkTimeListener.working} war=${WarEx.inWar}"
+                    }
+                    val result = runCatching {
+                        ScreenStateRecovery.inspectAndRecover(
+                            stuckForMs = 0L,
+                            stateFingerprint = "STARTUP_PROBE",
+                        )
+                    }
+                    var applied = false
+                    result.onSuccess {
+                        applied = it
+                        LifecycleTrace.mark("startup-screen-probe attempt=$attempt applied=$it")
+                    }.onFailure { error ->
+                        log.warn(error) { "STARTUP_SCREEN_PROBE_FAILED attempt=$attempt" }
+                    }
+                    if (applied) return@execute
+                    Thread.sleep(2_000L)
+                }
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                log.info { "STARTUP_SCREEN_PROBE_INTERRUPTED attempts=$attempt" }
+            } finally {
+                log.info {
+                    "STARTUP_SCREEN_PROBE_FINISHED attempts=$attempt " +
+                        "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+                }
+            }
+        }
     }
 
     private fun closePlatformAfterGameIsReady() {

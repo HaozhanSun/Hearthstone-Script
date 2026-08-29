@@ -1,7 +1,9 @@
 package club.xiaojiawei.hsscript.status
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ScreenStateRecoveryTest {
@@ -30,5 +32,40 @@ class ScreenStateRecoveryTest {
         assertFalse(ScreenStateRecovery.looksLikeReconnectText("登录 Battle.net"))
         assertFalse(ScreenStateRecovery.looksLikeReconnectText("正在重新连接"))
         assertFalse(ScreenStateRecovery.looksLikeReconnectText("选择套牌 狂野对战"))
+    }
+
+    @Test
+    fun `recognizes traditional and simplified matchmaking OCR variants`() {
+        assertTrue(ScreenStateRecovery.looksLikeMatchmakingText("搜寻对手 取消"))
+        assertTrue(ScreenStateRecovery.looksLikeMatchmakingText("寻找对手"))
+        assertTrue(ScreenStateRecovery.looksLikeMatchmakingText("正在匹配"))
+        assertFalse(ScreenStateRecovery.looksLikeMatchmakingText("还有未领取的奖励"))
+        assertEquals("MATCHMAKING", ScreenStateRecovery.classifyForTest("搜寻对手 取消"))
+    }
+
+    @Test
+    fun `does not treat reward pack advertisement as pack opening`() {
+        val reward = "还有未领取的奖励 5包标准卡牌包 确定"
+        assertFalse(ScreenStateRecovery.looksLikePackOpeningText(reward))
+        assertNull(ScreenStateRecovery.classifyForTest(reward))
+        assertTrue(ScreenStateRecovery.looksLikePackOpeningText("打开卡牌包 点击打开"))
+        assertEquals("PACK_OPENING", ScreenStateRecovery.classifyForTest("打开卡牌包 点击打开"))
+    }
+
+    @Test
+    fun `prioritizes reconnect failure over generic login`() {
+        val failure = "重新连接失败 无法重新连接。请重新启动《炉石传说》。退出游戏 取消"
+        assertTrue(ScreenStateRecovery.looksLikeReconnectFailureText(failure))
+        assertEquals("RECONNECT_FAILURE", ScreenStateRecovery.classifyForTest(failure))
+        assertFalse(ScreenStateRecovery.looksLikeReconnectFailureText("登录 Battle.net"))
+    }
+
+    @Test
+    fun `recognizes loading text and leaves blank OCR unresolved`() {
+        assertTrue(ScreenStateRecovery.looksLikeLoadingText("正在加载，请稍候"))
+        assertEquals("LOADING", ScreenStateRecovery.classifyForTest("正在加载，请稍候"))
+        assertNull(ScreenStateRecovery.classifyForTest(""))
+        assertTrue(ScreenStateRecovery.looksLikeLoadingVisual(0.499, 0.195, 0.01))
+        assertFalse(ScreenStateRecovery.looksLikeLoadingVisual(0.069, 0.127, 0.54))
     }
 }

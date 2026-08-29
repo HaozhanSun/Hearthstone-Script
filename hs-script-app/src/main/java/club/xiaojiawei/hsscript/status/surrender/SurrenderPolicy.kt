@@ -12,6 +12,7 @@ import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.statistics.Record
 import club.xiaojiawei.hsscript.statistics.RecordDaoEx
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
+import java.time.LocalDateTime
 
 /**
  * The point at which a surrender rule is evaluated.
@@ -44,6 +45,16 @@ data class SurrenderRuleResult(
     val reason: String? = null,
 )
 
+data class PersistentStreakSnapshot(
+    val consecutiveSurrenders: Int,
+    val consecutiveWins: Int,
+)
+
+data class PersistentStreakGuard(
+    val ruleId: String,
+    val reason: String,
+)
+
 private data class SurrenderRule(
     val id: String,
     val evaluate: (SurrenderRuleContext) -> SurrenderRuleResult,
@@ -70,6 +81,10 @@ object SurrenderPolicy {
     private const val MAX_RANK_INSPECTION_ATTEMPTS = 8
     private const val WIN_RATE_GUARD_THRESHOLD_PERCENT = 45.0
     private const val WIN_RATE_GUARD_MIN_GAMES = 5
+    /** Protect the next game after seven persisted concessions. */
+    private const val MAX_CONSECUTIVE_SURRENDERS = 7
+    /** Protect the next game after five persisted wins in a row. */
+    private const val MAX_CONSECUTIVE_WINS = 5
 
     /**
      * Early opponent-hero checks run once per resolved identity.  Keeping the
@@ -169,6 +184,84 @@ object SurrenderPolicy {
     }
 
     /**
+     * Calculate terminal-result streaks from persisted records.  Sorting by
+     * end time makes the result independent of database row order and means
+     * the streak survives process and machine restarts.
+     *
+     * Unknown/legacy surrender flags break both streaks. A win is counted
+     * only when it is explicitly non-surrendered, matching the win-rate guard.
+     */
+    internal fun persistentStreakSnapshot(records: List<Record>): PersistentStreakSnapshot {
+        var consecutiveSurrenders = 0
+        var consecutiveWins = 0
+        val completed = records
+            .filter { it.result != null }
+            .sortedWith(compareBy<Record> { it.endTime ?: LocalDateTime.MIN }.thenBy { it.id ?: Int.MIN_VALUE })
+        completed.forEach { record ->
+            when {
+                record.surrendered == true -> {
+                    consecutiveSurrenders++
+                    consecutiveWins = 0
+                }
+                record.result == true && record.surrendered == false -> {
+                    consecutiveWins++
+                    consecutiveSurrenders = 0
+                }
+                else -> {
+                    consecutiveSurrenders = 0
+                    consecutiveWins = 0
+                }
+            }
+        }
+        return PersistentStreakSnapshot(consecutiveSurrenders, consecutiveWins)
+    }
+
+    internal fun evaluatePersistentStreakGuard(snapshot: PersistentStreakSnapshot): PersistentStreakGuard? = when {
+        snapshot.consecutiveSurrenders >= MAX_CONSECUTIVE_SURRENDERS -> PersistentStreakGuard(
+            ruleId = "consecutive-surrenders-over-seven",
+            reason = "consecutive-surrenders=${snapshot.consecutiveSurrenders} threshold=$MAX_CONSECUTIVE_SURRENDERS",
+        )
+        snapshot.consecutiveWins >= MAX_CONSECUTIVE_WINS -> PersistentStreakGuard(
+            ruleId = "consecutive-wins-over-four",
+            reason = "consecutive-wins=${snapshot.consecutiveWins} threshold=$MAX_CONSECUTIVE_WINS",
+        )
+        else -> null
+    }
+
+    /**
+     * Re-read durable history before any early surrender decision. A
+     * triggered guard never pauses automation and never mutates the history.
+     * Instead it skips this policy pass, which prevents another automatic
+     * surrender while allowing the normal game loop to continue and produce
+     * a real result that can reset a suspicious streak. The evidence includes
+     * the recent durable records so an OCR/result regression is diagnosable.
+     */
+    private fun enforcePersistentStreakGuard(): Boolean = runCatching {
+        val strategy = DeckStrategyManager.currentDeckStrategy ?: return false
+        val strategyId = strategy.id().takeIf { it.isNotBlank() } ?: return false
+        val records = RecordDaoEx.RECORD_DAO.query(Record(strategyId = strategyId))
+        val snapshot = persistentStreakSnapshot(records)
+        val guard = evaluatePersistentStreakGuard(snapshot) ?: return false
+        val evidence = records
+            .filter { it.result != null }
+            .sortedWith(compareBy<Record> { it.endTime ?: LocalDateTime.MIN }.thenBy { it.id ?: Int.MIN_VALUE })
+            .takeLast(10)
+            .joinToString(",") {
+                "id=${it.id ?: "?"}:result=${it.result}:surrendered=${it.surrendered}:end=${it.endTime ?: "?"}"
+            }
+        log.warn {
+            "PERSISTENT_STREAK_GUARD_RECOVERY_CONTINUE strategy=$strategyId rule=${guard.ruleId} " +
+                "reason=${guard.reason} consecutiveSurrenders=${snapshot.consecutiveSurrenders} " +
+                "consecutiveWins=${snapshot.consecutiveWins} action=CONTINUE " +
+                "surrenderPolicyPass=SKIPPED evidence=$evidence source=statistics.db"
+        }
+        true
+    }.getOrElse { error ->
+        log.warn(error) { "PERSISTENT_STREAK_GUARD_UNAVAILABLE reason=statistics-read-failed" }
+        false
+    }
+
+    /**
      * Evaluate the rival hero as soon as the live model has a resolved hero
      * entity during the pre-mulligan phases.  Unknown/placeholder names are
      * ignored here: an early surrender is safe only after the portrait's
@@ -179,6 +272,7 @@ object SurrenderPolicy {
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") {
             return null
         }
+        if (enforcePersistentStreakGuard()) return null
         if (war.currentPhase !in setOf(
                 WarPhaseEnum.FILL_DECK,
                 WarPhaseEnum.DRAWN_INIT_CARD,
@@ -263,13 +357,16 @@ object SurrenderPolicy {
     /**
      * The rank gate is the primary policy: Silver 10 is the floor, so Silver
      * 9..1 and every tier above Silver surrender before mulligan. The old
-     * 45% win-rate gate is a secondary insurance and is evaluated from known
-     * non-surrendered games for the selected strategy. It cannot replace a
-     * rank decision, and a small/empty sample is ignored.
+     * 45% win-rate gate is a secondary insurance and is evaluated from every
+     * completed result for the selected strategy, including our own
+     * concessions. Otherwise a win-rate-triggered surrender would never enter
+     * its own denominator and the same stale percentage would trigger forever.
+     * A small/empty sample is ignored.
      */
     @Synchronized
     fun evaluateCurrentRankBeforeMulligan(): SurrenderRuleResult? {
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") return null
+        if (enforcePersistentStreakGuard()) return null
         val phase = WAR.currentPhase
         if (!isRankInspectionEligible(WarEx.inWar, phase)) {
             if (phase == WarPhaseEnum.FILL_DECK || !WarEx.inWar) {
@@ -358,7 +455,23 @@ object SurrenderPolicy {
         val wins: Int,
     ) {
         val percent: Double
-            get() = if (games <= 0) 0.0 else wins * 100.0 / games
+                get() = if (games <= 0) 0.0 else wins * 100.0 / games
+    }
+
+    /**
+     * Build the guard's all-completed-results snapshot without database access.
+     *
+     * A local concession is always a loss for this policy, even if a stale
+     * WarEx.isWin value was left over from the previous game when the
+     * concession was recorded.  This also repairs the denominator for legacy
+     * rows written before the listener normalized surrendered results.
+     */
+    internal fun winRateSnapshotForCompletedResults(records: List<Record>): WinRateSnapshot {
+        val completed = records.filter { it.result != null }
+        return WinRateSnapshot(
+            games = completed.size,
+            wins = completed.count { it.result == true && it.surrendered != true },
+        )
     }
 
     /** Pure policy helper kept package-visible so threshold behavior is testable. */
@@ -378,22 +491,35 @@ object SurrenderPolicy {
         )
     }
 
-    /** Read only completed, explicitly non-surrendered games for the active strategy. */
+    /**
+     * Read all completed results for the active strategy.  The statistics UI
+     * can separately report non-surrendered games; this policy must count a
+     * local concession as a completed loss so its own guard can decay.
+     */
     private fun evaluateWinRateGuard(): SurrenderRuleResult? = runCatching {
         val strategy = DeckStrategyManager.currentDeckStrategy ?: return null
         val strategyId = strategy.id().takeIf { it.isNotBlank() } ?: return null
         val records = RecordDaoEx.RECORD_DAO.query(Record(strategyId = strategyId))
-        val played = records.filter { it.surrendered == false && it.result != null }
-        val snapshot = WinRateSnapshot(
-            games = played.size,
-            wins = played.count { it.result == true },
-        )
+        val completed = records.filter { it.result != null }
+        val played = completed.count { it.surrendered == false }
+        val surrendered = completed.count { it.surrendered == true }
+        val unknownSurrender = completed.count { it.surrendered == null }
+        val snapshot = winRateSnapshotForCompletedResults(records)
         val result = evaluateWinRate(snapshot)
         if (result == null) {
             log.info {
                 "WIN_RATE_POLICY_CLEAR strategy=$strategyId games=${snapshot.games} " +
                     "wins=${snapshot.wins} rate=${"%.2f".format(java.util.Locale.ROOT, snapshot.percent)}% " +
+                    "played=$played surrendered=$surrendered unknownSurrender=$unknownSurrender " +
+                    "basis=all-completed-results " +
                     "threshold=${WIN_RATE_GUARD_THRESHOLD_PERCENT}% minGames=$WIN_RATE_GUARD_MIN_GAMES"
+            }
+        } else {
+            log.info {
+                "WIN_RATE_POLICY_SNAPSHOT strategy=$strategyId games=${snapshot.games} " +
+                    "wins=${snapshot.wins} rate=${"%.2f".format(java.util.Locale.ROOT, snapshot.percent)}% " +
+                    "played=$played surrendered=$surrendered unknownSurrender=$unknownSurrender " +
+                    "basis=all-completed-results"
             }
         }
         result

@@ -43,11 +43,13 @@ import javafx.event.ActionEvent
 import javafx.event.EventHandler
 import javafx.fxml.FXML
 import javafx.scene.control.Label
+import javafx.scene.control.OverrunStyle
 import javafx.scene.control.Toggle
 import javafx.scene.control.Tooltip
 import javafx.scene.input.MouseButton
 import javafx.scene.input.MouseEvent
 import javafx.scene.layout.AnchorPane
+import javafx.scene.layout.Region
 import javafx.scene.layout.VBox
 import javafx.stage.Popup
 import javafx.util.Duration
@@ -60,6 +62,8 @@ import java.util.*
  * @author 肖嘉威
  * @date 2023/2/21 12:33
  */
+private const val LOG_CONTENT_PADDING = 10.0
+
 class MainController : MainView() {
     private var isNotHoverLog = true
 
@@ -210,9 +214,9 @@ class MainController : MainView() {
             }
             val label = CopyLabel()
             label.notificationManager = notificationManger
-            label.style = "-fx-wrap-text: true; -fx-text-overrun: clip"
-            label.maxWidth = Double.MAX_VALUE
-            label.prefWidthProperty().bind(logVBox.widthProperty().subtract(10))
+            label.isWrapText = true
+            label.textOverrun = OverrunStyle.CLIP
+            bindLogWidth(label)
 
             val levelInt = event.level.levelInt
             var message = event.formattedMessage
@@ -222,8 +226,7 @@ class MainController : MainView() {
                 label.text = message
                 label.styleClass.add("copyLog")
                 val anchorPane = wrapLabel(label)
-                anchorPane.maxWidth = Double.MAX_VALUE
-                anchorPane.prefWidthProperty().bind(logVBox.widthProperty().subtract(10))
+                bindLogWidth(anchorPane)
                 list.add(anchorPane)
                 return@runUI
             }
@@ -239,6 +242,11 @@ class MainController : MainView() {
             }
             list.add(label)
         }
+    }
+
+    private fun bindLogWidth(node: Region) {
+        node.maxWidth = Double.MAX_VALUE
+        node.prefWidthProperty().bind(logVBox.widthProperty().subtract(LOG_CONTENT_PADDING))
     }
 
     private fun wrapLabel(label: Label): AnchorPane {

@@ -174,7 +174,13 @@ object MctsDeckProfileTelemetry {
 
     private fun currentPirateDeck(): Deck? {
         val decks = synchronized(DeckLogListener.DECKS) { DeckLogListener.DECKS.toList() }
-        return decks.firstOrNull { it.name.contains("海盗瞎") || it.name.contains("海盗") }
+        return selectCurrentDeck(DeckLogListener.selectedGameDeck(), decks)
+    }
+
+    /** Prefer the per-match selection over the cached deck-list response. */
+    internal fun selectCurrentDeck(selectedGameDeck: Deck?, decks: List<Deck>): Deck? {
+        return selectedGameDeck?.takeIf { it.code.isNotBlank() }
+            ?: decks.firstOrNull { it.name.contains("海盗瞎") || it.name.contains("海盗") }
             ?: decks.firstOrNull { it.code.isNotBlank() }
     }
 }

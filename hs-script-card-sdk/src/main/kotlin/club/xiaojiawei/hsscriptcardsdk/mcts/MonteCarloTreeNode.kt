@@ -73,6 +73,11 @@ class MonteCarloTreeNode(
      */
     private fun generateActions(war: War): MutableList<Action> {
         val result = mutableListOf<Action>()
+        // A timing card is intentionally hidden while another useful action
+        // exists, but it must remain available as a last-resort action.  If
+        // it is discarded here, EndTurn becomes the only root child and the
+        // live executor can replan forever without making progress.
+        val deferredTimingActions = mutableListOf<Action>()
         val rootScan = if (parent == null && arg.debugName.isNotBlank()) mutableListOf<Map<String, Any?>>() else null
 
         fun addScan(details: Map<String, Any?>) {
@@ -130,6 +135,18 @@ class MonteCarloTreeNode(
                 val shouldDefer = arg.decisionModel?.shouldDefer(card, war)
                     ?: CardTimingPolicy.shouldDefer(card, war)
                 if (shouldDefer) {
+                    if (CardTimingPolicy.isEndOfTurnCostReductionCard(card)) {
+                        val deferredPlayActions = runCatching { card.action.generatePlayActions(war, me) }
+                            .getOrElse {
+                                scanCard(card, "FILTERED", "deferred-play-action-generation-error:${it::class.java.simpleName}")
+                                emptyList()
+                            }
+                        if (deferredPlayActions.isNotEmpty()) {
+                            deferredTimingActions.addAll(deferredPlayActions)
+                        } else if (arg.decisionModel?.canCreateOpaqueAction(card, war) == true) {
+                            deferredTimingActions.add(createOpaquePlayAction(card))
+                        }
+                    }
                     scanCard(card, "FILTERED", "decision-model-should-defer")
                     if (parent == null && arg.debugName.isNotBlank()) {
                         log.info {
@@ -260,7 +277,26 @@ class MonteCarloTreeNode(
         deferredDecisions.filter { it.second }.forEach { (action, _) ->
             addScan(mapOf("kind" to "ACTION_FILTER", "outcome" to "FILTERED", "reason" to "decision-model-deferred-action", "action" to actionDescription(action)))
         }
-        val filteredActions = if (deferredActions.isNotEmpty()) deferredActions else result
+        val nonEndTurnActions = deferredActions.filterNot { it === TurnOverAction }
+        val filteredActions = if (nonEndTurnActions.isNotEmpty()) {
+            deferredActions
+        } else {
+            // EndTurn is not a useful action for this decision.  When every
+            // currently generated action is deferred, retain those deferred
+            // actions and add the explicitly supported timing-card fallback
+            // instead of treating EndTurn as proof that work is complete.
+            (result + deferredTimingActions).distinct()
+        }
+        if (deferredTimingActions.isNotEmpty() && nonEndTurnActions.isEmpty()) {
+            addScan(
+                mapOf(
+                    "kind" to "ACTION_FILTER",
+                    "outcome" to "FALLBACK_ALLOWED",
+                    "reason" to "deferred-timing-action-is-only-remaining-useful-work",
+                    "actions" to deferredTimingActions.map(::actionDescription),
+                ),
+            )
+        }
         // In experimental/receding-horizon MCTS, EndTurn is a terminal
         // control action, not a peer of a still-legal card, attack, or power.
         // Keeping it in the root set lets UCT end the turn early; the live
@@ -514,6 +550,7 @@ class MonteCarloTreeNode(
                     arg.experimentalSearch,
                     arg.experimentalTurnBudgetMillis,
                     arg.experimentalActionBudgetMillis,
+                    arg.rootSelectionPolicy,
                 )
                 val inverseWar = war.clone()
                 inverseWar.me.apply {

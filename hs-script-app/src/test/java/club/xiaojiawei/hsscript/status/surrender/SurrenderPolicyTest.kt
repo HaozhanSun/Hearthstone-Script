@@ -8,16 +8,87 @@ import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
+import club.xiaojiawei.hsscript.statistics.Record
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.io.File
 import java.nio.file.Files
+import java.nio.file.Path
 import java.awt.Color
 import java.awt.image.BufferedImage
+import java.time.LocalDateTime
+import javax.imageio.ImageIO
 
 class SurrenderPolicyTest {
+
+    @Test
+    fun `persistent streaks are reconstructed in end time order after restart`() {
+        val base = LocalDateTime.of(2026, 8, 28, 12, 0)
+        val records = listOf(
+            Record(id = 3, result = true, surrendered = false, endTime = base.plusMinutes(3)),
+            Record(id = 1, result = true, surrendered = false, endTime = base.plusMinutes(1)),
+            Record(id = 2, result = true, surrendered = false, endTime = base.plusMinutes(2)),
+            Record(id = 4, result = true, surrendered = false, endTime = base.plusMinutes(4)),
+        )
+
+        assertEquals(
+            PersistentStreakSnapshot(consecutiveSurrenders = 0, consecutiveWins = 4),
+            SurrenderPolicy.persistentStreakSnapshot(records),
+        )
+        assertEquals(
+            "consecutive-wins-over-four",
+            SurrenderPolicy.evaluatePersistentStreakGuard(
+                PersistentStreakSnapshot(consecutiveSurrenders = 0, consecutiveWins = 5),
+            )?.ruleId,
+        )
+    }
+
+    @Test
+    fun `seven persisted surrenders block the eighth automatic surrender`() {
+        val base = LocalDateTime.of(2026, 8, 28, 13, 0)
+        val records = (1..7).map { index ->
+            Record(
+                id = index,
+                result = false,
+                surrendered = true,
+                endTime = base.plusMinutes(index.toLong()),
+            )
+        }
+
+        val snapshot = SurrenderPolicy.persistentStreakSnapshot(records)
+        assertEquals(7, snapshot.consecutiveSurrenders)
+        assertEquals(0, snapshot.consecutiveWins)
+        assertEquals(
+            "consecutive-surrenders-over-seven",
+            SurrenderPolicy.evaluatePersistentStreakGuard(snapshot)?.ruleId,
+        )
+    }
+
+    @Test
+    fun `non surrender loss and unknown legacy flag reset streaks`() {
+        val base = LocalDateTime.of(2026, 8, 28, 14, 0)
+        val records = listOf(
+            Record(id = 1, result = true, surrendered = false, endTime = base.plusMinutes(1)),
+            Record(id = 2, result = true, surrendered = false, endTime = base.plusMinutes(2)),
+            Record(id = 3, result = false, surrendered = false, endTime = base.plusMinutes(3)),
+            Record(id = 4, result = false, surrendered = true, endTime = base.plusMinutes(4)),
+            Record(id = 5, result = false, surrendered = null, endTime = base.plusMinutes(5)),
+            Record(id = 6, result = false, surrendered = true, endTime = base.plusMinutes(6)),
+        )
+
+        assertEquals(
+            PersistentStreakSnapshot(consecutiveSurrenders = 1, consecutiveWins = 0),
+            SurrenderPolicy.persistentStreakSnapshot(records),
+        )
+        assertNull(
+            SurrenderPolicy.evaluatePersistentStreakGuard(
+                PersistentStreakSnapshot(consecutiveSurrenders = 1, consecutiveWins = 0),
+            ),
+        )
+    }
 
     @Test
     fun surrenderStateRequiresGameplayOrActiveWar() {
@@ -152,6 +223,62 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun rankResolverAcceptsVisualTenHintWhenBadgeArtworkCreatesOnlyNoise() {
+        // Captured from the real 1920x1080 rank-10 badge. The broad badge
+        // crop included the portrait and shield ornament, so OCR returned
+        // invalid multi-digit noise instead of the visible 10.
+        assertEquals(
+            10,
+            CurrentRankDetector.resolveRankCandidates(
+                listOf("939", "51", "191", "91", "", ""),
+                visualTenHint = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `rank OCR recognizes ten real screenshots when fixture directory is configured`() {
+        val fixtureFiles = System.getProperty("rank.screenshot.files")
+            ?.split(File.pathSeparator)
+            ?.filter(String::isNotBlank)
+            ?.map { Path.of(it) }
+        val fixtureDirectory = System.getProperty("rank.screenshot.dir")
+        if (fixtureFiles == null && fixtureDirectory == null) return
+
+        val files = fixtureFiles ?: Files.list(Path.of(fixtureDirectory!!)).use { stream ->
+            stream
+                .filter { it.toString().lowercase().endsWith(".png") }
+                .sorted()
+                .toList()
+        }
+        val requestedCount = System.getProperty("rank.screenshot.limit")?.toIntOrNull() ?: 10
+        assertTrue(files.size >= requestedCount, "Expected at least $requestedCount rank screenshots")
+
+        // The directory also contains matching/gameplay frames where the
+        // rank badge is genuinely absent.  A focused ten-file list is used
+        // for the positive OCR regression; it is supplied by the test
+        // command from real screenshots whose badge visibly shows 10.
+        val selected = files.take(requestedCount)
+        val failures = selected.map { file ->
+            val detection = ImageIO.read(file.toFile())?.let {
+                CurrentRankDetector.detectCapturedImage(it, saveEvidence = false)
+            }
+            println(
+                "RANK_FIXTURE file=${file.fileName} rank=${detection?.rank ?: "null"} " +
+                    "ocr=${detection?.ocrText?.ifBlank { "<empty>" } ?: "<no-detection>"}",
+            )
+            file.fileName.toString() to detection
+        }.filter { (_, detection) -> detection?.rank != 10 }
+
+        assertTrue(
+            failures.isEmpty(),
+            "Rank-10 OCR failed for: " + failures.joinToString { (file, detection) ->
+                "$file -> ${detection?.rank ?: "null"} (${detection?.ocrText ?: "no detection"})"
+            },
+        )
+    }
+
+    @Test
     fun rankVisualHintDistinguishesTwoDigitBadgeFromSingleDigitBadge() {
         val ten = BufferedImage(144, 140, BufferedImage.TYPE_INT_RGB)
         val tenGraphics = ten.createGraphics()
@@ -189,9 +316,10 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun rankResolverRequiresAgreementBeforeSurrenderRank() {
+    fun rankResolverRequiresAgreementAndTreatsRepeatedOneAsAmbiguous() {
         assertNull(CurrentRankDetector.resolveRankCandidates(listOf("1", "", "")))
-        assertEquals(1, CurrentRankDetector.resolveRankCandidates(listOf("1", "1", "")))
+        assertNull(CurrentRankDetector.resolveRankCandidates(listOf("1", "1", "")))
+        assertEquals(2, CurrentRankDetector.resolveRankCandidates(listOf("2", "2", "")))
         assertEquals(9, CurrentRankDetector.resolveRankCandidates(listOf("9", "9", "19")))
     }
 
@@ -249,6 +377,30 @@ class SurrenderPolicyTest {
         assertTrue(result!!.shouldSurrender)
         assertEquals("win-rate-at-least-45-percent", result.ruleId)
         assertTrue(result!!.reason.orEmpty().contains("reached-threshold=45.0%"))
+    }
+
+    @Test
+    fun winRateSnapshotCountsSurrenderedResultsForTheGuardDenominator() {
+        val records = listOf(
+            Record(result = true, surrendered = false),
+            Record(result = true, surrendered = false),
+            Record(result = true, surrendered = false),
+            Record(result = false, surrendered = false),
+            Record(result = true, surrendered = false),
+            Record(result = false, surrendered = true),
+            Record(result = false, surrendered = true),
+            Record(result = false, surrendered = null),
+            // Legacy rows can contain a stale true result on a local
+            // concession; the policy must still treat it as a loss.
+            Record(result = true, surrendered = true),
+        )
+
+        val snapshot = SurrenderPolicy.winRateSnapshotForCompletedResults(records)
+
+        assertEquals(9, snapshot.games)
+        assertEquals(4, snapshot.wins)
+        assertEquals(44.44444444444444, snapshot.percent)
+        assertTrue(SurrenderPolicy.evaluateWinRate(snapshot) == null)
     }
 
     @Test

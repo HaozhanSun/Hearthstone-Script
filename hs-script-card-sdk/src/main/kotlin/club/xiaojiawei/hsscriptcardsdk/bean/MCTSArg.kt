@@ -10,6 +10,15 @@ import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 
 typealias ScoreCalculator = Function<War, Double>
 
+/** Root-child selection modes for the isolated experimental MCTS path. */
+enum class MctsRootSelectionPolicy {
+    /** Preserve the existing robust-child behavior. */
+    VISITS_THEN_VALUE,
+
+    /** Select the root action by the best discovered complete turn plan. */
+    GLOBAL_TURN_PLAN,
+}
+
 data class MCTSArg(
     /**
      * 结束时间
@@ -48,4 +57,6 @@ data class MCTSArg(
     val experimentalTurnBudgetMillis: Long = 20_000L,
     /** Maximum wall-clock time for one experimental re-plan. */
     val experimentalActionBudgetMillis: Long = 1_800L,
+    /** Root-child policy used only by experimental MCTS strategies. */
+    val rootSelectionPolicy: MctsRootSelectionPolicy = MctsRootSelectionPolicy.VISITS_THEN_VALUE,
 )

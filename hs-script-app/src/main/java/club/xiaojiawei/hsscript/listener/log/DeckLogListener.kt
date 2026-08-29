@@ -18,6 +18,12 @@ object DeckLogListener : AbstractLogListener(GAME_DECKS_LOG_NAME, 0, 1500L, Time
 
     val DECKS = LinkedList<Deck>()
 
+    /** The deck Hearthstone selected for the current matchmaking attempt. */
+    @Volatile
+    private var selectedGameDeck: Deck? = null
+
+    fun selectedGameDeck(): Deck? = selectedGameDeck
+
     var dealing = false
 
     override fun dealOldLog() {
@@ -30,6 +36,8 @@ object DeckLogListener : AbstractLogListener(GAME_DECKS_LOG_NAME, 0, 1500L, Time
                 if (line == null || line.isEmpty()) break
                 if (line.contains("Deck Contents Received")) {
                     dealReceived()
+                } else if (line.contains("Finding Game With Deck")) {
+                    dealFindingGameDeck()
                 } else if (line.contains("Finished Editing Deck")) {
                     dealEditing()
                 }
@@ -40,6 +48,7 @@ object DeckLogListener : AbstractLogListener(GAME_DECKS_LOG_NAME, 0, 1500L, Time
 
     private fun dealReceived() {
         DECKS.clear()
+        selectedGameDeck = null
         var line: String?
         var filePointer = logFile!!.getPosition()
         while (true) {
@@ -71,6 +80,12 @@ object DeckLogListener : AbstractLogListener(GAME_DECKS_LOG_NAME, 0, 1500L, Time
         if (!exist) {
             DECKS.addFirst(deck)
         }
+    }
+
+    private fun dealFindingGameDeck() {
+        val nameLine = logFile?.readLine() ?: return
+        if (!nameLine.contains("###")) return
+        selectedGameDeck = createDeck(nameLine)
     }
 
     private fun createDeck(line: String): Deck {

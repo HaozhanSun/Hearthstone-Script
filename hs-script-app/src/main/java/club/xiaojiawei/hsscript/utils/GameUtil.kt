@@ -782,11 +782,12 @@ object GameUtil {
 
                 runCatching {
                     log.info { "E2E恢复：尝试关闭旧结算页面 #$number" }
-                    // The result label's clickable hitbox is narrower than
-                    // the decorative banner.  Use the stable center point so
-                    // OCR-free stale-result recovery does not repeatedly land
-                    // on non-interactive pixels near the banner edges.
-                    GAME_END_CONTINUE_RECT.lClickCenter(false)
+                    // Preserve the known-working upstream click behavior for
+                    // the localized result label.  The result banner can be
+                    // shifted by client scaling, so the rectangle's sampled
+                    // point is more reliable than assuming its mathematical
+                    // center is the interactive glyph.
+                    GAME_END_CONTINUE_RECT.lClick(false)
                 }.onFailure { error ->
                     log.warn(error) { "E2E恢复：关闭旧结算页面尝试失败 #$number" }
                 }

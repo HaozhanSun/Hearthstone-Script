@@ -19,12 +19,12 @@
     <fx:define>
         <ToggleGroup fx:id="pauseToggleGroup"/>
     </fx:define>
-    <Accordion fx:id="accordion" styleClass="accordion-ui, accordion-ui-big, accordion-ui-pure"
+    <Accordion fx:id="accordion" minWidth="0" styleClass="accordion-ui, accordion-ui-big, accordion-ui-pure"
                expandedPane="$titledPaneControl">
         <panes>
             <TitledPane text="控制" fx:id="titledPaneControl">
-                <VBox alignment="TOP_CENTER" spacing="20" style="-fx-padding: 5 5 10 5">
-                    <HBox alignment="CENTER" spacing="40">
+                <VBox alignment="TOP_CENTER" fillWidth="true" spacing="20" minWidth="0" style="-fx-padding: 5 5 10 5">
+                    <HBox alignment="CENTER" spacing="16" maxWidth="Infinity">
                         <ToggleButton fx:id="startButton" toggleGroup="$pauseToggleGroup" text="开始" onAction="#start"
                                       styleClass="btn-ui, btn-ui-small, btn-ui-success-3d">
                             <tooltip>
@@ -54,21 +54,17 @@
                         </ToggleButton>
                     </HBox>
 
-                    <Label text="模式："
-                           contentDisplay="RIGHT">
-                        <graphic>
-                            <ComboBox prefWidth="110" styleClass="combo-box-ui, combo-box-ui-small, combo-box-ui-normal"
-                                      fx:id="runModeBox"/>
-                        </graphic>
-                    </Label>
+                    <HBox alignment="CENTER_LEFT" spacing="6" maxWidth="Infinity">
+                        <Label text="模式：" minWidth="40"/>
+                        <ComboBox fx:id="runModeBox" prefWidth="110" minWidth="0" maxWidth="Infinity"
+                                  HBox.hgrow="ALWAYS" styleClass="combo-box-ui, combo-box-ui-small, combo-box-ui-normal"/>
+                    </HBox>
 
-                    <Label text="策略："
-                           contentDisplay="RIGHT">
-                        <graphic>
-                            <ComboBox prefWidth="110" styleClass="combo-box-ui, combo-box-ui-small, combo-box-ui-normal"
-                                      fx:id="deckStrategyBox"/>
-                        </graphic>
-                    </Label>
+                    <HBox alignment="CENTER_LEFT" spacing="6" maxWidth="Infinity">
+                        <Label text="策略：" minWidth="40"/>
+                        <ComboBox fx:id="deckStrategyBox" prefWidth="110" minWidth="0" maxWidth="Infinity"
+                                  HBox.hgrow="ALWAYS" styleClass="combo-box-ui, combo-box-ui-small, combo-box-ui-normal"/>
+                    </HBox>
 
                     <ConfigCheckBox text="打开时自动开始" styleClass="check-box-ui, check-box-ui-success"
                                     contentDisplay="RIGHT" config="START_ON_OPEN">
@@ -135,8 +131,8 @@
                         <HBox alignment="CENTER" style="-fx-padding: 5 0 5 0">
                             <Label fx:id="workTimeRuleSetId"/>
                         </HBox>
-                        <ScrollPane styleClass="scroll-pane-item" style="-fx-background: #E8E8FF" VBox.vgrow="ALWAYS" fitToHeight="true">
-                            <VBox fx:id="workTimePane" spacing="5" alignment="CENTER"/>
+                        <ScrollPane styleClass="scroll-pane-item" style="-fx-background: #E8E8FF" VBox.vgrow="ALWAYS" fitToHeight="true" fitToWidth="true" minWidth="0">
+                            <VBox fx:id="workTimePane" spacing="5" alignment="CENTER" minWidth="0"/>
                         </ScrollPane>
                         <HBox alignment="CENTER" style="-fx-padding: 5;-fx-spacing: 20.0">
                             <ConfigCheckBox text="高优先" styleClass="check-box-ui, check-box-ui-success" contentDisplay="RIGHT" config="WORK_TIME_RULE_HIGH_PRIORITY">
@@ -153,8 +149,8 @@
                     </VBox>
 
                     <VBox alignment="CENTER" spacing="5">
-                        <HBox spacing="5" alignment="CENTER">
-                            <Text fx:id="versionText" style="-fx-cursor: hand" onMouseClicked="#openVersionMsg"/>
+                        <HBox spacing="5" alignment="CENTER" maxWidth="Infinity">
+                            <Text fx:id="versionText" wrappingWidth="260" style="-fx-cursor: hand" onMouseClicked="#openVersionMsg"/>
                             <Button onAction="#updateVersion" fx:id="updateBtn"
                                     styleClass="btn-ui, btn-ui-small, btn-ui-normal" visible="false" managed="false">
                                 <tooltip>

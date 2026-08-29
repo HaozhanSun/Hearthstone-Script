@@ -12,6 +12,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
+import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsReplayTrace
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
@@ -67,6 +68,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
         val model = activeDecisionModel
         val suppressed = suppressedExperimentalCreatorIds()
         val result = linkedSetOf<String>()
+        val deferredTimingCreatorIds = linkedSetOf<String>()
         val decisions = mutableListOf<Map<String, Any?>>()
         fun decision(details: Map<String, Any?>) {
             decisions += details
@@ -93,6 +95,9 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             // Mirror MonteCarloTreeNode: a card filtered by a deck timing
             // hook is not an actionable residual for the end-turn guard.
             if (model?.shouldDefer(card, war) == true) {
+                if (CardTimingPolicy.isEndOfTurnCostReductionCard(card)) {
+                    deferredTimingCreatorIds += card.entityId
+                }
                 decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "decision-model-should-defer"))
                 return@forEach
             }
@@ -173,12 +178,22 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 return@let
             }
             if (power.canPower() && runCatching {
-                    power.action.generatePowerActions(war, me).isNotEmpty()
+                    power.action.generatePowerActions(war, me)
+                        .any { model?.isDeferredAction(it, war) != true }
                 }.getOrDefault(false)
             ) result += power.entityId
             val opaquePower = model?.canCreateOpaquePowerAction(power, war) == true
             if (opaquePower) result += power.entityId
             decision(mapOf("kind" to "HERO_POWER", "entityId" to power.entityId, "outcome" to if (power.entityId in result) "ACTIONABLE" else "FILTERED", "reason" to if (opaquePower) "opaque-power-fallback" else "power-actions-or-not-powerable"))
+        }
+        if (result.isEmpty() && deferredTimingCreatorIds.isNotEmpty()) {
+            result += deferredTimingCreatorIds
+            decisions += mapOf(
+                "kind" to "ACTION_FILTER",
+                "outcome" to "FALLBACK_ALLOWED",
+                "reason" to "deferred-timing-card-is-only-remaining-useful-work",
+                "entityIds" to deferredTimingCreatorIds,
+            )
         }
         MctsReplayTrace.record(
             war,
@@ -234,6 +249,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                         mctsArg.experimentalSearch,
                         mctsArg.experimentalTurnBudgetMillis,
                         mctsArg.experimentalActionBudgetMillis,
+                        mctsArg.rootSelectionPolicy,
                     )
                 if (arg.debugName.isNotBlank()) {
                     log.info {
@@ -361,6 +377,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 true,
                 template.experimentalTurnBudgetMillis,
                 template.experimentalActionBudgetMillis,
+                template.rootSelectionPolicy,
             )
             val path = search.searchBestNode(war, arg)
                 .filter { it.applyAction !is EmptyAction }
@@ -648,11 +665,42 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
         private fun isBlocked(action: Action): Boolean =
             action.creator?.entityId?.let(blockedCreatorIds::contains) == true
 
+        /**
+         * A deck model may inspect the complete simulated War while deciding
+         * whether another action should be deferred.  Merely rejecting the
+         * blocked action at the wrapper boundary is not enough: the delegate
+         * can still count that stale creator as a useful alternative and defer
+         * the only real action (for example, hero power).  Temporarily mark
+         * the blocked entities uncertain while the delegate performs its
+         * decision, then restore the simulation exactly as it was.
+         */
+        private inline fun <T> withBlockedCreatorsMasked(war: War, block: () -> T): T {
+            val masked = war.cardMap.values
+                .filter { it.entityId in blockedCreatorIds }
+                .distinct()
+            val previous = masked.associateWith { it.isUncertain }
+            masked.forEach { it.isUncertain = true }
+            return try {
+                block()
+            } finally {
+                previous.forEach { (card, uncertain) -> card.isUncertain = uncertain }
+            }
+        }
+
         override fun isMandatoryAction(action: Action, war: War): Boolean =
-            !isBlocked(action) && delegate.isMandatoryAction(action, war)
+            !isBlocked(action) && withBlockedCreatorsMasked(war) {
+                delegate.isMandatoryAction(action, war)
+            }
 
         override fun isDeferredAction(action: Action, war: War): Boolean =
-            isBlocked(action) || delegate.isDeferredAction(action, war)
+            isBlocked(action) || withBlockedCreatorsMasked(war) {
+                delegate.isDeferredAction(action, war)
+            }
+
+        override fun actionPrior(action: Action, war: War): Double =
+            withBlockedCreatorsMasked(war) {
+                delegate.actionPrior(action, war)
+            }
     }
 
     /**

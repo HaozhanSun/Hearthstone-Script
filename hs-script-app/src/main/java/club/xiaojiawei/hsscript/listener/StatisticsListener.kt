@@ -43,7 +43,10 @@ object StatisticsListener {
                         strategyId = deckStrategy.id(),
                         strategyName = deckStrategy.name(),
                         runMode = runModeEnum,
-                        result = WarEx.isWin,
+                        // A local concession is a completed loss.  WarEx.isWin
+                        // can still contain the previous game's value when a
+                        // pre-mulligan surrender is recorded.
+                        result = if (surrendered == true) false else WarEx.isWin,
                         surrendered = surrendered,
                         experience = WarEx.aEXP.toInt(),
                         startTime = startDateTime,

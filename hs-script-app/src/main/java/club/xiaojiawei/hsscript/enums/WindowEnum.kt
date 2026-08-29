@@ -18,6 +18,10 @@ val SCREEN_WIDTH = Screen.getPrimary().bounds.width
 @Suppress("ktlint:standard:property-naming")
 val SCREEN_HEIGHT = Screen.getPrimary().bounds.height
 
+private const val MAIN_DEFAULT_WIDTH = 300.0
+private const val MAIN_MIN_WIDTH = 220.0
+private const val MAIN_RIGHT_MARGIN = 12.0
+
 enum class WindowEnum(
     val fxmlName: String,
     val title: String = "",
@@ -60,9 +64,12 @@ enum class WindowEnum(
     MAIN(
         "main.fxml",
         PROGRAM_NAME,
-        320.0,
+        // Start wide enough for the controls and log text, while keeping a
+        // small margin from the screen edge.  The stage remains resizable so
+        // the user can move or size it around Hearthstone's End Turn control.
+        MAIN_DEFAULT_WIDTH,
         590.0,
-        SCREEN_WIDTH - 320.0,
+        SCREEN_WIDTH - MAIN_DEFAULT_WIDTH - MAIN_RIGHT_MARGIN,
         (SCREEN_HEIGHT - 590.0) / 2,
         alwaysOnTop = true,
     ),

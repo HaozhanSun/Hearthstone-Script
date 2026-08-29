@@ -44,6 +44,8 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
     const val HOZEN_ROUGHHOUSER = "VAC_938"
     const val PRINCE_RENATHAL = "REV_018"
     const val DANGEROUS_CLIFFSIDE = "VAC_929"
+    /** The live Hearthstone token created by Dangerous Cliffside. */
+    const val CLIFFSIDE_PIRATE_TOKEN = "VAC_926t"
     const val RAGEWING = "YOD_032"
     const val BLINDEYE_JUDGE = "MAW_008"
     const val WEAPONS_ATTENDANT = "VAC_924"
@@ -208,6 +210,14 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             (!war.me.playArea.isFull || card.cardType !== CardTypeEnum.MINION)
 
     override fun isDeferredAction(action: Action, war: War): Boolean {
+        // Demon Hunter's hero power is a resource sink, not an opening move.
+        // Keep it out of the current node while any non-hero-power action is
+        // still available. It becomes legal again on the next re-plan after
+        // the useful hand/board actions have been exhausted.
+        if (isHeroPowerAction(action)) {
+            return hasOtherNonHeroPowerAction(war)
+        }
+
         // Blindeye Judge is a last-resort draw card. Remove it from the
         // current node while any useful hand play, board attack, location
         // activation, or hero power remains. This is deliberately separate
@@ -224,6 +234,11 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         val attackablePirates = me.playArea.cards.count { isPirate(it) && it.canAttack() }
         val friendlyMinions = me.playArea.cards.count { it.cardType === CardTypeEnum.MINION }
         val futurePirates = futurePirateSummons(war)
+        if (isHeroPowerAction(action)) {
+            // This also protects rollout/expansion ordering if a caller uses
+            // the model without the deferred-action filter.
+            return if (hasOtherNonHeroPowerAction(war)) -40.0 else -1.0
+        }
         return when {
             isCard(card, SHIPS_CANNON) -> if (me.playArea.cards.any { isCard(it, SHIPS_CANNON) }) 0.0 else 12.0
             isCard(card, TREASURE_DISTRIBUTOR) -> 10.0 + futurePirates * 1.5
@@ -305,7 +320,6 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         }
         if (hozenCount > 0) {
             attacker.atc += hozenCount
-            attacker.health += hozenCount
         }
 
         // Dynamic auras are applied only for this combat calculation and then
@@ -351,11 +365,23 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             val beforeIds = before.me.playArea.cards.map { it.entityId }.toSet()
             summonPatchesFromDeck(after)
             applyDistributorToNewPirates(beforeIds, after)
+            if (!isCard(creator, HOZEN_ROUGHHOUSER)) {
+                applyHozenHealthAuraToNewPirates(beforeIds, after)
+            }
             val newPirates = after.me.playArea.cards.count { it.entityId !in beforeIds && isPirate(it) }
             val cannons = after.me.playArea.cards.count { isCard(it, SHIPS_CANNON) && it.isAlive() }
             // A cannon's random 2 damage is expected reward only. It never
             // changes a minion's health or the Ragewing deterministic cost.
             expectedReward += newPirates * cannons * 1.1
+        }
+
+        if (creator != null && isCard(creator, HOZEN_ROUGHHOUSER) && action is PlayAction) {
+            // Hozen's Battlecry immediately gives the other Pirates +1/+1.
+            // Attack is represented by effectivePirateAttack so it remains
+            // an ongoing aura for future summons; health is materialized in
+            // the simulated state because it affects combat survivability.
+            after.me.playArea.findByEntityId(creator.entityId)?.let { applyHozenHealthAura(it, after) }
+            applyHozenHealthAuraToOtherPirates(after, creator)
         }
 
         if (creator != null && isCard(creator, DANGEROUS_CLIFFSIDE) && action is PowerAction) {
@@ -468,14 +494,94 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 (
                     card.action.generatePlayActions(war, me).isNotEmpty() ||
                         canCreateOpaqueAction(card, war)
-                    )
+                )
         }
-        val boardAction = me.playArea.cards.any { it.canAttack() || it.canPower() }
-        val heroAttack = me.playArea.hero?.canAttack() == true
+        val boardAction = me.playArea.cards.any { hasGeneratedBoardAction(it, war) }
+        val heroAttack = me.playArea.hero?.let { hero ->
+            hero.canAttack() && runCatching {
+                hero.action.generateAttackActions(war, me).isNotEmpty()
+            }.getOrDefault(false)
+        } == true
         val heroPower = me.playArea.power?.let { power ->
-            me.usableResource >= power.cost && power.canPower()
+            me.usableResource >= power.cost && power.canPower() && runCatching {
+                power.action.generatePowerActions(war, me)
+                    .any { !isDeferredAction(it, war) }
+            }.getOrDefault(false)
         } == true
         return handAction || boardAction || heroAttack || heroPower
+    }
+
+    /** Whether the current state has useful work other than hero power. */
+    private fun hasOtherNonHeroPowerAction(war: War): Boolean {
+        val me = war.me
+        val handAction = me.handArea.cards.any { card ->
+            !isCard(card, BLINDEYE_JUDGE) &&
+                !card.isUncertain &&
+                !shouldDefer(card, war) &&
+                card.cost <= me.usableResource &&
+                (card.cardType !== CardTypeEnum.MINION || !me.playArea.isFull) &&
+                (
+                    card.action.generatePlayActions(war, me).isNotEmpty() ||
+                        canCreateOpaqueAction(card, war)
+                )
+        }
+        val boardAction = me.playArea.cards.any { hasGeneratedBoardAction(it, war) }
+        val heroAttack = me.playArea.hero?.let { hero ->
+            hero.canAttack() && runCatching {
+                hero.action.generateAttackActions(war, me).isNotEmpty()
+            }.getOrDefault(false)
+        } == true
+        // Treat Coin as a planning bridge when it unlocks a non-power card.
+        // At the current mana total that card is not yet a legal hand action,
+        // but using the hero power first would still consume the resource that
+        // the bridge needs.  This keeps the power at the end of the useful
+        // sequence without hard-coding a card or a fixed play order.
+        val coinBridge = hasCoinUnlockingNonHeroPowerCard(war)
+        return handAction || boardAction || heroAttack || coinBridge
+    }
+
+    private fun hasCoinUnlockingNonHeroPowerCard(war: War): Boolean {
+        val me = war.me
+        val coinAvailable = me.handArea.cards.any { it.isCoinCard && !it.isUncertain }
+        if (!coinAvailable) return false
+
+        val afterCoinMana = me.usableResource + 1
+        return me.handArea.cards.any { card ->
+            !card.isCoinCard &&
+                !isCard(card, BLINDEYE_JUDGE) &&
+                !card.isUncertain &&
+                !shouldDefer(card, war) &&
+                card.cost > me.usableResource &&
+                card.cost <= afterCoinMana &&
+                (card.cardType !== CardTypeEnum.MINION || !me.playArea.isFull) &&
+                (
+                    card.action.generatePlayActions(war, me).isNotEmpty() ||
+                        canCreateOpaqueAction(card, war)
+                )
+        }
+    }
+
+    private fun isHeroPowerAction(action: Action): Boolean =
+        action is PowerAction && action.creator?.cardType === CardTypeEnum.HERO_POWER
+
+    /**
+     * `canPower()` is only a capability flag.  Some parser entities expose it
+     * while their action generator still returns no action.  Treating that
+     * flag as real work makes hero-power deferral self-perpetuating: MCTS
+     * hides the power, the phantom board action keeps it hidden, and the
+     * timing card that should be the last fallback is never reached.
+     */
+    private fun hasGeneratedBoardAction(card: Card, war: War): Boolean {
+        val attackActions = if (card.canAttack()) runCatching {
+            card.action.generateAttackActions(war, war.me)
+        }.getOrDefault(emptyList()) else emptyList()
+        if (attackActions.any { !isDeferredAction(it, war) }) return true
+
+        val powerActions = if (card.canPower()) runCatching {
+            card.action.generatePowerActions(war, war.me)
+        }.getOrDefault(emptyList()) else emptyList()
+        return powerActions.any { !isDeferredAction(it, war) } ||
+            canCreateOpaquePowerAction(card, war)
     }
 
     private fun oneHealthEnemyMinions(me: Player): Int =
@@ -556,7 +662,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 ?: return
             val token = template.clone().apply {
                 entityId = war.incrementMaxEntityId()
-                cardId = "VAC_929t"
+                cardId = CLIFFSIDE_PIRATE_TOKEN
                 entityName = "惊险悬崖冲锋海盗"
                 cardType = CardTypeEnum.MINION
                 cardRace = CardRaceEnum.PIRATE
@@ -569,6 +675,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 isExhausted = false
             }
             war.addCard(token, war.me.playArea)
+            applyHozenHealthAura(token, war)
         }
     }
 
@@ -596,6 +703,26 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
 
     private fun isHeroAttack(action: Action): Boolean =
         action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO
+
+    private fun applyHozenHealthAuraToOtherPirates(war: War, hozen: Card) {
+        war.me.playArea.cards
+            .filter { it.entityId != hozen.entityId && isPirate(it) && it.isAlive() }
+            .forEach { pirate -> applyHozenHealthAura(pirate, war) }
+    }
+
+    private fun applyHozenHealthAuraToNewPirates(beforeIds: Set<String>, war: War) {
+        war.me.playArea.cards
+            .filter { it.entityId !in beforeIds && isPirate(it) && it.isAlive() }
+            .forEach { pirate -> applyHozenHealthAura(pirate, war) }
+    }
+
+    private fun applyHozenHealthAura(pirate: Card, war: War) {
+        if (!isPirate(pirate)) return
+        val hozenCount = war.me.playArea.cards.count {
+            isCard(it, HOZEN_ROUGHHOUSER) && it.entityId != pirate.entityId && it.isAlive()
+        }
+        if (hozenCount > 0) pirate.health += hozenCount
+    }
 
     private fun applyDeterministicDynamicCosts(before: War, after: War) {
         val damageDelta = ((after.rival.playArea.hero?.damage ?: 0) - (before.rival.playArea.hero?.damage ?: 0))

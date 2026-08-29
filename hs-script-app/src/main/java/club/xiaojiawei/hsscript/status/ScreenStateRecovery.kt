@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
+import club.xiaojiawei.hsscript.strategy.mode.LoginModeStrategy
 import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
@@ -48,10 +49,12 @@ object ScreenStateRecovery {
         MATCHMAKING("MATCHMAKING"),
         RESULT("RESULT"),
         RECONNECT("RECONNECT"),
+        RECONNECT_FAILURE("RECONNECT_FAILURE"),
         LOGIN("LOGIN"),
         GAME_MODE("GAME_MODE"),
         COLLECTION("COLLECTION"),
         PACK_OPENING("PACK_OPENING"),
+        LOADING("LOADING"),
     }
 
     private data class Capture(
@@ -65,6 +68,7 @@ object ScreenStateRecovery {
         val sampleHash: Long,
         val warmRatio: Double,
         val blueRatio: Double,
+        val loadingCentralDarkRatio: Double,
         val resultContinueGrayLightRatio: Double,
         val resultBannerLowSaturationRatio: Double,
     ) {
@@ -72,6 +76,7 @@ object ScreenStateRecovery {
             "hash=${java.lang.Long.toUnsignedString(sampleHash, 16)} " +
                 "warmRatio=${"%.3f".format(Locale.ROOT, warmRatio)} " +
                 "blueRatio=${"%.3f".format(Locale.ROOT, blueRatio)} " +
+                "loadingCentralDark=${"%.3f".format(Locale.ROOT, loadingCentralDarkRatio)} " +
                 "resultContinueGrayLight=${"%.3f".format(Locale.ROOT, resultContinueGrayLightRatio)} " +
                 "resultBannerLowSaturation=${"%.3f".format(Locale.ROOT, resultBannerLowSaturationRatio)}"
     }
@@ -79,6 +84,7 @@ object ScreenStateRecovery {
     private data class RegionSignal(
         val grayLightRatio: Double,
         val lowSaturationRatio: Double,
+        val darkRatio: Double,
     )
 
     private data class Detection(
@@ -297,10 +303,12 @@ object ScreenStateRecovery {
         // gameplay and mulligan controls do not.
         val continueSignal = sampleRegion(image, 0.41, 0.59, 0.91, 0.98)
         val bannerSignal = sampleRegion(image, 0.38, 0.62, 0.52, 0.72)
+        val loadingCenterSignal = sampleRegion(image, 0.18, 0.82, 0.08, 0.92)
         return VisualSignature(
             sampleHash = hash,
             warmRatio = if (samples == 0) 0.0 else warm.toDouble() / samples,
             blueRatio = if (samples == 0) 0.0 else blue.toDouble() / samples,
+            loadingCentralDarkRatio = loadingCenterSignal.darkRatio,
             resultContinueGrayLightRatio = continueSignal.grayLightRatio,
             resultBannerLowSaturationRatio = bannerSignal.lowSaturationRatio,
         )
@@ -320,6 +328,7 @@ object ScreenStateRecovery {
         var samples = 0
         var grayLight = 0
         var lowSaturation = 0
+        var dark = 0
         var y = y0
         while (y < y1) {
             var x = x0
@@ -333,15 +342,17 @@ object ScreenStateRecovery {
                 val average = (r + g + b) / 3.0
                 if (maximum - minimum <= 35) lowSaturation++
                 if (maximum - minimum <= 35 && average >= 180) grayLight++
+                if (average < 70) dark++
                 samples++
                 x += 2
             }
             y += 2
         }
-        if (samples == 0) return RegionSignal(0.0, 0.0)
+        if (samples == 0) return RegionSignal(0.0, 0.0, 0.0)
         return RegionSignal(
             grayLightRatio = grayLight.toDouble() / samples,
             lowSaturationRatio = lowSaturation.toDouble() / samples,
+            darkRatio = dark.toDouble() / samples,
         )
     }
 
@@ -359,17 +370,38 @@ object ScreenStateRecovery {
         if (looksLikeResultVisual(visual.resultContinueGrayLightRatio, visual.resultBannerLowSaturationRatio)) {
             return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
         }
-        if (has("寻找对手") || has("正在匹配") || has("取消匹配")) {
+        // The live client uses "搜寻对手" while some localized/client builds
+        // use "寻找对手". OCR also commonly separates the cancel label, so
+        // accept both forms but require a matchmaking-specific phrase.
+        if (looksLikeMatchmakingText(text)) {
             return Detection(ScreenKind.MATCHMAKING, ModeEnum.TOURNAMENT, 95, "matchmaking-text")
         }
         if (text.contains("我的收藏") || text.contains("收藏管理")) {
             return Detection(ScreenKind.COLLECTION, ModeEnum.COLLECTIONMANAGER, 95, "collection-text")
         }
-        if (text.contains("开包") || text.contains("卡牌包")) {
+        // Reward pages advertise unopened packs too.  A bare "卡牌包" is
+        // therefore not evidence that the pack-opening scene is visible.
+        if (looksLikePackOpeningText(text)) {
             return Detection(ScreenKind.PACK_OPENING, ModeEnum.PACKOPENING, 95, "pack-opening-text")
+        }
+        // This must precede the generic login/reconnect matcher. The failure
+        // dialog asks for a game restart and does not expose a login action.
+        if (looksLikeReconnectFailureText(text)) {
+            return Detection(ScreenKind.RECONNECT_FAILURE, ModeEnum.LOGIN, 97, "reconnect-failure-text")
         }
         if (looksLikeReconnectText(text)) {
             return Detection(ScreenKind.RECONNECT, ModeEnum.LOGIN, 96, "reconnect-disconnected-text")
+        }
+        if (looksLikeLoadingText(text)) {
+            return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 88, "loading-text")
+        }
+        if (looksLikeLoadingVisual(
+                centralDarkRatio = visual.loadingCentralDarkRatio,
+                warmRatio = visual.warmRatio,
+                blueRatio = visual.blueRatio,
+            )
+        ) {
+            return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 87, "loading-card-back-visual")
         }
         if (text.contains("登录") || text.contains("重新连接")) {
             return Detection(ScreenKind.LOGIN, ModeEnum.LOGIN, 90, "login-text")
@@ -391,6 +423,64 @@ object ScreenStateRecovery {
         if (visual.warmRatio > 0.0 || visual.blueRatio > 0.0) return null
         return null
     }
+
+    internal fun looksLikeMatchmakingText(ocrText: String): Boolean {
+        val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+        return text.contains("寻找对手") ||
+            text.contains("搜寻对手") ||
+            text.contains("搜索对手") ||
+            text.contains("正在匹配") ||
+            text.contains("取消匹配") ||
+            text.contains("取消") && text.contains("匹配")
+    }
+
+    internal fun looksLikePackOpeningText(ocrText: String): Boolean {
+        val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+        val rewardPage = text.contains("未领取的奖励") ||
+            text.contains("未领取奖励") ||
+            text.contains("领取奖励") ||
+            text.contains("奖励") && text.contains("确定")
+        if (rewardPage) return false
+        return text.contains("开包") ||
+            text.contains("打开卡牌包") ||
+            text.contains("点击打开") ||
+            text.contains("翻开卡牌包")
+    }
+
+    internal fun looksLikeReconnectFailureText(ocrText: String): Boolean {
+        val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+        return text.contains("重新连接失败") ||
+            text.contains("无法重新连接") ||
+            text.contains("请重新启动炉石传说") ||
+            text.contains("重新启动《炉石传说》")
+    }
+
+    internal fun looksLikeLoadingText(ocrText: String): Boolean {
+        val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+        return text.contains("正在加载") ||
+            text.contains("加载中") ||
+            text.contains("读取中") ||
+            text.contains("请稍候")
+    }
+
+    internal fun looksLikeLoadingVisual(
+        centralDarkRatio: Double,
+        warmRatio: Double,
+        blueRatio: Double,
+    ): Boolean = centralDarkRatio >= 0.35 && warmRatio >= 0.10 && blueRatio <= 0.15
+
+    /** Test-only classification seam that keeps the production detector private. */
+    internal fun classifyForTest(ocrText: String): String? = detect(
+        ocrText,
+        VisualSignature(
+            sampleHash = 0L,
+            warmRatio = 0.0,
+            blueRatio = 0.0,
+            loadingCentralDarkRatio = 0.0,
+            resultContinueGrayLightRatio = 0.0,
+            resultBannerLowSaturationRatio = 0.0,
+        ),
+    )?.kind?.code
 
     /**
      * Result pages have a stable action label even when the outcome title is
@@ -511,6 +601,25 @@ object ScreenStateRecovery {
                             "retryIntervalMs=$RECONNECT_RETRY_INTERVAL_MS"
                     }
                 }
+            }
+
+            ScreenKind.RECONNECT_FAILURE -> {
+                // Dismiss only the known recovery dialog. Do not dispatch the
+                // reconnect click and do not enter any credential/login flow.
+                Mode.recover(ModeEnum.LOGIN, "visible-reconnect-failure", enterStrategy = false)
+                EXTRA_THREAD_POOL.schedule({
+                    if (WorkTimeListener.working && !PauseStatus.isPause && !WarEx.inWar) {
+                        LoginModeStrategy.RECONNECT_RECOVERY_EXIT_RECT.lClick(false)
+                        log.warn { "SCREEN_RECOVERY_APPLIED screen=RECONNECT_FAILURE action=DISMISS_RECOVERY_DIALOG" }
+                    } else {
+                        log.info { "SCREEN_RECOVERY_RECONNECT_FAILURE_SKIPPED reason=state-changed" }
+                    }
+                }, 300, TimeUnit.MILLISECONDS)
+            }
+
+            ScreenKind.LOADING -> {
+                Mode.recover(ModeEnum.STARTUP, "visible-loading-screen", enterStrategy = false)
+                log.info { "SCREEN_RECOVERY_APPLIED screen=LOADING action=WAIT_FOR_CLIENT" }
             }
 
             else -> {

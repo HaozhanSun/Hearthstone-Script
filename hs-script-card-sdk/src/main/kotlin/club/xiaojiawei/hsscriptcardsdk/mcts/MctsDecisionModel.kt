@@ -54,4 +54,12 @@ interface MctsDecisionModel {
 
     /** State features that are not represented by the generic score calculator. */
     fun scoreAdjustment(war: War): Double = 0.0
+
+    /**
+     * Additional score for a discovered complete turn plan. The default is
+     * zero so existing strategies retain their current root selection. This
+     * hook is intentionally plan-level rather than card-ID-specific: it can
+     * reward resource-efficient plans without forcing a particular card order.
+     */
+    fun turnPlanAdjustment(root: War, terminal: War, path: List<Action>): Double = 0.0
 }

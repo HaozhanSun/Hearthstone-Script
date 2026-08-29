@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.Action
 import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
 import club.xiaojiawei.hsscriptbase.bean.LRunnable
 import club.xiaojiawei.hsscriptcardsdk.bean.MCTSArg
+import club.xiaojiawei.hsscriptcardsdk.bean.MctsRootSelectionPolicy
 import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.TurnOverAction
@@ -128,6 +129,12 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
         val result = mutableListOf<MonteCarloTreeNode>()
 
         if (rootNode.arg.experimentalSearch) {
+            if (
+                rootNode.parent == null &&
+                    rootNode.arg.rootSelectionPolicy == MctsRootSelectionPolicy.GLOBAL_TURN_PLAN
+            ) {
+                return selectGlobalTurnPlan(rootNode)?.path?.toMutableList() ?: result
+            }
             // In the multi-threaded path the worker receives an already
             // expanded root child.  Keep that worker root in the returned
             // path; otherwise the mandatory root action (for example the
@@ -207,6 +214,96 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
         return result
     }
 
+    private data class GlobalPlanCandidate(
+        val rootChild: MonteCarloTreeNode,
+        val path: List<MonteCarloTreeNode>,
+        val score: Double,
+        val terminalAverageValue: Double,
+        val terminalVisits: Int,
+    )
+
+    /**
+     * Build the best discovered complete path by terminal state score. This
+     * is used only by the opt-in global-plan experiment; the legacy and
+     * existing experimental strategies retain visit-first path selection.
+     */
+    private fun buildGlobalPlan(rootWar: War, node: MonteCarloTreeNode): List<MonteCarloTreeNode> {
+        val ownPath = listOf(node)
+        if (node.children.isEmpty()) return ownPath
+
+        val bestChildPath = node.children
+            .map { buildGlobalPlan(rootWar, it) }
+            .maxWithOrNull(
+                compareBy<List<MonteCarloTreeNode>> {
+                    globalPlanScore(rootWar, it)
+                }.thenBy {
+                    it.lastOrNull()?.state?.averageValue() ?: 0.0
+                }.thenBy {
+                    it.lastOrNull()?.state?.visitCount ?: 0
+                },
+            )
+            ?: return ownPath
+        return ownPath + bestChildPath
+    }
+
+    private fun globalPlanScore(rootWar: War, path: List<MonteCarloTreeNode>): Double {
+        val terminal = path.lastOrNull() ?: return Double.NEGATIVE_INFINITY
+        val actions = path.map { it.applyAction }
+        return terminal.state.score +
+            (terminal.arg.decisionModel?.turnPlanAdjustment(rootWar, terminal.state.war, actions) ?: 0.0)
+    }
+
+    private fun selectGlobalTurnPlan(rootNode: MonteCarloTreeNode): GlobalPlanCandidate? {
+        val rootWar = rootNode.state.war
+        val candidates = rootNode.children.map { child ->
+            val path = buildGlobalPlan(rootWar, child)
+            val terminal = path.last()
+            GlobalPlanCandidate(
+                rootChild = child,
+                path = path,
+                score = globalPlanScore(rootWar, path),
+                terminalAverageValue = terminal.state.averageValue(),
+                terminalVisits = terminal.state.visitCount,
+            )
+        }
+        val selected = candidates.maxWithOrNull(
+            compareBy<GlobalPlanCandidate> { it.score }
+                .thenBy { it.terminalAverageValue }
+                .thenBy { it.terminalVisits },
+        )
+        if (rootNode.arg.debugName.isNotBlank()) {
+            candidates.sortedByDescending { it.score }.take(12).forEachIndexed { index, candidate ->
+                val terminal = candidate.path.last()
+                val adjustment = candidate.score - terminal.state.score
+                log.info {
+                    "MCTS_DEBUG_GLOBAL_PLAN strategy=${rootNode.arg.debugName} " +
+                        "rank=${index + 1} rootAction=${describeAction(candidate.rootChild.applyAction)} " +
+                        "planScore=${"%.3f".format(candidate.score)} " +
+                        "terminalScore=${"%.3f".format(terminal.state.score)} " +
+                        "planAdjustment=${"%.3f".format(adjustment)} " +
+                        "path=${candidate.path.joinToString(" -> ") { describeAction(it.applyAction) }} " +
+                        "terminalVisits=${candidate.terminalVisits}"
+                }
+                MctsReplayTrace.record(
+                    rootWar,
+                    "search_global_plan_candidate",
+                    "root candidate evaluated by complete discovered turn plan",
+                    mapOf(
+                        "strategy" to rootNode.arg.debugName,
+                        "rank" to index + 1,
+                        "rootAction" to describeAction(candidate.rootChild.applyAction),
+                        "planScore" to candidate.score,
+                        "terminalScore" to terminal.state.score,
+                        "planAdjustment" to adjustment,
+                        "path" to candidate.path.map { describeAction(it.applyAction) },
+                        "terminalVisits" to candidate.terminalVisits,
+                    ),
+                )
+            }
+        }
+        return selected
+    }
+
     fun searchBestNode(
         war: War, arg: MCTSArg
     ): MutableList<MonteCarloTreeNode> {
@@ -226,6 +323,7 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
             arg.experimentalSearch,
             arg.experimentalTurnBudgetMillis,
             arg.experimentalActionBudgetMillis,
+            arg.rootSelectionPolicy,
         )
         val endTime = arg.endMillisTime
         val rootNode = MonteCarloTreeNode(newWar, InitAction, newArg)
@@ -328,6 +426,7 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
                     arg.experimentalSearch,
                     arg.experimentalTurnBudgetMillis,
                     arg.experimentalActionBudgetMillis,
+                    arg.rootSelectionPolicy,
                 )
                 for (i in index until endIndex) {
                     rootNode.expand(rootNode.actions[i], childArg)?.let { newRootNode ->
@@ -426,30 +525,48 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
         var maxScore = Int.MIN_VALUE.toDouble()
         var bestResult: MutableList<MonteCarloTreeNode>? = null
         if (arg.experimentalSearch) {
-            // The master root is the source of truth for the first action.
-            // Worker paths may contain a valid descendant path, but selecting
-            // one of those paths directly can make the returned first action
-            // disagree with the filtered/mandatory root candidates.  Rebuild
-            // the path from the selected master-root child so cannon-first,
-            // deferred-card, and location-chain constraints survive the
-            // worker merge.
-            val selectedRootChild = rootNode.children.maxWithOrNull(
-                compareBy<MonteCarloTreeNode> { it.state.visitCount }
-                    .thenBy { it.state.averageValue() },
-            )
-            bestResult = selectedRootChild?.let { buildBest(it) }
-                ?: if (results.isEmpty()) buildBest(rootNode) else null
-            if (arg.debugName.isNotBlank()) {
-                MctsReplayTrace.record(
-                    war,
-                    "search_selection_branch",
-                    when {
-                        selectedRootChild != null -> "experimental-master-root-child-selected"
-                        results.isEmpty() -> "experimental-root-fallback-because-no-worker-result"
-                        else -> "experimental-no-root-child-and-worker-results-present"
-                    },
-                    mapOf("strategy" to arg.debugName, "hasSelectedRootChild" to (selectedRootChild != null), "workerResultCount" to results.size),
+            if (arg.rootSelectionPolicy == MctsRootSelectionPolicy.GLOBAL_TURN_PLAN) {
+                val selectedPlan = selectGlobalTurnPlan(rootNode)
+                bestResult = selectedPlan?.path?.toMutableList()
+                if (arg.debugName.isNotBlank()) {
+                    MctsReplayTrace.record(
+                        war,
+                        "search_selection_branch",
+                        if (selectedPlan != null) "global-turn-plan-selected" else "global-turn-plan-no-root-child",
+                        mapOf(
+                            "strategy" to arg.debugName,
+                            "selectedRootAction" to selectedPlan?.let { describeAction(it.rootChild.applyAction) },
+                            "selectedPlanScore" to selectedPlan?.score,
+                            "selectedPath" to selectedPlan?.path?.map { describeAction(it.applyAction) },
+                        ),
+                    )
+                }
+            } else {
+                // The master root is the source of truth for the first action.
+                // Worker paths may contain a valid descendant path, but selecting
+                // one of those paths directly can make the returned first action
+                // disagree with the filtered/mandatory root candidates.  Rebuild
+                // the path from the selected master-root child so cannon-first,
+                // deferred-card, and location-chain constraints survive the
+                // worker merge.
+                val selectedRootChild = rootNode.children.maxWithOrNull(
+                    compareBy<MonteCarloTreeNode> { it.state.visitCount }
+                        .thenBy { it.state.averageValue() },
                 )
+                bestResult = selectedRootChild?.let { buildBest(it) }
+                    ?: if (results.isEmpty()) buildBest(rootNode) else null
+                if (arg.debugName.isNotBlank()) {
+                    MctsReplayTrace.record(
+                        war,
+                        "search_selection_branch",
+                        when {
+                            selectedRootChild != null -> "experimental-master-root-child-selected"
+                            results.isEmpty() -> "experimental-root-fallback-because-no-worker-result"
+                            else -> "experimental-no-root-child-and-worker-results-present"
+                        },
+                        mapOf("strategy" to arg.debugName, "hasSelectedRootChild" to (selectedRootChild != null), "workerResultCount" to results.size),
+                    )
+                }
             }
         } else if (results.isEmpty()) {
             bestResult = buildBest(rootNode)
@@ -474,7 +591,19 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
         // model's mandatory/deferred filtering and return one deterministic
         // legal root action so the receding-horizon executor can make real
         // progress even when there was no time for a rollout.
-        if (arg.experimentalSearch && finalResult.isEmpty() && rootNode.actions.isNotEmpty()) {
+        val hasExecutableResult = finalResult.any {
+            it.applyAction !is club.xiaojiawei.hsscriptcardsdk.bean.EmptyAction &&
+                it.applyAction !== TurnOverAction
+        }
+        val hasExecutableRootAction = rootNode.actions.any { it !== TurnOverAction }
+        var rootFallbackDispatched = false
+        if (arg.experimentalSearch && !hasExecutableResult && hasExecutableRootAction) {
+            val previousPath = finalResult.map { describeAction(it.applyAction) }
+            val fallbackReason = if (finalResult.isEmpty()) {
+                "legal-root-action-without-expanded-child"
+            } else {
+                "only-end-turn-result-replaced"
+            }
             val fallback = rootNode.actions
                 .filterNot { it === TurnOverAction }
                 .maxWithOrNull(
@@ -483,10 +612,12 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
                 ) ?: rootNode.actions.first()
             rootNode.expand(fallback)?.let { expanded ->
                 finalResult = mutableListOf(expanded)
+                rootFallbackDispatched = true
                 if (arg.debugName.isNotBlank()) {
                     log.info {
                         "MCTS_DEBUG_ROOT_FALLBACK strategy=${arg.debugName} " +
-                            "action=${describeAction(fallback)} reason=legal-root-action-without-expanded-child"
+                            "action=${describeAction(fallback)} " +
+                            "reason=$fallbackReason"
                     }
                 }
             }
@@ -498,6 +629,18 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
                     mapOf("strategy" to arg.debugName, "rootLegalActions" to rootNode.actions.map(::describeAction)),
                 )
             }
+            if (arg.debugName.isNotBlank() && rootFallbackDispatched && !hasExecutableResult) {
+                MctsReplayTrace.record(
+                    war,
+                    "search_runtime_branch",
+                    "experimental-only-end-turn-result-replaced",
+                    mapOf(
+                        "strategy" to arg.debugName,
+                        "previousPath" to previousPath,
+                        "rootLegalActions" to rootNode.actions.map(::describeAction),
+                    ),
+                )
+            }
         }
         if (arg.debugName.isNotBlank()) {
             log.info {
@@ -505,7 +648,12 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
                     "path=${finalResult.filter { it.applyAction !is club.xiaojiawei.hsscriptcardsdk.bean.EmptyAction }
                         .joinToString(" -> ") { describeAction(it.applyAction) }
                         .ifBlank { "(empty)" }} " +
-                    "selectionRule=${if (arg.experimentalSearch) "best master-root action by visits/value, then descendant path" else "best complete simulated path by final state score"}"
+                    "selectionRule=${when {
+                        arg.experimentalSearch && arg.rootSelectionPolicy == MctsRootSelectionPolicy.GLOBAL_TURN_PLAN ->
+                            "best discovered complete turn plan by terminal score plus plan adjustment"
+                        arg.experimentalSearch -> "best master-root action by visits/value, then descendant path"
+                        else -> "best complete simulated path by final state score"
+                    }}"
             }
             MctsReplayTrace.record(
                 war,

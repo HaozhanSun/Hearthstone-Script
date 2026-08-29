@@ -194,10 +194,11 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
 
     fun startMatching() {
         log.info { "开始匹配" }
+        // Keep the upstream entry sequence: Hearthstone may first display the
+        // automatic deck-completion dialog.  A single start click can leave
+        // the client on the deck-selection page while the script has already
+        // logged START_MATCHING, which is not a real state transition.
         START_RECT.lClick()
-        // Hearthstone may show a modal when the selected deck is missing cards.
-        // The green confirmation is harmless when the modal is absent and
-        // prevents the matchmaking flow from stopping at that modal.
         SystemUtil.delayLong()
         log.info { "尝试确认自动补全套牌弹窗" }
         COMPLETE_DECK_CONFIRM_RECT.lClick()

@@ -44,10 +44,15 @@ object CurrentRankDetector {
     private const val RANK_EXPANDED_TOP = 0.78
     private const val RANK_EXPANDED_WIDTH = 0.12
     private const val RANK_EXPANDED_HEIGHT = 0.20
-    private const val RANK_DIGIT_LEFT = 0.012
-    private const val RANK_DIGIT_TOP = 0.835
-    private const val RANK_DIGIT_WIDTH = 0.060
-    private const val RANK_DIGIT_HEIGHT = 0.105
+    // The full badge contains the portrait, shield ornament, rank numeral,
+    // and (at this resolution) the first pixels of the player name.  Feeding
+    // that whole image to Tesseract produces values such as 939/51/191.
+    // This inner window is centered on the white numeral row in the 1920x1080
+    // Hearthstone HUD and deliberately excludes the portrait and name.
+    private const val RANK_DIGIT_LEFT = 0.018
+    private const val RANK_DIGIT_TOP = 0.880
+    private const val RANK_DIGIT_WIDTH = 0.018
+    private const val RANK_DIGIT_HEIGHT = 0.027
     // The stylized 10 badge is frequently OCR'd as a lone 1.  This narrow
     // inner window excludes the shield border and the player name, leaving
     // only the numeral row for a conservative two-digit layout check.
@@ -110,6 +115,14 @@ object CurrentRankDetector {
     internal fun resolveRankCandidates(candidates: List<String>, visualTenHint: Boolean = false): Int? {
         val parsed = candidates.mapNotNull(::parseRankText)
         if (parsed.contains(10)) return 10
+        // On the real rank-10 badge, all OCR passes can be contaminated by
+        // the shield artwork and return only invalid multi-digit noise (for
+        // example 939|51|191|91).  If the independent visual check confirms
+        // a two-digit badge and OCR did see numeric pixels, that is still
+        // stronger evidence for rank 10 than accepting an arbitrary lower
+        // rank.  Keep the numeric-evidence requirement so an empty/blank
+        // screen cannot become rank 10 from the visual hint alone.
+        if (visualTenHint && parsed.isEmpty() && candidates.any { it.any(Char::isDigit) }) return 10
         if (visualTenHint && parsed.isNotEmpty() && parsed.all { it in 1 until MAX_RANK }) return 10
         val counts = parsed.groupingBy { it }.eachCount()
         val candidatesBelowTen = counts.entries
@@ -125,6 +138,11 @@ object CurrentRankDetector {
         val highestCount = best.value
         if (candidatesBelowTen.count { it.value == highestCount } > 1) return null
         if (parsed.any { it != best.key }) return null
+        // A stylized rank-10 badge is commonly read as "1" by every OCR
+        // pass when the zero is faint or cropped.  Without a resolved tier or
+        // a positive two-digit visual hint, that evidence is ambiguous with
+        // rank 1 and must not cause an irreversible surrender.
+        if (best.key == 1 && !visualTenHint) return null
         return best.key
     }
 
@@ -155,6 +173,22 @@ object CurrentRankDetector {
         if (bounds.width < 400 || bounds.height < 300) return null
 
         val screen = Robot().createScreenCapture(bounds)
+        return@runCatching detectCapturedImage(screen, bounds, saveEvidence = true)
+    }.getOrElse { error ->
+        log.warn(error) { "RANK_OCR_FAILED" }
+        null
+    }
+
+    /**
+     * Run the same OCR pipeline against a supplied screenshot.  Keeping this
+     * separate from Robot capture makes the real saved rank screenshots
+     * usable as deterministic regression fixtures.
+     */
+    internal fun detectCapturedImage(
+        screen: BufferedImage,
+        bounds: Rectangle = Rectangle(0, 0, screen.width, screen.height),
+        saveEvidence: Boolean = false,
+    ): Detection? = runCatching {
         val rankRegion = cropRankRegion(screen)
         val tessData = File(TESS_DATA_PATH)
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
@@ -162,6 +196,11 @@ object CurrentRankDetector {
             log.info { "RANK_OCR_SKIPPED reason=missing-tessdata path=${chiSim.absolutePath}" }
             return null
         }
+        // The badge contains Arabic numerals.  Tesseract's English model is
+        // substantially more reliable for the outlined 10 than the Chinese
+        // model, while the Chinese model remains a compatible fallback for
+        // installations that have not downloaded eng.traineddata yet.
+        val rankLanguage = if (File(tessData, "eng.traineddata").isFile) "eng" else CHI_SIM_DATA
 
         val expandedRegion = crop(
             screen,
@@ -178,18 +217,22 @@ object CurrentRankDetector {
             RANK_DIGIT_HEIGHT,
         )
         val ocrInputs = listOf(
-            rankRegion to 11,
-            rankRegion to 6,
-            expandedRegion to 11,
-            expandedRegion to 6,
+            // Rank OCR must only see the small numeral window.  Running OCR
+            // on the full badge was the source of 939/51/191/91 noise from
+            // the portrait and shield artwork.
+            digitRegion to 6,
             digitRegion to 7,
+            digitRegion to 8,
+            digitRegion to 10,
+            digitRegion to 11,
             digitRegion to 13,
         )
         val ocrTexts = ocrInputs.map { (image, pageSegMode) ->
-            ocrRank(image, tessData, pageSegMode)
+            ocrRank(image, tessData, pageSegMode, rankLanguage)
         }
         val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
-        val visualTenHint = looksLikeTwoDigitRank(rankRegion)
+        val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
+            looksLikeTwoDigitRank(rankRegion)
         val rank = resolveRankCandidates(ocrTexts, visualTenHint)
         val tierOcrTexts = listOf(rankRegion, expandedRegion).map { image ->
             ocrTier(image, tessData)
@@ -210,7 +253,7 @@ object CurrentRankDetector {
                 "tierCandidates=${tierOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
                 "visualTenHint=$visualTenHint tier=${tier.name} rank=${rank ?: "UNKNOWN"}"
         }
-        if (tier === RankTier.UNKNOWN || rank == null) {
+        if (saveEvidence && (tier === RankTier.UNKNOWN || rank == null)) {
             val evidence = UnknownStateScreenshot.save(
                 image = screen,
                 regions = listOf(
@@ -332,15 +375,54 @@ object CurrentRankDetector {
         return image.getSubimage(x, y, width, height)
     }
 
-    private fun ocrRank(image: BufferedImage, tessData: File, pageSegMode: Int): String =
-        TesseractEx().apply {
+    private fun ocrRank(image: BufferedImage, tessData: File, pageSegMode: Int, language: String): String {
+        fun run(
+            input: BufferedImage,
+            suffix: String,
+            whitelist: String = "0123456789",
+        ): String = TesseractEx().apply {
             setDatapath(tessData.absolutePath)
-            setLanguage(CHI_SIM_DATA)
+            setLanguage(language)
             setPageSegMode(pageSegMode)
-            setVariable("tessedit_char_whitelist", "0123456789")
-            setVariable("user_defined_dpi", "200")
-        }.doOCR(scaleForOcr(image), "current-rank-psm$pageSegMode")
+            setVariable("tessedit_char_whitelist", whitelist)
+            setVariable("user_defined_dpi", "300")
+        }.doOCR(input, "current-rank-psm$pageSegMode-$suffix")
             .replace(Regex("\\s+"), "")
+
+        if (pageSegMode == 10) {
+            // The badge's outlined 1 and 0 touch visually after scaling. OCR
+            // each half of the same tight box as one character, then join
+            // only a clean 1+0 pair. This is still OCR-only recognition and
+            // avoids any template/image matching.
+            // The numeral 1 is narrower than the 0.  Splitting the same
+            // tight OCR input gives Tesseract a single-character view when
+            // the full two-character badge is difficult to segment.
+            val split = (image.width * 0.45).toInt().coerceIn(1, image.width - 1)
+            val overlap = 2
+            val left = image.getSubimage(0, 0, (split + overlap).coerceAtMost(image.width), image.height)
+            val rightStart = (split - overlap).coerceAtLeast(0)
+            val right = image.getSubimage(rightStart, 0, image.width - rightStart, image.height)
+            val leftTexts = listOf(
+                run(prepareRankOcrImage(left), "left-one-mask", whitelist = "1"),
+                run(scaleForOcr(left, 4), "left-one-raw", whitelist = "1"),
+            )
+            val rightTexts = listOf(
+                run(prepareRankOcrImage(right), "right-zero-mask", whitelist = "0"),
+                run(scaleForOcr(right, 4), "right-zero-raw", whitelist = "0"),
+            )
+            val leftIsOne = leftTexts.any { text -> text.filter(Char::isDigit) == "1" }
+            val rightIsZero = rightTexts.any { text -> text.filter(Char::isDigit) == "0" }
+            if (leftIsOne && rightIsZero) return "10"
+        }
+
+        // Keep both views inside the same tight digit box.  The mask removes
+        // the colored badge background, while the raw view preserves the
+        // antialiased outline when the glyph is too thin for thresholding.
+        return listOf(
+            run(prepareRankOcrImage(image), "mask"),
+            run(scaleForOcr(image, 4), "raw"),
+        ).firstOrNull(String::isNotBlank).orEmpty()
+    }
 
     private fun ocrTier(image: BufferedImage, tessData: File): String =
         TesseractEx().apply {
@@ -351,9 +433,47 @@ object CurrentRankDetector {
         }.doOCR(scaleForOcr(image), "current-tier")
             .replace(Regex("\\s+"), "")
 
-    private fun scaleForOcr(image: BufferedImage): BufferedImage {
-        val width = (image.width * 2).coerceAtLeast(1)
-        val height = (image.height * 2).coerceAtLeast(1)
+    /**
+     * Keep the OCR input limited to the numeral box, but make the white
+     * outlined glyph readable against the colored badge background.  This is
+     * deliberately plain BufferedImage processing; it does not use a visual
+     * template or OpenCV.
+     */
+    private fun prepareRankOcrImage(image: BufferedImage): BufferedImage {
+        val scale = 4
+        val padding = 20
+        val scaled = BufferedImage(
+            image.width * scale + padding * 2,
+            image.height * scale + padding * 2,
+            BufferedImage.TYPE_BYTE_GRAY,
+        )
+        val graphics = scaled.createGraphics()
+        graphics.color = java.awt.Color.WHITE
+        graphics.fillRect(0, 0, scaled.width, scaled.height)
+        graphics.dispose()
+        for (y in padding until scaled.height - padding) {
+            for (x in padding until scaled.width - padding) {
+                val source = image.getRGB((x - padding) / scale, (y - padding) / scale)
+                val red = source shr 16 and 0xff
+                val green = source shr 8 and 0xff
+                val blue = source and 0xff
+                val brightest = maxOf(red, green, blue)
+                val darkest = minOf(red, green, blue)
+                // The numeral has a bright, nearly neutral face.  Darken
+                // those pixels and leave the colored/dark badge as white so
+                // Tesseract sees a clean black-on-white digit mask.
+                val foreground = brightest >= 155 && brightest - darkest <= 105
+                val value = if (foreground) 0 else 255
+                val gray = (value shl 16) or (value shl 8) or value
+                scaled.setRGB(x, y, gray)
+            }
+        }
+        return scaled
+    }
+
+    private fun scaleForOcr(image: BufferedImage, scale: Int = 2): BufferedImage {
+        val width = (image.width * scale).coerceAtLeast(1)
+        val height = (image.height * scale).coerceAtLeast(1)
         val scaled = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
         val graphics = scaled.createGraphics()
         try {

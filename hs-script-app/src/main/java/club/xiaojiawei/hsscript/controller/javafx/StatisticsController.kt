@@ -300,7 +300,10 @@ class StatisticsController : Initializable, StageHook {
 
     private fun initWRPane(records: List<Record>) {
         val rates = records.groupBy { it.strategyId to it.strategyName }.map { (strategy, games) ->
-            val wins = games.count { it.result == true }
+            // Historical rows may contain a stale true result when we
+            // conceded during pre-mulligan. Keep the statistics view aligned
+            // with SurrenderPolicy: an explicit local concession is a loss.
+            val wins = games.count { it.result == true && it.surrendered != true }
             (strategy.second ?: "未知") to if (games.isEmpty()) 0.0 else wins * 100.0 / games.size
         }
         val xAxis = CategoryAxis().apply { label = "策略" }
@@ -320,7 +323,7 @@ class StatisticsController : Initializable, StageHook {
         val totalSeconds = durations.sum()
         val played = records.filter { it.surrendered == false }
         val totalExperience = records.sumOf { it.experience ?: 0 }
-        val overallWins = records.count { it.result == true }
+        val overallWins = records.count { it.result == true && it.surrendered != true }
         val playedWins = played.count { it.result == true }
         val xpPerMinute = if (totalSeconds > 0) totalExperience * 60.0 / totalSeconds else null
 

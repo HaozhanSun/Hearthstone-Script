@@ -46,6 +46,9 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object WindowUtil {
     private const val CONTROLLER_KEY = "controller"
+    private const val MAIN_DEFAULT_WIDTH = 300.0
+    private const val MAIN_MIN_WIDTH = 220.0
+    private const val MAIN_RIGHT_MARGIN = 12.0
 
     private val STAGE_MAP: MutableMap<WindowEnum, Stage> = ConcurrentHashMap()
 
@@ -459,25 +462,29 @@ object WindowUtil {
             addIcon(stage)
 
             windowConfig[windowEnum]?.let {
-                // Older releases stored the main window at 215 px.  That
-                // width is not enough for the log pane even when wrapping is
-                // enabled, so do a one-time safe migration to the current
-                // default instead of allowing a stale saved size to keep the
-                // new layout unusable.
-                val minimumWidth = if (windowEnum === WindowEnum.MAIN) {
-                    windowEnum.width
+                if (windowEnum === WindowEnum.MAIN) {
+                    // 220 px was the temporary, non-resizable layout.  Treat
+                    // that value as a legacy default and give the responsive
+                    // layout its wider starting size once, while preserving
+                    // any user-selected size from a newer build.
+                    val savedWidth = it.width.toDouble()
+                    val initialWidth = if (savedWidth <= MAIN_MIN_WIDTH) MAIN_DEFAULT_WIDTH else savedWidth
+                    stage.width = initialWidth
+                    stage.minWidth = MAIN_MIN_WIDTH
                 } else {
-                    0.0
+                    stage.width = it.width.toDouble()
                 }
-                stage.width = maxOf(it.width.toDouble(), minimumWidth)
-                if (minimumWidth > 0.0) stage.minWidth = minimumWidth
                 stage.height = it.height.toDouble()
-                stage.x = it.x.toDouble()
+                stage.x = if (windowEnum === WindowEnum.MAIN && it.x.toDouble() + stage.width > SCREEN_WIDTH) {
+                    (SCREEN_WIDTH - stage.width - MAIN_RIGHT_MARGIN).coerceAtLeast(0.0)
+                } else {
+                    it.x.toDouble()
+                }
                 stage.y = it.y.toDouble()
             } ?: let {
                 (windowEnum.width > 0).isTrue {
                     stage.width = windowEnum.width
-                    stage.minWidth = windowEnum.width
+                    stage.minWidth = if (windowEnum === WindowEnum.MAIN) MAIN_MIN_WIDTH else windowEnum.width
                 }
                 (windowEnum.height > 0).isTrue {
                     stage.height = windowEnum.height
@@ -498,6 +505,7 @@ object WindowUtil {
 
             stage.isAlwaysOnTop = windowEnum.alwaysOnTop
             stage.initStyle(windowEnum.initStyle)
+            stage.isResizable = windowEnum === WindowEnum.MAIN || windowEnum.initStyle === StageStyle.DECORATED
             if (windowEnum.initStyle === StageStyle.TRANSPARENT) {
                 scene.fill = null
             }

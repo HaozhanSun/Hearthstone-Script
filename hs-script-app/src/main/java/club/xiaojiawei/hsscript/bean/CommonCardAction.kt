@@ -57,9 +57,23 @@ class CommonCardAction : CardAction(false, true) {
     }
 
     public override fun execPower(): Boolean {
-        return WAR.me.let {
-            execPower(min((it.playArea.cardSize()), it.playArea.maxSize - 1))
-        }
+        return belongCard?.let { card ->
+            // Locations are activated from the board, not dragged out of the
+            // hand.  The generic index overload was written for hand cards;
+            // using it for an already-played location produces an invalid
+            // hand rectangle (indexOfCard == -1) and silently sends no input.
+            if (card.cardType === CardTypeEnum.LOCATION && card.area === WAR.me.playArea) {
+                val cardRect = getCardRect(card)
+                if (cardRect.isValid()) {
+                    cardRect.lClickCenter(isCancel = false)
+                    return true
+                }
+                return false
+            }
+            WAR.me.let {
+                execPower(min((it.playArea.cardSize()), it.playArea.maxSize - 1))
+            }
+        } ?: false
     }
 
     public override fun execPower(card: Card): Boolean {
@@ -78,10 +92,15 @@ class CommonCardAction : CardAction(false, true) {
                 }
                 return false
             }
-            var startRect: GameRect
-            if ((GameUtil.getMyHandCardRect(WAR.me.handArea.indexOfCard(belongCard), belongCard.area.cardSize())
-                    .also { startRect = it }).isValid()
-            ) {
+            val startRect = if (belongCard.cardType === CardTypeEnum.LOCATION && belongCard.area === WAR.me.playArea) {
+                getCardRect(belongCard)
+            } else {
+                GameUtil.getMyHandCardRect(
+                    WAR.me.handArea.indexOfCard(belongCard),
+                    belongCard.area.cardSize(),
+                )
+            }
+            if (startRect.isValid()) {
                 if (card.area is PlayArea) {
                     val endRect = getCardRect(card)
                     if (endRect.isValid()) {
@@ -102,6 +121,14 @@ class CommonCardAction : CardAction(false, true) {
                 val powerRect = getCardRect(belongCard)
                 if (powerRect.isValid()) {
                     powerRect.lClickCenter(isCancel = false)
+                    return true
+                }
+                return false
+            }
+            if (belongCard.cardType === CardTypeEnum.LOCATION && belongCard.area === WAR.me.playArea) {
+                val cardRect = getCardRect(belongCard)
+                if (cardRect.isValid()) {
+                    cardRect.lClickCenter(isCancel = false)
                     return true
                 }
                 return false
