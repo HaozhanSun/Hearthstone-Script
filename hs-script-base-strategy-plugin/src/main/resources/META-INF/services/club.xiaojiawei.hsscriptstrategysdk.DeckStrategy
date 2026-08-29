@@ -4,3 +4,4 @@ club.xiaojiawei.hsscriptbasestrategy.strategy.HsRadicalDeckStrategy
 club.xiaojiawei.hsscriptbasestrategy.strategy.HsMCTSDeckStrategy
 club.xiaojiawei.hsscriptbasestrategy.strategy.HsOnlyFaceDeckStrategy
 club.xiaojiawei.hsscriptbasestrategy.strategy.HsPirateDemonHunterMctsGlobalPlanDeckStrategy
+club.xiaojiawei.hsscriptbasestrategy.strategy.HsPirateWarriorMctsDeckStrategy
