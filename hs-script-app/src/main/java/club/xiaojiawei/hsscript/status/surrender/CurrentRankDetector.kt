@@ -223,6 +223,52 @@ object CurrentRankDetector {
             RANK_DIGIT_WIDTH,
             RANK_DIGIT_HEIGHT,
         )
+        if (!OcrRuntime.isLegacySelected()) {
+            val ocrTexts = listOf(
+                OcrRuntime.recognize(rankRegion, "current-rank-paddlex-badge") { "" }
+                    .replace(Regex("\\s+"), ""),
+            )
+            val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
+            val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
+                looksLikeTwoDigitRank(rankRegion)
+            val rank = resolveRankCandidates(ocrTexts, visualTenHint)
+            val tier = detectTierVisual(rankRegion)
+            log.info {
+                "RANK_OCR provider=PADDLEX passes=${ocrTexts.size} bounds=$bounds " +
+                    "region=${rankRegion.width}x${rankRegion.height} " +
+                    "text=${ocrText.ifBlank { "<empty>" }} " +
+                    "candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
+                    "tierCandidates=<visual-only> visualTenHint=$visualTenHint " +
+                    "tier=${tier.name} rank=${rank ?: "UNKNOWN"}"
+            }
+            if (saveEvidence && (tier === RankTier.UNKNOWN || rank == null)) {
+                val evidence = UnknownStateScreenshot.save(
+                    image = screen,
+                    regions = listOf(
+                        UnknownStateScreenshot.UnknownRegion(
+                            Rectangle(
+                                0,
+                                (screen.height * RANK_REGION_TOP).toInt(),
+                                (screen.width * RANK_REGION_WIDTH).toInt(),
+                                (screen.height * RANK_REGION_HEIGHT).toInt(),
+                            ),
+                            "rank-badge-unresolved",
+                        ),
+                    ),
+                    category = "rank-detection",
+                    trigger = "rank-ocr-unresolved",
+                    state = "rank=${rank ?: "UNKNOWN"}|tier=${tier.name}",
+                    phase = "pre-mulligan-rank-check",
+                    ocrText = ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } },
+                )
+                log.warn {
+                    "RANK_OCR_EVIDENCE provider=PADDLEX rank=${rank ?: "UNKNOWN"} tier=${tier.name} " +
+                        "path=${evidence?.file?.absolutePath ?: "not-saved"} " +
+                        "link=${evidence?.link ?: "none"}"
+                }
+            }
+            return Detection(rank, tier, ocrText, bounds)
+        }
         val ocrInputs = listOf(
             // Rank OCR must only see the small numeral window.  Running OCR
             // on the full badge was the source of 939/51/191/91 noise from

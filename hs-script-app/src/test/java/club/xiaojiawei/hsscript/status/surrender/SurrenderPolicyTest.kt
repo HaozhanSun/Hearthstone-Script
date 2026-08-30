@@ -2,6 +2,11 @@ package club.xiaojiawei.hsscript.status.surrender
 
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
+import club.xiaojiawei.hsscript.ocr.OcrHealth
+import club.xiaojiawei.hsscript.ocr.OcrProviderKind
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
+import club.xiaojiawei.hsscript.ocr.OcrTextBridge
+import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
 import club.xiaojiawei.hsscript.status.DebugScreenshotRing
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
@@ -296,6 +301,45 @@ class SurrenderPolicyTest {
         oneGraphics.fillRect(53, 45, 12, 35)
         oneGraphics.dispose()
         assertFalse(CurrentRankDetector.looksLikeTwoDigitRank(one))
+    }
+
+    @Test
+    fun paddleXRankDetectionUsesSingleSidecarPass() {
+        val originalSettingsProvider = OcrRuntime.settingsProvider
+        val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
+        val calls = mutableListOf<String>()
+        try {
+            OcrRuntime.settingsProvider = {
+                PaddleXOcrSettings(
+                    enabled = true,
+                    pythonExecutable = "python",
+                    modulePath = "fake-module",
+                    device = "cpu",
+                    modelCachePath = "",
+                    timeoutMs = 1000,
+                )
+            }
+            OcrRuntime.paddleXBridgeFactory = {
+                object : OcrTextBridge {
+                    override fun recognize(image: BufferedImage, desc: String): String {
+                        calls += desc
+                        return "10"
+                    }
+
+                    override fun healthCheck(): OcrHealth =
+                        OcrHealth(true, OcrProviderKind.PADDLEX, "ok")
+                }
+            }
+
+            val screen = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
+            val detection = CurrentRankDetector.detectCapturedImage(screen, saveEvidence = false)
+
+            assertEquals(10, detection?.rank)
+            assertEquals(listOf("current-rank-paddlex-badge"), calls)
+        } finally {
+            OcrRuntime.settingsProvider = originalSettingsProvider
+            OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
+        }
     }
 
     @Test
