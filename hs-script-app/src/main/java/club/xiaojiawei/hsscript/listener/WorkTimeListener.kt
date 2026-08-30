@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscript.utils.WindowUtil
 import club.xiaojiawei.hsscript.utils.WorkTimeJitter
+import club.xiaojiawei.hsscript.utils.WorkTimeWindow
 import club.xiaojiawei.hsscript.utils.StartupRunWindow
 import club.xiaojiawei.hsscript.utils.go
 import club.xiaojiawei.hsscript.utils.runUI
@@ -313,7 +314,7 @@ object WorkTimeListener {
             timeRules.withIndex().find { (index, rule) ->
                 val window = jitteredWindow(id, index, rule, LocalDate.now())
                     ?: return@find false
-                nowTime in window.start..window.end
+                WorkTimeWindow.contains(nowTime, window.start, window.end)
             }?.value
         }
     }
@@ -393,13 +394,7 @@ object WorkTimeListener {
                 val startTime = window.start
                 val endTime = window.end
 
-                // 检查时间有效性
-                if (startTime > endTime) {
-                    log.warn { "工作时间规则无效：开始时间 $startTime 晚于结束时间 $endTime" }
-                    continue
-                }
-
-                if (nowTime in startTime..endTime) {
+                if (WorkTimeWindow.contains(nowTime, startTime, endTime)) {
                     canWork = true
                     closestWorkTimeRule = rule
                     currentWorkTimeRule = rule // 设置当前工作时间规则

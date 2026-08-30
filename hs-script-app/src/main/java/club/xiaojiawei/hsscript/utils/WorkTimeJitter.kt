@@ -32,8 +32,8 @@ object WorkTimeJitter {
 
     /**
      * Jitters each endpoint independently.  Clamping at the day boundaries
-     * prevents a 00:00/23:59 schedule from silently becoming a cross-midnight
-     * interval, which the existing schedule model does not represent.
+     * keeps a nominal all-day schedule inside the same calendar day instead
+     * of silently turning it into a nearly all-day wrapped interval.
      */
     fun jitterWindow(
         start: LocalTime,

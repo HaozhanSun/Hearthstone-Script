@@ -67,8 +67,8 @@ if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
     } catch { $deployedVersion = $null }
 }
 
-if (-not [string]::IsNullOrWhiteSpace($deployedVersion) -and $currentVersion -eq $deployedVersion) {
-    $base = Get-BaseVersion $currentVersion
+if (-not [string]::IsNullOrWhiteSpace($deployedVersion) -and (Get-BaseVersion $currentVersion) -le (Get-BaseVersion $deployedVersion)) {
+    $base = Get-BaseVersion $deployedVersion
     $now = Get-Date
     $zoneName = if ([System.TimeZoneInfo]::Local.IsDaylightSavingTime($now)) { 'PDT' } else { 'PST' }
     $nextVersion = "v$($base.Major).$($base.Minor).$($base.Build + 1)-local-$($now.ToString('yyyyMMdd-HHmmss'))$zoneName"
@@ -95,7 +95,7 @@ if (-not [string]::IsNullOrWhiteSpace($deployedVersion) -and $currentVersion -eq
 
 $mavenBaseArgs = @('-f', $pomPath, '-pl', 'hs-script-app', '-am', '-Pjvm', '-Djava.version=24', '-Dproject.build.outputTimestamp=0')
 if (-not $SkipTests) {
-    $testArgs = $mavenBaseArgs + @('-DforkCount=0', '-Dtest=CardTimingPolicyTest,MctsReplayTraceTest,MctsRoundScreenshotTest,SurrenderPolicyTest,GameUtilSurrenderGuardTest,ScreenStateRecoveryTest,UnknownStateScreenshotTest,TurnEndActionGuardTest,PirateDemonHunterMctsExperimentModelTest,StartupRunWindowTest,WorkTimeJitterTest,WorkTimeRuleSetTest,WorkTimeRuleTest,GlobalHotkeyListenerTest,UiLogFormatterTest', '-Dsurefire.failIfNoSpecifiedTests=false', 'test')
+    $testArgs = $mavenBaseArgs + @('-DforkCount=0', '-Dtest=CardTimingPolicyTest,MctsReplayTraceTest,MctsRoundScreenshotTest,SurrenderPolicyTest,PaddleXRankDetectorTest,GameUtilSurrenderGuardTest,ScreenStateRecoveryTest,UnknownStateScreenshotTest,TurnEndActionGuardTest,PirateDemonHunterMctsExperimentModelTest,StartupRunWindowTest,WorkTimeJitterTest,WorkTimeWindowTest,WorkTimePresetDefaultsTest,WorkTimeRuleSetTest,WorkTimeRuleTest,GlobalHotkeyListenerTest,UiLogFormatterTest', '-Dsurefire.failIfNoSpecifiedTests=false', 'test')
     Write-Output 'TARGETED_TESTS=enabled'
     & $mavenWrapper @testArgs
     if ($LASTEXITCODE -ne 0) { throw "Targeted regression tests failed with exit code $LASTEXITCODE" }
