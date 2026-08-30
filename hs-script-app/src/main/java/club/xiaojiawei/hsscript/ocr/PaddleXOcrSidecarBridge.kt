@@ -190,7 +190,7 @@ class PaddleXOcrSidecarBridge(
         replace(Regex("\\s+"), " ").trim().let { if (it.length <= limit) it else it.take(limit) + "..." }
 
     companion object {
-        private const val HEALTH_TIMEOUT_MS = 10_000L
+        private const val HEALTH_TIMEOUT_MS = 60_000L
         private val objectMapper: ObjectMapper = jacksonObjectMapper()
 
         private fun runProcess(
