@@ -3,6 +3,7 @@ package club.xiaojiawei.hsscript.status.surrender
 import club.xiaojiawei.hsscript.bean.TesseractEx
 import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
 import club.xiaojiawei.hsscriptbase.config.log
@@ -198,7 +199,7 @@ object CurrentRankDetector {
         val rankRegion = cropRankRegion(screen)
         val tessData = File(TESS_DATA_PATH)
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
-        if (!chiSim.isFile) {
+        if (OcrRuntime.isLegacySelected() && !chiSim.isFile) {
             log.info { "RANK_OCR_SKIPPED reason=missing-tessdata path=${chiSim.absolutePath}" }
             return null
         }

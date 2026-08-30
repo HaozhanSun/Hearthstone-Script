@@ -640,6 +640,54 @@ enum class ConfigEnum(
     ),
 
     /**
+     * 使用 PaddleX OCR；关闭后使用 legacy Tess4J/TesseractEx
+     */
+    USE_PADDLEX_OCR(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { TRUE_STR },
+    ),
+
+    /**
+     * PaddleX OCR Python 可执行文件；空值使用 python 或 PADDLEX_OCR_PYTHON
+     */
+    PADDLEX_OCR_PYTHON(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "" },
+    ),
+
+    /**
+     * PaddleX OCR sidecar 模块路径；空值使用随包 resources/paddlex-vision/src
+     */
+    PADDLEX_OCR_MODULE_PATH(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "" },
+    ),
+
+    /**
+     * PaddleX OCR 设备，例如 cpu 或 gpu:0
+     */
+    PADDLEX_OCR_DEVICE(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "cpu" },
+    ),
+
+    /**
+     * PaddleX/Paddle 模型缓存目录；空值使用 PaddleX/Paddle 默认缓存
+     */
+    PADDLEX_OCR_MODEL_CACHE(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "" },
+    ),
+
+    /**
+     * PaddleX OCR sidecar 超时（毫秒）
+     */
+    PADDLEX_OCR_TIMEOUT_MS(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "120000" },
+    ),
+
+    /**
      * 启用控制台热键
      */
     ENABLE_CONSOLE_HOTKEY(

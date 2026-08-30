@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.consts.SCREEN_SCALE
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.SCREEN_WIDTH
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.starter.InjectGameStarter
 import club.xiaojiawei.hsscript.statistics.RecordDaoEx
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
@@ -166,7 +167,7 @@ object HubModeStrategy : AbstractModeStrategy<Any?>() {
     }
 
     private fun handleTask() {
-        if (File(TESS_DATA_PATH).listFiles().isEmpty()) {
+        if (OcrRuntime.isLegacySelected() && File(TESS_DATA_PATH).listFiles().isNullOrEmpty()) {
             log.warn { "tess数据集文件不存在，无法使用自动刷新任务功能" }
             return
         }

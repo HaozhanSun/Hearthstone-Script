@@ -109,6 +109,13 @@ val TESS_DATA_PATH by lazy {
 }
 
 /**
+ * PaddleX OCR Python sidecar module path
+ */
+val PADDLEX_VISION_PATH by lazy {
+    getPath("resources/paddlex-vision/src")
+}
+
+/**
  * 脚本程序图标名字
  */
 const val MAIN_IMG_NAME: String = "favicon.png"

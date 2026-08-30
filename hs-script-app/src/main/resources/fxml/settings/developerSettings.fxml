@@ -85,6 +85,11 @@
                             <SettingHBox name="保存OCR图片" tabWindow="DEVELOPER_SETTINGS" group="调试">
                                 <ConfigSwitch notificationManager="${notificationManager}" config="SAVE_OCR_IMG"/>
                             </SettingHBox>
+                            <SettingHBox name="使用PaddleX OCR（默认）"
+                                         tip="开启后任务、卡屏恢复、段位识别 OCR 走 PaddleX sidecar；关闭后使用 legacy Tess4J。Python 路径、模块路径、设备、模型缓存和超时可在 config/script.ini 的 dev 组调整。"
+                                         tabWindow="DEVELOPER_SETTINGS" group="调试">
+                                <ConfigSwitch notificationManager="${notificationManager}" config="USE_PADDLEX_OCR"/>
+                            </SettingHBox>
                             <SettingHBox name="日志级别" tabWindow="DEVELOPER_SETTINGS" group="调试">
                                 <Hyperlink text="日志" onAction="#openLogFile"/>
                                 <ComboBox fx:id="fileLogLevelComboBox"

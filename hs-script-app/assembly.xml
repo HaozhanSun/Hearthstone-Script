@@ -47,6 +47,13 @@
             </includes>
             <outputDirectory>resources/img/</outputDirectory>
         </fileSet>
+        <fileSet>
+            <directory>${project.parent.basedir}/experiments/paddlex-vision/src</directory>
+            <includes>
+                <include>**/*.py</include>
+            </includes>
+            <outputDirectory>resources/paddlex-vision/src/</outputDirectory>
+        </fileSet>
 <!--        <fileSet>-->
 <!--            <directory>${project.basedir}/src/main/resources/resources/tessdata</directory>-->
 <!--            <includes>-->

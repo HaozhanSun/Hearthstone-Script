@@ -14,6 +14,7 @@ import club.xiaojiawei.hsscript.listener.GlobalHotkeyListener
 import club.xiaojiawei.hsscript.listener.StatisticsListener
 import club.xiaojiawei.hsscript.listener.VersionListener
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.RuntimeSafety
 import club.xiaojiawei.hsscript.status.ScriptStatus
@@ -179,6 +180,7 @@ class MainApplication : Application() {
             "构建版本=${BuildInfo.VERSION}, 上游基线=${BuildInfo.UPSTREAM_BASELINE_VERSION}, " +
                 "本地构建时间(Pacific)=${BuildInfo.BUILD_TIMESTAMP_PACIFIC}"
         }
+        OcrRuntime.logStartupProvider()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             log.error(throwable) { "未捕获线程异常：${thread.name}" }
         }

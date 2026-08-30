@@ -14,20 +14,24 @@ The adapter runs two PaddleX pipelines against one image:
    example, `"猫" -> "猫粮" (right_of)`.
 
 The adapter also exposes `ocr_text`, a flattened string compatible with the
-current application's OCR-oriented decision code. This is the seam that can be
-used by a future opt-in sidecar bridge; the production OCR implementation is
-not replaced by this experiment yet.
+current application's OCR-oriented decision code. The production application
+uses the CLI's OCR-only JSON mode through an out-of-process sidecar when its
+PaddleX OCR switch is enabled.
 
 `PaddleXOcrBridge.do_ocr(image)` is the text-only compatibility wrapper. Its
 shape mirrors the current `TesseractEx.doOCR` contract (`image -> String`) so it
 can be exercised independently before any production integration is considered.
+The CLI also supports `--ocr-only`, which runs only the PaddleX OCR pipeline
+and emits the same JSON contract with empty `objects` and `relations`. The main
+application uses this out-of-process shape when PaddleX OCR is enabled.
 
 For the current rank incident, `RankBadgeProbe` is the controlled experiment:
 it crops only the lower-left numeric badge, upscales that crop, runs the
 OCR-only adapter, and accepts a rank only from a clean numeric token. This
 prevents card text, player names, and the script window from participating in
-rank recognition. It is intentionally not wired into surrender or the
-production Kotlin detector.
+rank recognition. The production Kotlin detector now routes its existing OCR
+calls through the shared provider switch rather than importing this Python
+probe directly.
 
 ## Installation
 
@@ -55,9 +59,25 @@ From this directory:
   --json-out .\output\result.json
 ```
 
+For the production text-only bridge:
+
+```powershell
+..\.venv\Scripts\python.exe -m paddlex_vision_experiment.cli `
+  --ocr-only `
+  --input C:\path\to\ocr-crop.png `
+  --device cpu
+```
+
 The first real run may download model weights. Use an actual Hearthstone
 screenshot for an application-level result; the repository currently does not
 contain a stable labeled Hearthstone image fixture.
+
+The production application does not bundle PaddleX, PaddlePaddle, or model
+weights. Configure `PADDLEX_OCR_PYTHON` to a Python/venv that has PaddleX
+installed. `PADDLEX_OCR_MODULE_PATH`, `PADDLEX_OCR_DEVICE`,
+`PADDLEX_OCR_MODEL_CACHE`, and `PADDLEX_OCR_TIMEOUT_MS` can be set in the
+application `dev` config group or through environment variables of the same
+name; an empty model cache value leaves PaddleX/Paddle on their default cache.
 
 On Windows, the adapter disables PaddleX's default oneDNN run mode by default
 because the PaddlePaddle 3.x CPU runner can otherwise fail in a PIR/oneDNN

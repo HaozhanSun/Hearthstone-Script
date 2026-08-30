@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.bean
 
 import club.xiaojiawei.hsscript.consts.ROOT_PATH
 import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.FileUtil
 import net.sourceforge.tess4j.Tesseract
@@ -39,6 +40,8 @@ class TesseractEx : Tesseract() {
                 ImageIO.write(it, "png", ocrPath)
             }
         }
-        return super.doOCR(p0)
+        return OcrRuntime.recognize(p0, desc) { doLegacyOCR(p0) }
     }
+
+    private fun doLegacyOCR(image: BufferedImage?): String = super.doOCR(image)
 }

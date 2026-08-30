@@ -4,7 +4,7 @@
 
     <groupId>com.github.xjw580.Hearthstone-Script</groupId>
     <artifactId>hs-script</artifactId>
-        <version>v4.16.88-local-20260829-151655PDT</version>
+        <version>v4.16.96-local-20260829-212428PDT</version>
     <packaging>pom</packaging>
 
     <name>Hearthstone-Script</name>
@@ -37,7 +37,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- This build contains local changes on top of the upstream GA baseline. -->
         <upstream-baseline-version>v4.16.3-GA</upstream-baseline-version>
-        <local-build-timestamp-pacific>2026-08-29 15:16:55 PDT</local-build-timestamp-pacific>
+        <local-build-timestamp-pacific>2026-08-29 21:24:28 PDT</local-build-timestamp-pacific>
 
         <!--java/fx-->
         <java.version>25</java.version>

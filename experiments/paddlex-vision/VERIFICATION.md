@@ -1,7 +1,8 @@
 # Verification record
 
-This record covers the isolated experiment only. It is not an application
-release record and does not satisfy the project's real-Hearthstone E2E gate.
+This record covers the isolated experiment and sidecar contract only. It is
+not an application release record and does not satisfy the project's
+real-Hearthstone E2E gate.
 
 ## Results
 
@@ -11,7 +12,8 @@ release record and does not satisfy the project's real-Hearthstone E2E gate.
 | Rank-badge offline probe | 16 saved screenshots classified correctly: 12 rank 10, 2 rank 8, and 2 non-rank screens returned unresolved |
 | PaddleX live model smoke test | `1 passed, 5 deselected` |
 | CLI inference and JSON output | Passed; `schema=1`, `objects=1`, `texts=182`, `ocr_chars=1358` on a saved desktop screenshot |
-| Existing `hs-script-app` Maven test command | Failed during existing Kotlin compilation before tests; unresolved plugin SDK/JDBC/MCTS symbols |
+| Production sidecar contract test | Covered by fake-provider `--ocr-only` CLI test; no PaddleX/model download required |
+| Existing `hs-script-app` Maven test command | Re-run from the production integration session; see release handoff for current Maven results |
 | Real Hearthstone two-game E2E gate | Not run; no stable labeled Hearthstone fixture or fresh game evidence was available |
 
 ## Live smoke-test environment
@@ -34,7 +36,8 @@ release record and does not satisfy the project's real-Hearthstone E2E gate.
 
 ## Isolation
 
-No PaddleX dependency, Python bridge, or production OCR replacement was added
-to the Maven project. The only integration seam is the opt-in
-`PaddleXOcrBridge.do_ocr(image) -> str` wrapper under this directory, matching
-the text-only shape of the current OCR consumer.
+No PaddleX dependency is added to the Maven project. The production
+application packages this experiment's Python source as a sidecar and invokes
+`paddlex_vision_experiment.cli --ocr-only` out of process, consuming
+`schema_version=1` and `ocr_text` from JSON. PaddleX and its model cache remain
+owned by the configured Python runtime.
