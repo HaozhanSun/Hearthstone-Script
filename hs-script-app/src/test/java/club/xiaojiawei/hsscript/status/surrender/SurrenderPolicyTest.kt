@@ -281,6 +281,33 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun `rank OCR matches expected ranks from saved screenshots`() {
+        val encoded = System.getProperty("rank.screenshot.expectations") ?: return
+        val cases = encoded
+            .split(File.pathSeparator)
+            .filter(String::isNotBlank)
+            .map { item ->
+                val separator = item.lastIndexOf('=')
+                require(separator > 0) { "Expected screenshot=rank entries: $item" }
+                Path.of(item.substring(0, separator)) to item.substring(separator + 1).toInt()
+            }
+        assertTrue(cases.size >= 3, "Expected at least three screenshot/rank evidence cases")
+
+        cases.forEachIndexed { index, (file, expectedRank) ->
+            val detection = ImageIO.read(file.toFile())?.let {
+                CurrentRankDetector.detectCapturedImage(it, saveEvidence = false)
+            }
+            println(
+                "RANK_EVIDENCE round=${index + 1} expected=$expectedRank " +
+                    "actual=${detection?.rank ?: "UNKNOWN"} " +
+                    "ocr=${detection?.ocrText?.ifBlank { "<empty>" } ?: "<no-detection>"} " +
+                    "screenshot=$file",
+            )
+            assertEquals(expectedRank, detection?.rank, "Unexpected rank for $file")
+        }
+    }
+
+    @Test
     fun rankVisualHintDistinguishesTwoDigitBadgeFromSingleDigitBadge() {
         val ten = BufferedImage(144, 140, BufferedImage.TYPE_INT_RGB)
         val tenGraphics = ten.createGraphics()
@@ -324,6 +351,17 @@ class SurrenderPolicyTest {
         assertNull(CurrentRankDetector.resolveRankCandidates(listOf("1", "1", ""), visualTenHint = true))
         assertEquals(2, CurrentRankDetector.resolveRankCandidates(listOf("2", "2", "")))
         assertEquals(9, CurrentRankDetector.resolveRankCandidates(listOf("9", "9", "19")))
+    }
+
+    @Test
+    fun `AntiWin guard does not turn ambiguous OCR one into a surrender rank`() {
+        val ambiguousRank = CurrentRankDetector.resolveRankCandidates(
+            listOf("1", "1", "1"),
+            visualTenHint = true,
+        )
+
+        assertNull(ambiguousRank)
+        assertNull(SurrenderPolicy.evaluateWinRate(SurrenderPolicy.WinRateSnapshot(games = 4, wins = 4)))
     }
 
     @Test
