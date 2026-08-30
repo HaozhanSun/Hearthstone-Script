@@ -15,6 +15,7 @@ import club.xiaojiawei.hsscript.enums.RegCommonNameEnum
 import club.xiaojiawei.hsscript.enums.WindowEnum
 import club.xiaojiawei.hsscript.initializer.ServiceInitializer
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.utils.SystemUtil.delay
@@ -155,6 +156,7 @@ object SystemUtil {
     @Deprecated("")
     @Suppress("DEPRECATION")
     fun deleteAllContent() {
+        if (!ActionDispatchGate.allow("keyboard-delete-all")) return
         ROBOT.keyPress(KeyEvent.VK_CONTROL)
         sendKey(KeyEvent.VK_A)
         ROBOT.keyRelease(KeyEvent.VK_CONTROL)
@@ -165,6 +167,7 @@ object SystemUtil {
     @Deprecated("")
     @Suppress("DEPRECATION")
     fun pasteFromClipboard() {
+        if (!ActionDispatchGate.allow("keyboard-paste")) return
         ROBOT.keyPress(KeyEvent.VK_CONTROL)
         sendKey(KeyEvent.VK_V)
         ROBOT.keyRelease(KeyEvent.VK_CONTROL)
@@ -172,6 +175,7 @@ object SystemUtil {
 
     @Deprecated("")
     fun sendKey(keyCode: Int) {
+        if (!ActionDispatchGate.allow("keyboard-$keyCode")) return
         ROBOT.keyPress(keyCode)
         ROBOT.keyRelease(keyCode)
     }
@@ -253,6 +257,7 @@ object SystemUtil {
      */
     @Deprecated("由 {@link SystemDll#closeProgram(WinDef.HWND)} 取代")
     fun killProgram(programHWND: WinDef.HWND?) {
+        if (!ActionDispatchGate.allow("keyboard-close-program")) return
         showWindow(programHWND)
         ROBOT.keyPress(18)
         ROBOT.keyPress(115)

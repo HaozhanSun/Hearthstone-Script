@@ -62,8 +62,8 @@ class UiLogFormatterTest {
     @Test
     fun `persistent streak evidence stays in the file log only`() {
         val message =
-            "PERSISTENT_STREAK_GUARD_RECOVERY_CONTINUE strategy=pirate rule=MAX_CONSECUTIVE_WINS " +
-                "consecutiveWins=5 action=CONTINUE evidence=id=17:result=WIN:surrendered=false"
+            "PERSISTENT_STREAK_GUARD_TRIGGERED strategy=pirate rule=MAX_CONSECUTIVE_WINS " +
+                "consecutiveWins=5 action=SURRENDER evidence=id=17:result=WIN:surrendered=false"
 
         assertTrue(UiLogFormatter.isHiddenFromUi(message))
         assertFalse(UiLogFormatter.isHiddenFromUi("当前处于：回合结束阶段"))

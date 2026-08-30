@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscript.interfaces.closer.ThreadCloser
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.TaskManager
+import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
@@ -130,11 +131,19 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
     private fun surrenderImmediatelyForCurrentRank(): Boolean {
         val result = SurrenderPolicy.evaluateCurrentRankBeforeMulligan() ?: return false
         cancelAllTask()
-        log.warn {
-            "立即投降：当前排位不是 10 级，跳过剩余换牌流程 " +
-                "rule=${result.ruleId} reason=${result.reason ?: "none"}"
+        if (result.shouldSurrender) {
+            log.warn {
+                "立即投降：当前排位策略命中，跳过剩余换牌流程 " +
+                    "rule=${result.ruleId} reason=${result.reason ?: "none"}"
+            }
+            GameUtil.surrender(skipEndTurn = true)
+        } else {
+            log.error {
+                "立即投降流程阻断：当前排位无法确认，暂停等待明确OCR证据 " +
+                    "rule=${result.ruleId} reason=${result.reason ?: "none"}"
+            }
+            PauseStatus.isPause = true
         }
-        GameUtil.surrender(skipEndTurn = true)
         return true
     }
 

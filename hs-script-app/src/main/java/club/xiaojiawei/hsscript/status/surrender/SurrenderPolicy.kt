@@ -7,6 +7,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.isValid
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
+import club.xiaojiawei.hsscriptbase.enums.StepEnum
 import club.xiaojiawei.hsscript.status.DebugScreenshotRing
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
@@ -75,6 +76,12 @@ object SurrenderPolicy {
      */
     internal fun hasConfirmedGameState(mode: ModeEnum?, inWar: Boolean): Boolean =
         mode === ModeEnum.GAMEPLAY || inWar
+
+    /** Terminal Power.log/model facts always outrank a late surrender rule. */
+    internal fun hasAuthoritativeTerminalState(war: War = WAR): Boolean =
+        war.currentPhase === WarPhaseEnum.GAME_OVER ||
+            war.currentTurnStep === StepEnum.FINAL_GAMEOVER ||
+            war.won.isNotBlank() || war.lost.isNotBlank() || war.conceded.isNotBlank()
 
     private const val NAME_RESOLUTION_TIMEOUT_MS = 3_000L
     private const val NAME_RESOLUTION_POLL_MS = 100L
@@ -229,20 +236,32 @@ object SurrenderPolicy {
         else -> null
     }
 
-    /**
-     * Re-read durable history before any early surrender decision. A
-     * triggered guard never pauses automation and never mutates the history.
-     * Instead it skips this policy pass, which prevents another automatic
-     * surrender while allowing the normal game loop to continue and produce
-     * a real result that can reset a suspicious streak. The evidence includes
-     * the recent durable records so an OCR/result regression is diagnosable.
-     */
-    private fun enforcePersistentStreakGuard(): Boolean = runCatching {
-        val strategy = DeckStrategyManager.currentDeckStrategy ?: return false
-        val strategyId = strategy.id().takeIf { it.isNotBlank() } ?: return false
+    internal fun persistentStreakGuardDecision(
+        snapshot: PersistentStreakSnapshot,
+    ): SurrenderRuleResult? = evaluatePersistentStreakGuard(snapshot)?.let { guard ->
+        SurrenderRuleResult(
+            ruleId = guard.ruleId,
+            matched = true,
+            shouldSurrender = true,
+            reason = guard.reason,
+        )
+    }
+
+    internal fun unresolvedRankDecision(attempts: Int): SurrenderRuleResult =
+        SurrenderRuleResult(
+            ruleId = "rank-ocr-unresolved",
+            matched = false,
+            shouldSurrender = false,
+            reason = "rank-ocr-unresolved attempts=$attempts",
+        )
+
+    /** Re-read durable history and turn a matched protection into a decision. */
+    private fun enforcePersistentStreakGuard(): SurrenderRuleResult? = runCatching {
+        val strategy = DeckStrategyManager.currentDeckStrategy ?: return null
+        val strategyId = strategy.id().takeIf { it.isNotBlank() } ?: return null
         val records = RecordDaoEx.RECORD_DAO.query(Record(strategyId = strategyId))
         val snapshot = persistentStreakSnapshot(records)
-        val guard = evaluatePersistentStreakGuard(snapshot) ?: return false
+        val guard = evaluatePersistentStreakGuard(snapshot) ?: return null
         val evidence = records
             .filter { it.result != null }
             .sortedWith(compareBy<Record> { it.endTime ?: LocalDateTime.MIN }.thenBy { it.id ?: Int.MIN_VALUE })
@@ -251,15 +270,15 @@ object SurrenderPolicy {
                 "id=${it.id ?: "?"}:result=${it.result}:surrendered=${it.surrendered}:end=${it.endTime ?: "?"}"
             }
         log.warn {
-            "PERSISTENT_STREAK_GUARD_RECOVERY_CONTINUE strategy=$strategyId rule=${guard.ruleId} " +
+            "PERSISTENT_STREAK_GUARD_TRIGGERED strategy=$strategyId rule=${guard.ruleId} " +
                 "reason=${guard.reason} consecutiveSurrenders=${snapshot.consecutiveSurrenders} " +
-                "consecutiveWins=${snapshot.consecutiveWins} action=CONTINUE " +
-                "surrenderPolicyPass=SKIPPED evidence=$evidence source=statistics.db"
+                "consecutiveWins=${snapshot.consecutiveWins} action=SURRENDER " +
+                "surrenderPolicyPass=EXECUTED evidence=$evidence source=statistics.db"
         }
-        true
+        persistentStreakGuardDecision(snapshot)
     }.getOrElse { error ->
         log.warn(error) { "PERSISTENT_STREAK_GUARD_UNAVAILABLE reason=statistics-read-failed" }
-        false
+        null
     }
 
     /**
@@ -273,7 +292,7 @@ object SurrenderPolicy {
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") {
             return null
         }
-        if (enforcePersistentStreakGuard()) return null
+        enforcePersistentStreakGuard()?.let { return it }
         if (war.currentPhase !in setOf(
                 WarPhaseEnum.FILL_DECK,
                 WarPhaseEnum.DRAWN_INIT_CARD,
@@ -375,7 +394,7 @@ object SurrenderPolicy {
             log.debug { "RANK_POLICY_SKIP reason=historical-power-log-replay" }
             return null
         }
-        if (enforcePersistentStreakGuard()) return null
+        enforcePersistentStreakGuard()?.let { return it }
         val phase = WAR.currentPhase
         if (!isRankInspectionEligible(WarEx.inWar, phase)) {
             if (phase == WarPhaseEnum.FILL_DECK || !WarEx.inWar) {
@@ -395,22 +414,14 @@ object SurrenderPolicy {
         val detection = CurrentRankDetector.detect()
         val rank = detection?.rank
         if (rank == null) {
-            evaluateWinRateGuard()?.let { result ->
-                rankCheckCompleted = true
-                log.warn {
-                    "WIN_RATE_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                        "rule=${result.ruleId} reason=${result.reason} fallback=rank-unresolved"
-                }
-                return result
+            rankCheckCompleted = true
+            val result = unresolvedRankDecision(rankInspectionAttempts)
+            log.error {
+                "RANK_POLICY_BLOCKED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                    "rule=${result.ruleId} reason=${result.reason} action=PAUSE " +
+                    "ocrFailure=true"
             }
-            if (rankInspectionAttempts >= MAX_RANK_INSPECTION_ATTEMPTS) {
-                rankCheckCompleted = true
-                log.warn {
-                    "RANK_POLICY_CONTINUE reason=rank-ocr-unresolved " +
-                        "attempts=$rankInspectionAttempts"
-                }
-            }
-            return null
+            return result
         }
 
         rankCheckCompleted = true

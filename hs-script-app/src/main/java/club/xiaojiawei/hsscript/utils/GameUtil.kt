@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscript.enums.ProgramPermissionEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.Mode
+import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.RuntimeSafety
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
@@ -70,7 +71,8 @@ object GameUtil {
     }
 
     internal fun isSurrenderStateConfirmed(mode: ModeEnum?, inWar: Boolean): Boolean =
-        SurrenderPolicy.hasConfirmedGameState(mode, inWar)
+        SurrenderPolicy.hasConfirmedGameState(mode, inWar) &&
+            !SurrenderPolicy.hasAuthoritativeTerminalState()
 
     /**
      * The first stale-result recovery click is deliberately deterministic so
@@ -606,6 +608,7 @@ object GameUtil {
             log.info { "Power.log恢复回放：跳过历史投降请求" }
             return
         }
+        if (!ActionDispatchGate.allow("surrender-request")) return
 //        SystemUtil.frontWindow(ScriptStaticData.getGameHWND());
 //        按ESC键弹出投降界面
 //        ScriptStaticData.ROBOT.keyPress(27);
@@ -613,6 +616,10 @@ object GameUtil {
         if (gameEndTasks.isNotEmpty()) return
         val initialMode = Mode.currMode
         val initialInWar = WarEx.inWar
+        if (SurrenderPolicy.hasAuthoritativeTerminalState()) {
+            log.warn { "SURRENDER_BLOCKED reason=authoritative-terminal-state-before-request" }
+            return
+        }
         if (!isSurrenderStateConfirmed(initialMode, initialInWar)) {
             log.warn {
                 "投降请求忽略：未确认有效对局状态 " +
@@ -621,13 +628,6 @@ object GameUtil {
                     "reason=mode-not-gameplay-and-war-not-active"
             }
             return
-        }
-        // Keep a process-local ownership signal for statistics. A fast
-        // surrender can reach GAME_OVER before PLAYSTATE=CONCEDED is parsed
-        // or before war.me has been assigned its game id.
-        WarEx.surrenderRequested = true
-        if (System.getProperty("hs.script.e2e") == "true") {
-            E2ETrace.markSurrenderRequested()
         }
         log.info {
             if (skipEndTurn) {
@@ -640,6 +640,16 @@ object GameUtil {
         if (!skipEndTurn) {
             delay(RandomUtil.getActionInterval(1000))
         }
+        if (!ActionDispatchGate.allow("surrender-request-after-delay")) return
+        if (SurrenderPolicy.hasAuthoritativeTerminalState()) {
+            log.warn { "SURRENDER_BLOCKED reason=authoritative-terminal-state-after-delay" }
+            return
+        }
+        // Mark ownership only after all pre-dispatch checks pass.
+        WarEx.surrenderRequested = true
+        if (System.getProperty("hs.script.e2e") == "true") {
+            E2ETrace.markSurrenderRequested()
+        }
         val isGamePlay = Mode.currMode === ModeEnum.GAMEPLAY
         val surrenderRetryInterval = RandomUtil.getActionInterval(500).toLong()
         var surrenderAttempts = 0
@@ -647,7 +657,12 @@ object GameUtil {
         gameEndTasks.add(
             EXTRA_THREAD_POOL.scheduleWithFixedDelay(
                 {
-                    if (PauseStatus.isPause) {
+                    if (!ActionDispatchGate.allow("surrender-retry")) {
+                        cancelGameEndTask()
+                    } else if (SurrenderPolicy.hasAuthoritativeTerminalState()) {
+                        log.warn { "SURRENDER_BLOCKED action=surrender-retry reason=authoritative-terminal-state" }
+                        cancelGameEndTask()
+                    } else if (PauseStatus.isPause) {
                         cancelGameEndTask()
                     } else if (WarEx.warCount > warCount || (isGamePlay && Mode.currMode !== ModeEnum.GAMEPLAY)) {
                         cancelGameEndTask()

@@ -44,6 +44,12 @@ class SurrenderPolicyTest {
                 PersistentStreakSnapshot(consecutiveSurrenders = 0, consecutiveWins = 5),
             )?.ruleId,
         )
+        val decision = SurrenderPolicy.persistentStreakGuardDecision(
+            PersistentStreakSnapshot(consecutiveSurrenders = 0, consecutiveWins = 5),
+        )
+        assertTrue(decision!!.matched)
+        assertTrue(decision.shouldSurrender)
+        assertEquals("consecutive-wins=5 threshold=5", decision.reason)
     }
 
     @Test
@@ -96,6 +102,18 @@ class SurrenderPolicyTest {
         assertFalse(SurrenderPolicy.hasConfirmedGameState(ModeEnum.HUB, false))
         assertTrue(SurrenderPolicy.hasConfirmedGameState(ModeEnum.GAMEPLAY, false))
         assertTrue(SurrenderPolicy.hasConfirmedGameState(null, true))
+    }
+
+    @Test
+    fun authoritativeTerminalStateOutranksSurrenderDecision() {
+        val terminal = War().apply { currentPhase = WarPhaseEnum.GAME_OVER }
+        val active = War().apply {
+            currentPhase = WarPhaseEnum.REPLACE_CARD
+            currentTurnStep = club.xiaojiawei.hsscriptbase.enums.StepEnum.BEGIN_MULLIGAN
+        }
+
+        assertTrue(SurrenderPolicy.hasAuthoritativeTerminalState(terminal))
+        assertFalse(SurrenderPolicy.hasAuthoritativeTerminalState(active))
     }
 
     @Test
@@ -338,6 +356,14 @@ class SurrenderPolicyTest {
     @Test
     fun rankTenDoesNotRequestSurrender() {
         assertNull(SurrenderPolicy.evaluateCurrentRank(10))
+    }
+
+    @Test
+    fun unresolvedRankIsAnExplicitNonSurrenderDecision() {
+        val result = SurrenderPolicy.unresolvedRankDecision(1)
+
+        assertFalse(result.shouldSurrender)
+        assertEquals("rank-ocr-unresolved", result.ruleId)
     }
 
     @Test

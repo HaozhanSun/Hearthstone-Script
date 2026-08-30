@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.MouseControlModeEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.Mode
+import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscriptbase.config.log
@@ -157,6 +158,7 @@ object MouseUtil {
      * observable for stale result pages.
      */
     internal fun pressEnterForRecovery(): Boolean {
+        if (!ActionDispatchGate.allow("recovery-enter")) return false
         if (!e2eInputEnabled()) {
             SystemUtil.sendKey(java.awt.event.KeyEvent.VK_ENTER)
             return true
@@ -184,6 +186,7 @@ object MouseUtil {
         }
         try {
             synchronized(e2eRobotLock) {
+                if (!ActionDispatchGate.allow("recovery-enter")) return false
                 if (!focusE2EWindow(hwnd)) {
                     log.warn { "E2E_RECOVERY_KEY_SKIPPED key=ENTER hwnd=$hwnd reason=foreground-unconfirmed" }
                     return false
@@ -228,6 +231,7 @@ object MouseUtil {
      * and require the game to be the verified foreground window first.
      */
     internal fun leftButtonClickForRecovery(pos: Point): Boolean {
+        if (!ActionDispatchGate.allow("recovery-click")) return false
         val hwnd = ScriptStatus.gameHWND
         if (!e2eInputEnabled() || hwnd == null) {
             leftButtonClick(pos, hwnd)
@@ -252,6 +256,7 @@ object MouseUtil {
         }
         try {
             synchronized(e2eRobotLock) {
+                if (!ActionDispatchGate.allow("recovery-click")) return false
                 val focused = focusE2EWindow(hwnd)
                 if (!focused) {
                     log.warn {
@@ -264,6 +269,7 @@ object MouseUtil {
                 // and fills the desktop.  GameRect coordinates are therefore
                 // already screen coordinates, matching the existing Robot
                 // conversion used by this runtime.
+                if (!ActionDispatchGate.allow("recovery-click")) return false
                 val accepted = sendE2eWindowsClick(Point(pos.x, pos.y))
                 log.info {
                     "E2E_RECOVERY_CLICK_SENT pos=(${pos.x},${pos.y}) hwnd=$hwnd " +
@@ -292,6 +298,7 @@ object MouseUtil {
     ): Boolean {
         val task: Future<Boolean> = e2eRobotExecutor.submit<Boolean> {
             synchronized(e2eRobotLock) {
+                if (!ActionDispatchGate.allow("e2e-click")) return@submit false
                 log.info { "E2E_INPUT_ROBOT_BEGIN client=(${pos.x},${pos.y}) hwnd=$hwnd" }
                 val foregroundFocused = focusE2EWindow(hwnd)
                 if (Thread.currentThread().isInterrupted) {
@@ -301,6 +308,7 @@ object MouseUtil {
                 if (!foregroundFocused) {
                     log.warn { "E2E_INPUT_ROBOT_FOREGROUND_UNCONFIRMED hwnd=$hwnd" }
                 }
+                if (!ActionDispatchGate.allow("e2e-click")) return@submit false
                 // The E2E game is deliberately kept borderless/full-screen.
                 // Keep the coordinate conversion screen-relative after the
                 // foreground request; Hearthstone owns the full client area.
@@ -331,6 +339,7 @@ object MouseUtil {
                     log.info { "E2E_INPUT_ROBOT_CANCELLED_BEFORE_PRESS client=(${pos.x},${pos.y}) hwnd=$hwnd" }
                     return@submit false
                 }
+                if (!ActionDispatchGate.allow("e2e-click")) return@submit false
                 e2eRobot.apply {
                     mousePress(buttonMask)
                     log.info { "E2E_INPUT_ROBOT_PRESSED" }
@@ -397,10 +406,12 @@ object MouseUtil {
     ): Boolean {
         val task: Future<Boolean> = e2eRobotExecutor.submit<Boolean> {
             synchronized(e2eRobotLock) {
+                if (!ActionDispatchGate.allow("mulligan-click")) return@submit false
                 log.info { "MULLIGAN_ROBOT_BEGIN target=(${pos.x},${pos.y}) hwnd=$hwnd" }
                 val focused = focusE2EWindow(hwnd)
                 if (!focused) log.warn { "MULLIGAN_ROBOT_FOREGROUND_UNCONFIRMED hwnd=$hwnd" }
                 if (Thread.currentThread().isInterrupted) return@submit false
+                if (!ActionDispatchGate.allow("mulligan-click")) return@submit false
 
                 e2eRobot.mouseMove(pos.x, pos.y)
                 e2eRobot.waitForIdle()
@@ -416,6 +427,7 @@ object MouseUtil {
                 // full-screen hit-test layer; the legacy mouse_event helper
                 // can move the cursor successfully while dropping the
                 // button transition before Unity sees it.
+                if (!ActionDispatchGate.allow("mulligan-click")) return@submit false
                 val sent = sendE2eWindowsClick(Point(pos.x, pos.y))
                 val after = MouseInfo.getPointerInfo()?.location
                 log.info {
@@ -453,6 +465,7 @@ object MouseUtil {
      * harness requests it, so the selection can be verified visually.
      */
     fun leftButtonClickMulligan(pos: Point, hwnd: HWND?): Boolean {
+        if (!ActionDispatchGate.allow("mulligan-click")) return false
         if (!e2eInputEnabled() || hwnd == null ||
             System.getProperty("hs.script.e2e.mulligan-robot") != "true"
         ) {
@@ -612,6 +625,7 @@ object MouseUtil {
      * and makes the selection visible (red X) before confirmation.
      */
     private fun sendE2eWindowsClick(screenPoint: Point): Boolean {
+        if (!ActionDispatchGate.allow("sendinput-click")) return false
         fun configureMouseInput(inputValue: WinUser.INPUT, flags: Int) {
             inputValue.apply {
                 type = WinDef.DWORD(WinUser.INPUT.INPUT_MOUSE.toLong())
@@ -658,6 +672,7 @@ object MouseUtil {
             Thread.currentThread().interrupt()
             return false
         }
+        if (!ActionDispatchGate.allow("sendinput-click")) return false
 
         @Suppress("UNCHECKED_CAST")
         val buttons = WinUser.INPUT().toArray(2) as Array<WinUser.INPUT>
@@ -701,6 +716,7 @@ object MouseUtil {
         hwnd: HWND?,
         mouseMode: Int = effectiveMouseMode(),
     ) {
+        if (!ActionDispatchGate.allow("left-click")) return
         val environmentValid = validateEnv(hwnd)
         if (e2eInputEnabled()) {
                 log.info {
@@ -746,6 +762,7 @@ object MouseUtil {
                 return
             }
             try {
+                if (!ActionDispatchGate.allow("left-click")) return
                 if (!WorkTimeListener.working && !ScriptStatus.testMode) return
 
                 if (e2eNativeClickEnabled() && hwnd != null) {
@@ -819,11 +836,13 @@ object MouseUtil {
         hwnd: HWND?,
         mouseMode: Int = effectiveMouseMode(),
     ) {
+        if (!ActionDispatchGate.allow("right-click")) return
         if (!validateEnv(hwnd) || Mode.currMode !== ModeEnum.GAMEPLAY) return
 
         if (validatePoint(pos)) {
             DRIVER_LOCK.lock()
             try {
+                if (!ActionDispatchGate.allow("right-click")) return
                 if ((!WorkTimeListener.working || Mode.currMode !== ModeEnum.GAMEPLAY) && !ScriptStatus.testMode) return
 
                 if (e2eInputEnabled() && hwnd != null && clickWithE2ERobot(pos, hwnd, InputEvent.BUTTON3_DOWN_MASK)) {
@@ -851,6 +870,7 @@ object MouseUtil {
     }
 
     private fun validateEnv(hwnd: HWND?): Boolean {
+        if (PauseStatus.isPause) return false
         if (ScriptStatus.testMode) return true
 //        选择卡牌时间只让特定线程执行
         if (WarEx.war.isChooseCardTime && !Thread.currentThread().isDiscoverCardThread()) return false
@@ -867,10 +887,12 @@ object MouseUtil {
         hwnd: HWND?,
         mouseMode: Int = effectiveMouseMode(),
     ) {
+        if (!ActionDispatchGate.allow("mouse-move")) return
         if (!validateEnv(hwnd)) return
 
         DRIVER_LOCK.lock()
         try {
+            if (!ActionDispatchGate.allow("mouse-move")) return
             if (!WorkTimeListener.working && !ScriptStatus.testMode) return
 
             if (validatePoint(startPos)) {

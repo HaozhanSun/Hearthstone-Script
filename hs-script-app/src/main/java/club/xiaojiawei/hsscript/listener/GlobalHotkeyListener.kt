@@ -219,9 +219,14 @@ object GlobalHotkeyListener : HotkeyListener {
     }
 
     private fun setPauseState(paused: Boolean, source: String) {
-        PauseStatus.isPause = paused
-        log.info {
-            "捕捉到热键[$source]，${if (paused) "暂停脚本" else "开始脚本"}"
+        if (paused) {
+            log.info { "PAUSE_REQUESTED source=$source" }
+            PauseStatus.isPause = true
+            log.info { "PAUSE_ACTIVE source=$source" }
+        } else {
+            log.info { "RESUME_REQUESTED source=$source" }
+            PauseStatus.isPause = false
+            log.info { "RESUME_ACTIVE source=$source" }
         }
     }
 
