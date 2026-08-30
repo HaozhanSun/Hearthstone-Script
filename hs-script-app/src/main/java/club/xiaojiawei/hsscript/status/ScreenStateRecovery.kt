@@ -178,12 +178,17 @@ object ScreenStateRecovery {
         }
 
         if (detection == null || detection.confidence < 85) {
+            PauseStatus.isPause = true
             log.warn {
                 "SCREEN_RECOVERY_UNRESOLVED confidence=${detection?.confidence ?: 0} " +
                     "screenshot=${capture.file?.absolutePath ?: "not-saved"} " +
                     "screenshotLink=${capture.file?.toURI()?.toString() ?: "none"} " +
                     "unknownStateScreenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                     "unknownStateScreenshotLink=${evidence?.link ?: "none"}"
+            }
+            log.error {
+                "SCREEN_RECOVERY_PAUSE_ACTIVE reason=unresolved-ocr-or-visual-state " +
+                    "ocrFailure=${ocrText.isBlank()} confidence=${detection?.confidence ?: 0}"
             }
             return false
         }

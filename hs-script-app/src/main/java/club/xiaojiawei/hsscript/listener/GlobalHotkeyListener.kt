@@ -42,6 +42,7 @@ object GlobalHotkeyListener : HotkeyListener {
     private const val VK_F2 = 0x71
 
     private val fixedHotkeyHookStarted = AtomicBoolean(false)
+    private val fixedHotkeyStatePollerStarted = AtomicBoolean(false)
     @Volatile
     private var fixedHotkeyHook: WinUser.HHOOK? = null
     private val fixedHotkeyHookCallback = object : WinUser.LowLevelKeyboardProc {
@@ -134,6 +135,7 @@ object GlobalHotkeyListener : HotkeyListener {
      * a function key is held.
      */
     private fun startFixedHotkeyPoller() {
+        startFixedHotkeyStatePoller()
         if (!fixedHotkeyHookStarted.compareAndSet(false, true)) return
 
         Thread({
@@ -227,6 +229,40 @@ object GlobalHotkeyListener : HotkeyListener {
             log.info { "RESUME_REQUESTED source=$source" }
             PauseStatus.isPause = false
             log.info { "RESUME_ACTIVE source=$source" }
+        }
+    }
+
+    /**
+     * Some supervised input bridges deliver function keys to the foreground
+     * client without producing a low-level hook callback. Poll the physical
+     * key state as a compatibility backstop; the same edge/dedup rules keep
+     * this from double-firing when the hook path also receives the key.
+     */
+    private fun startFixedHotkeyStatePoller() {
+        if (!fixedHotkeyStatePollerStarted.compareAndSet(false, true)) return
+
+        Thread({
+            var f1Down = false
+            var f2Down = false
+            try {
+                while (true) {
+                    val f1Now = (User32.INSTANCE.GetAsyncKeyState(VK_F1).toInt() and 0x8000) != 0
+                    val f2Now = (User32.INSTANCE.GetAsyncKeyState(VK_F2).toInt() and 0x8000) != 0
+                    if (f1Now && !f1Down) dispatchFixedHotkey(HOT_KEY_START_F1)
+                    if (f2Now && !f2Down) dispatchFixedHotkey(HOT_KEY_PAUSE_F2)
+                    f1Down = f1Now
+                    f2Down = f2Now
+                    Thread.sleep(25)
+                }
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (error: Throwable) {
+                log.warn(error) { "固定 F1/F2 按键状态轮询失败" }
+                fixedHotkeyStatePollerStarted.set(false)
+            }
+        }, "Global F1/F2 Hotkey State Poller").apply {
+            isDaemon = true
+            start()
         }
     }
 

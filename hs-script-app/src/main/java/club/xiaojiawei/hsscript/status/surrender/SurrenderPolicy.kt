@@ -14,6 +14,7 @@ import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.statistics.Record
 import club.xiaojiawei.hsscript.statistics.RecordDaoEx
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
+import club.xiaojiawei.hsscript.status.PauseStatus
 import java.time.LocalDateTime
 
 /**
@@ -255,6 +256,16 @@ object SurrenderPolicy {
             reason = "rank-ocr-unresolved attempts=$attempts",
         )
 
+    internal fun blockForUnresolvedRank(attempts: Int): SurrenderRuleResult {
+        val result = unresolvedRankDecision(attempts)
+        PauseStatus.isPause = true
+        log.error {
+            "RANK_POLICY_BLOCKED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                "rule=${result.ruleId} reason=${result.reason} action=PAUSE ocrFailure=true"
+        }
+        return result
+    }
+
     /** Re-read durable history and turn a matched protection into a decision. */
     private fun enforcePersistentStreakGuard(): SurrenderRuleResult? = runCatching {
         val strategy = DeckStrategyManager.currentDeckStrategy ?: return null
@@ -415,13 +426,7 @@ object SurrenderPolicy {
         val rank = detection?.rank
         if (rank == null) {
             rankCheckCompleted = true
-            val result = unresolvedRankDecision(rankInspectionAttempts)
-            log.error {
-                "RANK_POLICY_BLOCKED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                    "rule=${result.ruleId} reason=${result.reason} action=PAUSE " +
-                    "ocrFailure=true"
-            }
-            return result
+            return blockForUnresolvedRank(rankInspectionAttempts)
         }
 
         rankCheckCompleted = true

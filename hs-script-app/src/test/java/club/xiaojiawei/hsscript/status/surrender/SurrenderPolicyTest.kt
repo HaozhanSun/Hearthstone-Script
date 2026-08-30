@@ -3,6 +3,7 @@ package club.xiaojiawei.hsscript.status.surrender
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscript.status.DebugScreenshotRing
+import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
@@ -359,11 +360,17 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun unresolvedRankIsAnExplicitNonSurrenderDecision() {
-        val result = SurrenderPolicy.unresolvedRankDecision(1)
+    fun unresolvedRankIsAnExplicitNonSurrenderDecisionAndPauses() {
+        try {
+            PauseStatus.isPause = false
+            val result = SurrenderPolicy.blockForUnresolvedRank(1)
 
-        assertFalse(result.shouldSurrender)
-        assertEquals("rank-ocr-unresolved", result.ruleId)
+            assertFalse(result.shouldSurrender)
+            assertEquals("rank-ocr-unresolved", result.ruleId)
+            assertTrue(PauseStatus.isPause)
+        } finally {
+            PauseStatus.isPause = true
+        }
     }
 
     @Test
