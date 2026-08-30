@@ -356,8 +356,10 @@ object SurrenderPolicy {
     }
 
     /**
-     * The rank gate is the primary policy: Silver 10 is the floor, so Silver
-     * 9..1 and every tier above Silver surrender before mulligan. The old
+     * The rank gate is the primary policy: rank 5 and rank 10 are progression
+     * boundaries, so never surrender for rank advancement at either boundary.
+     * At other ranks, Silver 9..1 and every tier above Silver surrender before
+     * mulligan. The old
      * 45% win-rate gate is a secondary insurance and is evaluated from every
      * completed result for the selected strategy, including our own
      * concessions. Otherwise a win-rate-triggered surrender would never enter
@@ -441,6 +443,10 @@ object SurrenderPolicy {
         rank: Int,
         tier: CurrentRankDetector.RankTier = CurrentRankDetector.RankTier.UNKNOWN,
     ): SurrenderRuleResult? {
+        // Hearthstone cannot demote across the rank-floor boundaries. A rank
+        // 10 or rank 5 surrender only repeats the same segment instead of
+        // advancing progress, regardless of the current tier.
+        if (rank == 5 || rank == 10) return null
         if (tier.order > CurrentRankDetector.RankTier.SILVER.order) {
             return SurrenderRuleResult(
                 ruleId = "current-tier-above-silver-10",

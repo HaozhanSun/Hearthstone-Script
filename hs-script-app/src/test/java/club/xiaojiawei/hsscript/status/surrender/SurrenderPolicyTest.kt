@@ -379,20 +379,42 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun silverTenIsTheSafeFloorButGoldTenRequestsSurrender() {
+    fun rankTenIsAlwaysSafeAcrossTiers() {
         assertNull(
             SurrenderPolicy.evaluateCurrentRank(
                 rank = 10,
                 tier = CurrentRankDetector.RankTier.SILVER,
             ),
         )
-        val result = SurrenderPolicy.evaluateCurrentRank(
-            rank = 10,
-            tier = CurrentRankDetector.RankTier.GOLD,
+        assertNull(
+            SurrenderPolicy.evaluateCurrentRank(
+                rank = 10,
+                tier = CurrentRankDetector.RankTier.GOLD,
+            ),
         )
-        assertTrue(result != null)
-        assertTrue(result!!.shouldSurrender)
-        assertEquals("current-tier-above-silver-10", result.ruleId)
+        assertNull(
+            SurrenderPolicy.evaluateCurrentRank(
+                rank = 10,
+                tier = CurrentRankDetector.RankTier.DIAMOND,
+            ),
+        )
+    }
+
+    @Test
+    fun rankFiveIsAlwaysSafeAcrossTiers() {
+        assertNull(SurrenderPolicy.evaluateCurrentRank(5))
+        assertNull(
+            SurrenderPolicy.evaluateCurrentRank(
+                rank = 5,
+                tier = CurrentRankDetector.RankTier.GOLD,
+            ),
+        )
+        assertNull(
+            SurrenderPolicy.evaluateCurrentRank(
+                rank = 5,
+                tier = CurrentRankDetector.RankTier.DIAMOND,
+            ),
+        )
     }
 
     @Test
