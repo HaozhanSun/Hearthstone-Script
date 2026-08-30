@@ -147,6 +147,7 @@ class PaddleXOcrSidecarBridge(
         if (settings.modelCachePath.isNotBlank()) {
             environment["PADDLE_HOME"] = settings.modelCachePath
             environment["PADDLEX_HOME"] = settings.modelCachePath
+            environment["PADDLE_PDX_CACHE_HOME"] = settings.modelCachePath
         }
         return environment
     }

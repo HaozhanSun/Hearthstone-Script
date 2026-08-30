@@ -86,6 +86,7 @@ class PaddleXOcrSidecarBridgeTest {
         assertEquals("ok", bridge.recognize(TestImages.onePixel(), "cache-env"))
         assertEquals(cachePath, seenEnvironment["PADDLE_HOME"])
         assertEquals(cachePath, seenEnvironment["PADDLEX_HOME"])
+        assertEquals(cachePath, seenEnvironment["PADDLE_PDX_CACHE_HOME"])
     }
 
     private fun bridgeWithRunner(result: () -> SidecarProcessResult): PaddleXOcrSidecarBridge =
