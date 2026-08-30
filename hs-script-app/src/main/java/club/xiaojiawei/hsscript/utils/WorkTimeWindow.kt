@@ -1,9 +1,26 @@
 package club.xiaojiawei.hsscript.utils
 
+import java.time.Duration
+import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
 
 object WorkTimeWindow {
     private const val SECONDS_PER_DAY = 24 * 60 * 60
+
+    data class Occurrence(
+        val scheduleDate: LocalDate,
+        val start: LocalDateTime,
+        val end: LocalDateTime,
+    ) {
+        fun contains(now: LocalDateTime): Boolean = !now.isBefore(start) && !now.isAfter(end)
+
+        fun secondsUntilStart(now: LocalDateTime): Long = Duration.between(now, start).seconds
+
+        fun secondsSinceEnd(now: LocalDateTime): Long = Duration.between(end, now).seconds
+
+        fun durationMinutes(): Long = Duration.between(start, end).toMinutes()
+    }
 
     fun contains(
         now: LocalTime,
@@ -16,6 +33,27 @@ object WorkTimeWindow {
             now >= start || now <= end
         }
     }
+
+    fun occurrence(
+        scheduleDate: LocalDate,
+        start: LocalTime,
+        end: LocalTime,
+    ): Occurrence {
+        val startDateTime = scheduleDate.atTime(start)
+        val endDate = if (start <= end) scheduleDate else scheduleDate.plusDays(1)
+        return Occurrence(
+            scheduleDate = scheduleDate,
+            start = startDateTime,
+            end = endDate.atTime(end),
+        )
+    }
+
+    fun contains(
+        now: LocalDateTime,
+        scheduleDate: LocalDate,
+        start: LocalTime,
+        end: LocalTime,
+    ): Boolean = occurrence(scheduleDate, start, end).contains(now)
 
     fun durationMinutes(
         start: LocalTime,

@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.listener
 
 import club.xiaojiawei.hsscript.bean.WorkTimeRule
+import club.xiaojiawei.hsscript.bean.WorkTimeRuleSet
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.WindowEnum
@@ -22,7 +23,7 @@ import javafx.beans.property.SimpleBooleanProperty
 import javafx.beans.value.ChangeListener
 import javafx.stage.Stage
 import java.time.LocalDate
-import java.time.LocalTime
+import java.time.LocalDateTime
 import java.time.ZonedDateTime
 import java.util.Random
 import java.util.concurrent.ScheduledFuture
@@ -47,6 +48,15 @@ object WorkTimeListener {
         val jitterSeconds: Int,
     )
 
+    private data class ScheduledRuleWindow(
+        val ruleSetId: String,
+        val ruleIndex: Int,
+        val rule: WorkTimeRule,
+        val scheduleDate: LocalDate,
+        val window: WorkTimeJitter.Window,
+        val occurrence: WorkTimeWindow.Occurrence,
+    )
+
     private val jitterCacheLock = Any()
     private val jitterCache = mutableMapOf<JitterKey, WorkTimeJitter.Window>()
     private var jitterCacheObservedToday: LocalDate? = null
@@ -55,6 +65,7 @@ object WorkTimeListener {
     private var currentScheduleWindow: WorkTimeJitter.Window? = null
     private var currentScheduleRuleSetId: String? = null
     private var currentScheduleRuleIndex: Int? = null
+    private var currentScheduleDate: LocalDate? = null
     private var lastScheduleDecision: String? = null
 
     private fun timestamp(): String = ZonedDateTime.now().toString()
@@ -66,6 +77,7 @@ object WorkTimeListener {
         }
         return "ruleSet=${currentScheduleRuleSetId ?: "?"} " +
             "ruleIndex=${currentScheduleRuleIndex ?: "?"} " +
+            "scheduleDate=${currentScheduleDate ?: "?"} " +
             "effective=${window.start}-${window.end} " +
             "offsets=${window.startOffsetSeconds},${window.endOffsetSeconds}s"
     }
@@ -124,6 +136,45 @@ object WorkTimeListener {
             }
         }
     }
+
+    private fun scheduledWindows(
+        now: LocalDateTime,
+        firstDayOffset: Int,
+        lastDayOffset: Int,
+    ): List<ScheduledRuleWindow> {
+        val workTimeSetting = WorkTimeStatus.readOnlyWorkTimeSetting().toList()
+        if (workTimeSetting.isEmpty()) return emptyList()
+
+        val ruleSets = WorkTimeStatus.readOnlyWorkTimeRuleSet().toList()
+        val today = now.toLocalDate()
+        val currentDayIndex = today.dayOfWeek.value - 1
+        val windows = mutableListOf<ScheduledRuleWindow>()
+
+        for (dayOffset in firstDayOffset..lastDayOffset) {
+            val dayIndex = Math.floorMod(currentDayIndex + dayOffset, workTimeSetting.size)
+            val ruleSetId = workTimeSetting.getOrNull(dayIndex) ?: continue
+            val ruleSet: WorkTimeRuleSet = ruleSets.find { it.id == ruleSetId } ?: continue
+            val scheduleDate = today.plusDays(dayOffset.toLong())
+
+            for ((ruleIndex, rule) in ruleSet.getTimeRules().filter { it.enable }.withIndex()) {
+                val window = jitteredWindow(ruleSetId, ruleIndex, rule, scheduleDate) ?: continue
+                windows += ScheduledRuleWindow(
+                    ruleSetId = ruleSetId,
+                    ruleIndex = ruleIndex,
+                    rule = rule,
+                    scheduleDate = scheduleDate,
+                    window = window,
+                    occurrence = WorkTimeWindow.occurrence(scheduleDate, window.start, window.end),
+                )
+            }
+        }
+
+        return windows.sortedBy { it.occurrence.start }
+    }
+
+    private fun activeScheduleWindow(now: LocalDateTime = LocalDateTime.now()): ScheduledRuleWindow? =
+        scheduledWindows(now, -1, 0)
+            .firstOrNull { it.occurrence.contains(now) }
 
     val launch: Unit by lazy {
         checkWorkTask =
@@ -301,22 +352,7 @@ object WorkTimeListener {
      * @return 返回当前时间段对应的WorkTimeRule，如果没有找到则返回null
      */
     fun getActiveWorkTimeRule(): WorkTimeRule? {
-        val readOnlyWorkTimeSetting = WorkTimeStatus.readOnlyWorkTimeSetting()
-        val dayIndex = LocalDate.now().dayOfWeek.value - 1
-        if (dayIndex >= readOnlyWorkTimeSetting.size) return null
-
-        val id = readOnlyWorkTimeSetting[dayIndex]
-        return WorkTimeStatus.readOnlyWorkTimeRuleSet().toList().find { it.id == id }?.let { ruleSet ->
-            val timeRules = ruleSet.getTimeRules().filter { it.enable }
-            val nowTime = LocalTime.now()
-
-            // 寻找当前时间所在的工作时间段
-            timeRules.withIndex().find { (index, rule) ->
-                val window = jitteredWindow(id, index, rule, LocalDate.now())
-                    ?: return@find false
-                WorkTimeWindow.contains(nowTime, window.start, window.end)
-            }?.value
-        }
+        return activeScheduleWindow()?.rule
     }
 
     /**
@@ -334,90 +370,35 @@ object WorkTimeListener {
         } ?: emptyList()
     }
 
-    /**
-     * 检查是否有紧接着的下一个工作时间段
-     * @param currentEndTime 当前工作时间段的结束时间
-     * @return true如果有紧接着的工作时间段，false如果没有
-     */
-    private fun hasImmediateNextWorkPeriod(currentEndTime: LocalTime): Boolean {
-        val readOnlyWorkTimeSetting = WorkTimeStatus.readOnlyWorkTimeSetting()
-        val dayIndex = LocalDate.now().dayOfWeek.value - 1
-        if (dayIndex >= readOnlyWorkTimeSetting.size) return false
-
-        val id = readOnlyWorkTimeSetting[dayIndex]
-        return WorkTimeStatus.readOnlyWorkTimeRuleSet().toList().find { it.id == id }?.let { ruleSet ->
-            val timeRules = ruleSet.getTimeRules().filter { it.enable }
-
-            // 检查是否有在当前结束时间后立即开始的工作时间段
-            timeRules.withIndex().any { (index, rule) ->
-                val window = jitteredWindow(id, index, rule, LocalDate.now())
-                    ?: return@any false
-                val startTime = window.start
-                // 允许少量时间间隔（比如1分钟内）认为是连续的
-                val timeDiff = startTime.toSecondOfDay() - currentEndTime.toSecondOfDay()
-                timeDiff in 0..60 // 60秒内的间隔认为是连续的
-            }
-        } ?: false
-    }
-
     @Synchronized
     fun checkWork() {
-        var canWork = false
-        var closestWorkTimeRule: WorkTimeRule? = null
-        var activeScheduleWindow: WorkTimeJitter.Window? = null
-        var activeScheduleRuleSetId: String? = null
-        var activeScheduleRuleIndex: Int? = null
+        val now = LocalDateTime.now()
+        val activeWindow = activeScheduleWindow(now)
+        var closestWorkTimeRule: WorkTimeRule? = activeWindow?.rule
 
-        val readOnlyWorkTimeSetting = WorkTimeStatus.readOnlyWorkTimeSetting()
-        val dayIndex = LocalDate.now().dayOfWeek.value - 1
-        if (dayIndex >= readOnlyWorkTimeSetting.size) {
-            isDuringWorkDate = false
-            currentWorkTimeRule = null
-            prevClosestWorkTimeRule = null
-            return
+        currentWorkTimeRule = activeWindow?.rule
+        activeWindow?.let {
+            this.closestWorkTimeRule = it.rule
         }
 
-        val id = readOnlyWorkTimeSetting[dayIndex]
-        WorkTimeStatus.readOnlyWorkTimeRuleSet().toList().find { it.id == id }?.let { ruleSet ->
-            val timeRules = ruleSet.getTimeRules().filter { it.enable } // 只处理启用的规则
-            val nowTime = LocalTime.now()
-            val nowSecondOfDay = nowTime.toSecondOfDay()
-
-            var minDiffSec: Int = Int.MAX_VALUE
-
-            // 重置当前工作时间规则
-            currentWorkTimeRule = null
-
-            for ((index, rule) in timeRules.withIndex()) {
-                val window = jitteredWindow(id, index, rule, LocalDate.now())
-                    ?: continue
-                val startTime = window.start
-                val endTime = window.end
-
-                if (WorkTimeWindow.contains(nowTime, startTime, endTime)) {
-                    canWork = true
-                    closestWorkTimeRule = rule
-                    currentWorkTimeRule = rule // 设置当前工作时间规则
-                    this.closestWorkTimeRule = rule
-                    activeScheduleWindow = window
-                    activeScheduleRuleSetId = id
-                    activeScheduleRuleIndex = index
-                    break
-                } else {
-                    // 找出最近刚结束的工作时间段（用于执行收尾操作）
-                    val diffSec = nowSecondOfDay - endTime.toSecondOfDay()
-                    if (diffSec in 1 until minDiffSec) {
-                        minDiffSec = diffSec
-                        closestWorkTimeRule = rule
-                    }
+        if (activeWindow == null) {
+            var minDiffSec = Long.MAX_VALUE
+            val currentDate = now.toLocalDate()
+            for (scheduledWindow in scheduledWindows(now, -1, 0)) {
+                val diffSec = scheduledWindow.occurrence.secondsSinceEnd(now)
+                if (diffSec > 0 && scheduledWindow.occurrence.end.toLocalDate().isEqual(currentDate) && diffSec < minDiffSec) {
+                    minDiffSec = diffSec
+                    closestWorkTimeRule = scheduledWindow.rule
                 }
             }
         }
 
+        val canWork = activeWindow != null
         isDuringWorkDate = canWork
-        currentScheduleWindow = activeScheduleWindow
-        currentScheduleRuleSetId = activeScheduleRuleSetId
-        currentScheduleRuleIndex = activeScheduleRuleIndex
+        currentScheduleWindow = activeWindow?.window
+        currentScheduleRuleSetId = activeWindow?.ruleSetId
+        currentScheduleRuleIndex = activeWindow?.ruleIndex
+        currentScheduleDate = activeWindow?.scheduleDate
         if (canWork) {
             startupRunWindow.clear()
             startupWorkTimeRule = null
@@ -461,21 +442,16 @@ object WorkTimeListener {
      * @return 距离下一次工作时间的秒数，如果没有找到返回-1L，如果当前正在工作返回0L
      */
     fun getSecondsUntilNextWorkPeriod(): Long {
-        if (working) return 0L
+        val now = LocalDateTime.now()
+        if (working || activeScheduleWindow(now) != null) return 0L
 
         val readOnlyWorkTimeSetting = WorkTimeStatus.readOnlyWorkTimeSetting()
-        val currentDayIndex = LocalDate.now().dayOfWeek.value - 1
-        if (currentDayIndex >= readOnlyWorkTimeSetting.size) return -1L
+        if (readOnlyWorkTimeSetting.isEmpty()) return -1L
 
-        // 先检查今天剩余的工作时间
-        val todaySeconds = getSecondsUntilNextWorkPeriodForDay(currentDayIndex, 0)
-        if (todaySeconds > 0) return todaySeconds
-
-        // 检查后续几天的工作时间
+        // 检查今天和后续几天的工作时间
         val totalDays = readOnlyWorkTimeSetting.size
-        for (dayOffset in 1 until totalDays) {
-            val dayIndex = (currentDayIndex + dayOffset) % totalDays
-            val seconds = getSecondsUntilNextWorkPeriodForDay(dayIndex, dayOffset)
+        for (dayOffset in 0 until totalDays) {
+            val seconds = getSecondsUntilNextWorkPeriodForDay(dayOffset, now)
             if (seconds > 0) return seconds
         }
 
@@ -484,46 +460,17 @@ object WorkTimeListener {
 
     /**
      * 获取指定天的下一个工作时间段开始的秒数
-     * @param dayIndex 星期索引 (0-6，0为周一)
      * @param dayOffset 天数偏移量 (0为今天，1为明天，以此类推)
      * @return 距离该天最近工作时间开始的秒数，如果没有找到返回-1L
      */
-    private fun getSecondsUntilNextWorkPeriodForDay(dayIndex: Int, dayOffset: Int): Long {
-        val readOnlyWorkTimeSetting = WorkTimeStatus.readOnlyWorkTimeSetting()
-        if (dayIndex >= readOnlyWorkTimeSetting.size) return -1L
+    private fun getSecondsUntilNextWorkPeriodForDay(dayOffset: Int, now: LocalDateTime): Long {
+        val minDiffSec =
+            scheduledWindows(now, dayOffset, dayOffset)
+                .map { it.occurrence.secondsUntilStart(now) }
+                .filter { it > 0 }
+                .minOrNull()
 
-        val id = readOnlyWorkTimeSetting[dayIndex]
-        return WorkTimeStatus.readOnlyWorkTimeRuleSet().toList().find { it.id == id }?.let { ruleSet ->
-            val timeRules = ruleSet.getTimeRules().filter { it.enable }
-            val nowTime = LocalTime.now()
-            val nowSecondOfDay = nowTime.toSecondOfDay()
-
-            var minDiffSec: Long = Long.MAX_VALUE
-
-            for ((index, rule) in timeRules.withIndex()) {
-                val window = jitteredWindow(
-                    id,
-                    index,
-                    rule,
-                    LocalDate.now().plusDays(dayOffset.toLong()),
-                ) ?: continue
-                val startSecondOfDay = window.start.toSecondOfDay().toLong()
-
-                val diffSec: Long = if (dayOffset == 0) {
-                    // 今天：只考虑未来的时间
-                    startSecondOfDay - nowSecondOfDay
-                } else {
-                    // 其他天：加上天数偏移的秒数
-                    startSecondOfDay + dayOffset * 24 * 3600L - nowSecondOfDay
-                }
-
-                if (diffSec > 0 && diffSec < minDiffSec) {
-                    minDiffSec = diffSec
-                }
-            }
-
-            if (minDiffSec == Long.MAX_VALUE) -1L else minDiffSec
-        } ?: -1L
+        return minDiffSec ?: -1L
     }
 
     /**
@@ -531,14 +478,14 @@ object WorkTimeListener {
      * @return Pair<WorkTimeRule?, Long> - 工作规则和距离开始的秒数
      */
     fun getNextWorkPeriodInfo(): Pair<WorkTimeRule?, Long> {
-        if (working) return Pair(getCurrentWorkTimeRule() ?: startupWorkTimeRule, 0L)
+        val now = LocalDateTime.now()
+        val activeWindow = activeScheduleWindow(now)
+        if (working || activeWindow != null) {
+            return Pair(getCurrentWorkTimeRule() ?: activeWindow?.rule ?: startupWorkTimeRule, 0L)
+        }
 
         val readOnlyWorkTimeSetting = WorkTimeStatus.readOnlyWorkTimeSetting()
-        val currentDayIndex = LocalDate.now().dayOfWeek.value - 1
-        if (currentDayIndex >= readOnlyWorkTimeSetting.size) return Pair(null, -1L)
-
-        val nowTime = LocalTime.now()
-        val nowSecondOfDay = nowTime.toSecondOfDay()
+        if (readOnlyWorkTimeSetting.isEmpty()) return Pair(null, -1L)
 
         var nearestRule: WorkTimeRule? = null
         var nearestSeconds: Long = Long.MAX_VALUE
@@ -546,31 +493,11 @@ object WorkTimeListener {
         // 检查所有天的工作时间
         val totalDays = readOnlyWorkTimeSetting.size
         for (dayOffset in 0 until totalDays) {
-            val dayIndex = (currentDayIndex + dayOffset) % totalDays
-            val id = readOnlyWorkTimeSetting[dayIndex]
-
-            WorkTimeStatus.readOnlyWorkTimeRuleSet().toList().find { it.id == id }?.let { ruleSet ->
-                val timeRules = ruleSet.getTimeRules().filter { it.enable }
-
-                for ((index, rule) in timeRules.withIndex()) {
-                    val window = jitteredWindow(
-                        id,
-                        index,
-                        rule,
-                        LocalDate.now().plusDays(dayOffset.toLong()),
-                    ) ?: continue
-                    val startSecondOfDay = window.start.toSecondOfDay().toLong()
-
-                    val diffSec: Long = if (dayOffset == 0) {
-                        startSecondOfDay - nowSecondOfDay
-                    } else {
-                        startSecondOfDay + dayOffset * 24 * 3600L - nowSecondOfDay
-                    }
-
-                    if (diffSec > 0 && diffSec < nearestSeconds) {
-                        nearestSeconds = diffSec
-                        nearestRule = rule
-                    }
+            for (scheduledWindow in scheduledWindows(now, dayOffset, dayOffset)) {
+                val diffSec = scheduledWindow.occurrence.secondsUntilStart(now)
+                if (diffSec > 0 && diffSec < nearestSeconds) {
+                    nearestSeconds = diffSec
+                    nearestRule = scheduledWindow.rule
                 }
             }
         }
