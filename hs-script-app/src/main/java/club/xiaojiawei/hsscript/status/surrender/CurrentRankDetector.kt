@@ -196,6 +196,30 @@ object CurrentRankDetector {
         saveEvidence: Boolean = false,
     ): Detection? = runCatching {
         val rankRegion = cropRankRegion(screen)
+
+        // PaddleX is an opt-in replacement for this one high-risk OCR task.
+        // It owns the tightly controlled badge crop and returns to the
+        // existing Tesseract pipeline if its Python runtime/model is absent,
+        // slow, or unable to produce a rank.  General screen/card OCR remains
+        // on the existing path.
+        if (PaddleXRankDetector.isEnabled()) {
+            val paddleX = PaddleXRankDetector.detect(screen)
+            if (paddleX?.rank != null) {
+                val tier = detectTierVisual(rankRegion)
+                log.info {
+                    "RANK_OCR engine=PaddleX text=${paddleX.rawText.ifBlank { "<empty>" }} " +
+                        "tier=${tier.name} rank=${paddleX.rank}"
+                }
+                return@runCatching Detection(
+                    rank = paddleX.rank,
+                    tier = tier,
+                    ocrText = paddleX.rawText,
+                    captureBounds = bounds,
+                )
+            }
+            log.info { "RANK_OCR engine=PaddleX result=unresolved fallback=Tesseract" }
+        }
+
         val tessData = File(TESS_DATA_PATH)
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
         if (!chiSim.isFile) {

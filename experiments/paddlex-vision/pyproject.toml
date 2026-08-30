@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paddlex-vision-experiment"
+version = "0.1.0"
+description = "Isolated PaddleX object detection and Chinese OCR experiment"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+runtime = ["paddlex[base]"]
+test = ["pytest>=8"]
+
+[project.scripts]
+paddlex-vision = "paddlex_vision_experiment.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+    "paddlex: live test that requires PaddleX and a local image fixture",
+]
