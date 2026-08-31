@@ -393,7 +393,14 @@ object CurrentRankDetector {
             setPageSegMode(pageSegMode)
             setVariable("tessedit_char_whitelist", whitelist)
             setVariable("user_defined_dpi", "300")
-        }.doOCR(input, "current-rank-psm$pageSegMode-$suffix")
+        }.doOCR(
+            input,
+            "current-rank-psm$pageSegMode-$suffix",
+            paddleXContract = { text ->
+                val digits = text.filter(Char::isDigit)
+                (whitelist == "0" && digits == "0") || parseRankText(text) != null
+            },
+        )
             .replace(Regex("\\s+"), "")
 
         if (pageSegMode == 10) {
@@ -437,7 +444,11 @@ object CurrentRankDetector {
             setLanguage(CHI_SIM_DATA)
             setPageSegMode(11)
             setVariable("user_defined_dpi", "200")
-        }.doOCR(scaleForOcr(image), "current-tier")
+        }.doOCR(
+            scaleForOcr(image),
+            "current-tier",
+            paddleXContract = { parseTierText(it) !== RankTier.UNKNOWN },
+        )
             .replace(Regex("\\s+"), "")
 
     /**

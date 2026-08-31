@@ -637,6 +637,15 @@ enum class ConfigEnum(
     ),
 
     /**
+     * OCR routing policy. AUTO/PADDLEX_FIRST preserves PaddleX priority and
+     * falls back to legacy Tesseract only after a contract-level failure.
+     */
+    OCR_PROVIDER_MODE(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "AUTO" },
+    ),
+
+    /**
      * PaddleX OCR Python 可执行文件；空值使用 python 或 PADDLEX_OCR_PYTHON
      */
     PADDLEX_OCR_PYTHON(

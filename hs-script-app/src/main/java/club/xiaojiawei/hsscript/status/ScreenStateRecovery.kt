@@ -144,6 +144,14 @@ object ScreenStateRecovery {
         }
 
         val ocrText = runOCRIfAvailable(capture.image, "screen-recovery") ?: return false
+        if (!OcrRuntime.lastRecognitionAccepted()) {
+            PauseStatus.isPause = true
+            log.error {
+                "SCREEN_RECOVERY_PAUSE_ACTIVE reason=ocr-provider-contract-failed " +
+                    "provider=${OcrRuntime.lastUsedProvider() ?: "UNKNOWN"}"
+            }
+            return false
+        }
         if (!stateStillCurrent()) {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-during-inspection state=$stateFingerprint" }
             return false
@@ -362,12 +370,34 @@ object ScreenStateRecovery {
                 setLanguage(CHI_SIM_DATA)
                 setPageSegMode(11)
                 setVariable("user_defined_dpi", "160")
-            }.doOCR(ocrImage, "screen-recovery")
+            }.doOCR(ocrImage, "screen-recovery", ::isScreenOcrContract)
                 .replace(Regex("\\s+"), "")
         }.getOrElse { error ->
             log.warn(error) { "SCREEN_RECOVERY_OCR_FAILED" }
             ""
         }
+    }
+
+    /**
+     * PaddleX text is only accepted when it can participate in the same
+     * screen mapping as legacy recovery.  A non-empty but unmapped response
+     * is not evidence of a safe state and therefore triggers legacy OCR.
+     */
+    private fun isScreenOcrContract(ocrText: String): Boolean {
+        val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+        return text.contains("选择套牌") ||
+            looksLikeResultText(text) ||
+            looksLikeMatchmakingText(text) ||
+            looksLikeCollectionText(text) ||
+            looksLikePackOpeningText(text) ||
+            looksLikeReconnectFailureText(text) ||
+            looksLikeReconnectText(text) ||
+            looksLikeHubText(text) ||
+            looksLikeLoadingText(text) ||
+            text.contains("登录") || text.contains("重新连接") ||
+            text.contains("狂野对战") || text.contains("标准对战") || text.contains("传统对战") ||
+            text.contains("选择模式") || text.contains("冒险模式") ||
+            text.contains("任务") && (text.contains("商店") || text.contains("对战"))
     }
 
     private fun runOCRIfAvailable(image: BufferedImage, purpose: String): String? {
