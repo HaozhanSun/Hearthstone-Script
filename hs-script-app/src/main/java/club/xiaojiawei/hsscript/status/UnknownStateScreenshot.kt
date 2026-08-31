@@ -40,6 +40,7 @@ object UnknownStateScreenshot {
     const val CATEGORY_ACTION_FAILURE = "action-failure"
     const val CATEGORY_TURN_END_STUCK = "turn-end-stuck"
     const val CATEGORY_POPUP_RECOVERY = "popup-recovery"
+    const val CATEGORY_SCREEN_WATCHDOG = "screen-watchdog"
 
     private val timestampFormatter = DateTimeFormatter.ofPattern(
         "yyyyMMdd-HHmmss-SSS",

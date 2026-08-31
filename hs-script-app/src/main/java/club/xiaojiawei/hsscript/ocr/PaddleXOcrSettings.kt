@@ -24,7 +24,10 @@ data class PaddleXOcrSettings(
 
         fun fromConfig(): PaddleXOcrSettings {
             return PaddleXOcrSettings(
-                enabled = ConfigEnum.USE_PADDLEX_OCR.getBoolean(),
+                // OCR_PROVIDER_MODE is authoritative. USE_PADDLEX_OCR remains
+                // as a compatibility/audit key but must not override an
+                // explicit PADDLEX_ONLY selection.
+                enabled = OcrProviderMode.fromConfig().usesPaddleX,
                 pythonExecutable = ConfigEnum.PADDLEX_OCR_PYTHON.getString()
                     .ifBlank { System.getenv("PADDLEX_OCR_PYTHON").orEmpty() }
                     .ifBlank { DEFAULT_PYTHON_EXECUTABLE },

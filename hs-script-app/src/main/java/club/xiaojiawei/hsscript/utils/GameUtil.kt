@@ -16,7 +16,10 @@ import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
+import club.xiaojiawei.hsscript.status.ScreenWatchdog
+import club.xiaojiawei.hsscript.status.ScreenWatchdogRecoveryAction
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
+import club.xiaojiawei.hsscript.strategy.phase.GameOverPhaseStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil.CHOOSE_ONE_RECTS
 import club.xiaojiawei.hsscript.utils.SystemUtil.delay
 import club.xiaojiawei.hsscriptbase.bean.LRunnable
@@ -644,13 +647,15 @@ object GameUtil {
         val surrenderRetryInterval = RandomUtil.getActionInterval(500).toLong()
         var surrenderAttempts = 0
         val maxSurrenderAttempts = 30
+        val surrenderStartedAt = System.currentTimeMillis()
         gameEndTasks.add(
             EXTRA_THREAD_POOL.scheduleWithFixedDelay(
                 {
+                    fun stopSurrenderTask() = cancelGameEndTask()
                     if (PauseStatus.isPause) {
-                        cancelGameEndTask()
+                        stopSurrenderTask()
                     } else if (WarEx.warCount > warCount || (isGamePlay && Mode.currMode !== ModeEnum.GAMEPLAY)) {
-                        cancelGameEndTask()
+                        stopSurrenderTask()
                     } else if (!isSurrenderStateConfirmed(Mode.currMode, WarEx.inWar)) {
                         log.warn {
                             "投降任务终止：有效对局状态已丢失，停止坐标输入 " +
@@ -658,7 +663,7 @@ object GameUtil {
                                 "warCount=${WarEx.warCount} " +
                                 "reason=mode-not-gameplay-and-war-not-active"
                         }
-                        cancelGameEndTask()
+                        stopSurrenderTask()
                     } else if (++surrenderAttempts > maxSurrenderAttempts) {
                         // Never keep clicking a potentially stale coordinate
                         // forever.  If the game did not leave GAMEPLAY after
@@ -670,9 +675,71 @@ object GameUtil {
                                 "attempts=$surrenderAttempts mode=${Mode.currMode} " +
                                 "inWar=${WarEx.inWar} warCount=${WarEx.warCount}"
                         }
-                        cancelGameEndTask()
+                        stopSurrenderTask()
                         PauseStatus.isPause = true
                     } else {
+                        val watchdogTiming = ScreenWatchdog.shouldInspect(
+                            startedAt = surrenderStartedAt,
+                            attempts = surrenderAttempts,
+                        )
+                        if (watchdogTiming.shouldInspect) {
+                            val state = "mode=${Mode.currMode?.name ?: "NONE"}|inWar=${WarEx.inWar}|" +
+                                "warPhase=${WarEx.war.currentPhase.name}|warCount=${WarEx.warCount}"
+                            val observation = ScreenWatchdog.inspectForSurrender(
+                                state = state,
+                                attempts = surrenderAttempts,
+                            )
+                            log.warn {
+                                "RECOVERY_ACTION source=screen-watchdog action=${observation.action} " +
+                                    "kind=${observation.kind} provider=${observation.provider} " +
+                                    "screenshot=${observation.screenshotPath ?: "not-saved"}"
+                            }
+                            when (observation.action) {
+                                ScreenWatchdogRecoveryAction.CONTINUE_ACTION -> Unit
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_WIN,
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_LOSS,
+                                -> {
+                                    stopSurrenderTask()
+                                    GameOverPhaseStrategy.forceTerminalFromScreenWatchdog(
+                                        observation.kind,
+                                        observation.screenshotPath ?: observation.reason,
+                                    )
+                                    return@scheduleWithFixedDelay
+                                }
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CLEAR_RESULT -> {
+                                    stopSurrenderTask()
+                                    Mode.recover(ModeEnum.GAMEPLAY, "screen-watchdog-result-page", enterStrategy = false)
+                                    dismissStaleGameEndScreen()
+                                    return@scheduleWithFixedDelay
+                                }
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MATCHMAKING -> {
+                                    stopSurrenderTask()
+                                    Mode.recover(ModeEnum.TOURNAMENT, "screen-watchdog-matchmaking", enterStrategy = false)
+                                    return@scheduleWithFixedDelay
+                                }
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MAIN_MENU -> {
+                                    stopSurrenderTask()
+                                    Mode.recover(ModeEnum.HUB, "screen-watchdog-main-menu", enterStrategy = true)
+                                    return@scheduleWithFixedDelay
+                                }
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_PAUSE_UNKNOWN -> {
+                                    stopSurrenderTask()
+                                    log.error {
+                                        "SCREEN_WATCHDOG_BLOCKED reason=unknown-or-capture-failed " +
+                                            "kind=${observation.kind} attempts=$surrenderAttempts " +
+                                            "screenshot=${observation.screenshotPath ?: "not-saved"}"
+                                    }
+                                    PauseStatus.isPause = true
+                                    return@scheduleWithFixedDelay
+                                }
+                            }
+                        } else if (watchdogTiming.reason.startsWith("cooldown")) {
+                            log.warn {
+                                "SCREEN_WATCHDOG_THROTTLED reason=${watchdogTiming.reason} " +
+                                    "attempts=$surrenderAttempts"
+                            }
+                            return@scheduleWithFixedDelay
+                        }
                         log.info {
                             "投降尝试 #$surrenderAttempts/$maxSurrenderAttempts " +
                                 "mode=${Mode.currMode} inWar=${WarEx.inWar}"

@@ -640,6 +640,14 @@ enum class ConfigEnum(
     ),
 
     /**
+     * OCR provider mode: AUTO, PADDLEX_ONLY, LEGACY_ONLY
+     */
+    OCR_PROVIDER_MODE(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "AUTO" },
+    ),
+
+    /**
      * 使用 PaddleX OCR；关闭后使用 legacy Tess4J/TesseractEx
      */
     USE_PADDLEX_OCR(
@@ -685,6 +693,38 @@ enum class ConfigEnum(
     PADDLEX_OCR_TIMEOUT_MS(
         group = DEV_CONFIG_GROUP,
         defaultValueInitializer = { "120000" },
+    ),
+
+    /**
+     * 启用 PaddleX 屏幕 watchdog；卡住或重复恢复动作时截图 OCR 校正状态机
+     */
+    SCREEN_WATCHDOG_ENABLED(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { TRUE_STR },
+    ),
+
+    /**
+     * 屏幕 watchdog 触发的卡住时长（毫秒）
+     */
+    SCREEN_WATCHDOG_STUCK_MS(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "30000" },
+    ),
+
+    /**
+     * 同一恢复动作超过该次数后触发屏幕 watchdog
+     */
+    SCREEN_WATCHDOG_MAX_RETRIES(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "3" },
+    ),
+
+    /**
+     * 屏幕 watchdog 截图冷却时间（毫秒）
+     */
+    SCREEN_WATCHDOG_COOLDOWN_MS(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "15000" },
     ),
 
     /**

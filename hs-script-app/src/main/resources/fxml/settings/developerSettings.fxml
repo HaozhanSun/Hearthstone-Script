@@ -85,10 +85,21 @@
                             <SettingHBox name="保存OCR图片" tabWindow="DEVELOPER_SETTINGS" group="调试">
                                 <ConfigSwitch notificationManager="${notificationManager}" config="SAVE_OCR_IMG"/>
                             </SettingHBox>
-                            <SettingHBox name="使用PaddleX OCR（默认）"
-                                         tip="开启后任务、卡屏恢复、段位识别 OCR 走 PaddleX sidecar；关闭后使用 legacy Tess4J。Python 路径、模块路径、设备、模型缓存和超时可在 config/script.ini 的 dev 组调整。"
+                            <SettingHBox name="OCR Provider（默认 PaddleX）"
+                                         tip="Legacy OCR / Tesseract 完全绕过 PaddleX；PaddleX OCR 只使用 PaddleX，失败时 fail-closed；AUTO 使用 PaddleX，失败时明确记录后回退 Legacy。Python 路径、模块路径、设备、模型缓存和超时可在 config/script.ini 的 dev 组调整。"
                                          tabWindow="DEVELOPER_SETTINGS" group="调试">
-                                <ConfigSwitch notificationManager="${notificationManager}" config="USE_PADDLEX_OCR"/>
+                                <fx:define>
+                                    <ToggleGroup fx:id="ocrProviderToggle"/>
+                                </fx:define>
+                                <RadioButton fx:id="legacyOcrRadio" text="Legacy OCR (Tesseract)"
+                                             toggleGroup="$ocrProviderToggle"
+                                             styleClass="radio-button-ui, radio-button-ui-main"/>
+                                <RadioButton fx:id="autoOcrRadio" text="AUTO (PaddleX-first)"
+                                             toggleGroup="$ocrProviderToggle"
+                                             styleClass="radio-button-ui, radio-button-ui-main"/>
+                                <RadioButton fx:id="paddlexOcrRadio" text="PaddleX OCR"
+                                             toggleGroup="$ocrProviderToggle"
+                                             styleClass="radio-button-ui, radio-button-ui-main"/>
                             </SettingHBox>
                             <SettingHBox name="日志级别" tabWindow="DEVELOPER_SETTINGS" group="调试">
                                 <Hyperlink text="日志" onAction="#openLogFile"/>
