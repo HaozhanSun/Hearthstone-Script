@@ -138,7 +138,15 @@ object MouseUtil {
             }
         }
     }.getOrElse { error ->
-        log.warn(error) { "E2E_INPUT_ROBOT_FOREGROUND_FAILED hwnd=$hwnd" }
+        if (error is InterruptedException) {
+            // A phase transition can cancel the focus delay while the click
+            // target is already stale. Preserve cancellation without adding
+            // an exception stack trace to an otherwise healthy E2E run.
+            Thread.currentThread().interrupt()
+            log.info { "E2E_INPUT_ROBOT_FOREGROUND_INTERRUPTED hwnd=$hwnd" }
+        } else {
+            log.warn(error) { "E2E_INPUT_ROBOT_FOREGROUND_FAILED hwnd=$hwnd" }
+        }
         false
     }
 
