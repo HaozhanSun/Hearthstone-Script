@@ -35,15 +35,15 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     const val HOOK_N_HEAVE = "CAP_105"
     const val CAPTAIN_CROWLEY = "CAP_106"
 
-    /** IDs whose parser may be absent in an older local card database. */
+    /**
+     * Safe, known-meaning fallback cards. New CAP cards are intentionally not
+     * included: known text is not the same as a verified local action/state
+     * transition, so an unknown parser result must fail closed.
+     */
     private val opaqueKnownCards = setOf(
         SHIPS_CANNON,
         QUESTLINE,
         TREASURE_DISTRIBUTOR,
-        CANNONMASTER,
-        BLASTPOWDER_ENGINEER,
-        HOOK_N_HEAVE,
-        CAPTAIN_CROWLEY,
     )
 
     fun isCard(card: Card, id: String): Boolean =
@@ -127,6 +127,47 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     override fun shouldDefer(card: Card, war: War): Boolean = false
 
     /**
+     * Materialize only the deterministic combat buffs for a cloned attack
+     * state.  The temporary field makes the matching cleanup explicit, so
+     * the base attack is not permanently or doubly buffed across rollouts.
+     */
+    override fun beforeSimulatedAction(war: War, action: Action): MctsDecisionModel.SimulationResult {
+        val attacker = (action as? AttackAction)?.creator?.let { war.cardMap[it.entityId] }
+            ?: return MctsDecisionModel.SimulationResult()
+        if (!isPirate(attacker)) return MctsDecisionModel.SimulationResult()
+
+        val otherCaptains = war.me.playArea.cards.count {
+            isCard(it, SOUTHSEA_CAPTAIN) && it.isAlive() && it.entityId != attacker.entityId
+        }
+        val otherHozens = war.me.playArea.cards.count {
+            isCard(it, HOZEN_ROUGHHOUSER) && it.isAlive() && it.entityId != attacker.entityId
+        }
+        val temporaryBonus = otherCaptains + otherHozens
+        if (temporaryBonus > 0) {
+            attacker.atc += temporaryBonus
+            attacker.mctsTemporaryAttackBonus += temporaryBonus
+        }
+        return MctsDecisionModel.SimulationResult()
+    }
+
+    override fun afterSimulatedAction(
+        before: War,
+        after: War,
+        action: Action,
+    ): MctsDecisionModel.SimulationResult {
+        val creator = action.creator
+        if (action is AttackAction && creator != null) {
+            after.me.playArea.findByEntityId(creator.entityId)?.let { attacker ->
+                if (attacker.mctsTemporaryAttackBonus > 0) {
+                    attacker.atc -= attacker.mctsTemporaryAttackBonus
+                    attacker.mctsTemporaryAttackBonus = 0
+                }
+            }
+        }
+        return MctsDecisionModel.SimulationResult()
+    }
+
+    /**
      * Reward attack lines using the attack that the live auras are expected
      * to provide. Southsea Captain buffs other Pirates statically; each other
      * Hozen Roughhouser buffs an attacking Pirate at the attack event.
@@ -167,11 +208,45 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             isCard(it, BLASTPOWDER_ENGINEER) && it.isAlive()
         }
         val free = freeSlots(war)
+        val rivalHero = war.rival.playArea.hero
+        val myHero = war.me.playArea.hero
+        val incomingAttack = war.rival.playArea.cards
+            .filter { it.isAlive() && it.canAttack() }
+            .sumOf { max(it.atc, 0) }
+        val rivalHeroAttack = war.rival.playArea.hero
+            ?.takeIf { it.isAlive() && it.canAttack() }
+            ?.let { max(it.atc, 0) }
+            ?: 0
+        val totalIncomingAttack = incomingAttack + rivalHeroAttack
+        // This is a visible-board threat heuristic, not proof of lethal: it
+        // deliberately excludes hidden hand, random damage, and unparsed text.
+        val defensePenalty = myHero?.let {
+            if (!it.isAlive()) {
+                0.0
+            } else {
+                val gap = totalIncomingAttack - it.blood()
+                when {
+                    gap >= 0 -> 80.0 + gap * 8.0
+                    gap >= -4 -> (gap + 5) * 6.0
+                    else -> 0.0
+                }
+            }
+        } ?: 0.0
+        val hasRivalTaunt = war.rival.playArea.cards.any { it.isAlive() && it.isTaunt }
+        val potentialLethalPressure = if (
+            rivalHero?.isAlive() == true && !hasRivalTaunt && attackValue >= rivalHero.blood()
+        ) {
+            40.0
+        } else {
+            0.0
+        }
 
         return attackValue * 0.65 +
             cannons * (8.0 + otherPirates * 1.5) +
             distributors * (5.0 + otherPirates * 1.0) +
             engine * (3.0 + attackValue * 0.25) +
+            potentialLethalPressure -
+            defensePenalty +
             if (free == 0 && otherPirates < 4) -3.0 else 0.0
     }
 
