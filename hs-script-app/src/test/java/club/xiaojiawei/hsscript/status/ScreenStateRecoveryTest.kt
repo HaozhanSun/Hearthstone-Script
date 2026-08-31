@@ -48,6 +48,7 @@ class ScreenStateRecoveryTest {
         val reward = "还有未领取的奖励 5包标准卡牌包 确定"
         assertFalse(ScreenStateRecovery.looksLikePackOpeningText(reward))
         assertNull(ScreenStateRecovery.classifyForTest(reward))
+        assertFalse(ScreenStateRecovery.looksLikePackOpeningText("传统对战 开包 我的收藏 商店"))
         assertTrue(ScreenStateRecovery.looksLikePackOpeningText("打开卡牌包 点击打开"))
         assertEquals("PACK_OPENING", ScreenStateRecovery.classifyForTest("打开卡牌包 点击打开"))
     }
@@ -67,5 +68,17 @@ class ScreenStateRecoveryTest {
         assertNull(ScreenStateRecovery.classifyForTest(""))
         assertTrue(ScreenStateRecovery.looksLikeLoadingVisual(0.499, 0.195, 0.01))
         assertFalse(ScreenStateRecovery.looksLikeLoadingVisual(0.069, 0.127, 0.54))
+    }
+
+    @Test
+    fun `does not classify the hub collection navigation button as collection screen`() {
+        val hub = "传统对战 酒馆战棋 竞技模式 其他模式 开包 我的收藏 商店"
+        val collection = "我的套牌 卡牌制作 查找 39/40 卡牌"
+
+        assertFalse(ScreenStateRecovery.looksLikeCollectionText(hub))
+        assertTrue(ScreenStateRecovery.looksLikeHubText(hub))
+        assertEquals("HOME", ScreenStateRecovery.classifyForTest(hub))
+        assertTrue(ScreenStateRecovery.looksLikeCollectionText(collection))
+        assertEquals("COLLECTION", ScreenStateRecovery.classifyForTest(collection))
     }
 }

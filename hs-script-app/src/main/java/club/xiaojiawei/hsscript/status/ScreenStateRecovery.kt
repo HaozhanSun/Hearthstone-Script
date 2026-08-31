@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import javax.imageio.ImageIO
 import javafx.application.Platform
 
@@ -268,12 +269,20 @@ object ScreenStateRecovery {
     private fun <T> withMainOverlaySuppressed(block: () -> T): T? {
         val stage = WindowUtil.getStage(WindowEnum.MAIN) ?: return block()
         val wasShowing = AtomicBoolean(false)
+        val originalAlwaysOnTop = AtomicBoolean(false)
+        val originalOpacity = AtomicReference(1.0)
         val suppressFailed = AtomicBoolean(false)
         val hidden = CountDownLatch(1)
         if (Platform.isFxApplicationThread()) {
             wasShowing.set(stage.isShowing)
+            originalAlwaysOnTop.set(stage.isAlwaysOnTop)
+            originalOpacity.set(stage.opacity)
             if (wasShowing.get()) {
-                runCatching { stage.hide() }
+                runCatching {
+                    stage.isAlwaysOnTop = false
+                    stage.opacity = 0.0
+                    stage.hide()
+                }
                     .onFailure {
                         suppressFailed.set(true)
                         log.warn(it) { "SCREEN_RECOVERY_OVERLAY_SUPPRESS_FAILED" }
@@ -284,14 +293,24 @@ object ScreenStateRecovery {
                 log.info { "SCREEN_RECOVERY_OVERLAY_SUPPRESSED showing=true" }
                 block()
             } finally {
-                if (wasShowing.get()) stage.show()
+                if (wasShowing.get()) {
+                    stage.opacity = originalOpacity.get()
+                    stage.isAlwaysOnTop = originalAlwaysOnTop.get()
+                    stage.show()
+                }
             }
         }
 
         Platform.runLater {
             runCatching {
                 wasShowing.set(stage.isShowing)
-                if (wasShowing.get()) stage.hide()
+                originalAlwaysOnTop.set(stage.isAlwaysOnTop)
+                originalOpacity.set(stage.opacity)
+                if (wasShowing.get()) {
+                    stage.isAlwaysOnTop = false
+                    stage.opacity = 0.0
+                    stage.hide()
+                }
             }.onFailure { error ->
                 suppressFailed.set(true)
                 log.warn(error) { "SCREEN_RECOVERY_OVERLAY_SUPPRESS_FAILED" }
@@ -303,6 +322,7 @@ object ScreenStateRecovery {
             return null
         }
         if (suppressFailed.get()) return null
+        if (wasShowing.get()) Thread.sleep(250)
 
         return try {
             if (wasShowing.get()) {
@@ -313,7 +333,11 @@ object ScreenStateRecovery {
             if (wasShowing.get()) {
                 val restored = CountDownLatch(1)
                 Platform.runLater {
-                    runCatching { stage.show() }
+                    runCatching {
+                        stage.opacity = originalOpacity.get()
+                        stage.isAlwaysOnTop = originalAlwaysOnTop.get()
+                        stage.show()
+                    }
                         .onFailure { error -> log.warn(error) { "SCREEN_RECOVERY_OVERLAY_RESTORE_FAILED" } }
                     restored.countDown()
                 }
@@ -479,7 +503,7 @@ object ScreenStateRecovery {
         if (looksLikeMatchmakingText(text)) {
             return Detection(ScreenKind.MATCHMAKING, ModeEnum.TOURNAMENT, 95, "matchmaking-text")
         }
-        if (text.contains("我的收藏") || text.contains("收藏管理")) {
+        if (looksLikeCollectionText(text)) {
             return Detection(ScreenKind.COLLECTION, ModeEnum.COLLECTIONMANAGER, 95, "collection-text")
         }
         // Reward pages advertise unopened packs too.  A bare "卡牌包" is
@@ -509,6 +533,9 @@ object ScreenStateRecovery {
         if (text.contains("登录") || text.contains("重新连接")) {
             return Detection(ScreenKind.LOGIN, ModeEnum.LOGIN, 90, "login-text")
         }
+        if (looksLikeHubText(text)) {
+            return Detection(ScreenKind.HOME, ModeEnum.HUB, 92, "hub-navigation-text")
+        }
         if (text.contains("狂野对战") || text.contains("标准对战") || text.contains("传统对战")) {
             return Detection(ScreenKind.TOURNAMENT, ModeEnum.TOURNAMENT, 90, "tournament-text")
         }
@@ -525,6 +552,30 @@ object ScreenStateRecovery {
         // a false recovery while the user is looking at the client.
         if (visual.warmRatio > 0.0 || visual.blueRatio > 0.0) return null
         return null
+    }
+
+    /**
+     * The Hearthstone hub always contains a navigation button labelled
+     * "我的收藏". That label alone is therefore not evidence that the
+     * collection screen is visible. Require a collection-only control or
+     * title that is present after the hub button has been opened.
+     */
+    internal fun looksLikeCollectionText(ocrText: String): Boolean {
+        val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+        return text.contains("收藏管理") ||
+            text.contains("我的套牌") ||
+            text.contains("卡牌制作")
+    }
+
+    /**
+     * The hub exposes several mode/navigation labels at once. Requiring a
+     * cluster avoids treating a single "传统对战" label on a mode page as
+     * the hub while still recognizing the live localized main menu.
+     */
+    internal fun looksLikeHubText(ocrText: String): Boolean {
+        val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+        val hubTerms = listOf("传统对战", "酒馆战棋", "竞技模式", "其他模式", "开包", "我的收藏", "商店")
+        return hubTerms.count(text::contains) >= 3
     }
 
     internal fun looksLikeMatchmakingText(ocrText: String): Boolean {
@@ -544,8 +595,9 @@ object ScreenStateRecovery {
             text.contains("领取奖励") ||
             text.contains("奖励") && text.contains("确定")
         if (rewardPage) return false
-        return text.contains("开包") ||
-            text.contains("打开卡牌包") ||
+        // The hub has a navigation button labelled "开包". Only text that
+        // describes the opened pack interaction is specific to this screen.
+        return text.contains("打开卡牌包") ||
             text.contains("点击打开") ||
             text.contains("翻开卡牌包")
     }
@@ -774,4 +826,5 @@ internal class OcrInFlightGate {
     fun release() {
         inFlight.set(false)
     }
+
 }
