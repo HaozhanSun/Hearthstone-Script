@@ -146,13 +146,22 @@ function Get-PowerLogWinLinesAfter([string]$path, [long]$offset) {
             $stream.Seek($offset, [System.IO.SeekOrigin]::Begin) | Out-Null
             $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $true, 4096, $true)
             try {
+                $canonicalPrefixSeen = $false
+                $recentLines = [System.Collections.Generic.Queue[string]]::new()
                 while ($null -ne ($line = $reader.ReadLine())) {
-                    # Power.log repeats each state in a PowerTaskList block.
-                    # Only the canonical GameState record represents the game
-                    # result; counting the replayed PowerTaskList record would
-                    # turn one win into two games.
-                    if ($line.Contains("GameState.DebugPrintPower()") -and $line.Contains($winToken)) {
-                        [void]$matches.Add($line)
+                    # Hearthstone normally keeps the result on one line, but
+                    # some client builds split the record at the logger's
+                    # write boundary. Keep a short rolling window so the
+                    # authoritative prefix and PLAYSTATE token are paired
+                    # without counting the later PowerTaskList replay.
+                    $recentLines.Enqueue($line)
+                    while ($recentLines.Count -gt 6) { [void]$recentLines.Dequeue() }
+                    if ($line.Contains("GameState.DebugPrintPower()")) {
+                        $canonicalPrefixSeen = $true
+                    }
+                    if ($canonicalPrefixSeen -and $line.Contains($winToken)) {
+                        [void]$matches.Add(($recentLines -join " | "))
+                        $canonicalPrefixSeen = $false
                     }
                 }
             } finally { $reader.Dispose() }
