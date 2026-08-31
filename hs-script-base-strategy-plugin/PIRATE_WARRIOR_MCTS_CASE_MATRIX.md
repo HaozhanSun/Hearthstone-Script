@@ -67,6 +67,22 @@
 
 最终结果：`PirateWarriorMctsGoldenScenarioTest` 11 tests passed，`PirateWarriorMctsModelTest` 5 tests passed，合计 16 tests passed；reactor `BUILD SUCCESS`。编译期间仅有既有 MapStruct `deepClone` unmapped warning。该结果只证明离线模型/动作候选夹具，不证明 parser、UI 点击、游戏服务端接受、随机效果或真实回合 E2E。
 
+## Verification gotcha ledger
+
+下表专门记录容易把离线结果误读成真实 E2E 的验证陷阱。`status` 是本分支当前状态，不是发布结论。
+
+| symptom | root cause | safe response | required evidence | status |
+|---|---|---|---|---|
+| 日志显示 MCTS 选中了动作，但游戏没有变化 | dispatch/log event 只代表本地尝试；parser、UI 或客户端可能拒绝动作 | 把 `action_dispatched`、callback return、state delta、`action_confirmed`/`action_unconfirmed` 分开；无变化时抑制重复动作 | 同一 action 的 before/after state fingerprint、callback result、异常、retry suppression、实际 UI/游戏状态变化 | 通用 controller 已有离线语义；真实 accepted 仍待验证 |
+| fingerprint 相同但动作被误认为成功，或短暂变化被误判 | fingerprint 字段不完整、采样太早，或只比较日志/对象引用 | fingerprint 至少包含 turn owner、turn、mana/used resources、hand/board/weapon durability、hero health、target/card IDs；在 bounded wait 内重复采样 | action 前后 canonical fingerprint、采样时间、变化字段、稳定窗口和 timeout 结果 | 设计已记录；尚无真实客户端采样 fixture |
+| `END_TURN` 被提前执行，或结束后没有重新扫描 | experimental search 的候选过滤与 live executor 的 turn ownership/结束回合时序可能不同 | 仅在当前节点无可执行优先动作时允许 `END_TURN`；结束后等待 turn/state fingerprint，再重新扫描 | turn owner、END_TURN dispatch/accept、下一回合 fingerprint、重复扫描结果 | 通用离线节点覆盖；真实回合边界待验证 |
+| 新武器打出后旧武器仍被错误计分，或 Hookfist 被错误降/升权 | weapon replacement、耐久归零和攻击消耗是 transition 语义，不是单纯 hand/board presence | prior 只把已存活武器/同回合可支付武器当作证据；不伪造 replacement 或 durability 变化 | before/after equipped weapon entity、attack/durability、mana、旧武器移除、新武器生效和 accepted action | prior/耐久夹具已通过；真实 replacement transition 未确认 |
+| 船载火炮日志显示已下场，但随机炮击/船只招募没有发生 | 卡面文本已知不代表本地 parser 有完整 battlecry/ship/random transition | CAP 新卡和未验证生成效果保持 fail-closed；船炮只能使用 parser-backed action，随机效果只作待验证 reward | cannon/ship entity、trigger event、随机目标、伤害、招募卡 ID/位置、state fingerprint 前后差异 | fail-closed 离线覆盖；炮击/招募 E2E 未验证 |
+| 未知卡被 MCTS 当作普通 minion/opaque action 执行 | parser unknown action 与 generic minion fallback 可能只支付费用并移入战场，漏掉真实效果 | `isUncertain` 或无可靠 parser action 时过滤；禁止按卡名/前缀批量开启 opaque fallback | action scan outcome、parser class/card ID、uncertain 标记、无 action 的节点结果、无重复 retry | 未知卡和 CAP fail-closed 测试通过 |
+| replay 只能复现选择，不能复现游戏状态 | 只保存 selected action 或日志，不保存足够的 state/transition 输入 | 保存 redacted deterministic state snapshot、候选列表/prior、mandatory reason、chosen action、transition result 和 seed/random outcome | fixture 可离线重放并逐字段比较 expected/actual fingerprint；随机效果保存 seed 或 outcome | replay schema 已有基础 trace；Pirate Warrior 专用 fixture 待补 |
+| 测试通过但运行的仍是旧 JAR/旧插件进程 | stale process、旧 manifest、旧 classpath 或未重启 worker 与当前源码不一致 | 当前阶段不宣称运行验证；发布阶段必须记录 build ID、JAR SHA-256、manifest、进程 PID/classpath 和启动时间 | 新版本 identity 与运行时 identity 一致，旧进程不存在，manifest/hash/launcher 指向同一 artifact | 本轮未 build/deploy，故未适用；发布 gate 必须补证据 |
+| 离线 action accepted 被误写成真实 E2E 通过 | `TestCardAction`/generic simulator 的 callback 返回成功只证明测试夹具接受 | 报告中明确使用“offline model/action candidate pass”；禁止使用“游戏已接受/真实回合通过” | 真实客户端截图或状态采样、dispatch-to-accepted trace、回放 fixture、失败重试记录 | 当前报告明确为 offline-only |
+
 ## 下一步 telemetry/test
 
 - 每次搜索记录 state fingerprint、turn owner、mana/used resources、hand/board/weapon durability、candidate action、prior、mandatory reason、selected action。
