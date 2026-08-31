@@ -519,6 +519,12 @@ object ScreenStateRecovery {
         if (looksLikeReconnectText(text)) {
             return Detection(ScreenKind.RECONNECT, ModeEnum.LOGIN, 96, "reconnect-disconnected-text")
         }
+        // The hub's dark central menu resembles the loading card-back visual
+        // signature. A strong multi-label hub OCR observation must therefore
+        // win before the generic visual loading fallback.
+        if (looksLikeHubText(text)) {
+            return Detection(ScreenKind.HOME, ModeEnum.HUB, 92, "hub-navigation-text")
+        }
         if (looksLikeLoadingText(text)) {
             return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 88, "loading-text")
         }
@@ -532,9 +538,6 @@ object ScreenStateRecovery {
         }
         if (text.contains("登录") || text.contains("重新连接")) {
             return Detection(ScreenKind.LOGIN, ModeEnum.LOGIN, 90, "login-text")
-        }
-        if (looksLikeHubText(text)) {
-            return Detection(ScreenKind.HOME, ModeEnum.HUB, 92, "hub-navigation-text")
         }
         if (text.contains("狂野对战") || text.contains("标准对战") || text.contains("传统对战")) {
             return Detection(ScreenKind.TOURNAMENT, ModeEnum.TOURNAMENT, 90, "tournament-text")
