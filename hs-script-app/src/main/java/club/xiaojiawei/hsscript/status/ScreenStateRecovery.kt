@@ -21,6 +21,7 @@ import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.File
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
@@ -42,6 +43,14 @@ object ScreenStateRecovery {
     private const val RESULT_CONTINUE_GRAY_LIGHT_MIN = 0.025
     private const val RESULT_BANNER_LOW_SATURATION_MIN = 0.30
     private const val RECONNECT_RETRY_INTERVAL_MS = 60_000L
+    /**
+     * Screen recovery can be requested by both startup probing and the
+     * lifecycle monitor.  PaddleX launches a fresh Python process per call;
+     * overlapping probes contend for the CPU and can turn a healthy OCR run
+     * into a false 180-second timeout.  Keep the first probe authoritative and
+     * fail the duplicate closed without starting a second sidecar.
+     */
+    private val ocrInFlight = OcrInFlightGate()
     private val reconnectAttemptAt = AtomicLong(0L)
 
     private enum class ScreenKind(val code: String) {
@@ -129,7 +138,7 @@ object ScreenStateRecovery {
                 "visual=${capture.visual}"
         }
 
-        val ocrText = runOCR(capture.image)
+        val ocrText = runOCRIfAvailable(capture.image, "screen-recovery") ?: return false
         if (!stateStillCurrent()) {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-during-inspection state=$stateFingerprint" }
             return false
@@ -259,6 +268,18 @@ object ScreenStateRecovery {
         }.getOrElse { error ->
             log.warn(error) { "SCREEN_RECOVERY_OCR_FAILED" }
             ""
+        }
+    }
+
+    private fun runOCRIfAvailable(image: BufferedImage, purpose: String): String? {
+        if (!ocrInFlight.tryAcquire()) {
+            log.info { "SCREEN_RECOVERY_SKIPPED reason=ocr-in-flight purpose=$purpose" }
+            return null
+        }
+        return try {
+            runOCR(image)
+        } finally {
+            ocrInFlight.release()
         }
     }
 
@@ -529,7 +550,8 @@ object ScreenStateRecovery {
      */
     internal fun isResultVisibleForRecovery(): Boolean? = runCatching {
         val capture = captureScreen() ?: return@runCatching null
-        val detection = detect(runOCR(capture.image), capture.visual)
+        val ocrText = runOCRIfAvailable(capture.image, "result-postcheck") ?: return@runCatching null
+        val detection = detect(ocrText, capture.visual)
         when {
             detection == null || detection.confidence < 85 -> null
             detection.kind == ScreenKind.RESULT -> true
@@ -665,5 +687,16 @@ object ScreenStateRecovery {
             }
         }
         return true
+    }
+}
+
+/** Small thread-safe gate for the one-sidecar-at-a-time recovery invariant. */
+internal class OcrInFlightGate {
+    private val inFlight = AtomicBoolean(false)
+
+    fun tryAcquire(): Boolean = inFlight.compareAndSet(false, true)
+
+    fun release() {
+        inFlight.set(false)
     }
 }
