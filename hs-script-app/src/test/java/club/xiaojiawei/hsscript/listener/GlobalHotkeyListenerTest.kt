@@ -26,11 +26,14 @@ class GlobalHotkeyListenerTest {
     fun `F2 activates pause and F1 explicitly resumes`() {
         try {
             PauseStatus.isPause = false
+            WorkTimeListener.working = true
             GlobalHotkeyListener.onHotKey(445)
             assertTrue(PauseStatus.isPause)
+            assertFalse(WorkTimeListener.working)
             GlobalHotkeyListener.onHotKey(444)
             assertFalse(PauseStatus.isPause)
         } finally {
+            WorkTimeListener.working = false
             PauseStatus.isPause = true
         }
     }

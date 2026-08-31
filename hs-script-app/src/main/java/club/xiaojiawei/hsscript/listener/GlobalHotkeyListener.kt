@@ -224,6 +224,13 @@ object GlobalHotkeyListener : HotkeyListener {
         if (paused) {
             log.info { "PAUSE_REQUESTED source=$source" }
             PauseStatus.isPause = true
+            // The JavaFX property listener in Core is intentionally marshaled
+            // to the FX thread.  A hotkey can arrive while that queue is busy,
+            // so make the worker-state side of the pause gate synchronous as
+            // well.  ActionDispatchGate already uses the atomic PauseStatus;
+            // this keeps lifecycle evidence and legacy working checks aligned
+            // before PAUSE_ACTIVE is emitted.
+            WorkTimeListener.working = false
             log.info { "PAUSE_ACTIVE source=$source" }
         } else {
             log.info { "RESUME_REQUESTED source=$source" }

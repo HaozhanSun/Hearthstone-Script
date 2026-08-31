@@ -8,9 +8,11 @@ import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.strategy.mode.LoginModeStrategy
 import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
+import club.xiaojiawei.hsscript.enums.WindowEnum
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.MouseUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
+import club.xiaojiawei.hsscript.utils.WindowUtil
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
@@ -23,8 +25,10 @@ import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
+import javafx.application.Platform
 
 /**
  * Visual fallback for a stale LoadingScreen state.
@@ -236,17 +240,88 @@ object ScreenStateRecovery {
         }
         val bounds = candidate.intersection(allScreens)
         if (bounds.width < 400 || bounds.height < 300) return null
-        val image = try {
-            Robot().createScreenCapture(bounds)
-        } catch (_: Exception) {
-            Robot().createScreenCapture(allScreens)
-        }
+        val image = withMainOverlaySuppressed {
+            try {
+                Robot().createScreenCapture(bounds)
+            } catch (_: Exception) {
+                Robot().createScreenCapture(allScreens)
+            }
+        } ?: return null
         val saved = DebugScreenshotRing.save(image, "screen-recovery", "stale-screen")
         val file = saved?.file
         Capture(image, bounds, file, visualSignature(image))
     }.getOrElse { error ->
         log.warn(error) { "SCREEN_RECOVERY_FAILED reason=capture-exception" }
         null
+    }
+
+    /**
+     * The main JavaFX window is deliberately always-on-top so its controls
+     * remain usable while Hearthstone is full-screen.  A desktop Robot
+     * capture therefore includes the script's own log panel whenever the
+     * game is under it.  OCR then sees words such as "我的收藏" from that
+     * panel and can steer recovery into the wrong screen.  Hide only that
+     * overlay for the single capture and restore its prior visibility on the
+     * FX thread.  If the transition cannot be confirmed, fail closed rather
+     * than classify a contaminated screenshot.
+     */
+    private fun <T> withMainOverlaySuppressed(block: () -> T): T? {
+        val stage = WindowUtil.getStage(WindowEnum.MAIN) ?: return block()
+        val wasShowing = AtomicBoolean(false)
+        val suppressFailed = AtomicBoolean(false)
+        val hidden = CountDownLatch(1)
+        if (Platform.isFxApplicationThread()) {
+            wasShowing.set(stage.isShowing)
+            if (wasShowing.get()) {
+                runCatching { stage.hide() }
+                    .onFailure {
+                        suppressFailed.set(true)
+                        log.warn(it) { "SCREEN_RECOVERY_OVERLAY_SUPPRESS_FAILED" }
+                    }
+            }
+            if (suppressFailed.get()) return null
+            return try {
+                log.info { "SCREEN_RECOVERY_OVERLAY_SUPPRESSED showing=true" }
+                block()
+            } finally {
+                if (wasShowing.get()) stage.show()
+            }
+        }
+
+        Platform.runLater {
+            runCatching {
+                wasShowing.set(stage.isShowing)
+                if (wasShowing.get()) stage.hide()
+            }.onFailure { error ->
+                suppressFailed.set(true)
+                log.warn(error) { "SCREEN_RECOVERY_OVERLAY_SUPPRESS_FAILED" }
+            }
+            hidden.countDown()
+        }
+        if (!hidden.await(2, TimeUnit.SECONDS)) {
+            log.warn { "SCREEN_RECOVERY_OVERLAY_SUPPRESS_FAILED reason=fx-timeout" }
+            return null
+        }
+        if (suppressFailed.get()) return null
+
+        return try {
+            if (wasShowing.get()) {
+                log.info { "SCREEN_RECOVERY_OVERLAY_SUPPRESSED showing=true" }
+            }
+            block()
+        } finally {
+            if (wasShowing.get()) {
+                val restored = CountDownLatch(1)
+                Platform.runLater {
+                    runCatching { stage.show() }
+                        .onFailure { error -> log.warn(error) { "SCREEN_RECOVERY_OVERLAY_RESTORE_FAILED" } }
+                    restored.countDown()
+                }
+                if (!restored.await(2, TimeUnit.SECONDS)) {
+                    log.warn { "SCREEN_RECOVERY_OVERLAY_RESTORE_FAILED reason=fx-timeout" }
+                }
+            }
+        }
     }
 
     private fun runOCR(image: BufferedImage): String {
