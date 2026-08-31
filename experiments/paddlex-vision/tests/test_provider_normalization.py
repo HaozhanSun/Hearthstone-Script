@@ -2,6 +2,7 @@ from paddlex_vision_experiment.provider import (
     VisionAnalysis,
     normalize_object_payload,
     normalize_ocr_payload,
+    ocr_pipeline_config,
 )
 from paddlex_vision_experiment.ocr_bridge import PaddleXOcrBridge
 
@@ -56,3 +57,24 @@ def test_ocr_bridge_matches_text_only_consumer_contract():
             )
 
     assert PaddleXOcrBridge(FakeProvider()).do_ocr("fixture.png") == "你好世界"
+
+
+def test_ocr_pipeline_config_preserves_required_defaults_and_disables_unused_models():
+    calls: list[str] = []
+
+    def fake_load_pipeline_config(name: str) -> dict[str, object]:
+        calls.append(name)
+        return {
+            "pipeline_name": name,
+            "text_type": "general",
+            "use_doc_preprocessor": True,
+            "use_textline_orientation": True,
+        }
+
+    config = ocr_pipeline_config(fake_load_pipeline_config, "OCR")
+
+    assert calls == ["OCR"]
+    assert config["pipeline_name"] == "OCR"
+    assert config["text_type"] == "general"
+    assert config["use_doc_preprocessor"] is False
+    assert config["use_textline_orientation"] is False

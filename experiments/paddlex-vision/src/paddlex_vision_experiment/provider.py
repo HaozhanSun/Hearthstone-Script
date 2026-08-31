@@ -123,6 +123,27 @@ def normalize_ocr_payload(payload: dict[str, Any]) -> tuple[DetectedText, ...]:
     return tuple(normalized)
 
 
+def ocr_pipeline_config(load_pipeline_config: Any, pipeline: str) -> dict[str, Any]:
+    """Load PaddleX's full OCR config and disable unused document models.
+
+    Passing these switches only to ``predict`` is too late: PaddleX still
+    constructs the document-preprocessor and textline-orientation models when
+    the pipeline is created.  Those models are not needed for Hearthstone's
+    already-rendered UI and can make the CPU sidecar exceed its process
+    timeout.  Keep the full vendor config so required fields such as
+    ``text_type`` remain intact, then override only the two unused model
+    switches.
+    """
+
+    config = load_pipeline_config(pipeline)
+    if not isinstance(config, dict):
+        raise TypeError(f"unexpected PaddleX pipeline config type: {type(config).__name__}")
+    config = dict(config)
+    config["use_doc_preprocessor"] = False
+    config["use_textline_orientation"] = False
+    return config
+
+
 class PaddleXVisionProvider:
     """Run PaddleX object detection and OCR without importing it at module load."""
 
@@ -140,6 +161,7 @@ class PaddleXVisionProvider:
             os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
         try:
             from paddlex import create_pipeline
+            from paddlex.inference.pipelines import load_pipeline_config
         except ImportError as error:
             raise RuntimeError(
                 "PaddleX is not installed. Install this experiment's runtime extra "
@@ -147,7 +169,10 @@ class PaddleXVisionProvider:
             ) from error
 
         self._object_pipeline = create_pipeline(pipeline=object_pipeline, device=device)
-        self._ocr_pipeline = create_pipeline(pipeline=ocr_pipeline, device=device)
+        self._ocr_pipeline = create_pipeline(
+            config=ocr_pipeline_config(load_pipeline_config, ocr_pipeline),
+            device=device,
+        )
 
     @staticmethod
     def _first(results: Iterable[Any]) -> Any:
@@ -186,12 +211,16 @@ class PaddleXOcrProvider:
             os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
         try:
             from paddlex import create_pipeline
+            from paddlex.inference.pipelines import load_pipeline_config
         except ImportError as error:
             raise RuntimeError(
                 "PaddleX is not installed. Install this experiment's runtime extra "
                 "with: python -m pip install 'paddlex-vision-experiment[runtime]'"
             ) from error
-        self._ocr_pipeline = create_pipeline(pipeline=ocr_pipeline, device=device)
+        self._ocr_pipeline = create_pipeline(
+            config=ocr_pipeline_config(load_pipeline_config, ocr_pipeline),
+            device=device,
+        )
 
     def recognize(self, image: str | Path) -> tuple[DetectedText, ...]:
         result = next(
