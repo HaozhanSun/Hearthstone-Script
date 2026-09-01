@@ -4,8 +4,9 @@ Coordinator worktree: `C:/Users/yzjsh/.codex/worktrees/ab8c/Hearthstone Copilot`
 
 Coordinator branch: `codex/overnight-release-integration`
 
-Current checkpoint: `bdd63ba7` adds the hub visual recovery guard on top of the
-single-tree release lineage. The latest canonical deployment is v4.16.138;
+Current checkpoint: `4edae83d` adds the bounded pre-game E2E dispatch compatibility
+guard on top of the single-tree release lineage. The latest canonical deployment
+is v4.16.139;
 the worktree is intended to remain clean between evidence checkpoints. No E2E
 credit is assigned until real-game evidence passes the completion gate.
 
@@ -20,6 +21,9 @@ credit is assigned until real-game evidence passes the completion gate.
      tree and includes the OCR/runner/screen-recovery guard tests.
    - v4.16.138 checked-in build tests passed 119/119 with 0 failures and 0
      errors; the full 8-module reactor passed BUILD SUCCESS.
+   - v4.16.139 checked-in build tests passed 120/120 with 0 failures and 0
+     errors; the full 8-module reactor passed BUILD SUCCESS. The added test
+     covers the bounded pre-game context allowlist.
 
 2. **Release/CU mutex — v4.16.138 deployed and provenance verified**
    - Canonical manifest currently points to v4.16.135-local-20260901-011404PDT,
@@ -54,8 +58,17 @@ credit is assigned until real-game evidence passes the completion gate.
      `f5cb33ff2c81c85e02dfeba62a5e304a082b56e902346cf30eaa64d7c0cb4743`.
      Class markers confirm OCR reconciliation, hub visual recovery, fresh
      Power.log/CREATE_GAME readiness, and sentinel HWND handling.
+   - v4.16.139 manifest selected
+     `hs-script_v4.16.139-local-20260901-021338PDT.jar` with JAR SHA-256
+     `399cff9aef22a3a595d02b19be03e39e83fcc98bdad523a672b88e33b1ba094c`.
+     Target and canonical JAR hashes match. ZIP SHA-256 is
+     `a37b9d84c11c58fdfafc28a014ccf9683da566cab22ae9394d3f60aef25b3b76`.
+     The runner SHA-256 remains
+     `f5cb33ff2c81c85e02dfeba62a5e304a082b56e902346cf30eaa64d7c0cb4743`.
+     The compiled PowerLogListener contains the pre-game context allowlist
+     and retains the `E2E_READINESS_FAIL_CLOSED` marker.
 
-3. **Fresh DebugRun E2E — ready to start on v4.16.138**
+3. **Fresh DebugRun E2E — ready to start on v4.16.139**
    - Start only after manifest/JAR/ZIP/runner/shortcut provenance is verified.
    - Every attempt gets a new run id and per-run ledger. Preserve all failed
      artifacts and append a gotcha on invalidation.
@@ -78,6 +91,7 @@ credit is assigned until real-game evidence passes the completion gate.
 - OCR owner: `1d64115adb9bf73b3af07ba1c8dfe307eb20336c`, clean independent
   worktree; focused OCR contract tests reported 15/15.
 - Readiness/sentinel: `e53685c4` with sentinel guard `098a2d77`.
+- Pre-game readiness compatibility guard: `4edae83d3983a2d955d10dad86c3dabf2c1bd8d6`.
 - DebugRun runner: source commit `456ba0df27e69b833916b268fed12d6de18bdbdc`,
   integrated here as `44921340`.
 - Prior invalid run: `47710_5759`; it remains excluded because Legacy OCR was
