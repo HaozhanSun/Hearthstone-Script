@@ -71,9 +71,9 @@
 .\mvnw.cmd -pl hs-script-base-strategy-plugin -am -Dtest=PirateWarriorMctsModelTest,PirateWarriorMctsGoldenScenarioTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-最终结果（本轮）：命令 `.\mvnw.cmd -pl hs-script-base-strategy-plugin -am '-Dtest=PirateWarriorMctsModelTest,PirateWarriorMctsGoldenScenarioTest' '-Dsurefire.failIfNoSpecifiedTests=false' test`；`PirateWarriorMctsGoldenScenarioTest` 17 tests passed，`PirateWarriorMctsModelTest` 5 tests passed，合计 22 tests passed；reactor `BUILD SUCCESS`。编译期间仅有既有 MapStruct `deepClone` unmapped warning。该结果只证明离线模型/动作候选夹具，不证明 parser、UI 点击、游戏服务端接受、随机效果或真实回合 E2E。
+此前规则 checkpoint：命令 `.\mvnw.cmd -pl hs-script-base-strategy-plugin -am '-Dtest=PirateWarriorMctsModelTest,PirateWarriorMctsGoldenScenarioTest' '-Dsurefire.failIfNoSpecifiedTests=false' test`；`PirateWarriorMctsGoldenScenarioTest` 17 tests passed，`PirateWarriorMctsModelTest` 5 tests passed，合计 22 tests passed；reactor `BUILD SUCCESS`。编译期间仅有既有 MapStruct `deepClone` unmapped warning。该结果只证明离线模型/动作候选夹具，不证明 parser、UI 点击、游戏服务端接受、随机效果或真实回合 E2E。
 
-本轮 Hozen 语义修正后的最终离线结果：`PirateWarriorMctsGoldenScenarioTest` 19/19 passed + `PirateWarriorMctsModelTest` 5/5 passed = 24/24 passed；reactor `BUILD SUCCESS`。新增用例覆盖 0 个 Pirate、1 个其他 Pirate、2 个 Pirate、第二张同名猢狲、非 Pirate、手牌 Pirate 排除、触发者自身排除，以及 attack/health 两项状态。
+Hozen 语义修正 checkpoint：`PirateWarriorMctsGoldenScenarioTest` 19/19 passed + `PirateWarriorMctsModelTest` 5/5 passed = 24/24 passed；reactor `BUILD SUCCESS`。新增用例覆盖 0 个 Pirate、1 个其他 Pirate、2 个 Pirate、第二张同名猢狲、非 Pirate、手牌 Pirate 排除、触发者自身排除，以及 attack/health 两项状态。
 
 ## Verification gotcha ledger
 

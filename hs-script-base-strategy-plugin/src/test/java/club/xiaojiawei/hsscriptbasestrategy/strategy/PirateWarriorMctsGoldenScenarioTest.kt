@@ -140,6 +140,30 @@ class PirateWarriorMctsGoldenScenarioTest {
     }
 
     @Test
+    fun `hozen does not create a persistent aura for pirates played later`() {
+        val war = testWar(turn = 2, mana = 6)
+        val hozen = testCard(PirateWarriorMctsModel.HOZEN_ROUGHHOUSER, 3, 2).apply {
+            entityId = "FIRST_HOZEN_IN_HAND"
+        }
+        war.addCard(hozen, war.me.handArea)
+        val hozenPlay = hozen.action.generatePlayActions(war, war.me).single()
+        val afterHozen = MonteCarloTreeNode(war, InitAction, testArg()).buildNextNode(hozenPlay).state.war
+
+        val laterPirate = testCard("LATER_PIRATE", 1, 2).apply {
+            entityId = "LATER_PIRATE_IN_HAND"
+        }
+        afterHozen.addCard(laterPirate, afterHozen.me.handArea)
+        val piratePlay = laterPirate.action.generatePlayActions(afterHozen, afterHozen.me).single()
+        val afterLaterPirate = MonteCarloTreeNode(afterHozen, InitAction, testArg())
+            .buildNextNode(piratePlay)
+            .state
+            .war
+
+        assertEquals(2, afterLaterPirate.me.playArea.findByEntityId(laterPirate.entityId)?.atc)
+        assertEquals(3, afterLaterPirate.me.playArea.findByEntityId(laterPirate.entityId)?.health)
+    }
+
+    @Test
     fun `hookfist is downranked with a playable minion but rises when weapon fits this turn`() {
         val noWeapon = testWar(turn = 2, mana = 3)
         val hookfist = testCard(PirateWarriorMctsModel.HOOKFIST, 3)

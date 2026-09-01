@@ -39,6 +39,19 @@
 
 ## priority 约定
 
+## 本轮离线价值核对
+
+当前 deck 的保守价值理解以“可观察状态变化优先、未知 parser 效果 fail-closed”为准：
+
+| 卡牌 / ID | 当前模型价值理解 | 保守边界 |
+|---|---|---|
+| 前锋战斧 / `BAR_844` | 不是普通 face weapon；优先寻找可击杀随从并兑现抽牌，攻击本身后置。 | `AttackAction` 无 target 字段，因此用 clone delta 分类；对手英雄血量 `>=10` 硬禁打脸，未知目标禁用，非击杀随从不给 kill reward；武器耐久只在模拟 hook 显式消耗一次。 |
+| 克罗雷船长 / `CAP_106` | 5 费大幅扩展炮兵/海盗场面，只有 token 空位和炮联动都值得时才有高价值。 | `freeSlots < 3` 是 hard legality，不是低 prior；CAP parser、两个 token 的位置和额外炮击未确认，不开放 opaque fallback。 |
+| 粗暴的猢狲 / `VAC_938` | 打出时把 +1/+1 物化到当时其他场上 Pirate，攻击 reward 直接读取物化后的 stats。 | 不给触发者自身、非 Pirate、手牌 Pirate 或之后才打出的 Pirate；第二张同名且 entityId 不同的猢狲是合法目标。一次性 Battlecry 与本地 DB 文本冲突，真实 parser 仍待验证。 |
+| Warrior 英雄技能 / `HERO_01bp` | 主要是 Armor Up 的生存兜底，不应抢占海盗、武器、攻击或联动动作。 | 使用 `isDeferredAction` + 极低 prior 后置，不做全局 hard ban；只有技能可用、没有其他有价值动作时解除后置，法力不足不制造动作。 |
+
+完整 26 个可见卡名的逐卡价值、ID、priority 和待实测项仍以本报告上方逐卡表为准；本节只固定本轮四张高风险语义牌。
+
 - **P0 / hard mandatory**：从搜索候选中排除其他动作。当前只有“可支付船载火炮”最高；首回合“开进码头”是 deadline，且在没有 P0 炮时 mandatory；没有炮/首回合任务时，宝藏经销商是下一层 mandatory 开局器。
 - **高 prior**：只改变 action prior/访问顺序，不保证选择，也不等于合法性。英雄攻击、资源、联动和斩杀仍由 MCTS 比较。
 - **deferred / near-last**：英雄技能和前锋战斧非击杀攻击在仍有其他有价值动作时后置；只有真实候选集扫描后才允许成为最后手段。
@@ -73,5 +86,5 @@
 
 - 本分支：`codex/pirate-warrior-mcts-followup`
 - 前一实现 checkpoint：`0ef9d9f3`；gotcha ledger checkpoint：`ac1f0134`
-- 本轮最终提交应包含本报告、case matrix、模型、generic hook 和 offline tests；最终 commit/hash 以收尾时记录为准。
+- 本轮前一提交：`682f8e7b Correct Pirate Warrior Hozen battlecry model`；本轮新增“猢狲不对后续才打出的 Pirate 形成持续光环”的反例测试后，需以新的收尾 commit/hash 为准。
 - 上游对照：[Hearthstone-Script](https://github.com/HaozhanSun/Hearthstone-Script.git)，`origin/main` 对照 hash `942b09d8a693542202d0af6682d73d13b3cf97a5`；基线 `origin/master` 为 `c89e0b9ba1919b99c3535a5e780826a7830a3520`。
