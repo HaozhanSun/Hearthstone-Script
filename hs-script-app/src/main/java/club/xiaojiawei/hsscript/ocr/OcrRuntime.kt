@@ -55,13 +55,13 @@ object OcrRuntime {
     ): String {
         lastContractAccepted.set(false)
         val mode = modeProvider()
-        if (mode == OcrProviderMode.LEGACY_ONLY) return runLegacy(legacyOcr, desc, "mode=legacy-only", acceptPaddleX)
+        if (mode == OcrProviderMode.LEGACY_ONLY) return runLegacy(legacyOcr, desc, "mode=legacy-only")
         if (image == null) {
             if (mode == OcrProviderMode.PADDLEX_ONLY) {
                 throw PaddleXOcrException("PaddleX OCR cannot inspect a null image")
             }
             log.warn { "PADDLEX_FALLBACK_TO_LEGACY reason=null-image desc=${desc.ifBlank { "<none>" }}" }
-            return runLegacy(legacyOcr, desc, "null-image", acceptPaddleX)
+            return runLegacy(legacyOcr, desc, "null-image")
         }
         val settings = settingsProvider()
         if (!settings.enabled) {
@@ -69,7 +69,7 @@ object OcrRuntime {
                 throw PaddleXOcrException("PaddleX OCR is disabled by USE_PADDLEX_OCR")
             }
             log.info { "OCR_PROVIDER_SELECTED provider=LEGACY reason=paddlex-disabled desc=${desc.ifBlank { "<none>" }}" }
-            return runLegacy(legacyOcr, desc, "paddlex-disabled", acceptPaddleX)
+            return runLegacy(legacyOcr, desc, "paddlex-disabled")
         }
 
         val paddleXText = runCatching {
@@ -84,7 +84,7 @@ object OcrRuntime {
             }
             if (mode == OcrProviderMode.PADDLEX_ONLY) throw error
             log.warn { "PADDLEX_FALLBACK_TO_LEGACY reason=${fallbackReason(error)} desc=${desc.ifBlank { "<none>" }}" }
-            return runLegacy(legacyOcr, desc, fallbackReason(error), acceptPaddleX)
+            return runLegacy(legacyOcr, desc, fallbackReason(error))
         }
 
         if (!acceptPaddleX(paddleXText)) {
@@ -96,7 +96,7 @@ object OcrRuntime {
                 "PADDLEX_FALLBACK_TO_LEGACY reason=$reason desc=${desc.ifBlank { "<none>" }} " +
                     "chars=${paddleXText.length}"
             }
-            return runLegacy(legacyOcr, desc, reason, acceptPaddleX)
+            return runLegacy(legacyOcr, desc, reason)
         }
 
         lastProvider.set(OcrProviderKind.PADDLEX)
@@ -112,7 +112,6 @@ object OcrRuntime {
         legacyOcr: () -> String,
         desc: String,
         reason: String,
-        acceptPaddleX: (String) -> Boolean,
     ): String {
         return runCatching { legacyOcr() }.getOrElse { error ->
             lastProvider.set(OcrProviderKind.LEGACY)
@@ -123,7 +122,10 @@ object OcrRuntime {
             }
             throw PaddleXOcrException("PaddleX and legacy OCR both failed: legacy exception", error)
         }.also { text ->
-            val accepted = acceptPaddleX(text)
+            // Legacy's established contract is usable non-empty OCR text.
+            // Screen mapping remains a separate concern in ScreenStateRecovery;
+            // applying its PaddleX predicate here incorrectly rejected Tesseract.
+            val accepted = text.isNotBlank()
             lastProvider.set(OcrProviderKind.LEGACY)
             lastContractAccepted.set(accepted)
             log.info {
@@ -156,17 +158,26 @@ object OcrRuntime {
 
     private fun configuredMode(): OcrProviderMode {
         val requested = OcrProviderMode.parse(ConfigEnum.OCR_PROVIDER_MODE.getString())
-        // Preserve the pre-mode USE_PADDLEX_OCR=false contract when the new
-        // mode is left at its default AUTO value.
-        return if (requested == OcrProviderMode.AUTO && !settingsProvider().enabled) {
-            OcrProviderMode.LEGACY_ONLY
-        } else {
-            requested
-        }
+        return resolveConfiguredMode(requested, settingsProvider().enabled)
+    }
+
+    /**
+     * The visible compatibility switch is the user's persistent provider
+     * choice. Reconcile stale mode values left by older builds, but preserve
+     * explicit PADDLEX_ONLY as fail-closed when PaddleX is disabled.
+     */
+    internal fun resolveConfiguredMode(
+        requested: OcrProviderMode,
+        paddleXEnabled: Boolean,
+    ): OcrProviderMode = when {
+        !paddleXEnabled && requested != OcrProviderMode.PADDLEX_ONLY -> OcrProviderMode.LEGACY_ONLY
+        paddleXEnabled && requested == OcrProviderMode.LEGACY_ONLY -> OcrProviderMode.AUTO
+        else -> requested
     }
 
     fun logStartupProvider() {
         val settings = settingsProvider()
+        val requestedMode = OcrProviderMode.parse(ConfigEnum.OCR_PROVIDER_MODE.getString())
         val mode = modeProvider()
         val provider = when (mode) {
             OcrProviderMode.LEGACY_ONLY -> OcrProviderKind.LEGACY
@@ -175,10 +186,19 @@ object OcrRuntime {
         log.info {
             "OCR_PROVIDER_SELECTED provider=$provider " +
                 "mode=$mode " +
+                "requestedMode=$requestedMode " +
                 "configKey=${ConfigEnum.USE_PADDLEX_OCR.name} default=${ConfigEnum.USE_PADDLEX_OCR.defaultValue} " +
+                "${ConfigEnum.USE_PADDLEX_OCR.name}=${settings.enabled} " +
                 "python=${settings.pythonExecutable} modulePath=${settings.modulePath} " +
                 "device=${settings.device} modelCache=${settings.modelCachePath.ifBlank { "<paddlex-default>" }} " +
                 "timeoutMs=${settings.timeoutMs}"
+        }
+        if (requestedMode != mode) {
+            log.info {
+                "OCR_PROVIDER_CONFIG_RECONCILED requestedMode=$requestedMode effectiveMode=$mode " +
+                    "${ConfigEnum.USE_PADDLEX_OCR.name}=${settings.enabled} " +
+                    "reason=visible-switch-authoritative configKey=${ConfigEnum.OCR_PROVIDER_MODE.name}"
+            }
         }
         if (!settings.enabled || mode == OcrProviderMode.LEGACY_ONLY) return
 

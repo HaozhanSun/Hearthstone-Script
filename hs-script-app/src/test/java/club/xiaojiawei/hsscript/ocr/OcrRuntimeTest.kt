@@ -50,6 +50,39 @@ class OcrRuntimeTest {
         assertTrue(legacyCalled)
         assertEquals("legacy-text", result)
         assertEquals(OcrProviderKind.LEGACY, OcrRuntime.currentProvider())
+        assertTrue(OcrRuntime.lastRecognitionAccepted())
+    }
+
+    @Test
+    fun legacyRouteDoesNotUsePaddleXScreenMappingContract() {
+        OcrRuntime.settingsProvider = {
+            PaddleXOcrSettings(false, "python", "unused", "cpu", "", 1000)
+        }
+        OcrRuntime.modeProvider = { OcrProviderMode.LEGACY_ONLY }
+
+        val result = OcrRuntime.recognize(TestImages.onePixel(), "legacy-screen-contract", {
+            "unmapped legacy text"
+        }) { false }
+
+        assertEquals("unmapped legacy text", result)
+        assertEquals(OcrProviderKind.LEGACY, OcrRuntime.lastUsedProvider())
+        assertTrue(OcrRuntime.lastRecognitionAccepted())
+    }
+
+    @Test
+    fun configuredModeReconcilesStaleLegacyModeWithVisiblePaddleXSwitch() {
+        assertEquals(
+            OcrProviderMode.AUTO,
+            OcrRuntime.resolveConfiguredMode(OcrProviderMode.LEGACY_ONLY, paddleXEnabled = true),
+        )
+        assertEquals(
+            OcrProviderMode.LEGACY_ONLY,
+            OcrRuntime.resolveConfiguredMode(OcrProviderMode.AUTO, paddleXEnabled = false),
+        )
+        assertEquals(
+            OcrProviderMode.PADDLEX_ONLY,
+            OcrRuntime.resolveConfiguredMode(OcrProviderMode.PADDLEX_ONLY, paddleXEnabled = false),
+        )
     }
 
     @Test
@@ -189,7 +222,7 @@ class OcrRuntimeTest {
     }
 
     @Test
-    fun bothProvidersFailAreNotReportedAsAccepted() {
+    fun bothProvidersEmptyAreNotReportedAsAccepted() {
         OcrRuntime.modeProvider = { OcrProviderMode.AUTO }
         OcrRuntime.settingsProvider = {
             PaddleXOcrSettings(true, "python", "fake-module", "cpu", "", 1000)
@@ -202,11 +235,11 @@ class OcrRuntimeTest {
             }
         }
 
-        val result = OcrRuntime.recognize(TestImages.onePixel(), "both-fail", { "garbage" }) {
+        val result = OcrRuntime.recognize(TestImages.onePixel(), "both-empty", { "" }) {
             it.contains("known-state")
         }
 
-        assertEquals("garbage", result)
+        assertEquals("", result)
         assertFalse(OcrRuntime.lastRecognitionAccepted())
         assertEquals(null, OcrRuntime.chooseProvider(false, false, false))
         assertEquals(null, OcrRuntime.chooseProvider(true, true, true))
