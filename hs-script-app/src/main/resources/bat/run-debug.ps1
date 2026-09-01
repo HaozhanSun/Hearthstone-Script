@@ -2,24 +2,57 @@ $ErrorActionPreference = "Stop"
 
 $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $javaPath = "C:\Program Files\Java\jdk-25.0.4\bin\java.exe"
-$jar = Get-ChildItem -LiteralPath $scriptDirectory -Filter "hs-script_*.jar" -File |
-    Where-Object { $_.Name -notmatch "\.before-|\.bak" } |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
+$manifestPath = Join-Path $scriptDirectory "deployment-manifest.json"
+$manifest = if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+    Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+} else {
+    $null
+}
+$jar = if ($manifest -and $manifest.appJar) {
+    Get-Item -LiteralPath (Join-Path $scriptDirectory ([string]$manifest.appJar)) -ErrorAction Stop
+} else {
+    Get-ChildItem -LiteralPath $scriptDirectory -Filter "hs-script_*.jar" -File |
+        Where-Object { $_.Name -notmatch "\.before-|\.bak" } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+}
 if (-not $jar) { throw "No deployed hs-script JAR was found in: $scriptDirectory" }
 $jarName = $jar.Name
 $jarPath = $jar.FullName
 $logDirectory = Join-Path $scriptDirectory "log"
 $scriptLog = Join-Path $logDirectory "hs_script.log"
-$consoleLog = Join-Path $logDirectory "java-console-debug.log"
 $powerLogRoot = "D:\Hearthstone\Logs"
 $e2ePlayerName = if ($env:HS_E2E_PLAYER) { $env:HS_E2E_PLAYER } else { "laz#12793" }
 $testOnlySkipSurrender = $env:HS_E2E_SKIP_SURRENDER -eq "true"
 $gamesRequired = 2
 $maxRestarts = 50
 $runId = "{0}_{1}" -f (Get-Random -Minimum 10000 -Maximum 99999), (Get-Random -Minimum 1000 -Maximum 9999)
+$runDirectory = Join-Path (Join-Path $logDirectory "e2e-runs") $runId
+$consoleLog = Join-Path $runDirectory "java-console-debug.log"
+$ledgerPath = Join-Path $runDirectory "run-ledger.jsonl"
 
 New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
+New-Item -ItemType Directory -Force -Path $runDirectory | Out-Null
+
+function Write-LedgerEvent([string]$event, [hashtable]$fields = @{}) {
+    $record = [ordered]@{
+        timestamp = (Get-Date).ToString("o")
+        runId = $runId
+        event = $event
+    }
+    foreach ($entry in $fields.GetEnumerator()) { $record[$entry.Key] = $entry.Value }
+    $line = ($record | ConvertTo-Json -Compress -Depth 6) + [Environment]::NewLine
+    for ($retry = 0; $retry -lt 20; $retry++) {
+        try {
+            [System.IO.File]::AppendAllText($ledgerPath, $line, [System.Text.Encoding]::UTF8)
+            return
+        } catch {
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    Write-Host ("E2E_LEDGER_WRITE_FAILED: " + $event)
+}
+
 ## The ProcessStartInfo below supplies the working directory. Keeping the
 ## launcher in the caller's directory avoids permission failures from a
 ## secondary PowerShell session.
@@ -29,6 +62,9 @@ Set-Content -Path $consoleLog -Value @(
     "JAR=$jarName",
     "E2E watchdog max restarts=$maxRestarts",
     "E2E run id=$runId",
+    "E2E run directory=$runDirectory",
+    "E2E ledger=$ledgerPath",
+    "E2E manifest=$manifestPath",
     "E2E wins required=$gamesRequired",
     "E2E consecutive valid wins required=$gamesRequired",
     "E2E surrender-after-out-card=false",
@@ -36,6 +72,7 @@ Set-Content -Path $consoleLog -Value @(
     "E2E mulligan-screenshot=true",
     "E2E mulligan-input=SendInput-absolute"
 )
+Write-LedgerEvent "run-start" @{ jar = $jarName; jarPath = $jarPath; scriptDirectory = $scriptDirectory; powerLogRoot = $powerLogRoot; gamesRequired = $gamesRequired; maxRestarts = $maxRestarts }
 
 function Write-Trace([string]$message) {
     # The monitor and the redirected Java output can finish at the same time.
@@ -175,6 +212,7 @@ $validatedPowerWinCount = 0
 while ($true) {
     $attempt++
     Write-Trace "==== Java attempt $attempt start $(Get-Date -Format o) ===="
+    Write-LedgerEvent "attempt-start" @{ attempt = $attempt }
     $currentPowerLog = Get-LatestPowerLog
     if ($currentPowerLog) {
         if ($null -eq $powerLogPath -or $currentPowerLog.FullName -ne $powerLogPath) {
@@ -246,6 +284,7 @@ while ($true) {
             if (-not $gameReadySeen -and (Test-CurrentRunGameReady $process.Id)) {
                 $gameReadySeen = $true
                 Write-Trace "E2E_GAME_READY pid=$($process.Id) source=current-process-lifecycle"
+                Write-LedgerEvent "game-ready" @{ attempt = $attempt; pid = $process.Id; powerLog = $powerLogPath }
             }
             # The application marker is useful diagnostics, but the watchdog
             # only accepts fresh authoritative PLAYSTATE=WON lines below.
@@ -323,16 +362,20 @@ while ($true) {
     if ($stdout) { Write-Trace ("JAVA_STDOUT_BEGIN attempt=$attempt`n$stdout`nJAVA_STDOUT_END attempt=$attempt") }
     if ($stderr) { Write-Trace ("JAVA_STDERR_BEGIN attempt=$attempt`n$stderr`nJAVA_STDERR_END attempt=$attempt") }
     Write-Trace "==== Java attempt $attempt exit $(Get-Date -Format o) code=$($process.ExitCode) winSeen=$winSeen ===="
+    Write-LedgerEvent "attempt-exit" @{ attempt = $attempt; pid = $process.Id; exitCode = $process.ExitCode; winSeen = $winSeen; authoritativeWins = $powerLogWinLines.Count; consecutiveValidWins = $consecutiveValidWins; powerLog = $powerLogPath }
 
     if ($winSeen) {
         Write-Trace "==== E2E $gamesRequired authoritative win markers found; watchdog complete ===="
+        Write-LedgerEvent "run-complete" @{ attempts = $attempt; exitCode = 0; authoritativeWins = $powerLogWinLines.Count; consecutiveValidWins = $consecutiveValidWins }
         exit 0
     }
 
     if ($attempt -gt $maxRestarts) {
         Write-Trace "==== watchdog exhausted without $gamesRequired authoritative E2E win markers ===="
+        Write-LedgerEvent "run-exhausted" @{ attempts = $attempt; exitCode = 20; authoritativeWins = $powerLogWinLines.Count; consecutiveValidWins = $consecutiveValidWins }
         exit 20
     }
     Write-Trace "==== restarting Java after premature exit or non-win result; retry=$attempt ===="
+    Write-LedgerEvent "restart-requested" @{ attempt = $attempt; reason = "premature-exit-or-non-win" }
     Start-Sleep -Seconds 2
 }
