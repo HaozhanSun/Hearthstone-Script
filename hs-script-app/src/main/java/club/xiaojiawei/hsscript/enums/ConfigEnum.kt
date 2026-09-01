@@ -372,6 +372,9 @@ enum class ConfigEnum(
      */
     STARTUP_RUN_WINDOW_MINUTES(group = BEHAVIOR_CONFIG_GROUP, defaultValueInitializer = { "30" }),
 
+    /** Debug/test run preference; the live deadline is never persisted. */
+    DEBUG_RUN_MODE(group = DEV_CONFIG_GROUP, defaultValueInitializer = { FALSE_STR }),
+
     /**
      * 自动刷新游戏每日任务
      */

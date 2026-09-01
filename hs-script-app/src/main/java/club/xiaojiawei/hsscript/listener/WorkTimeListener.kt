@@ -4,7 +4,10 @@ import club.xiaojiawei.hsscript.bean.WorkTimeRule
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.WindowEnum
+import club.xiaojiawei.hsscript.status.DebugRunController
+import club.xiaojiawei.hsscript.status.DebugRunLease
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.TaskManager
 import club.xiaojiawei.hsscript.status.WorkTimeStatus
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
@@ -218,6 +221,9 @@ object WorkTimeListener {
 
     var isDuringWorkDate = false
 
+    /** True only when the ordinary configured schedule contains the current time. */
+    private var scheduledDuringWorkDate = false
+
     /**
      * 是否处于工作中
      */
@@ -292,7 +298,21 @@ object WorkTimeListener {
      * @return 如果当前处于工作时间内，返回对应的WorkTimeRule；否则返回null
      */
     fun getCurrentWorkTimeRule(): WorkTimeRule? {
-        return if (isDuringWorkDate) currentWorkTimeRule else if (startupRunWindow.isActive()) startupWorkTimeRule else null
+        // Debug/Test Run only bypasses the gate. It must not make a preset
+        // rule appear active or change the normal preset's mode/deck/actions.
+        return if (scheduledDuringWorkDate) currentWorkTimeRule else if (startupRunWindow.isActive()) startupWorkTimeRule else null
+    }
+
+    fun isInsideConfiguredSchedule(): Boolean = scheduledDuringWorkDate
+
+    /** Called by DebugRunController after its monotonic lease expires. */
+    fun onDebugRunExpired() {
+        checkWork()
+        if (!scheduledDuringWorkDate && !startupRunWindow.isActive()) {
+            TaskManager.closeAllTasks()
+            if (workingProperty.get()) workingProperty.set(false)
+            log.info { "DEBUG_OVERRIDE_EXPIRED_WORK_STOP reason=lease-expired-outside-schedule" }
+        }
     }
 
     /**
@@ -419,7 +439,8 @@ object WorkTimeListener {
             }
         }
 
-        isDuringWorkDate = canWork
+        scheduledDuringWorkDate = canWork
+        isDuringWorkDate = DebugRunLease.effectiveCanWork(canWork, DebugRunController.isActive())
         currentScheduleWindow = activeScheduleWindow
         currentScheduleRuleSetId = activeScheduleRuleSetId
         currentScheduleRuleIndex = activeScheduleRuleIndex
@@ -432,6 +453,8 @@ object WorkTimeListener {
         val startupOverrideActive = startupRunWindow.isActive()
         val decision = if (canWork) {
             "ACTIVE:${currentScheduleRuleSetId ?: "?"}:${currentScheduleRuleIndex ?: "?"}"
+        } else if (DebugRunController.isActive()) {
+            "DEBUG_OVERRIDE"
         } else if (startupOverrideActive) {
             "STARTUP_OVERRIDE"
         } else {

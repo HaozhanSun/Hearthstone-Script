@@ -74,6 +74,18 @@
                         </graphic>
                     </ConfigCheckBox>
 
+                    <HBox alignment="CENTER" spacing="6">
+                        <ConfigCheckBox fx:id="debugRunModeCheckBox" text="调试/Test Run"
+                                        styleClass="check-box-ui, check-box-ui-success"
+                                        contentDisplay="RIGHT" config="DEBUG_RUN_MODE"
+                                        onAction="#toggleDebugRun">
+                            <tooltip>
+                                <Tooltip text="一次性绕过工作时间段，最多运行30分钟；重启不会恢复租约"/>
+                            </tooltip>
+                        </ConfigCheckBox>
+                        <Label fx:id="debugRunStatus" text="DISABLED" style="-fx-font-size: 10px;"/>
+                    </HBox>
+
                     <GridPane>
                         <fx:define>
                             <Double fx:id="dataRowHeight" fx:value="25"/>

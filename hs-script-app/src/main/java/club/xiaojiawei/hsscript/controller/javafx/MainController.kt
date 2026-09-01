@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscript.appender.ExtraLogAppender
 import club.xiaojiawei.hsscript.bean.DownloaderParam
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.bean.single.WarEx.resetStatistics
+import club.xiaojiawei.hsscript.component.ConfigCheckBox
 import club.xiaojiawei.hsscript.component.WorkTimeItem
 import club.xiaojiawei.hsscript.controller.javafx.view.MainView
 import club.xiaojiawei.hsscript.enums.ConfigEnum
@@ -18,6 +19,8 @@ import club.xiaojiawei.hsscript.enums.WindowEnum
 import club.xiaojiawei.hsscript.listener.VersionListener
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
+import club.xiaojiawei.hsscript.status.DebugRunController
+import club.xiaojiawei.hsscript.status.DebugRunLease
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.WorkTimeStatus
 import club.xiaojiawei.hsscript.utils.ConfigUtil.getString
@@ -70,6 +73,12 @@ private const val LOG_CONTENT_PADDING = 10.0
 
 class MainController : MainView() {
 
+    @FXML
+    private lateinit var debugRunModeCheckBox: ConfigCheckBox
+
+    @FXML
+    private lateinit var debugRunStatus: Label
+
     private val uiLogTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     private var isNotHoverLog = true
 
@@ -84,6 +93,9 @@ class MainController : MainView() {
         resourceBundle: ResourceBundle?,
     ) {
         versionText.text = "当前版本：" + VersionListener.currentRelease.tagName
+        DebugRunController.resetAfterRestart()
+        debugRunModeCheckBox.isSelected = false
+        updateDebugRunStatus()
         addListener()
         initModeAndDeck()
         reloadWorkTime()
@@ -97,6 +109,37 @@ class MainController : MainView() {
                 }
             }
         }
+        go {
+            while (true) {
+                Thread.sleep(1000)
+                runUI { updateDebugRunStatus() }
+            }
+        }
+    }
+
+    @FXML
+    protected fun toggleDebugRun() {
+        if (debugRunModeCheckBox.isSelected) {
+            DebugRunController.enable("ui-toggle-on")
+        } else {
+            DebugRunController.disable("ui-toggle-off")
+        }
+        updateDebugRunStatus()
+    }
+
+    private fun updateDebugRunStatus() {
+        if (!::debugRunStatus.isInitialized) return
+        val snapshot = DebugRunController.snapshot()
+        debugRunStatus.text = when (snapshot.state) {
+            DebugRunLease.State.DISABLED -> "DISABLED"
+            DebugRunLease.State.ACTIVE -> "ACTIVE · ${formatDebugRunRemaining(snapshot.remainingMillis)}"
+            DebugRunLease.State.EXPIRED -> "EXPIRED"
+        }
+    }
+
+    private fun formatDebugRunRemaining(remainingMillis: Long): String {
+        val totalSeconds = (remainingMillis + 999L) / 1000L
+        return String.format("%02d:%02d", totalSeconds / 60L, totalSeconds % 60L)
     }
 
     /**
