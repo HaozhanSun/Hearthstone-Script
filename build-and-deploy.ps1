@@ -129,7 +129,7 @@ $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("hs-script-deploy-" + [g
 New-Item -ItemType Directory -Path $staging -Force | Out-Null
 try {
     [System.IO.Compression.ZipFile]::ExtractToDirectory($builtZip, $staging)
-    foreach ($item in @('resources', 'lib', 'hs_cards.db', 'logback.xml', 'create-aot.bat', 'debug-hs-script.bat', 'hs-script.bat', 'unlock.bat', 'card-update-util.exe', 'force-stop.exe', 'hs-script.exe', 'inject-util.exe', 'install-drive.exe', 'update.exe', (Split-Path -Leaf $builtJar))) {
+    foreach ($item in @('resources', 'lib', 'hs_cards.db', 'logback.xml', 'create-aot.bat', 'debug-hs-script.bat', 'hs-script.bat', 'run-debug.ps1', 'unlock.bat', 'card-update-util.exe', 'force-stop.exe', 'hs-script.exe', 'inject-util.exe', 'install-drive.exe', 'update.exe', (Split-Path -Leaf $builtJar))) {
         $source = Join-Path $staging $item
         if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $runtimeRoot -Recurse -Force }
     }

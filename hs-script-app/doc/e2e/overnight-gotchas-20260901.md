@@ -12,6 +12,18 @@
   before/after HEAD, source tree, JAR/ZIP hashes, manifest and shortcuts before
   starting any new E2E.
 
+## v4.16.136 runner packaging miss
+
+- **Status:** `invalid deployment evidence`; no E2E started and no run credit.
+- **Observed:** the checked-in script deployed the v4.16.136 JAR correctly but
+  its ZIP contained only the JAR, and canonical `run-debug.ps1` remained the
+  prior 18,967-byte file instead of the 19,618-byte source runner. The build
+  script extracted only the old resource set and the assembly did not include
+  `*.ps1`.
+- **Fix:** add `*.ps1` to the assembly bat file set and explicitly copy
+  `run-debug.ps1` from staging during deployment. Rebuild at v4.16.137 or
+  higher; v4.16.136 remains preserved but excluded from E2E.
+
 ## stale client after failed run
 
 - Failed run `47710_5759` left Hearthstone PID `12340` alive after Java/runner
@@ -26,4 +38,3 @@
 - Prevention: base the release candidate on the complete readiness/sentinel
   tree, then add the runner and provider fix as explicit commits. This branch
   follows that rule.
-
