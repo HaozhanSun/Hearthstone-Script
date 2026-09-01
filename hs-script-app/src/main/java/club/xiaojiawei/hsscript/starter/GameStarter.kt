@@ -58,10 +58,16 @@ class GameStarter : AbstractStarter() {
         // cached handle made a visible Hearthstone window look absent and
         // triggered repeated launch attempts.
         if (System.getProperty("hs.script.e2e") == "true") {
-            GameUtil.findGameHWND()?.let {
-                log.info { "E2E已发现现有炉石窗口，跳过重复启动" }
-                next(it)
-                return
+            GameUtil.findGameHWND()?.let { discoveredWindow ->
+                GameUtil.resolveRealGameWindow(discoveredWindow)?.let { realWindow ->
+                    log.info { "E2E已发现现有炉石窗口，跳过重复启动" }
+                    next(realWindow)
+                    return
+                }
+                log.warn {
+                    "E2E_WINDOW_DISCOVERY_REJECTED handle=$discoveredWindow " +
+                        "reason=screen-only-sentinel action=wait-for-real-window"
+                }
             }
         }
         var startTime = System.currentTimeMillis()
@@ -97,8 +103,15 @@ class GameStarter : AbstractStarter() {
                         }
                         if (GameUtil.isAliveOfGame()) {
 //                    游戏刚启动时可能找不到窗口句柄
-                            GameUtil.findGameHWND()?.let {
-                                next(it)
+                            GameUtil.findGameHWND()?.let { discoveredWindow ->
+                                GameUtil.resolveRealGameWindow(discoveredWindow)?.let { realWindow ->
+                                    next(realWindow)
+                                } ?: let {
+                                    log.warn {
+                                        "E2E_WINDOW_DISCOVERY_REJECTED handle=$discoveredWindow " +
+                                            "reason=screen-only-sentinel action=wait-for-real-window"
+                                    }
+                                }
                             } ?: let {
                                 if (diffTime > 10_000) {
                                     log.info { "${GAME_CN_NAME}已在运行，但未找到对应窗口句柄" }

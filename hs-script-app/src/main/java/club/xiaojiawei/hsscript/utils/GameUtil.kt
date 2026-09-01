@@ -983,6 +983,17 @@ object GameUtil {
         return null
     }
 
+    /**
+     * The E2E screen-coordinate fallback is deliberately non-null so callers
+     * that only need the screen can continue observing the client.  It is not
+     * a Windows HWND, however, and must never be installed as ScriptStatus's
+     * native game target.
+     */
+    internal fun resolveRealGameWindow(hwnd: WinDef.HWND?): WinDef.HWND? {
+        val address = hwnd?.pointer?.let(Pointer::nativeValue) ?: return null
+        return hwnd.takeIf { address != 0L && address != 1L }
+    }
+
     fun findPlatformHWND(): WinDef.HWND? = SystemUtil.findHWND("Chrome_WidgetWin_0", PLATFORM_CN_NAME) ?: let {
         SystemUtil.findHWND(
             "Chrome_WidgetWin_0",
