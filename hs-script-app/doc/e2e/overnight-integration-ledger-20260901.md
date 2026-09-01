@@ -4,9 +4,9 @@ Coordinator worktree: `C:/Users/yzjsh/.codex/worktrees/ab8c/Hearthstone Copilot`
 
 Coordinator branch: `codex/overnight-release-integration`
 
-Current checkpoint: `4edae83d` adds the bounded pre-game E2E dispatch compatibility
-guard on top of the single-tree release lineage. The latest canonical deployment
-is v4.16.139;
+Current checkpoint: the rank-badge visibility fix is built and deployed as
+v4.16.140 on top of the single-tree release lineage. The latest canonical
+deployment is v4.16.140;
 the worktree is intended to remain clean between evidence checkpoints. No E2E
 credit is assigned until real-game evidence passes the completion gate.
 
@@ -24,6 +24,9 @@ credit is assigned until real-game evidence passes the completion gate.
    - v4.16.139 checked-in build tests passed 120/120 with 0 failures and 0
      errors; the full 8-module reactor passed BUILD SUCCESS. The added test
      covers the bounded pre-game context allowlist.
+   - v4.16.140 checked-in build tests passed 121/121 with 0 failures and 0
+     errors; the full 8-module reactor passed BUILD SUCCESS. The added test
+     covers the transition-frame rank-badge visibility signal.
 
 2. **Release/CU mutex — v4.16.138 deployed and provenance verified**
    - Canonical manifest currently points to v4.16.135-local-20260901-011404PDT,
@@ -67,8 +70,16 @@ credit is assigned until real-game evidence passes the completion gate.
      `f5cb33ff2c81c85e02dfeba62a5e304a082b56e902346cf30eaa64d7c0cb4743`.
      The compiled PowerLogListener contains the pre-game context allowlist
      and retains the `E2E_READINESS_FAIL_CLOSED` marker.
+   - v4.16.140 manifest selected
+     `hs-script_v4.16.140-local-20260901-023200PDT.jar` with JAR SHA-256
+     `19efe1efeb4bc9bf793ebe99e35214a3f5315ca232ce3b034115769e4cc05135`.
+     Target and canonical JAR hashes match. ZIP SHA-256 is
+     `1d4fdb5d26f304e11e2fddcd0481bbe1ae69200a4b83922f8f37cbf9d6b2df42`.
+     The runner SHA-256 remains
+     `f5cb33ff2c81c85e02dfeba62a5e304a082b56e902346cf30eaa64d7c0cb4743`.
+     The manifest was generated at `2026-09-01T09:36:51.5180305Z`.
 
-3. **Fresh DebugRun E2E — ready to start on v4.16.139**
+3. **Fresh DebugRun E2E — pending completion on v4.16.140**
    - Start only after manifest/JAR/ZIP/runner/shortcut provenance is verified.
    - Every attempt gets a new run id and per-run ledger. Preserve all failed
      artifacts and append a gotcha on invalidation.
@@ -81,6 +92,12 @@ credit is assigned until real-game evidence passes the completion gate.
      Legacy OCR accepted 72–74 characters, but the new readiness guard also
      blocked the pre-game Hub-to-match dispatch. Fresh Power.log remained
      empty; the exact Java/wrapper/Hearthstone processes were stopped after
+     command-line validation. Preserve this run and exclude it from credit.
+   - Attempt `36241_8735` was invalidated after v4.16.139 reached two real
+     game starts: the first ended as `draw-or-unknown` without script
+     milestones; the second was still on the matchmaking overlay when the
+     model entered `DRAWN_INIT_CARD`, so rank OCR correctly failed closed after
+     emitting `rank=UNKNOWN`. The exact processes were stopped after
      command-line validation. Preserve this run and exclude it from credit.
 
 4. **MCTS/Pirate workstreams — locked**
@@ -99,3 +116,12 @@ credit is assigned until real-game evidence passes the completion gate.
   no valid game evidence exists.
 - Prior invalid run: `17306_2083`; it remains excluded because the hub was
   visually misclassified as loading and no game was created.
+
+- Current invalid run: `36241_8735`; v4.16.139 created a fresh `Power.log` and
+  two real `CREATE_GAME`-paired lifecycle entries. The first game ended as
+  `draw-or-unknown` and was rejected because the script milestones were absent.
+  The second game reached the real player's opening state but failed closed on
+  `RANK_OCR_EVIDENCE rank=UNKNOWN`, followed by
+  `RANK_POLICY_BLOCKED ... action=PAUSE`. Exact Java PID `2536`, runner wrapper
+  PID `44592`, and Hearthstone PID `36012` were stopped only after
+  command-line validation. The run is preserved and excluded from credit.

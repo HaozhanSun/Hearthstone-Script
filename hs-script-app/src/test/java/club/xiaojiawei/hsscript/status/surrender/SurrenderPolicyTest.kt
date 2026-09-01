@@ -318,6 +318,20 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun rankBadgeVisualSignalDoesNotTreatATransitionFrameAsVisible() {
+        val transition = BufferedImage(144, 140, BufferedImage.TYPE_INT_RGB)
+        assertFalse(CurrentRankDetector.hasRankBadgeVisualSignal(transition))
+
+        val visibleBadge = BufferedImage(144, 140, BufferedImage.TYPE_INT_RGB)
+        val graphics = visibleBadge.createGraphics()
+        graphics.color = Color(185, 185, 185)
+        graphics.drawRect(6, 6, 90, 100)
+        graphics.drawRect(10, 10, 82, 92)
+        graphics.dispose()
+        assertTrue(CurrentRankDetector.hasRankBadgeVisualSignal(visibleBadge))
+    }
+
+    @Test
     fun rankTierVisualClassifierDistinguishesWarmGoldFromNeutralSilver() {
         val gold = BufferedImage(144, 140, BufferedImage.TYPE_INT_RGB)
         val goldGraphics = gold.createGraphics()

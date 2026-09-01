@@ -68,6 +68,8 @@ object CurrentRankDetector {
         val tier: RankTier,
         val ocrText: String,
         val captureBounds: Rectangle,
+        /** False while the client is still showing matchmaking/transition UI. */
+        val badgeVisible: Boolean = true,
     )
 
     /** Parse only valid constructed ranks, preventing unrelated HUD numbers from becoming a decision. */
@@ -254,13 +256,16 @@ object CurrentRankDetector {
         } else {
             detectTierVisual(rankRegion)
         }
+        val badgeVisible = tier !== RankTier.UNKNOWN ||
+            visualTenHint ||
+            ocrTexts.any { text -> text.any(Char::isDigit) }
         log.info {
             "RANK_OCR bounds=$bounds region=${rankRegion.width}x${rankRegion.height} " +
                 "text=${ocrText.ifBlank { "<empty>" }} candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
                 "tierCandidates=${tierOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
-                "visualTenHint=$visualTenHint tier=${tier.name} rank=${rank ?: "UNKNOWN"}"
+                "visualTenHint=$visualTenHint badgeVisible=$badgeVisible tier=${tier.name} rank=${rank ?: "UNKNOWN"}"
         }
-        if (saveEvidence && (tier === RankTier.UNKNOWN || rank == null)) {
+        if (saveEvidence && badgeVisible && (tier === RankTier.UNKNOWN || rank == null)) {
             val evidence = UnknownStateScreenshot.save(
                 image = screen,
                 regions = listOf(
@@ -286,7 +291,7 @@ object CurrentRankDetector {
                     "link=${evidence?.link ?: "none"}"
             }
         }
-        Detection(rank, tier, ocrText, bounds)
+        Detection(rank, tier, ocrText, bounds, badgeVisible)
     }.getOrElse { error ->
         log.warn(error) { "RANK_OCR_FAILED" }
         null
@@ -327,6 +332,16 @@ object CurrentRankDetector {
         val span = occupiedColumns.last() - occupiedColumns.first() + 1
         return span >= RANK_TWO_DIGIT_MIN_SPAN && occupiedColumns.size >= RANK_TWO_DIGIT_MIN_SPAN / 2
     }
+
+    /**
+     * A live Power.log model can enter DRAWN_INIT_CARD before the client has
+     * left its matchmaking overlay.  The rank badge is absent in that frame,
+     * so an empty OCR result is not yet an OCR failure.  Tier metal or the
+     * dedicated two-digit visual signal is sufficient evidence that the badge
+     * is actually on screen; callers still require OCR to resolve the rank.
+     */
+    internal fun hasRankBadgeVisualSignal(image: BufferedImage): Boolean =
+        detectTierVisual(image) !== RankTier.UNKNOWN || looksLikeTwoDigitRank(image)
 
     /**
      * The in-game HUD normally shows only the numeric badge, not the league

@@ -69,3 +69,21 @@
   tournament entry, log-size check, and start matching) while the gate is
   still waiting. They remain blocked after the timeout. This is the minimal
   compatibility path matching the pre-gate upstream behavior at `e6ede413^`.
+
+## v4.16.139 run 36241_8735 — rank OCR fail-closed after real game creation
+
+- **Status:** `invalid E2E evidence`; no run credit.
+- **Observed:** the release candidate passed hub recovery and matchmaking. A
+  fresh Power.log was paired to Java PID `2536`, and the first real game was
+  detected, but its terminal state was `draw-or-unknown` with missing script
+  milestones, so the authoritative result was rejected. The next real game
+  reached `DRAWN_INIT_CARD` for current player `laz#12793`; rank OCR returned
+  no usable badge text and emitted `RANK_OCR_EVIDENCE rank=UNKNOWN`, then
+  `RANK_POLICY_BLOCKED ... action=PAUSE`. This violates the no-OCR-failure,
+  no-UNKNOWN completion gate. The per-run evidence is retained at
+  `outputs/Hearthstone Script/log/e2e-runs/36241_8735`; exact Java, runner, and
+  Hearthstone processes were stopped after command-line checks.
+- **Next investigation:** compare `CurrentRankDetector`'s rank-badge crop and
+  OCR contract against the known-working upstream path and the actual
+  opening-game screenshot before attempting another release build. Do not
+  reuse this run's Power.log or screenshots as success evidence.

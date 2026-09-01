@@ -423,6 +423,13 @@ object SurrenderPolicy {
         rankInspectionAttempts++
 
         val detection = CurrentRankDetector.detect()
+        if (detection != null && !detection.badgeVisible) {
+            log.info {
+                "RANK_POLICY_SKIP reason=rank-badge-not-visible " +
+                    "attempts=$rankInspectionAttempts phase=${phase.name}"
+            }
+            return null
+        }
         val rank = detection?.rank
         if (rank == null) {
             rankCheckCompleted = true
