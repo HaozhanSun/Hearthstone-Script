@@ -7,6 +7,7 @@ import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.E2EReadinessGate
+import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
@@ -198,6 +199,13 @@ object PowerLogListener :
             return
         }
         if (startsNewGame) {
+            if (System.getProperty("hs.script.e2e") == "true") {
+                // CREATE_GAME is the authoritative per-game boundary. A fast
+                // pre-mulligan surrender may never emit TURN=1, so resetting
+                // only from FillDeckPhaseStrategy would leave prior-game
+                // milestones attached to the new game.
+                E2ETrace.beginNewGame("CREATE_GAME")
+            }
             if (terminalTailFence) {
                 log.info { "检测到新的CREATE_GAME，打开下一局日志输入" }
             }

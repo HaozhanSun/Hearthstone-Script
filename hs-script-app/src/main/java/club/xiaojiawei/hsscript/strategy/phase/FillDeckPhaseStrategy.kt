@@ -8,7 +8,6 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.TagEnum
 import club.xiaojiawei.hsscript.enums.WindowEnum
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
-import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
@@ -29,7 +28,6 @@ object FillDeckPhaseStrategy : AbstractPhaseStrategy() {
         if (tagChangeEntity.tag == TagEnum.TURN && tagChangeEntity.value == "1") {
             resetForNewGame()
             SurrenderPolicy.resetForNewGame()
-            E2ETrace.resetForNewGame()
             war.currentPhase = WarPhaseEnum.DRAWN_INIT_CARD
             return true
         }

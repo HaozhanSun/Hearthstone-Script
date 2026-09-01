@@ -225,8 +225,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
             } else {
                 club.xiaojiawei.hsscriptbase.config.log.warn {
                     "E2E_GAME_RESULT_REJECTED ${System.getProperty("hs.script.e2e.run-id", "unknown")}, " +
-                        "missing script milestones: mulligan=${E2ETrace.mulliganCompleted}, " +
-                        "ourTurn=${E2ETrace.ourTurnSeen}, outCard=${E2ETrace.outCardStarted}"
+                        "missing script milestones: ${E2ETrace.milestoneSummary()}"
                 }
             }
         }

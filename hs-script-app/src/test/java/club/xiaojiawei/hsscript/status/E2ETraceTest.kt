@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.status
 
 import java.nio.file.Files
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -39,5 +40,29 @@ class E2ETraceTest {
         } finally {
             Files.deleteIfExists(log)
         }
+    }
+
+    @Test
+    fun `new CREATE_GAME boundary invalidates previous game milestones`() {
+        val initialSequence = E2ETrace.gameSequence
+        try {
+            E2ETrace.beginNewGame("test-create-game-1")
+            E2ETrace.markMulliganCompleted()
+            E2ETrace.markOurTurnSeen()
+            E2ETrace.markOutCardStarted()
+            assertTrue(E2ETrace.isValidScriptControlledGame())
+            val firstSequence = E2ETrace.gameSequence
+
+            E2ETrace.beginNewGame("test-create-game-2")
+
+            assertEquals(firstSequence + 1, E2ETrace.gameSequence)
+            assertFalse(E2ETrace.isValidScriptControlledGame())
+            assertFalse(E2ETrace.mulliganCompleted)
+            assertFalse(E2ETrace.ourTurnSeen)
+            assertFalse(E2ETrace.outCardStarted)
+        } finally {
+            E2ETrace.resetForNewGame()
+        }
+        assertEquals(initialSequence + 2, E2ETrace.gameSequence)
     }
 }

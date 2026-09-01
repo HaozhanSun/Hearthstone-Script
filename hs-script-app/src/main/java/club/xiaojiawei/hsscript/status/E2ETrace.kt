@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.status
 
 import java.io.File
 import java.io.RandomAccessFile
+import club.xiaojiawei.hsscriptbase.config.log
 
 /**
  * Process-local milestones used only by the automated E2E runner.
@@ -38,6 +39,10 @@ object E2ETrace {
     @Volatile
     var winRecorded: Boolean = false
 
+    /** Monotonic CREATE_GAME boundary within this JVM/run lineage. */
+    @Volatile
+    var gameSequence: Long = 0
+
     init {
         restore()
     }
@@ -47,6 +52,7 @@ object E2ETrace {
         runCatching {
             stateFile?.writeText(
                 buildString {
+                    appendLine("game-sequence=$gameSequence")
                     if (mulliganCompleted) appendLine("mulligan")
                     if (ourTurnSeen) appendLine("our-turn")
                     if (outCardStarted) appendLine("out-card")
@@ -59,42 +65,74 @@ object E2ETrace {
     private fun restore() {
         if (!enabled) return
         runCatching {
-            stateFile?.takeIf { it.isFile }?.readLines()?.let { lines ->
-                mulliganCompleted = "mulligan" in lines
-                ourTurnSeen = "our-turn" in lines
-                outCardStarted = "out-card" in lines
-                winRecorded = "win" in lines
+            // A state file is useful as a forensic breadcrumb, but it is not
+            // proof that a newly-started JVM controls the current game.
+            // E2E readiness binds the process to a fresh CREATE_GAME; discard
+            // state from an older process before that boundary.
+            stateFile?.takeIf { it.isFile }?.let { staleState ->
+                log.warn {
+                    "E2E_TRACE_STALE_STATE_DISCARDED path=${staleState.path} " +
+                        "reason=new-jvm-requires-fresh-create-game"
+                }
+                staleState.delete()
             }
         }
     }
 
     fun markMulliganCompleted() {
+        if (gameSequence == 0L) return
         mulliganCompleted = true
         persist()
+        logMilestone("mulligan")
     }
 
     fun markOurTurnSeen() {
+        if (gameSequence == 0L) return
         ourTurnSeen = true
         persist()
+        logMilestone("our-turn")
     }
 
     fun markOutCardStarted() {
+        if (gameSequence == 0L) return
         outCardStarted = true
         persist()
+        logMilestone("out-card")
     }
 
     fun markSurrenderRequested() {
+        if (gameSequence == 0L) return
         surrenderRequested = true
+        logMilestone("surrender-requested")
     }
 
+    /** Start a new E2E game lineage at the authoritative CREATE_GAME line. */
+    @Synchronized
+    fun beginNewGame(source: String = "CREATE_GAME") {
+        gameSequence += 1
+        resetFlagsForCurrentGame()
+        runCatching { stateFile?.delete() }
+        persist()
+        log.info {
+            "E2E_GAME_BOUNDARY sequence=$gameSequence source=$source " +
+                "milestones-cleared=true"
+        }
+    }
+
+    /** Clear current-game evidence without advancing the CREATE_GAME lineage. */
+    @Synchronized
     fun resetForNewGame() {
+        resetFlagsForCurrentGame()
+        runCatching { stateFile?.delete() }
+    }
+
+    private fun resetFlagsForCurrentGame() {
         mulliganCompleted = false
         ourTurnSeen = false
         outCardStarted = false
         surrenderRequested = false
         resultRecorded = false
         winRecorded = false
-        runCatching { stateFile?.delete() }
     }
 
     /**
@@ -114,7 +152,21 @@ object E2ETrace {
     }
 
     fun isValidScriptControlledGame(): Boolean =
-        mulliganCompleted && ourTurnSeen && outCardStarted
+        gameSequence > 0L && mulliganCompleted && ourTurnSeen && outCardStarted
+
+    fun milestoneSummary(): String =
+        "game=$gameSequence mulligan=$mulliganCompleted " +
+            "ourTurn=$ourTurnSeen outCard=$outCardStarted " +
+            "surrender=$surrenderRequested"
+
+    private fun logMilestone(name: String) {
+        if (enabled) {
+            log.info {
+                "E2E_MILESTONE game=$gameSequence milestone=$name accepted=true " +
+                    milestoneSummary()
+            }
+        }
+    }
 
     /**
      * Read the authoritative PLAYSTATE from the tail of Power.log.  The
