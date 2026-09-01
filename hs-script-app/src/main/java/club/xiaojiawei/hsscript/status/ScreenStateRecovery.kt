@@ -114,6 +114,8 @@ object ScreenStateRecovery {
         val evidence: String,
     )
 
+    internal fun shouldDiscardStaleInspection(inWar: Boolean): Boolean = inWar
+
     /**
      * Inspect the visible client and, if possible, move the state machine to
      * the detected screen. Returns true only when a state/action was applied.
@@ -158,6 +160,16 @@ object ScreenStateRecovery {
         }
         if (!stateStillCurrent()) {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-during-inspection state=$stateFingerprint" }
+            return false
+        }
+        // PaddleX can take long enough for the client to leave a startup or
+        // hub screen while this inspection is still in flight.  Never let a
+        // stale startup screenshot pause a live game that began meanwhile.
+        if (shouldDiscardStaleInspection(WarEx.inWar)) {
+            log.info {
+                "SCREEN_RECOVERY_SKIPPED reason=war-started-during-inspection " +
+                    "state=$stateFingerprint"
+            }
             return false
         }
         val detection = detect(ocrText, capture.visual)

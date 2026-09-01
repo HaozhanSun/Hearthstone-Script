@@ -27,6 +27,7 @@ class TesseractEx : Tesseract() {
         p0: BufferedImage?,
         desc: String = "",
         paddleXContract: (String) -> Boolean = { it.isNotBlank() },
+        allowEmptyProbeResult: Boolean = false,
     ): String {
         if (ConfigUtil.getBoolean(ConfigEnum.SAVE_OCR_IMG)) {
             val ocrPath = Path(ROOT_PATH, ocrDir)
@@ -44,7 +45,13 @@ class TesseractEx : Tesseract() {
                 ImageIO.write(it, "png", ocrPath)
             }
         }
-        return OcrRuntime.recognize(p0, desc, { doLegacyOCR(p0) }, paddleXContract)
+        return OcrRuntime.recognize(
+            p0,
+            desc,
+            { doLegacyOCR(p0) },
+            allowEmptyProbeResult = allowEmptyProbeResult,
+            acceptPaddleX = paddleXContract,
+        )
     }
 
     private fun doLegacyOCR(image: BufferedImage?): String = super.doOCR(image)

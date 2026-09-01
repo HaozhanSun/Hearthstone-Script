@@ -154,14 +154,14 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         // authoritative terminal marker for the current game in this process;
         // treating a non-empty marker as controlled keeps the alternating
         // concede round observable instead of misclassifying it as stale.
-        val currentPlayerConceded = war.conceded.isNotBlank() || E2ETrace.surrenderRequested
+        val authoritativeOutcome = readAuthoritativeOutcome()
+        val currentPlayerConceded = isCurrentPlayerConceded(authoritativeOutcome)
         val scriptControlledGame = e2eEnabled &&
             (E2ETrace.isValidScriptControlledGame() || currentPlayerConceded)
         // GAME_OVER can be emitted a few seconds before the final PLAYSTATE
         // line reaches the parser.  This is not E2E-only: the normal app used
         // to capture the last attack frame as draw-or-unknown and let the
         // MCTS worker submit one stale action during that same race.
-        val authoritativeOutcome = readAuthoritativeOutcome()
         if (war.me.gameId.isNotBlank() && authoritativeOutcome == null) {
             val now = System.currentTimeMillis()
             val waitStartedAt = e2eResultWaitStartedAt
@@ -196,6 +196,8 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
                 "draw-or-unknown"
             } else {
                 when {
+                    authoritativeOutcome == true -> "win"
+                    authoritativeOutcome == false -> "loss"
                     WarEx.isWin -> "win"
                     war.won.isNotBlank() -> "opponent-win"
                     war.lost == war.me.gameId -> "loss"
@@ -262,7 +264,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
     }
 
     private fun readE2eOutcome(): Boolean? {
-        val currentPlayerConceded = war.conceded.isNotBlank() || E2ETrace.surrenderRequested
+        val currentPlayerConceded = isCurrentPlayerConceded(authoritativeOutcome = null)
         if (!E2ETrace.isValidScriptControlledGame() && !currentPlayerConceded) return null
         val modelOutcome = when {
             war.won.isNotBlank() -> war.won == war.me.gameId
@@ -276,6 +278,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         } else E2ETrace.readPowerLogResult(
             PowerLogListener.logFile?.path(),
             war.me.gameId,
+            e2ePlayerIdentityFallback(),
         )
     }
 
@@ -290,6 +293,25 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         return modelOutcome ?: E2ETrace.readPowerLogResult(
             PowerLogListener.logFile?.path(),
             war.me.gameId,
+            e2ePlayerIdentityFallback(),
         )
     }
+
+    /**
+     * During a fast policy surrender the Power.log identity can be present
+     * before the listener copies it into war.me. Keep the authoritative
+     * result lookup tied to the explicitly requested E2E player instead of
+     * allowing the empty in-memory identity to fall back to stale state.
+     */
+    private fun e2ePlayerIdentityFallback(): String? =
+        System.getenv("HS_E2E_PLAYER")?.trim()?.takeIf { it.isNotEmpty() }
+
+    /**
+     * A policy request can race with a natural terminal PLAYSTATE. The
+     * authoritative loss/win must not be relabeled as CONCEDED merely because
+     * an earlier policy callback set the process-local request flag.
+     */
+    private fun isCurrentPlayerConceded(authoritativeOutcome: Boolean?): Boolean =
+        authoritativeOutcome == null &&
+            war.conceded.isNotBlank()
 }

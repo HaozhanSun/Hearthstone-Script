@@ -126,6 +126,9 @@ internal class E2EReadinessGate(
     }
 
     companion object {
-        const val DEFAULT_TIMEOUT_MS = 45_000L
+        // PaddleX-backed startup screen recovery can take roughly 30 seconds
+        // on the real client. Keep the wait bounded, but leave enough time
+        // for that recovery to dispatch the first fresh CREATE_GAME.
+        const val DEFAULT_TIMEOUT_MS = 180_000L
     }
 }

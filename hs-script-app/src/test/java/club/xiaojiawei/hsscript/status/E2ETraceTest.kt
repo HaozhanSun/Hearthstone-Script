@@ -43,6 +43,27 @@ class E2ETraceTest {
     }
 
     @Test
+    fun `uses fallback identity when current player model is not populated`() {
+        val log = Files.createTempFile("power", ".log")
+        try {
+            Files.writeString(
+                log,
+                "TAG_CHANGE Entity=KennethSun#5122 tag=PLAYSTATE value=LOST",
+            )
+
+            assertFalse(
+                E2ETrace.readPowerLogResult(
+                    log.toString(),
+                    playerGameId = "",
+                    fallbackPlayerGameId = "KennethSun#5122",
+                )!!,
+            )
+        } finally {
+            Files.deleteIfExists(log)
+        }
+    }
+
+    @Test
     fun `new CREATE_GAME boundary invalidates previous game milestones`() {
         val initialSequence = E2ETrace.gameSequence
         try {

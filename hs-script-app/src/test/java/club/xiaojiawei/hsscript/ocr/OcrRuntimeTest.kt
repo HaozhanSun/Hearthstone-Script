@@ -86,6 +86,96 @@ class OcrRuntimeTest {
     }
 
     @Test
+    fun emptyLegacyProbeIsQuietAndLaterNonEmptyProbeIsAccepted() {
+        OcrRuntime.settingsProvider = {
+            PaddleXOcrSettings(false, "python", "unused", "cpu", "", 1000)
+        }
+        OcrRuntime.modeProvider = { OcrProviderMode.LEGACY_ONLY }
+
+        val empty = OcrRuntime.recognize(
+            TestImages.onePixel(),
+            "rank-probe-empty",
+            legacyOcr = { "" },
+            allowEmptyProbeResult = true,
+        )
+        assertEquals("", empty)
+        assertEquals(OcrProviderKind.LEGACY, OcrRuntime.lastUsedProvider())
+        assertFalse(OcrRuntime.lastRecognitionAccepted())
+
+        val accepted = OcrRuntime.recognize(
+            TestImages.onePixel(),
+            "rank-probe-follow-up",
+            legacyOcr = { "10" },
+            allowEmptyProbeResult = true,
+        )
+        assertEquals("10", accepted)
+        assertTrue(OcrRuntime.lastRecognitionAccepted())
+    }
+
+    @Test
+    fun emptyPaddleXProbeDoesNotFallbackOrReportProviderFailure() {
+        OcrRuntime.settingsProvider = {
+            PaddleXOcrSettings(true, "python", "fake-module", "cpu", "", 1000)
+        }
+        OcrRuntime.modeProvider = { OcrProviderMode.PADDLEX_ONLY }
+        var legacyCalled = false
+        OcrRuntime.paddleXBridgeFactory = {
+            object : OcrTextBridge {
+                override fun recognize(image: java.awt.image.BufferedImage, desc: String): String = ""
+
+                override fun healthCheck(): OcrHealth = OcrHealth(true, OcrProviderKind.PADDLEX, "ok")
+            }
+        }
+
+        val result = OcrRuntime.recognize(
+            TestImages.onePixel(),
+            "paddlex-rank-probe-empty",
+            legacyOcr = {
+                legacyCalled = true
+                "legacy-must-not-run"
+            },
+            allowEmptyProbeResult = true,
+        )
+
+        assertEquals("", result)
+        assertFalse(legacyCalled)
+        assertEquals(OcrProviderKind.PADDLEX, OcrRuntime.lastUsedProvider())
+        assertFalse(OcrRuntime.lastRecognitionAccepted())
+    }
+
+    @Test
+    fun paddleXProbeExceptionStillFailsClosedWithoutLegacyFallback() {
+        OcrRuntime.settingsProvider = {
+            PaddleXOcrSettings(true, "python", "fake-module", "cpu", "", 1000)
+        }
+        OcrRuntime.modeProvider = { OcrProviderMode.PADDLEX_ONLY }
+        var legacyCalled = false
+        OcrRuntime.paddleXBridgeFactory = {
+            object : OcrTextBridge {
+                override fun recognize(image: java.awt.image.BufferedImage, desc: String): String =
+                    throw PaddleXOcrException("sidecar probe failure")
+
+                override fun healthCheck(): OcrHealth = OcrHealth(false, OcrProviderKind.PADDLEX, "failed")
+            }
+        }
+
+        assertFailsWith<PaddleXOcrException> {
+            OcrRuntime.recognize(
+                TestImages.onePixel(),
+                "paddlex-rank-probe-error",
+                legacyOcr = {
+                    legacyCalled = true
+                    "legacy-must-not-run"
+                },
+                allowEmptyProbeResult = true,
+            )
+        }
+        assertFalse(legacyCalled)
+        assertEquals(OcrProviderKind.PADDLEX, OcrRuntime.lastUsedProvider())
+        assertFalse(OcrRuntime.lastRecognitionAccepted())
+    }
+
+    @Test
     fun paddleXRouteUsesBridge() {
         OcrRuntime.settingsProvider = {
             PaddleXOcrSettings(

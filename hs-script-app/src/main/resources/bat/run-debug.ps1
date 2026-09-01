@@ -24,6 +24,7 @@ $scriptLog = Join-Path $logDirectory "hs_script.log"
 $powerLogRoot = "D:\Hearthstone\Logs"
 $e2ePlayerName = if ($env:HS_E2E_PLAYER) { $env:HS_E2E_PLAYER } else { "laz#12793" }
 $testOnlySkipSurrender = $env:HS_E2E_SKIP_SURRENDER -eq "true"
+$testOnlySkipPersistentStreakGuard = $env:HS_E2E_SKIP_PERSISTENT_STREAK -eq "true"
 $gamesRequired = 2
 $maxRestarts = 50
 $runId = "{0}_{1}" -f (Get-Random -Minimum 10000 -Maximum 99999), (Get-Random -Minimum 1000 -Maximum 9999)
@@ -69,6 +70,7 @@ Set-Content -Path $consoleLog -Value @(
     "E2E consecutive valid wins required=$gamesRequired",
     "E2E surrender-after-out-card=false",
     "E2E test-only skip-surrender-policy=$testOnlySkipSurrender",
+    "E2E test-only skip-persistent-streak-guard=$testOnlySkipPersistentStreakGuard",
     "E2E mulligan-screenshot=true",
     "E2E mulligan-input=SendInput-absolute"
 )
@@ -249,6 +251,13 @@ while ($true) {
         $jarIndex = [Array]::IndexOf([object[]]$arguments, "-jar")
         $arguments = @($arguments[0..($jarIndex - 1)]) +
             "-Dhs.script.e2e.skip-surrender-policy=true" +
+            @($arguments[$jarIndex..($arguments.Count - 1)])
+    }
+
+    if ($testOnlySkipPersistentStreakGuard) {
+        $jarIndex = [Array]::IndexOf([object[]]$arguments, "-jar")
+        $arguments = @($arguments[0..($jarIndex - 1)]) +
+            "-Dhs.script.e2e.skip-persistent-streak-guard=true" +
             @($arguments[$jarIndex..($arguments.Count - 1)])
     }
 

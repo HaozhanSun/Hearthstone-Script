@@ -9,6 +9,11 @@ import club.xiaojiawei.hsscript.status.E2EReadinessGate
 class PowerLogListenerTest {
 
     @Test
+    fun `default startup readiness wait covers slow real-client recovery but stays bounded`() {
+        assertEquals(180_000L, E2EReadinessGate.DEFAULT_TIMEOUT_MS)
+    }
+
+    @Test
     fun `only first-game navigation contexts bypass readiness while waiting`() {
         assertTrue(PowerLogListener.isPreGameDispatchContext("hub-after-enter"))
         assertTrue(PowerLogListener.isPreGameDispatchContext("tournament-entry"))

@@ -45,6 +45,14 @@ import kotlin.math.sin
  */
 object MouseUtil {
 
+    /**
+     * The E2E dispatcher interrupts an in-flight mouse path when a screen
+     * transition changes mode.  That is an expected cancellation, not a
+     * native input failure; keep it out of the zero-error run evidence.
+     */
+    internal fun isExpectedE2eInputCancellation(error: Throwable): Boolean =
+        error is InterruptedException
+
     private fun e2eInputEnabled(): Boolean =
         System.getProperty("hs.script.e2e.real-input") == "true" ||
             System.getProperty("hs.script.safe-native") == "true"
@@ -782,8 +790,15 @@ object MouseUtil {
                         savePos(pos)
                         return
                     } catch (error: Throwable) {
-                        log.error(error) {
-                            "E2E_INPUT_NATIVE_FAILED pos=(${pos.x},${pos.y}) hwnd=$hwnd"
+                        if (isExpectedE2eInputCancellation(error)) {
+                            Thread.currentThread().interrupt()
+                            log.info {
+                                "E2E_INPUT_CANCELLED_PHASE_CHANGE pos=(${pos.x},${pos.y}) hwnd=$hwnd"
+                            }
+                        } else {
+                            log.error(error) {
+                                "E2E_INPUT_NATIVE_FAILED pos=(${pos.x},${pos.y}) hwnd=$hwnd"
+                            }
                         }
                         return
                     }

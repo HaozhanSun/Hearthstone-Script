@@ -50,17 +50,20 @@ object CurrentRankDetector {
     // that whole image to Tesseract produces values such as 939/51/191.
     // This inner window is centered on the white numeral row in the 1920x1080
     // Hearthstone HUD and deliberately excludes the portrait and name.
-    private const val RANK_DIGIT_LEFT = 0.018
-    private const val RANK_DIGIT_TOP = 0.880
-    private const val RANK_DIGIT_WIDTH = 0.018
-    private const val RANK_DIGIT_HEIGHT = 0.027
+    // Keep the full numeral pair in view.  The previous 34 px crop clipped
+    // the right half of the live rank-10 badge at 1920x1080, causing every
+    // OCR pass to return empty even though the badge itself was visible.
+    private const val RANK_DIGIT_LEFT = 0.017
+    private const val RANK_DIGIT_TOP = 0.860
+    private const val RANK_DIGIT_WIDTH = 0.040
+    private const val RANK_DIGIT_HEIGHT = 0.070
     // The stylized 10 badge is frequently OCR'd as a lone 1.  This narrow
     // inner window excludes the shield border and the player name, leaving
     // only the numeral row for a conservative two-digit layout check.
-    private const val RANK_VISUAL_LEFT = 0.26
-    private const val RANK_VISUAL_TOP = 0.32
-    private const val RANK_VISUAL_WIDTH = 0.30
-    private const val RANK_VISUAL_HEIGHT = 0.25
+    private const val RANK_VISUAL_LEFT = 0.23
+    private const val RANK_VISUAL_TOP = 0.38
+    private const val RANK_VISUAL_WIDTH = 0.42
+    private const val RANK_VISUAL_HEIGHT = 0.38
     private const val RANK_TWO_DIGIT_MIN_SPAN = 24
 
     data class Detection(
@@ -199,6 +202,24 @@ object CurrentRankDetector {
         saveEvidence: Boolean = false,
     ): Detection? = runCatching {
         val rankRegion = cropRankRegion(screen)
+        // A live pre-mulligan transition often has no rank badge at all. Do
+        // not spend several minutes probing every OCR page-segmentation mode
+        // on that frame: the result cannot affect policy until the badge is
+        // visible, and blocking the Power.log listener can strand the client
+        // on a later result screen. The dedicated visual gate is deliberately
+        // evaluated before any OCR call for this reason.
+        val visualTier = detectTierVisual(rankRegion)
+        val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
+            looksLikeTwoDigitRank(rankRegion)
+        val badgeVisible = visualTier !== RankTier.UNKNOWN || visualTenHint
+        if (!badgeVisible) {
+            log.info {
+                "RANK_OCR bounds=$bounds region=${rankRegion.width}x${rankRegion.height} " +
+                    "text=<empty> candidates=<empty> tierCandidates=<empty> " +
+                    "visualTenHint=false badgeVisible=false tier=UNKNOWN rank=UNKNOWN"
+            }
+            return Detection(null, RankTier.UNKNOWN, "", bounds, badgeVisible = false)
+        }
         val tessData = File(TESS_DATA_PATH)
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
         if (OcrRuntime.isLegacySelected() && !chiSim.isFile) {
@@ -236,12 +257,16 @@ object CurrentRankDetector {
             digitRegion to 11,
             digitRegion to 13,
         )
-        val ocrTexts = ocrInputs.map { (image, pageSegMode) ->
-            ocrRank(image, tessData, pageSegMode, rankLanguage)
+        val ocrTexts = buildList {
+            for ((image, pageSegMode) in ocrInputs) {
+                val text = ocrRank(image, tessData, pageSegMode, rankLanguage)
+                add(text)
+                // A clean 10 is already authoritative. Avoid paying for the
+                // remaining slow PaddleX probes after the safe rank is known.
+                if (parseRankText(text) == 10) break
+            }
         }
         val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
-        val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
-            looksLikeTwoDigitRank(rankRegion)
         val rank = resolveRankCandidates(ocrTexts, visualTenHint)
         val tierOcrTexts = listOf(rankRegion, expandedRegion).map { image ->
             ocrTier(image, tessData)
@@ -254,11 +279,14 @@ object CurrentRankDetector {
         val tier = if (tierFromOcr !== RankTier.UNKNOWN) {
             tierFromOcr
         } else {
-            detectTierVisual(rankRegion)
+            visualTier
         }
-        val badgeVisible = tier !== RankTier.UNKNOWN ||
-            visualTenHint ||
-            ocrTexts.any { text -> text.any(Char::isDigit) }
+        // OCR digit output is not visual evidence: the live board and
+        // transition overlays contain many unrelated numerals (health,
+        // mana, card costs, timers).  Treating any one of those digits as a
+        // visible rank badge reintroduces the exact false pause seen during
+        // the real E2E run.  Visibility must come from the badge metal or
+        // the dedicated two-digit numeral-width signal only.
         log.info {
             "RANK_OCR bounds=$bounds region=${rankRegion.width}x${rankRegion.height} " +
                 "text=${ocrText.ifBlank { "<empty>" }} candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
@@ -322,7 +350,15 @@ object CurrentRankDetector {
                 val blue = color and 0xff
                 val brightest = maxOf(red, green, blue)
                 val darkest = minOf(red, green, blue)
-                if (brightest >= 180 && brightest - darkest <= 70) {
+                val neutralForeground = brightest >= 180 && brightest - darkest <= 70
+                // The live rank numeral is often rendered in a saturated
+                // orange/red enamel rather than neutral white.  Keep this
+                // criterion inside the dedicated numeral window so warm
+                // badge metal elsewhere in the HUD cannot count as a rank.
+                val warmForeground = red >= 145 && green >= 45 &&
+                    red > blue * 1.35 && green > blue * 1.08 &&
+                    red + green - blue >= 180
+                if (neutralForeground || warmForeground) {
                     foregroundPixels++
                 }
             }
@@ -415,6 +451,7 @@ object CurrentRankDetector {
                 val digits = text.filter(Char::isDigit)
                 (whitelist == "0" && digits == "0") || parseRankText(text) != null
             },
+            allowEmptyProbeResult = true,
         )
             .replace(Regex("\\s+"), "")
 
@@ -463,6 +500,7 @@ object CurrentRankDetector {
             scaleForOcr(image),
             "current-tier",
             paddleXContract = { parseTierText(it) !== RankTier.UNKNOWN },
+            allowEmptyProbeResult = true,
         )
             .replace(Regex("\\s+"), "")
 
@@ -495,7 +533,11 @@ object CurrentRankDetector {
                 // The numeral has a bright, nearly neutral face.  Darken
                 // those pixels and leave the colored/dark badge as white so
                 // Tesseract sees a clean black-on-white digit mask.
-                val foreground = brightest >= 155 && brightest - darkest <= 105
+                val neutralForeground = brightest >= 155 && brightest - darkest <= 105
+                val warmForeground = red >= 145 && green >= 45 &&
+                    red > blue * 1.35 && green > blue * 1.08 &&
+                    red + green - blue >= 180
+                val foreground = neutralForeground || warmForeground
                 val value = if (foreground) 0 else 255
                 val gray = (value shl 16) or (value shl 8) or value
                 scaled.setRGB(x, y, gray)

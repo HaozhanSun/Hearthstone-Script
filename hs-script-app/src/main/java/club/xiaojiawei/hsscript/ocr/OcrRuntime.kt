@@ -47,21 +47,38 @@ object OcrRuntime {
         legacyOcr: () -> String,
     ): String = recognize(image, desc, legacyOcr, { it.isNotBlank() })
 
+    /** Preserve the original trailing-lambda call shape used by callers. */
     fun recognize(
         image: BufferedImage?,
         desc: String = "",
         legacyOcr: () -> String,
+        acceptPaddleX: (String) -> Boolean,
+    ): String = recognize(
+        image,
+        desc,
+        legacyOcr,
+        allowEmptyProbeResult = false,
+        acceptPaddleX = acceptPaddleX,
+    )
+
+    fun recognize(
+        image: BufferedImage?,
+        desc: String = "",
+        legacyOcr: () -> String,
+        allowEmptyProbeResult: Boolean = false,
         acceptPaddleX: (String) -> Boolean = { it.isNotBlank() },
     ): String {
         lastContractAccepted.set(false)
         val mode = modeProvider()
-        if (mode == OcrProviderMode.LEGACY_ONLY) return runLegacy(legacyOcr, desc, "mode=legacy-only")
+        if (mode == OcrProviderMode.LEGACY_ONLY) {
+            return runLegacy(legacyOcr, desc, "mode=legacy-only", allowEmptyProbeResult)
+        }
         if (image == null) {
             if (mode == OcrProviderMode.PADDLEX_ONLY) {
                 throw PaddleXOcrException("PaddleX OCR cannot inspect a null image")
             }
             log.warn { "PADDLEX_FALLBACK_TO_LEGACY reason=null-image desc=${desc.ifBlank { "<none>" }}" }
-            return runLegacy(legacyOcr, desc, "null-image")
+            return runLegacy(legacyOcr, desc, "null-image", allowEmptyProbeResult)
         }
         val settings = settingsProvider()
         if (!settings.enabled) {
@@ -69,7 +86,7 @@ object OcrRuntime {
                 throw PaddleXOcrException("PaddleX OCR is disabled by USE_PADDLEX_OCR")
             }
             log.info { "OCR_PROVIDER_SELECTED provider=LEGACY reason=paddlex-disabled desc=${desc.ifBlank { "<none>" }}" }
-            return runLegacy(legacyOcr, desc, "paddlex-disabled")
+            return runLegacy(legacyOcr, desc, "paddlex-disabled", allowEmptyProbeResult)
         }
 
         val paddleXText = runCatching {
@@ -84,7 +101,16 @@ object OcrRuntime {
             }
             if (mode == OcrProviderMode.PADDLEX_ONLY) throw error
             log.warn { "PADDLEX_FALLBACK_TO_LEGACY reason=${fallbackReason(error)} desc=${desc.ifBlank { "<none>" }}" }
-            return runLegacy(legacyOcr, desc, fallbackReason(error))
+            return runLegacy(legacyOcr, desc, fallbackReason(error), allowEmptyProbeResult)
+        }
+
+        if (allowEmptyProbeResult && paddleXText.isBlank()) {
+            lastProvider.set(OcrProviderKind.PADDLEX)
+            log.debug {
+                "OCR_PROBE_EMPTY provider=PADDLEX desc=${desc.ifBlank { "<none>" }} " +
+                    "reason=expected-empty-probe"
+            }
+            return paddleXText
         }
 
         if (!acceptPaddleX(paddleXText)) {
@@ -94,9 +120,9 @@ object OcrRuntime {
             }
             log.warn {
                 "PADDLEX_FALLBACK_TO_LEGACY reason=$reason desc=${desc.ifBlank { "<none>" }} " +
-                    "chars=${paddleXText.length}"
+                    "chars=${paddleXText.length} preview=${previewForLog(paddleXText)}"
             }
-            return runLegacy(legacyOcr, desc, reason)
+            return runLegacy(legacyOcr, desc, reason, allowEmptyProbeResult)
         }
 
         lastProvider.set(OcrProviderKind.PADDLEX)
@@ -112,6 +138,7 @@ object OcrRuntime {
         legacyOcr: () -> String,
         desc: String,
         reason: String,
+        allowEmptyProbeResult: Boolean,
     ): String {
         return runCatching { legacyOcr() }.getOrElse { error ->
             lastProvider.set(OcrProviderKind.LEGACY)
@@ -137,14 +164,25 @@ object OcrRuntime {
                     "OCR_PROVIDER_SELECTED provider=LEGACY reason=$reason " +
                         "desc=${desc.ifBlank { "<none>" }} chars=${text.length}"
                 }
+            } else if (text.isBlank() && allowEmptyProbeResult) {
+                log.debug {
+                    "OCR_PROVIDER_PROBE_EMPTY provider=LEGACY reason=$reason " +
+                        "desc=${desc.ifBlank { "<none>" }} chars=${text.length}"
+                }
             } else {
                 log.warn {
                     "OCR_PROVIDERS_FAILED paddlex=$reason legacy=contract-rejected " +
-                        "desc=${desc.ifBlank { "<none>" }} chars=${text.length}"
+                        "desc=${desc.ifBlank { "<none>" }} chars=${text.length} " +
+                        "preview=${previewForLog(text)}"
                 }
             }
         }
     }
+
+    private fun previewForLog(text: String): String = text
+        .replace(Regex("\\s+"), " ")
+        .take(160)
+        .ifBlank { "<empty>" }
 
     private fun fallbackReason(error: Throwable): String = when (error) {
         is PaddleXOcrException -> when {

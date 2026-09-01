@@ -8,6 +8,12 @@ import kotlin.test.assertTrue
 
 class ScreenStateRecoveryTest {
     @Test
+    fun `discards a stale recovery inspection once a war starts`() {
+        assertFalse(ScreenStateRecovery.shouldDiscardStaleInspection(false))
+        assertTrue(ScreenStateRecovery.shouldDiscardStaleInspection(true))
+    }
+
+    @Test
     fun `recognizes result action when OCR loses outcome title`() {
         assertTrue(ScreenStateRecovery.looksLikeResultText("本局结果 KennethSun 写击继续"))
         assertTrue(ScreenStateRecovery.looksLikeResultText("败北 点击继续"))

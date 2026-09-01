@@ -173,11 +173,16 @@ object E2ETrace {
      * phase listener can enter GAME_OVER before the final PLAYSTATE tag has
      * reached the in-memory model, especially after a watchdog replay.
      */
-    fun readPowerLogResult(logPath: String?, playerGameId: String): Boolean? {
+    fun readPowerLogResult(
+        logPath: String?,
+        playerGameId: String,
+        fallbackPlayerGameId: String? = null,
+    ): Boolean? {
         // This parser is also used by the normal result handler.  E2E mode
         // controls milestone persistence, not whether Power.log is the
         // authoritative source of the terminal result.
-        if (logPath.isNullOrBlank() || playerGameId.isBlank()) return null
+        val playerIdentity = playerGameId.ifBlank { fallbackPlayerGameId?.trim().orEmpty() }
+        if (logPath.isNullOrBlank() || playerIdentity.isBlank()) return null
         return runCatching {
             RandomAccessFile(logPath, "r").use { file ->
                 val start = (file.length() - 128 * 1024L).coerceAtLeast(0L)
@@ -186,9 +191,9 @@ object E2ETrace {
                 val bytes = ByteArray(remaining)
                 file.readFully(bytes)
                 val text = bytes.toString(Charsets.UTF_8)
-                val playerWon = "Entity=$playerGameId tag=PLAYSTATE value=WON"
-                val playerLost = "Entity=$playerGameId tag=PLAYSTATE value=LOST"
-                val playerConceded = "Entity=$playerGameId tag=PLAYSTATE value=CONCEDED"
+                val playerWon = "Entity=$playerIdentity tag=PLAYSTATE value=WON"
+                val playerLost = "Entity=$playerIdentity tag=PLAYSTATE value=LOST"
+                val playerConceded = "Entity=$playerIdentity tag=PLAYSTATE value=CONCEDED"
                 // The tail can contain several games.  Comparing contains()
                 // in a fixed order lets an older WON marker override a newer
                 // CONCEDED/LOST marker, which mislabeled surrender results.

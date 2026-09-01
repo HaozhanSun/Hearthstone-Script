@@ -268,6 +268,17 @@ object SurrenderPolicy {
 
     /** Re-read durable history and turn a matched protection into a decision. */
     private fun enforcePersistentStreakGuard(): SurrenderRuleResult? = runCatching {
+        if (System.getProperty("hs.script.e2e.skip-persistent-streak-guard") == "true") {
+            // This narrowly scoped E2E accommodation keeps a stale local
+            // statistics history from terminating the real-input run before
+            // mulligan.  Rank, opponent-hero, win-rate, and turn-start rules
+            // remain active; normal launches never set this property.
+            log.info {
+                "E2E_TEST_ONLY persistent streak guard bypassed; " +
+                    "rank/hero/turn surrender policy remains enabled"
+            }
+            return null
+        }
         val strategy = DeckStrategyManager.currentDeckStrategy ?: return null
         val strategyId = strategy.id().takeIf { it.isNotBlank() } ?: return null
         val records = RecordDaoEx.RECORD_DAO.query(Record(strategyId = strategyId))

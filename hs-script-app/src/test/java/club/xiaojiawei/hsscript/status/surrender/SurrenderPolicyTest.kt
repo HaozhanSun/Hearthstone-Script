@@ -332,6 +332,19 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun rankBadgeVisualSignalIgnoresIsolatedHudDigitNoise() {
+        val noisyTransition = BufferedImage(144, 140, BufferedImage.TYPE_INT_RGB)
+        val graphics = noisyTransition.createGraphics()
+        graphics.color = Color.WHITE
+        graphics.fillRect(48, 52, 8, 30)
+        graphics.dispose()
+
+        // OCR digits alone are not evidence that the rank badge is on screen;
+        // board HUD numbers can occupy the same broad capture area.
+        assertFalse(CurrentRankDetector.hasRankBadgeVisualSignal(noisyTransition))
+    }
+
+    @Test
     fun rankTierVisualClassifierDistinguishesWarmGoldFromNeutralSilver() {
         val gold = BufferedImage(144, 140, BufferedImage.TYPE_INT_RGB)
         val goldGraphics = gold.createGraphics()
@@ -366,6 +379,21 @@ class SurrenderPolicyTest {
                 listOf("", "2", "4", "4", "", "3"),
             ),
         )
+    }
+
+    @Test
+    fun invisibleRankRegionSkipsExpensiveOcrProbes() {
+        val blankScreen = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
+
+        val detection = CurrentRankDetector.detectCapturedImage(
+            blankScreen,
+            saveEvidence = false,
+        )
+
+        assertTrue(detection != null)
+        assertFalse(detection!!.badgeVisible)
+        assertNull(detection.rank)
+        assertEquals(CurrentRankDetector.RankTier.UNKNOWN, detection.tier)
     }
 
     @Test
