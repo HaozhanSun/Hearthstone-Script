@@ -38,3 +38,18 @@
 - Prevention: base the release candidate on the complete readiness/sentinel
   tree, then add the runner and provider fix as explicit commits. This branch
   follows that rule.
+
+## v4.16.137 run 17306_2083 — hub misclassified as loading
+
+- **Status:** `invalid E2E evidence`; no game was created and no run credit.
+- **Observed:** after binding to the real window
+  `process:D:\Hearthstone\Hearthstone.exe`, the visible hub showed the four
+  navigation buttons, but Legacy OCR returned unreadable text. The generic
+  warm/dark visual signature then classified the hub as
+  `loading-card-back-visual`, paused the script, and left the fresh
+  `D:\Hearthstone\Logs\Hearthstone_2026_09_01_01_48_57\Power.log` empty.
+- **Fix:** add a measured central navigation-button brightness signal and
+  require it, together with hub-compatible central darkness/color, before
+  mapping an OCR-unclear screen to HUB. Add a regression test for the hub
+  versus loading-card measurements. The run's Java, wrapper, and Hearthstone
+  processes were stopped only after exact command-line validation.

@@ -47,6 +47,7 @@ object ScreenStateRecovery {
     private const val OCR_MAX_WIDTH = 1280
     private const val RESULT_CONTINUE_GRAY_LIGHT_MIN = 0.025
     private const val RESULT_BANNER_LOW_SATURATION_MIN = 0.30
+    private const val HUB_NAVIGATION_BRIGHT_MIN = 0.08
     private const val RECONNECT_RETRY_INTERVAL_MS = 60_000L
     /**
      * Screen recovery can be requested by both startup probing and the
@@ -85,6 +86,7 @@ object ScreenStateRecovery {
         val warmRatio: Double,
         val blueRatio: Double,
         val loadingCentralDarkRatio: Double,
+        val hubNavigationBrightRatio: Double,
         val resultContinueGrayLightRatio: Double,
         val resultBannerLowSaturationRatio: Double,
     ) {
@@ -93,6 +95,7 @@ object ScreenStateRecovery {
                 "warmRatio=${"%.3f".format(Locale.ROOT, warmRatio)} " +
                 "blueRatio=${"%.3f".format(Locale.ROOT, blueRatio)} " +
                 "loadingCentralDark=${"%.3f".format(Locale.ROOT, loadingCentralDarkRatio)} " +
+                "hubNavigationBright=${"%.3f".format(Locale.ROOT, hubNavigationBrightRatio)} " +
                 "resultContinueGrayLight=${"%.3f".format(Locale.ROOT, resultContinueGrayLightRatio)} " +
                 "resultBannerLowSaturation=${"%.3f".format(Locale.ROOT, resultBannerLowSaturationRatio)}"
     }
@@ -101,6 +104,7 @@ object ScreenStateRecovery {
         val grayLightRatio: Double,
         val lowSaturationRatio: Double,
         val darkRatio: Double,
+        val brightRatio: Double,
     )
 
     private data class Detection(
@@ -461,11 +465,13 @@ object ScreenStateRecovery {
         val continueSignal = sampleRegion(image, 0.41, 0.59, 0.91, 0.98)
         val bannerSignal = sampleRegion(image, 0.38, 0.62, 0.52, 0.72)
         val loadingCenterSignal = sampleRegion(image, 0.18, 0.82, 0.08, 0.92)
+        val hubNavigationSignal = sampleRegion(image, 0.37, 0.63, 0.27, 0.60)
         return VisualSignature(
             sampleHash = hash,
             warmRatio = if (samples == 0) 0.0 else warm.toDouble() / samples,
             blueRatio = if (samples == 0) 0.0 else blue.toDouble() / samples,
             loadingCentralDarkRatio = loadingCenterSignal.darkRatio,
+            hubNavigationBrightRatio = hubNavigationSignal.brightRatio,
             resultContinueGrayLightRatio = continueSignal.grayLightRatio,
             resultBannerLowSaturationRatio = bannerSignal.lowSaturationRatio,
         )
@@ -486,6 +492,7 @@ object ScreenStateRecovery {
         var grayLight = 0
         var lowSaturation = 0
         var dark = 0
+        var bright = 0
         var y = y0
         while (y < y1) {
             var x = x0
@@ -500,16 +507,18 @@ object ScreenStateRecovery {
                 if (maximum - minimum <= 35) lowSaturation++
                 if (maximum - minimum <= 35 && average >= 180) grayLight++
                 if (average < 70) dark++
+                if (average >= 180) bright++
                 samples++
                 x += 2
             }
             y += 2
         }
-        if (samples == 0) return RegionSignal(0.0, 0.0, 0.0)
+        if (samples == 0) return RegionSignal(0.0, 0.0, 0.0, 0.0)
         return RegionSignal(
             grayLightRatio = grayLight.toDouble() / samples,
             lowSaturationRatio = lowSaturation.toDouble() / samples,
             darkRatio = dark.toDouble() / samples,
+            brightRatio = bright.toDouble() / samples,
         )
     }
 
@@ -554,6 +563,15 @@ object ScreenStateRecovery {
         // win before the generic visual loading fallback.
         if (looksLikeHubText(text)) {
             return Detection(ScreenKind.HOME, ModeEnum.HUB, 92, "hub-navigation-text")
+        }
+        if (looksLikeHubVisual(
+                hubNavigationBrightRatio = visual.hubNavigationBrightRatio,
+                centralDarkRatio = visual.loadingCentralDarkRatio,
+                warmRatio = visual.warmRatio,
+                blueRatio = visual.blueRatio,
+            )
+        ) {
+            return Detection(ScreenKind.HOME, ModeEnum.HUB, 87, "hub-navigation-visual")
         }
         if (looksLikeLoadingText(text)) {
             return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 88, "loading-text")
@@ -657,6 +675,21 @@ object ScreenStateRecovery {
         blueRatio: Double,
     ): Boolean = centralDarkRatio >= 0.35 && warmRatio >= 0.10 && blueRatio <= 0.15
 
+    /**
+     * The hub renders four bright navigation buttons inside the central dark
+     * menu. The loading card-back has the same warm/blue palette but no bright
+     * navigation band and is substantially darker in that area.
+     */
+    internal fun looksLikeHubVisual(
+        hubNavigationBrightRatio: Double,
+        centralDarkRatio: Double,
+        warmRatio: Double,
+        blueRatio: Double,
+    ): Boolean = hubNavigationBrightRatio >= HUB_NAVIGATION_BRIGHT_MIN &&
+        centralDarkRatio in 0.25..0.75 &&
+        warmRatio >= 0.10 &&
+        blueRatio <= 0.20
+
     /** Test-only classification seam that keeps the production detector private. */
     internal fun classifyForTest(ocrText: String): String? = detect(
         ocrText,
@@ -665,6 +698,7 @@ object ScreenStateRecovery {
             warmRatio = 0.0,
             blueRatio = 0.0,
             loadingCentralDarkRatio = 0.0,
+            hubNavigationBrightRatio = 0.0,
             resultContinueGrayLightRatio = 0.0,
             resultBannerLowSaturationRatio = 0.0,
         ),

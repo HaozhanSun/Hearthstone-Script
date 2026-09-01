@@ -71,6 +71,16 @@ class ScreenStateRecoveryTest {
     }
 
     @Test
+    fun `recognizes the visible hub menu when OCR is unreadable`() {
+        // The current 1920x1080 hub screenshot measured a bright navigation
+        // band of 0.170 and a central dark ratio of 0.527. The loading
+        // card-back measured 0.000 and 0.981 in the same regions.
+        assertTrue(ScreenStateRecovery.looksLikeHubVisual(0.170, 0.527, 0.386, 0.122))
+        assertFalse(ScreenStateRecovery.looksLikeHubVisual(0.000, 0.981, 0.386, 0.122))
+        assertFalse(ScreenStateRecovery.looksLikeHubVisual(0.170, 0.527, 0.080, 0.122))
+    }
+
+    @Test
     fun `does not classify the hub collection navigation button as collection screen`() {
         val hub = "传统对战 酒馆战棋 竞技模式 其他模式 开包 我的收藏 商店"
         val collection = "我的套牌 卡牌制作 查找 39/40 卡牌"
