@@ -9,6 +9,7 @@ import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.SCREEN_WIDTH
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
+import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.starter.InjectGameStarter
 import club.xiaojiawei.hsscript.statistics.RecordDaoEx
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
@@ -319,12 +320,15 @@ object HubModeStrategy : AbstractModeStrategy<Any?>() {
     }
 
     override fun afterEnter(t: Any?) {
+        if (!PowerLogListener.allowE2EDispatch("hub-after-enter")) return
+
         if (ConfigUtil.getBoolean(ConfigEnum.AUTO_REFRESH_GAME_TASK)) {
             handleTask()
         }
 
         addEnteredTask(EXTRA_THREAD_POOL.scheduleWithFixedDelay({
             if (PauseStatus.isPause) return@scheduleWithFixedDelay
+            if (!PowerLogListener.allowE2EDispatch("hub-popup-dismiss")) return@scheduleWithFixedDelay
             log.info { "点击广告弹窗等" }
             log.info { "尝试关闭主界面促销页" }
             HOME_PROMO_BACK_RECT.lClick()

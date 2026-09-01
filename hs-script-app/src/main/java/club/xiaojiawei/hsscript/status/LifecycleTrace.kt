@@ -40,6 +40,7 @@ object LifecycleTrace {
         Thread {
             var lastState = ""
             while (running) {
+                PowerLogListener.enforceE2EReadiness()
                 detectStuckGameOver()
                 detectStuckStateRecovery()
                 val state = snapshot()

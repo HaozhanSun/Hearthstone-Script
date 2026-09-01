@@ -6,6 +6,7 @@ import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
+import club.xiaojiawei.hsscript.status.E2EReadinessGate
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
@@ -41,6 +42,11 @@ object PowerLogListener :
     @Volatile
     private var terminalTailFence = false
 
+    private val e2eReadinessGate = E2EReadinessGate()
+
+    @Volatile
+    private var lastReadinessLogAt = 0L
+
     private const val RESERVE_SIZE_B = 4 * 1024 * 1024
 
     override fun dealOldLog() {
@@ -49,8 +55,25 @@ object PowerLogListener :
         terminalTailFence = false
 
         logFile?.let {
+            if (System.getProperty("hs.script.e2e") == "true") {
+                val baseline = it.length()
+                e2eReadinessGate.begin(
+                    runId = System.getProperty("hs.script.e2e.run-id", "unknown"),
+                    processId = ProcessHandle.current().pid(),
+                    logPath = it.path(),
+                    baselineOffset = baseline,
+                    nowMs = System.currentTimeMillis(),
+                )
+                it.seek(baseline)
+                log.warn {
+                    "E2E_READINESS_SESSION_STARTED runId=${System.getProperty("hs.script.e2e.run-id", "unknown")} " +
+                        "pid=${ProcessHandle.current().pid()} path=${it.path()} baselineOffset=$baseline " +
+                        "existingLog=${baseline > 0} old-tail-replay=false"
+                }
+                return
+            }
             val replayExistingGame = hasUnfinishedGame(it.path())
-            if (replayExistingGame || System.getProperty("hs.script.e2e") == "true") {
+            if (replayExistingGame) {
                 // A restart or late attach must reconstruct an already active
                 // game before consuming new lines; otherwise the phase machine
                 // starts at FILL_DECK with no player mapping and the bot can
@@ -129,14 +152,12 @@ object PowerLogListener :
      */
     @Synchronized
     override fun dealNewLog() {
-        // During an E2E watchdog restart this method is also used to rebuild
-        // the in-memory model from the beginning of Power.log.  The normal
-        // listener intentionally yields while a phase handler is working, but
-        // applying that gate during replay stops at the first historical turn
-        // and later replays old GAME_OVER/matchmaking lines as if they were
-        // live input.  That creates duplicate queues, false results, and can
-        // make the app appear to close or restart by itself.  Replay must read
-        // through EOF; the live scheduled listener keeps the normal gate.
+        // The normal listener intentionally yields while a phase handler is
+        // working. During a deliberate non-E2E replay, the replay flag allows
+        // the cursor to read through EOF; the live scheduled listener keeps
+        // the normal gate. E2E runs never enter this replay path: they seek
+        // to the session baseline in dealOldLog and wait for a fresh
+        // CREATE_GAME transition instead.
         while (!PauseStatus.isPause && WorkTimeListener.working &&
             (replayingExistingLog || !AbstractPhaseStrategy.dealing)
         ) {
@@ -144,6 +165,22 @@ object PowerLogListener :
                 val line = it.readLine()
                 if (line == null) {
                     return@dealNewLog
+                } else if (System.getProperty("hs.script.e2e") == "true") {
+                    val ready = e2eReadinessGate.observeLine(
+                        runId = System.getProperty("hs.script.e2e.run-id", "unknown"),
+                        processId = ProcessHandle.current().pid(),
+                        absolutePosition = it.getPosition(),
+                        line = line,
+                    )
+                    if (ready) {
+                        log.info {
+                            "E2E_READINESS_READY runId=${System.getProperty("hs.script.e2e.run-id", "unknown")} " +
+                                "pid=${ProcessHandle.current().pid()} source=${it.path()} transition=CREATE_GAME"
+                        }
+                    }
+                    if (PowerLogUtil.isRelevance(line)) {
+                        resolveLog(line)
+                    }
                 } else if (PowerLogUtil.isRelevance(line)) {
                     resolveLog(line)
                 }
@@ -232,6 +269,7 @@ object PowerLogListener :
     }
 
     fun checkPowerLogSize(): Boolean {
+        if (!allowE2EDispatch("power-log-size-check")) return false
         val logFile = logFile
         logFile ?: return false
 
@@ -241,6 +279,45 @@ object PowerLogListener :
             return false
         }
         return true
+    }
+
+    /**
+     * E2E-only hard gate for all normal game/mode dispatch.  Normal user runs
+     * retain the upstream behavior; supervised E2E runs must prove a fresh
+     * CREATE_GAME transition first.
+     */
+    fun allowE2EDispatch(context: String): Boolean {
+        if (System.getProperty("hs.script.e2e") != "true") return true
+
+        val now = System.currentTimeMillis()
+        val decision = e2eReadinessGate.evaluate(
+            runId = System.getProperty("hs.script.e2e.run-id", "unknown"),
+            processId = ProcessHandle.current().pid(),
+            nowMs = now,
+        )
+        if (decision.state == E2EReadinessGate.State.READY) return true
+
+        if (decision.state == E2EReadinessGate.State.BLOCKED) {
+            if (!PauseStatus.isPause) {
+                log.error {
+                    "E2E_READINESS_FAIL_CLOSED context=$context reason=${decision.reason} " +
+                        "waitedMs=${decision.waitedMs} pause=true"
+                }
+                PauseStatus.isPause = true
+            }
+        } else if (now - lastReadinessLogAt >= 10_000L) {
+            lastReadinessLogAt = now
+            log.warn {
+                "E2E_READINESS_BLOCKED context=$context reason=${decision.reason} " +
+                    "waitedMs=${decision.waitedMs} action=none"
+            }
+        }
+        return false
+    }
+
+    /** Called by the lifecycle monitor so the bounded wait cannot run forever. */
+    fun enforceE2EReadiness() {
+        allowE2EDispatch("lifecycle-readiness")
     }
 
 }

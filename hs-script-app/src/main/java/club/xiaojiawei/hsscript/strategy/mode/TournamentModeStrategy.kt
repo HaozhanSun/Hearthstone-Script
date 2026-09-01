@@ -71,6 +71,8 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                     log.info { "模式入口轮询：当前模式=${Mode.currMode}，暂停=${PauseStatus.isPause}" }
                     if (PauseStatus.isPause) {
                         cancelAllWantEnterTasks()
+                    } else if (!PowerLogListener.allowE2EDispatch("tournament-entry")) {
+                        return@LRunnable
                     } else if (Mode.currMode == ModeEnum.HUB) {
                         log.info { "点击传统对战入口" }
                         TOURNAMENT_MODE_RECT.lClick()
@@ -193,6 +195,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
     }
 
     fun startMatching() {
+        if (!PowerLogListener.allowE2EDispatch("start-matching")) return
         log.info { "开始匹配" }
         // Keep the upstream entry sequence: Hearthstone may first display the
         // automatic deck-completion dialog.  A single start click can leave
