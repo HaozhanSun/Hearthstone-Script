@@ -282,9 +282,29 @@ object PowerLogListener :
     }
 
     /**
-     * E2E-only hard gate for all normal game/mode dispatch.  Normal user runs
+     * These are the bounded pre-game inputs needed to cause the first
+     * CREATE_GAME transition.  Requiring CREATE_GAME before these actions
+     * would deadlock a fresh E2E run on the hub forever.  Once the bounded
+     * readiness wait expires, even these inputs are fail-closed.
+     */
+    private val preGameDispatchContexts = setOf(
+        "hub-after-enter",
+        "hub-popup-dismiss",
+        "tournament-entry",
+        "power-log-size-check",
+        "start-matching",
+    )
+
+    internal fun isPreGameDispatchContext(context: String): Boolean =
+        context in preGameDispatchContexts
+
+    /**
+     * E2E-only hard gate for normal in-game dispatch.  Normal user runs
      * retain the upstream behavior; supervised E2E runs must prove a fresh
-     * CREATE_GAME transition first.
+     * CREATE_GAME transition before gameplay actions are allowed.  The
+     * small pre-game allowlist above is limited to the waiting state so it
+     * can start that authoritative transition without weakening the
+     * post-timeout fail-closed behavior.
      */
     fun allowE2EDispatch(context: String): Boolean {
         if (System.getProperty("hs.script.e2e") != "true") return true
@@ -296,6 +316,12 @@ object PowerLogListener :
             nowMs = now,
         )
         if (decision.state == E2EReadinessGate.State.READY) return true
+
+        if (decision.state == E2EReadinessGate.State.WAITING_FOR_CREATE_GAME &&
+            isPreGameDispatchContext(context)
+        ) {
+            return true
+        }
 
         if (decision.state == E2EReadinessGate.State.BLOCKED) {
             if (!PauseStatus.isPause) {

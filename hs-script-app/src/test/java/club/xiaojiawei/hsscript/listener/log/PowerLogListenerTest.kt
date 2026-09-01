@@ -9,6 +9,14 @@ import club.xiaojiawei.hsscript.status.E2EReadinessGate
 class PowerLogListenerTest {
 
     @Test
+    fun `only first-game navigation contexts bypass readiness while waiting`() {
+        assertTrue(PowerLogListener.isPreGameDispatchContext("hub-after-enter"))
+        assertTrue(PowerLogListener.isPreGameDispatchContext("tournament-entry"))
+        assertTrue(PowerLogListener.isPreGameDispatchContext("start-matching"))
+        assertFalse(PowerLogListener.isPreGameDispatchContext("gameplay-turn"))
+    }
+
+    @Test
     fun `empty fresh log blocks until a current CREATE_GAME transition`() {
         val gate = E2EReadinessGate(timeoutMs = 5_000)
         gate.begin("run-a", 101L, "fresh/Power.log", 0L, 1_000L)

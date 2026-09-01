@@ -63,6 +63,12 @@ credit is assigned until real-game evidence passes the completion gate.
      current-player WON in the same build/evidence lineage, and zero errors,
      exceptions, timeouts, OCR failures, UNKNOWN/manual recovery, or missing
      lifecycle/exit evidence.
+   - Attempt `17598_2257` was invalidated before game start: v4.16.138
+     correctly recognized the real hub (`hubNavigationBright=0.182`) and
+     Legacy OCR accepted 72–74 characters, but the new readiness guard also
+     blocked the pre-game Hub-to-match dispatch. Fresh Power.log remained
+     empty; the exact Java/wrapper/Hearthstone processes were stopped after
+     command-line validation. Preserve this run and exclude it from credit.
 
 4. **MCTS/Pirate workstreams — locked**
    - Do not start or merge while the release/CU mutex and E2E gate are open.
@@ -77,3 +83,5 @@ credit is assigned until real-game evidence passes the completion gate.
 - Prior invalid run: `47710_5759`; it remains excluded because Legacy OCR was
   contract-rejected, fresh Power.log readiness never reached CREATE_GAME, and
   no valid game evidence exists.
+- Prior invalid run: `17306_2083`; it remains excluded because the hub was
+  visually misclassified as loading and no game was created.

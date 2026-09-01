@@ -53,3 +53,19 @@
   mapping an OCR-unclear screen to HUB. Add a regression test for the hub
   versus loading-card measurements. The run's Java, wrapper, and Hearthstone
   processes were stopped only after exact command-line validation.
+
+## v4.16.138 run 17598_2257 — readiness self-lock before first game
+
+- **Status:** `invalid E2E evidence`; no game was created and no run credit.
+- **Observed:** the repaired build recognized the real Hearthstone hub with
+  `hubNavigationBright=0.182`, and Legacy OCR reported
+  `contractAccepted=true`. However, `HubModeStrategy.afterEnter` called the
+  new E2E dispatch gate before the first `CREATE_GAME`; the gate returned
+  `WAITING_FOR_CREATE_GAME`, so the initial mode-entry/matchmaking inputs were
+  never sent. The fresh Power.log stayed at length 0 and the bounded gate then
+  paused the run.
+- **Fix:** keep the fresh `CREATE_GAME` requirement for gameplay dispatch, but
+  allow only the bounded pre-game contexts (`hub-after-enter`, popup dismiss,
+  tournament entry, log-size check, and start matching) while the gate is
+  still waiting. They remain blocked after the timeout. This is the minimal
+  compatibility path matching the pre-gate upstream behavior at `e6ede413^`.
