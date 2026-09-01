@@ -1,0 +1,13 @@
+# pair|arm|case|action|expected|verdict|runtime_review
+axe-target|A|frontline-axe-kill|BAR_844_ATTACK_MINION|AXE_MINION_KILL|pass|needs-review
+axe-target|B|frontline-axe-no-target|BAR_844_ATTACK_HERO|NO_AXE_ACTION|pass|needs-review
+axe-trigger|A|frontline-axe-kill|BAR_844_ATTACK_MINION|AXE_MINION_KILL|pass|needs-review
+axe-trigger|B|frontline-axe-no-kill|BAR_844_ATTACK_MINION|DEFER_AXE|pass|needs-review
+crowley-space|A|crowley-three-slots|CAP_106_PLAY|CROWLEY_PLAY|pass|needs-review
+crowley-space|B|crowley-two-slots|CAP_106_PLAY|CROWLEY_FILTERED|pass|needs-review
+hero-power-order|A|warrior-power-only|HERO_01bp_POWER|HERO_POWER|pass|needs-review
+hero-power-order|B|warrior-power-last|HERO_01bp_POWER|DEFER_POWER|pass|needs-review
+hozen-scope|A|hozen-other-pirates|VAC_938_PLAY|HOZEN_OTHER_PIRATES_PLUS_ONE|pass|needs-review
+hozen-scope|B|hozen-self-only|VAC_938_PLAY|HOZEN_SELF_UNCHANGED|pass|needs-review
+opaque-fallback|A|known-cannon-opaque|GVG_075_PLAY|OPAQUE_ALLOWED|pass|needs-review
+opaque-fallback|B|unverified-crowley-opaque|CAP_106_PLAY|OPAQUE_BLOCKED|pass|needs-review

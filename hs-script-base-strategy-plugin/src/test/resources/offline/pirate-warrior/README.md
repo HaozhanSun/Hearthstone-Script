@@ -22,3 +22,9 @@ synthetic `WON` replay. These outcomes are labels for offline scenario
 evaluation, not claims about a real match. The test prints each replay step as
 `action`, `reason`, `expected`, `verdict`, `evidence=offline-simulation`, and
 `e2e=not-run`.
+
+`ab-calibration-tape.tsv` pairs normal (`A`) and conservative/fail-closed
+(`B`) arms for target legality, effective versus ineffective Axe triggers,
+Crowley board space, Warrior hero power ordering, Hozen target scope, and
+opaque fallback. Each pair is evaluated by the model and printed with the
+same offline/E2E boundary.

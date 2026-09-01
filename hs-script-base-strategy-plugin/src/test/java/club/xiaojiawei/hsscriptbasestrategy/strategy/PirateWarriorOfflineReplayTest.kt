@@ -119,6 +119,45 @@ class PirateWarriorOfflineReplayTest {
         }
     }
 
+    @Test
+    fun `A B calibration tape prints normal and fail closed branches`() {
+        val tape = loadCalibrationTape()
+        assertEquals(12, tape.size)
+        tape.groupBy { it.pair }.values.forEach { pair ->
+            assertEquals(setOf("A", "B"), pair.map { it.arm }.toSet())
+        }
+
+        tape.forEach { row ->
+            assertTrue(row.verdict in setOf("pass", "needs-review", "bug"))
+            assertEquals("needs-review", row.runtimeReview)
+            val evaluation = when (row.caseId) {
+                "frontline-axe-kill" -> frontlineAxeKill()
+                "frontline-axe-no-target" -> frontlineAxeNoTarget()
+                "frontline-axe-no-kill" -> frontlineAxeNoKill()
+                "crowley-three-slots" -> crowleySlots(3)
+                "crowley-two-slots" -> crowleySlots(2)
+                "warrior-power-only" -> warriorPowerOnly()
+                "warrior-power-last" -> warriorPowerLast()
+                "hozen-other-pirates" -> hozenOtherPirates()
+                "hozen-self-only" -> hozenSelfOnly()
+                "known-cannon-opaque" -> knownCannonOpaque()
+                "unverified-crowley-opaque" -> unverifiedCrowleyOpaque()
+                else -> error("Unknown A/B calibration case: ${row.caseId}")
+            }
+
+            assertEquals(row.expected, evaluation.selected, row.caseId)
+            assertTrue(evaluation.matches, "${row.caseId}: ${evaluation.reason}")
+            println(
+                "PIRATE_WARRIOR_AB_CALIBRATION " +
+                    "pair=${row.pair} arm=${row.arm} case=${row.caseId} " +
+                    "action=${row.action} reason=${evaluation.reason} " +
+                    "expected=${row.expected} selected=${evaluation.selected} " +
+                    "verdict=${row.verdict} runtime_review=${row.runtimeReview} " +
+                    "evidence=offline-simulation e2e=not-run",
+            )
+        }
+    }
+
     private fun frontlineAxeKill(): Evaluation {
         val war = frontlineAxeWar(heroHealth = 10, rivalHeroHealth = 30, minionHealth = 3)
         val actions = heroAttackActions(war)
@@ -148,6 +187,24 @@ class PirateWarriorOfflineReplayTest {
             selected = if (deferred && prior < 0.0) "DEFER_AXE" else "BUG",
             candidates = listOf("AXE_MINION_NONKILL:legal=$legal:deferred=$deferred:prior=$prior"),
             reason = "随从血量高于战斧攻击力，不兑现可靠抽牌效果，且有其他 Pirate 动作",
+        )
+    }
+
+    private fun frontlineAxeNoTarget(): Evaluation {
+        val war = testWar(turn = 2, mana = 4)
+        war.addCard(testHero("MY_HERO", health = 10, attack = 3), war.me.playArea)
+        war.addCard(testCard(PirateWarriorMctsModel.FRONTLINE_AXE, 4, attack = 3).apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            durability = 3
+        }, war.me.playArea)
+        war.addCard(testHero("RIVAL_HERO", health = 30), war.rival.playArea)
+        val actions = heroAttackActions(war)
+        val legal = actions.count { PirateWarriorMctsModel.isActionLegal(it, war) }
+        return Evaluation(
+            selected = if (actions.isNotEmpty() && legal == 0) "NO_AXE_ACTION" else "BUG",
+            candidates = listOf("BAR_844:actions=${actions.size}:legal=$legal"),
+            reason = "无法确认可接受的随从目标且脸部攻击未过血线规则时 fail-closed",
         )
     }
 
@@ -244,6 +301,46 @@ class PirateWarriorOfflineReplayTest {
         )
     }
 
+    private fun hozenSelfOnly(): Evaluation {
+        val war = testWar(turn = 2, mana = 3)
+        val hozen = testCard(PirateWarriorMctsModel.HOZEN_ROUGHHOUSER, 3, 2).apply {
+            entityId = "SOLO_HOZEN_IN_HAND"
+        }
+        war.addCard(hozen, war.me.handArea)
+        val play = hozen.action.generatePlayActions(war, war.me).single()
+        val after = MonteCarloTreeNode(war, InitAction, testArg()).buildNextNode(play).state.war
+        val played = after.me.playArea.findByEntityId(hozen.entityId)
+        val matches = played?.atc == 2 && played.health == 3
+        return Evaluation(
+            selected = if (matches) "HOZEN_SELF_UNCHANGED" else "BUG",
+            candidates = listOf("VAC_938:self=${played?.atc}/${played?.health}"),
+            reason = "没有其他场上 Pirate 时触发者自身不获得一次性 +1/+1",
+            matches = matches,
+        )
+    }
+
+    private fun knownCannonOpaque(): Evaluation {
+        val war = testWar(turn = 2, mana = 2)
+        val cannon = testCard(PirateWarriorMctsModel.SHIPS_CANNON, 2)
+        val allowed = PirateWarriorMctsModel.canCreateOpaqueAction(cannon, war)
+        return Evaluation(
+            selected = if (allowed) "OPAQUE_ALLOWED" else "BUG",
+            candidates = listOf("GVG_075:opaqueAllowed=$allowed"),
+            reason = "只有明确列入 opaqueKnownCards 的已知安全卡允许 fallback",
+        )
+    }
+
+    private fun unverifiedCrowleyOpaque(): Evaluation {
+        val war = testWar(turn = 2, mana = 5)
+        val crowley = testCard(PirateWarriorMctsModel.CAPTAIN_CROWLEY, 5)
+        val allowed = PirateWarriorMctsModel.canCreateOpaqueAction(crowley, war)
+        return Evaluation(
+            selected = if (!allowed) "OPAQUE_BLOCKED" else "BUG",
+            candidates = listOf("CAP_106:opaqueAllowed=$allowed"),
+            reason = "未确认 CAP parser/transition 不因卡名而伪造 opaque action",
+        )
+    }
+
     private fun loadFixtures(): List<Fixture> =
         requireNotNull(javaClass.getResourceAsStream("/offline/pirate-warrior/fixtures.tsv"))
             .bufferedReader()
@@ -264,6 +361,17 @@ class PirateWarriorOfflineReplayTest {
                 val fields = line.split('|')
                 require(fields.size == 5) { "Malformed scenario row: $line" }
                 Scenario(fields[0], fields[1], fields[2], fields[3], fields[4])
+            }
+
+    private fun loadCalibrationTape(): List<CalibrationRow> =
+        requireNotNull(javaClass.getResourceAsStream("/offline/pirate-warrior/ab-calibration-tape.tsv"))
+            .bufferedReader()
+            .readLines()
+            .filter { it.isNotBlank() && !it.startsWith("#") }
+            .map { line ->
+                val fields = line.split('|')
+                require(fields.size == 7) { "Malformed calibration row: $line" }
+                CalibrationRow(fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6])
             }
 
     private fun scenarioEvaluation(scenario: Scenario, steps: List<ReplayStep>): ScenarioEvaluation {
@@ -378,6 +486,16 @@ class PirateWarriorOfflineReplayTest {
         val expectedSequence: String,
         val reason: String,
         val verdict: String,
+    )
+
+    private data class CalibrationRow(
+        val pair: String,
+        val arm: String,
+        val caseId: String,
+        val action: String,
+        val expected: String,
+        val verdict: String,
+        val runtimeReview: String,
     )
 
     private data class ReplayStep(
