@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.Action
 import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
+import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.bean.WarScoreCalculatorBuilder
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
@@ -34,6 +35,12 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     const val CANNONMASTER = "CAP_107"
     const val HOOK_N_HEAVE = "CAP_105"
     const val CAPTAIN_CROWLEY = "CAP_106"
+
+    private enum class FrontlineAxeTarget {
+        HERO,
+        MINION,
+        UNKNOWN,
+    }
 
     /**
      * Safe, known-meaning fallback cards. New CAP cards are intentionally not
@@ -81,7 +88,7 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             isCard(card, HOZEN_ROUGHHOUSER) ->
                 if (otherPirates > 0) 28.0 + attackablePirates * 3.0 else -18.0
             isCard(card, HOOK_N_HEAVE) -> if (freeSlots >= 2) 24.0 else -30.0
-            isCard(card, CAPTAIN_CROWLEY) -> if (freeSlots >= 2) 26.0 else -30.0
+            isCard(card, CAPTAIN_CROWLEY) -> if (freeSlots >= 3) 26.0 else -100.0
             isCard(card, RAGEWING) -> if (card.cost <= 1) 24.0 else 5.0
             isCard(card, HOOKFIST) -> when {
                 hasWeapon(war) || canPlayWeaponThisTurn(war, card) -> 18.0
@@ -90,6 +97,18 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             }
             isCard(card, ANCHOR) || isCard(card, FRONTLINE_AXE) ->
                 if (hasWeapon(war)) 4.0 else 16.0
+            action is PowerAction && card.cardType === CardTypeEnum.HERO_POWER ->
+                if (hasOtherUsefulNonHeroPowerAction(war)) -1_000.0 else -10.0
+            isFrontlineAxeHeroAttack(action, war) -> when (frontlineAxeTarget(action, war)) {
+                FrontlineAxeTarget.MINION -> if (frontlineAxeCanKill(action, war)) 30.0 else -100.0
+                FrontlineAxeTarget.HERO -> if (war.me.playArea.hero?.blood()?.let { it < 10 } == true) {
+                    val heroAttack = max(war.me.playArea.hero?.atc ?: 0, war.me.playArea.weapon?.atc ?: 0)
+                    if (war.rival.playArea.hero?.blood()?.let { it <= heroAttack } == true) 80.0 else 20.0
+                } else {
+                    -1_000.0
+                }
+                FrontlineAxeTarget.UNKNOWN -> -1_000.0
+            }
             action is AttackAction && isPirate(card) ->
                 effectivePirateAttack(card, war) * 0.45
             else -> 0.0
@@ -123,6 +142,41 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         return false
     }
 
+    /**
+     * Hard legality that the generic action generator cannot express: the
+     * Frontline Axe face restriction and Captain Crowley's three-slot summon
+     * requirement. This is intentionally separate from actionPrior.
+     */
+    override fun isActionLegal(action: Action, war: War): Boolean {
+        val creator = action.creator
+        if (creator != null && action is PlayAction && isCard(creator, CAPTAIN_CROWLEY)) {
+            return freeSlots(war) >= 3
+        }
+
+        if (isFrontlineAxeHeroAttack(action, war)) {
+            return when (frontlineAxeTarget(action, war)) {
+                FrontlineAxeTarget.MINION -> true
+                FrontlineAxeTarget.HERO -> war.me.playArea.hero?.blood()?.let { it < 10 } == true
+                FrontlineAxeTarget.UNKNOWN -> false
+            }
+        }
+        return true
+    }
+
+    /** Keep Warrior's armor power behind all useful Pirate Warrior work. */
+    override fun isDeferredAction(action: Action, war: War): Boolean {
+        if (isHeroPowerAction(action)) {
+            return hasOtherUsefulNonHeroPowerAction(war)
+        }
+
+        if (isFrontlineAxeHeroAttack(action, war) &&
+            frontlineAxeTarget(action, war) == FrontlineAxeTarget.MINION
+        ) {
+            return hasOtherUsefulNonAxeAction(war)
+        }
+        return false
+    }
+
     /** Do not hide Patches when it is literally the only legal action. */
     override fun shouldDefer(card: Card, war: War): Boolean = false
 
@@ -132,6 +186,16 @@ object PirateWarriorMctsModel : MctsDecisionModel {
      * the base attack is not permanently or doubly buffed across rollouts.
      */
     override fun beforeSimulatedAction(war: War, action: Action): MctsDecisionModel.SimulationResult {
+        // CardUtil.simulateAttack currently routes weapon wear through
+        // Card.injured(), whose generic canHurt() intentionally excludes
+        // WEAPON. Apply the verified Frontline Axe durability transition here
+        // until the shared simulator models weapon replacement/wear directly.
+        if (isFrontlineAxeHeroAttack(action, war)) {
+            war.me.playArea.weapon?.takeIf { !it.isImmune && it.isAlive() }?.let {
+                it.damage += 1
+            }
+        }
+
         val attacker = (action as? AttackAction)?.creator?.let { war.cardMap[it.entityId] }
             ?: return MctsDecisionModel.SimulationResult()
         if (!isPirate(attacker)) return MctsDecisionModel.SimulationResult()
@@ -162,6 +226,12 @@ object PirateWarriorMctsModel : MctsDecisionModel {
                     attacker.atc -= attacker.mctsTemporaryAttackBonus
                     attacker.mctsTemporaryAttackBonus = 0
                 }
+            }
+            if (isFrontlineAxeHeroAttack(action, before) && killedRivalMinion(before, after)) {
+                // The local DB confirms the Axe draw trigger, but there is no
+                // BAR_844 parser here. Reward the verified kill/effect line
+                // without inventing a second draw in the simulated hand.
+                return MctsDecisionModel.SimulationResult(expectedReward = 18.0)
             }
         }
         return MctsDecisionModel.SimulationResult()
@@ -259,6 +329,94 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         return (if (pirate) 12.0 else 0.0) +
             max(card.atc, 0) * 0.35 +
             if (card.cost <= 2) 2.0 else 0.0
+    }
+
+    private fun isHeroPowerAction(action: Action): Boolean =
+        action is PowerAction && action.creator?.cardType === CardTypeEnum.HERO_POWER
+
+    private fun isFrontlineAxeHeroAttack(action: Action, war: War): Boolean =
+        action is AttackAction &&
+            action.creator?.entityId == war.me.playArea.hero?.entityId &&
+            war.me.playArea.weapon?.let { isCard(it, FRONTLINE_AXE) && it.isAlive() } == true
+
+    /**
+     * AttackAction has no target field in the upstream API. Infer the target
+     * only by simulating on a clone and observing the authoritative delta;
+     * inability to classify is UNKNOWN and therefore fail-closed.
+     */
+    private fun frontlineAxeTarget(action: Action, war: War): FrontlineAxeTarget {
+        val simulated = simulateOnClone(action, war) ?: return FrontlineAxeTarget.UNKNOWN
+        if (killedOrDamagedRivalMinion(war, simulated)) return FrontlineAxeTarget.MINION
+
+        val beforeHero = war.rival.playArea.hero
+        val afterHero = simulated.rival.playArea.hero
+        return if (beforeHero != null && (afterHero == null || afterHero.blood() < beforeHero.blood())) {
+            FrontlineAxeTarget.HERO
+        } else {
+            FrontlineAxeTarget.UNKNOWN
+        }
+    }
+
+    private fun frontlineAxeCanKill(action: Action, war: War): Boolean {
+        val simulated = simulateOnClone(action, war) ?: return false
+        return killedRivalMinion(war, simulated)
+    }
+
+    private fun simulateOnClone(action: Action, war: War): War? =
+        runCatching {
+            war.clone().also { cloned ->
+                beforeSimulatedAction(cloned, action)
+                action.simulate.accept(cloned)
+            }
+        }.getOrNull()
+
+    private fun killedRivalMinion(before: War, after: War): Boolean {
+        val afterCards = after.rival.playArea.cards.associateBy { it.entityId }
+        return before.rival.playArea.cards.any { beforeCard ->
+            val afterCard = afterCards[beforeCard.entityId]
+            beforeCard.isAlive() && (afterCard == null || !afterCard.isAlive())
+        }
+    }
+
+    private fun killedOrDamagedRivalMinion(before: War, after: War): Boolean {
+        val afterCards = after.rival.playArea.cards.associateBy { it.entityId }
+        return before.rival.playArea.cards.any { beforeCard ->
+            val afterCard = afterCards[beforeCard.entityId]
+            beforeCard.isAlive() && (
+                afterCard == null ||
+                    !afterCard.isAlive() ||
+                    afterCard.damage != beforeCard.damage ||
+                    afterCard.isDivineShield != beforeCard.isDivineShield
+                )
+        }
+    }
+
+    private fun hasOtherUsefulNonHeroPowerAction(war: War): Boolean =
+        hasOtherUsefulNonAxeAction(war)
+
+    private fun hasOtherUsefulNonAxeAction(war: War): Boolean {
+        val me = war.me
+        val handAction = me.handArea.cards.any { card ->
+            !card.isUncertain &&
+                card.cost <= me.usableResource &&
+                (card.cardType !== CardTypeEnum.MINION || freeSlots(war) > 0) &&
+                (
+                    runCatching { card.action.generatePlayActions(war, me) }
+                        .getOrDefault(emptyList())
+                        .any { isActionLegal(it, war) } ||
+                        canCreateOpaqueAction(card, war)
+                    )
+        }
+        val boardAction = me.playArea.cards.any { card ->
+            val attacks = if (card.canAttack()) runCatching {
+                card.action.generateAttackActions(war, me)
+            }.getOrDefault(emptyList()) else emptyList()
+            val powers = if (card.canPower()) runCatching {
+                card.action.generatePowerActions(war, me)
+            }.getOrDefault(emptyList()) else emptyList()
+            attacks.any { isActionLegal(it, war) } || powers.any { isActionLegal(it, war) }
+        }
+        return handAction || boardAction
     }
 
     private fun isFirstTurn(war: War): Boolean = war.me.turn <= 1

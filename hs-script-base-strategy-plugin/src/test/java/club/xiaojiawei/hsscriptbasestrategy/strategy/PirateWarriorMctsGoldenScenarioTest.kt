@@ -6,6 +6,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.InitAction
 import club.xiaojiawei.hsscriptcardsdk.bean.MCTSArg
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
+import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
@@ -115,6 +116,127 @@ class PirateWarriorMctsGoldenScenarioTest {
     }
 
     @Test
+    fun `frontline axe blocks face at ten health but permits it below ten`() {
+        val atTen = frontlineAxeWar(heroHealth = 10, rivalHeroHealth = 30, minionHealth = 3)
+        val atTenActions = heroAttackActions(atTen)
+        val atTenLegal = atTenActions.filter { PirateWarriorMctsModel.isActionLegal(it, atTen) }
+        assertEquals(1, atTenLegal.size)
+        assertTrue(atTenLegal.all { hitsRivalMinion(it, atTen) })
+
+        val atNine = frontlineAxeWar(heroHealth = 9, rivalHeroHealth = 30, minionHealth = 3)
+        val atNineActions = heroAttackActions(atNine)
+        val atNineLegal = atNineActions.filter { PirateWarriorMctsModel.isActionLegal(it, atNine) }
+        assertEquals(2, atNineLegal.size)
+        assertTrue(atNineLegal.any { !hitsRivalMinion(it, atNine) })
+
+        val lethal = frontlineAxeWar(heroHealth = 9, rivalHeroHealth = 3, minionHealth = 3)
+        val lethalFace = heroAttackActions(lethal).first { !hitsRivalMinion(it, lethal) }
+        assertTrue(PirateWarriorMctsModel.isActionLegal(lethalFace, lethal))
+        assertTrue(PirateWarriorMctsModel.actionPrior(lethalFace, lethal) >= 80.0)
+    }
+
+    @Test
+    fun `frontline axe only rewards a minion kill and consumes one durability`() {
+        val nonKill = frontlineAxeWar(heroHealth = 9, rivalHeroHealth = 30, minionHealth = 7)
+        val nonKillAction = heroAttackActions(nonKill).first { hitsRivalMinion(it, nonKill) }
+        val nonKillAfter = simulate(nonKillAction, nonKill)
+        assertTrue(PirateWarriorMctsModel.actionPrior(nonKillAction, nonKill) < 0.0)
+        assertEquals(0.0, PirateWarriorMctsModel.afterSimulatedAction(nonKill, nonKillAfter, nonKillAction).expectedReward)
+        assertEquals(1, nonKillAfter.me.playArea.weapon?.damage)
+        assertEquals(2, nonKillAfter.me.playArea.weapon?.blood())
+        assertEquals(4, nonKillAfter.rival.playArea.cards.single().blood())
+
+        val exactKill = frontlineAxeWar(heroHealth = 9, rivalHeroHealth = 30, minionHealth = 3)
+        val killAction = heroAttackActions(exactKill).first { hitsRivalMinion(it, exactKill) }
+        val killAfter = simulate(killAction, exactKill)
+        assertTrue(PirateWarriorMctsModel.actionPrior(killAction, exactKill) > 0.0)
+        assertEquals(18.0, PirateWarriorMctsModel.afterSimulatedAction(exactKill, killAfter, killAction).expectedReward)
+        assertEquals(1, killAfter.me.playArea.weapon?.damage)
+        assertEquals(2, killAfter.me.playArea.weapon?.blood())
+
+        val lastDurability = frontlineAxeWar(heroHealth = 9, rivalHeroHealth = 30, minionHealth = 3).also {
+            it.me.playArea.weapon?.durability = 1
+        }
+        val lastDurabilityAction = heroAttackActions(lastDurability).first { hitsRivalMinion(it, lastDurability) }
+        val lastDurabilityAfter = simulate(lastDurabilityAction, lastDurability)
+        val spentWeapon = lastDurabilityAfter.me.playArea.weapon
+        assertTrue(spentWeapon == null || (!spentWeapon.isAlive() && spentWeapon.damage >= 1))
+    }
+
+    @Test
+    fun `frontline axe attacks are deferred behind a ready pirate and multiple minions stay targetable`() {
+        val war = frontlineAxeWar(heroHealth = 10, rivalHeroHealth = 30, minionHealth = 3, minionCount = 2)
+        war.addCard(testCard("READY_PIRATE", 1, 2), war.me.playArea)
+        val actions = heroAttackActions(war)
+        val minionActions = actions.filter { hitsRivalMinion(it, war) }
+
+        assertEquals(2, minionActions.size)
+        assertTrue(minionActions.all { PirateWarriorMctsModel.isActionLegal(it, war) })
+        assertTrue(minionActions.all { PirateWarriorMctsModel.isDeferredAction(it, war) })
+    }
+
+    @Test
+    fun `frontline axe has no legal attack action when no rival target exists`() {
+        val war = testWar(turn = 2, mana = 4)
+        val hero = testHero("MY_HERO", health = 9, attack = 3)
+        val weapon = testWeapon(PirateWarriorMctsModel.FRONTLINE_AXE, attack = 3, durability = 3)
+        war.addCard(hero, war.me.playArea)
+        war.addCard(weapon, war.me.playArea)
+
+        assertTrue(heroAttackActions(war).isEmpty())
+    }
+
+    @Test
+    fun `captain crowley is hard-gated at three empty slots`() {
+        listOf(0, 1, 2, 3, 7).forEach { freeSlots ->
+            val war = testWar(turn = 2, mana = 5)
+            repeat(7 - freeSlots) { index ->
+                war.addCard(testCard("OCCUPIED_$freeSlots-$index", 1), war.me.playArea)
+            }
+            val crowley = testCard(PirateWarriorMctsModel.CAPTAIN_CROWLEY, 5)
+            val action = PlayAction({}, {}, crowley)
+
+            assertEquals(freeSlots >= 3, PirateWarriorMctsModel.isActionLegal(action, war))
+            assertEquals(freeSlots >= 3, PirateWarriorMctsModel.actionPrior(action, war) > 0.0)
+        }
+    }
+
+    @Test
+    fun `warrior hero power is last resort while minions or attacks remain`() {
+        val withMinion = testWar(turn = 2, mana = 2)
+        val power = testHeroPower()
+        val minion = testCard("PLAYABLE_PIRATE", 1)
+        withMinion.addCard(power, withMinion.me.playArea)
+        withMinion.addCard(minion, withMinion.me.handArea)
+        val powerAction = PowerAction({}, {}, power)
+        val minionAction = PlayAction({}, {}, minion)
+
+        assertTrue(PirateWarriorMctsModel.isDeferredAction(powerAction, withMinion))
+        assertTrue(PirateWarriorMctsModel.actionPrior(powerAction, withMinion) <
+            PirateWarriorMctsModel.actionPrior(minionAction, withMinion))
+
+        val withAttack = testWar(turn = 2, mana = 2)
+        val attackPower = testHeroPower()
+        val attacker = testCard("READY_PIRATE", 1)
+        withAttack.addCard(testHero("MY_HERO", health = 4), withAttack.me.playArea)
+        val rivalHero = testHero("RIVAL_HERO", health = 30)
+        withAttack.addCard(attackPower, withAttack.me.playArea)
+        withAttack.addCard(attacker, withAttack.me.playArea)
+        withAttack.addCard(rivalHero, withAttack.rival.playArea)
+        assertTrue(PirateWarriorMctsModel.isDeferredAction(PowerAction({}, {}, attackPower), withAttack))
+
+        val onlyPower = testWar(turn = 2, mana = 2)
+        val onlyPowerCard = testHeroPower()
+        onlyPower.addCard(onlyPowerCard, onlyPower.me.playArea)
+        assertFalse(PirateWarriorMctsModel.isDeferredAction(PowerAction({}, {}, onlyPowerCard), onlyPower))
+
+        val insufficient = testWar(turn = 2, mana = 1)
+        val insufficientPower = testHeroPower().apply { cost = 2 }
+        insufficient.addCard(insufficientPower, insufficient.me.playArea)
+        assertFalse(PirateWarriorMctsModel.isDeferredAction(PowerAction({}, {}, insufficientPower), insufficient))
+    }
+
+    @Test
     fun `unknown card is fail safe and does not receive opaque action`() {
         val war = testWar(turn = 2, mana = 2)
         val unknown = testCard("CAP_UNKNOWN", 2).apply {
@@ -220,6 +342,61 @@ class PirateWarriorMctsGoldenScenarioTest {
         health = 3
         action.belongCard = this
     }
+
+    private fun testWeapon(cardId: String, attack: Int, durability: Int): Card =
+        testCard(cardId, cost = 4, attack = attack).apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            this.durability = durability
+        }
+
+    private fun testHeroPower(): Card = testCard("HERO_01bp", cost = 2).apply {
+        cardType = CardTypeEnum.HERO_POWER
+        cardRace = CardRaceEnum.UNKNOWN
+        isExhausted = false
+    }
+
+    private fun frontlineAxeWar(
+        heroHealth: Int,
+        rivalHeroHealth: Int,
+        minionHealth: Int,
+        minionCount: Int = 1,
+    ): War {
+        val war = testWar(turn = 2, mana = 4)
+        war.addCard(testHero("MY_HERO", heroHealth, attack = 3), war.me.playArea)
+        war.addCard(testWeapon(PirateWarriorMctsModel.FRONTLINE_AXE, attack = 3, durability = 3), war.me.playArea)
+        war.addCard(testHero("RIVAL_HERO", rivalHeroHealth), war.rival.playArea)
+        repeat(minionCount) { index ->
+            war.addCard(testCard("RIVAL_MINION_$index", 1, attack = 1).apply {
+                cardRace = CardRaceEnum.UNKNOWN
+                health = minionHealth
+            }, war.rival.playArea)
+        }
+        return war
+    }
+
+    private fun heroAttackActions(war: War): List<club.xiaojiawei.hsscriptcardsdk.bean.AttackAction> =
+        war.me.playArea.hero?.action?.generateAttackActions(war, war.me).orEmpty()
+
+    private fun hitsRivalMinion(action: club.xiaojiawei.hsscriptcardsdk.bean.AttackAction, war: War): Boolean {
+        val after = simulate(action, war)
+        val beforeCards = war.rival.playArea.cards.associateBy { it.entityId }
+        return beforeCards.any { (entityId, beforeCard) ->
+            val afterCard = after.rival.playArea.cards.associateBy { it.entityId }[entityId]
+            beforeCard.isAlive() && (
+                afterCard == null ||
+                    !afterCard.isAlive() ||
+                    afterCard.damage != beforeCard.damage ||
+                    afterCard.isDivineShield != beforeCard.isDivineShield
+                )
+        }
+    }
+
+    private fun simulate(action: club.xiaojiawei.hsscriptcardsdk.bean.AttackAction, war: War): War =
+        war.clone().also {
+            PirateWarriorMctsModel.beforeSimulatedAction(it, action)
+            action.simulate.accept(it)
+        }
 
     private fun testHero(cardId: String, health: Int, attack: Int = 0): Card =
         testCard(cardId, cost = 0, attack = attack).apply {

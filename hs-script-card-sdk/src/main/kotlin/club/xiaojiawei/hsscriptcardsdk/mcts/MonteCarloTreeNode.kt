@@ -281,6 +281,21 @@ class MonteCarloTreeNode(
                 }
             }
         }
+        val decisionModel = arg.decisionModel
+        if (decisionModel != null) {
+            val illegalActions = result.filterNot { decisionModel.isActionLegal(it, war) }
+            if (illegalActions.isNotEmpty()) {
+                result.removeAll(illegalActions.toSet())
+                addScan(
+                    mapOf(
+                        "kind" to "ACTION_FILTER",
+                        "outcome" to "FILTERED",
+                        "reason" to "decision-model-illegal-action",
+                        "actions" to illegalActions.map(::actionDescription),
+                    ),
+                )
+            }
+        }
         val mandatoryActions: List<Action> = arg.decisionModel
             ?.let { model -> result.filter { model.isMandatoryAction(it, war) } }
             ?: emptyList()
