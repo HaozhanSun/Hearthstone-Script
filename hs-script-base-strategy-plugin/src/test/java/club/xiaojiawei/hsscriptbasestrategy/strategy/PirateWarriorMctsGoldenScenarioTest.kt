@@ -44,7 +44,7 @@ class PirateWarriorMctsGoldenScenarioTest {
     }
 
     @Test
-    fun `southsea and hozen only add reward to another attacking pirate`() {
+    fun `southsea aura is counted but hozen does not add an attack-event bonus`() {
         val war = testWar(turn = 2, mana = 4)
         val captain = testCard(PirateWarriorMctsModel.SOUTHSEA_CAPTAIN, 3, 3)
         val hozen = testCard(PirateWarriorMctsModel.HOZEN_ROUGHHOUSER, 3, 2)
@@ -53,13 +53,13 @@ class PirateWarriorMctsGoldenScenarioTest {
         war.addCard(hozen, war.me.playArea)
         war.addCard(pirate, war.me.playArea)
 
-        assertEquals(4, PirateWarriorMctsModel.effectivePirateAttack(pirate, war))
-        assertEquals(4, PirateWarriorMctsModel.effectivePirateAttack(captain, war))
+        assertEquals(3, PirateWarriorMctsModel.effectivePirateAttack(pirate, war))
+        assertEquals(3, PirateWarriorMctsModel.effectivePirateAttack(captain, war))
         assertEquals(3, PirateWarriorMctsModel.effectivePirateAttack(hozen, war))
     }
 
     @Test
-    fun `combat aura is temporary during simulation and is cleaned up`() {
+    fun `southsea combat bonus is temporary during simulation and is cleaned up`() {
         val war = testWar(turn = 2, mana = 4)
         val captain = testCard(PirateWarriorMctsModel.SOUTHSEA_CAPTAIN, 3, 3)
         val hozen = testCard(PirateWarriorMctsModel.HOZEN_ROUGHHOUSER, 3, 2)
@@ -70,10 +70,73 @@ class PirateWarriorMctsGoldenScenarioTest {
         val attack = AttackAction({}, {}, attacker)
 
         PirateWarriorMctsModel.beforeSimulatedAction(war, attack)
-        assertEquals(4, attacker.atc)
+        assertEquals(3, attacker.atc)
         PirateWarriorMctsModel.afterSimulatedAction(war, war, attack)
         assertEquals(2, attacker.atc)
         assertEquals(0, attacker.mctsTemporaryAttackBonus)
+    }
+
+    @Test
+    fun `hozen battlecry buffs only other pirates already on board`() {
+        val war = testWar(turn = 2, mana = 3)
+        val hozen = testCard(PirateWarriorMctsModel.HOZEN_ROUGHHOUSER, 3, 2).apply { entityId = "HOZEN_IN_HAND" }
+        val existingPirate = testCard("EXISTING_PIRATE", 1, 2).apply { health = 2 }
+        val secondHozen = testCard(PirateWarriorMctsModel.HOZEN_ROUGHHOUSER, 3, 2).apply {
+            entityId = "SECOND_HOZEN_ON_BOARD"
+            health = 4
+        }
+        val nonPirate = testCard("NON_PIRATE", 1, 2).apply {
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 2
+        }
+        val handPirate = testCard("HAND_PIRATE", 1, 2).apply { health = 2 }
+        war.addCard(hozen, war.me.handArea)
+        war.addCard(existingPirate, war.me.playArea)
+        war.addCard(secondHozen, war.me.playArea)
+        war.addCard(nonPirate, war.me.playArea)
+        war.addCard(handPirate, war.me.handArea)
+
+        val play = hozen.action.generatePlayActions(war, war.me).single()
+        val after = MonteCarloTreeNode(war, InitAction, testArg()).buildNextNode(play).state.war
+
+        assertEquals(3, after.me.playArea.findByEntityId(existingPirate.entityId)?.atc)
+        assertEquals(3, after.me.playArea.findByEntityId(existingPirate.entityId)?.health)
+        assertEquals(3, after.me.playArea.findByEntityId(secondHozen.entityId)?.atc)
+        assertEquals(5, after.me.playArea.findByEntityId(secondHozen.entityId)?.health)
+        assertEquals(2, after.me.playArea.findByEntityId(nonPirate.entityId)?.atc)
+        assertEquals(2, after.me.playArea.findByEntityId(nonPirate.entityId)?.health)
+        assertEquals(2, after.me.handArea.findByEntityId(handPirate.entityId)?.atc)
+        assertEquals(2, after.me.handArea.findByEntityId(handPirate.entityId)?.health)
+        assertEquals(2, after.me.playArea.findByEntityId(hozen.entityId)?.atc)
+        assertEquals(3, after.me.playArea.findByEntityId(hozen.entityId)?.health)
+    }
+
+    @Test
+    fun `hozen with no other pirate leaves itself unchanged and a second hozen is a valid target`() {
+        val soloWar = testWar(turn = 2, mana = 3)
+        val soloHozen = testCard(PirateWarriorMctsModel.HOZEN_ROUGHHOUSER, 3, 2)
+        soloWar.addCard(soloHozen, soloWar.me.handArea)
+        val soloPlay = soloHozen.action.generatePlayActions(soloWar, soloWar.me).single()
+        val soloAfter = MonteCarloTreeNode(soloWar, InitAction, testArg()).buildNextNode(soloPlay).state.war
+        assertEquals(2, soloAfter.me.playArea.findByEntityId(soloHozen.entityId)?.atc)
+        assertEquals(3, soloAfter.me.playArea.findByEntityId(soloHozen.entityId)?.health)
+
+        val chainWar = testWar(turn = 2, mana = 6)
+        val firstHozen = testCard(PirateWarriorMctsModel.HOZEN_ROUGHHOUSER, 3, 2).apply { entityId = "FIRST_HOZEN_ON_BOARD" }
+        val secondHozen = testCard(PirateWarriorMctsModel.HOZEN_ROUGHHOUSER, 3, 2).apply { entityId = "SECOND_HOZEN_IN_HAND" }
+        val pirate = testCard("BOARD_PIRATE", 1, 2).apply { health = 2 }
+        chainWar.addCard(firstHozen, chainWar.me.playArea)
+        chainWar.addCard(secondHozen, chainWar.me.handArea)
+        chainWar.addCard(pirate, chainWar.me.playArea)
+        val secondPlay = secondHozen.action.generatePlayActions(chainWar, chainWar.me).single()
+        val chainAfter = MonteCarloTreeNode(chainWar, InitAction, testArg()).buildNextNode(secondPlay).state.war
+
+        assertEquals(3, chainAfter.me.playArea.findByEntityId(firstHozen.entityId)?.atc)
+        assertEquals(4, chainAfter.me.playArea.findByEntityId(firstHozen.entityId)?.health)
+        assertEquals(3, chainAfter.me.playArea.findByEntityId(pirate.entityId)?.atc)
+        assertEquals(3, chainAfter.me.playArea.findByEntityId(pirate.entityId)?.health)
+        assertEquals(2, chainAfter.me.playArea.findByEntityId(secondHozen.entityId)?.atc)
+        assertEquals(3, chainAfter.me.playArea.findByEntityId(secondHozen.entityId)?.health)
     }
 
     @Test

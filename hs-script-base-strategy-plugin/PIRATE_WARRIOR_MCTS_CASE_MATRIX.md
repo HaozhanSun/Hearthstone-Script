@@ -22,7 +22,7 @@
 | 开进码头首回合 | 首回合有费用且合法时优先于普通动作；炮仍优先 | PASS | 当前按 `me.turn <= 1`；实际回合编号遥测需确认 |
 | 海盗帕奇斯 | 起手全部换掉；运行中 action prior 最低但不隐藏唯一合法动作 | PASS | mulligan 与 action prior 分开；召唤/压缩牌库效果不由 opaque fallback 猜测 |
 | 南海船长 | 其他海盗的 reward 攻击力加 1；不把自身当作自身 buff 目标 | PASS | golden test 验证队长/粗暴猢狲/攻击海盗的交叉加成 |
-| 粗暴的猢狲 | 攻击事件的其他海盗按每个存活猢狲 +1 评估 | PASS | 仅是评估先验，不模拟真实触发事件或过量攻击 |
+| 粗暴的猢狲 | 打出时只对当时场上的其他 Pirate minions +1/+1；同名第二张属于其他 Pirate；自身、非 Pirate、手牌 Pirate 不计入 | PASS；新增 0/1/2/同名/非 Pirate/手牌/自身与 attack+health golden coverage | 本地 DB 文本与用户确认语义冲突；当前按用户确认语义物化到 clone state，真实 parser/Battlecry 待确认 |
 | 狂暴邪翼蝠 | 满足费用条件时提高 play prior；高费时不强制 | PASS（代码路径） | 仍需实战/回放确认其动态费用和入场语义 |
 | 钩拳-3000型 | 已装备武器或当回合能连同武器支付时提高；有其他可下怪且无武器线时降权 | PASS；黄金测试通过 | 武器 replacement 的实际扣耐久/替换由通用 transition 和 E2E 验证 |
 | 前锋战斧 | 对手英雄血量 >=10 时硬禁英雄打脸；只能打随从且放在其他可行动作之后；不能击杀不加 kill/effect reward；血量 <10 才允许打脸，斩杀提高优先级 | PASS；新增 5 个 golden edge cases | upstream `AttackAction` 没有 target 字段，当前用 clone delta 识别目标；多个随从的相对排序仍受通用 API 限制。通用 `CardUtil` 的 `canHurt()` 不覆盖 WEAPON，模型暂时在 simulation hook 中补耐久损耗；weapon replacement/真实 accepted action 未确认 |
@@ -50,7 +50,7 @@
 ### 高风险 card-specific hard-coding
 
 - 船载火炮 P0、首回合任务、宝藏经销商 precedence、帕奇斯 mulligan：依赖具体卡组与真实回合时序，必须保留 telemetry 开关和回放样本。
-- 南海船长/猢狲的 +1 评估：依赖光环/攻击事件语义；当前只改 reward，不修改 card stats，也不假装完成 trigger transition。
+- 南海船长 +1 仍按 ongoing aura reward；粗暴猢狲是打出时的一次性 +1/+1 Battlecry，已在 clone state 物化，只作用于当时其他场上 Pirate；真实 parser/trigger transition 仍待确认。
 - 钩拳武器同回合条件：依赖武器费用、可替换武器和 parser 执行结果；当前是 prior，不是硬 legality。
 - 新 `CAP_*` 卡、Discover、随机炮击、生成牌：本分支 fail-closed；禁止用 opaque action 补齐未知效果。
 - `isActionLegal` 的前锋战斧目标过滤与克罗雷三空位门槛是真正 hard gate，不是调低 prior；目标无法由 clone delta 可靠识别时 fail-closed。此处不能推广为所有职业/所有卡牌的通用规则。
@@ -73,6 +73,8 @@
 
 最终结果（本轮）：命令 `.\mvnw.cmd -pl hs-script-base-strategy-plugin -am '-Dtest=PirateWarriorMctsModelTest,PirateWarriorMctsGoldenScenarioTest' '-Dsurefire.failIfNoSpecifiedTests=false' test`；`PirateWarriorMctsGoldenScenarioTest` 17 tests passed，`PirateWarriorMctsModelTest` 5 tests passed，合计 22 tests passed；reactor `BUILD SUCCESS`。编译期间仅有既有 MapStruct `deepClone` unmapped warning。该结果只证明离线模型/动作候选夹具，不证明 parser、UI 点击、游戏服务端接受、随机效果或真实回合 E2E。
 
+本轮 Hozen 语义修正后的最终离线结果：`PirateWarriorMctsGoldenScenarioTest` 19/19 passed + `PirateWarriorMctsModelTest` 5/5 passed = 24/24 passed；reactor `BUILD SUCCESS`。新增用例覆盖 0 个 Pirate、1 个其他 Pirate、2 个 Pirate、第二张同名猢狲、非 Pirate、手牌 Pirate 排除、触发者自身排除，以及 attack/health 两项状态。
+
 ## Verification gotcha ledger
 
 下表专门记录容易把离线结果误读成真实 E2E 的验证陷阱。`status` 是本分支当前状态，不是发布结论。
@@ -86,6 +88,7 @@
 | 船载火炮日志显示已下场，但随机炮击/船只招募没有发生 | 卡面文本已知不代表本地 parser 有完整 battlecry/ship/random transition | CAP 新卡和未验证生成效果保持 fail-closed；船炮只能使用 parser-backed action，随机效果只作待验证 reward | cannon/ship entity、trigger event、随机目标、伤害、招募卡 ID/位置、state fingerprint 前后差异 | fail-closed 离线覆盖；炮击/招募 E2E 未验证 |
 | 未知卡被 MCTS 当作普通 minion/opaque action 执行 | parser unknown action 与 generic minion fallback 可能只支付费用并移入战场，漏掉真实效果 | `isUncertain` 或无可靠 parser action 时过滤；禁止按卡名/前缀批量开启 opaque fallback | action scan outcome、parser class/card ID、uncertain 标记、无 action 的节点结果、无重复 retry | 未知卡和 CAP fail-closed 测试通过 |
 | replay 只能复现选择，不能复现游戏状态 | 只保存 selected action 或日志，不保存足够的 state/transition 输入 | 保存 redacted deterministic state snapshot、候选列表/prior、mandatory reason、chosen action、transition result 和 seed/random outcome | fixture 可离线重放并逐字段比较 expected/actual fingerprint；随机效果保存 seed 或 outcome | replay schema 已有基础 trace；Pirate Warrior 专用 fixture 待补 |
+| 两张同名 Pirate 在 clone 后只剩一张 | 测试夹具复用了相同 entityId，`cardMap`/target lookup 覆盖了前一实体；真实运行时 entityId 必须逐实体唯一 | golden fixture 为每个实体分配唯一 ID；按 entityId 排除触发者，允许第二张同名牌作为其他 Pirate | clone 前后 entity IDs、board count、触发者/目标 stats 逐项比较 | 已修复并由 Hozen 24-case offline 集覆盖；真实 snapshot identity 待 E2E |
 | 测试通过但运行的仍是旧 JAR/旧插件进程 | stale process、旧 manifest、旧 classpath 或未重启 worker 与当前源码不一致 | 当前阶段不宣称运行验证；发布阶段必须记录 build ID、JAR SHA-256、manifest、进程 PID/classpath 和启动时间 | 新版本 identity 与运行时 identity 一致，旧进程不存在，manifest/hash/launcher 指向同一 artifact | 本轮未 build/deploy，故未适用；发布 gate 必须补证据 |
 | 离线 action accepted 被误写成真实 E2E 通过 | `TestCardAction`/generic simulator 的 callback 返回成功只证明测试夹具接受 | 报告中明确使用“offline model/action candidate pass”；禁止使用“游戏已接受/真实回合通过” | 真实客户端截图或状态采样、dispatch-to-accepted trace、回放 fixture、失败重试记录 | 当前报告明确为 offline-only |
 | 前锋战斧攻击被误判为合法打脸或有效 kill line | `AttackAction` 没有 target 字段；仅凭 creator/card name 无法知道目标，且共享 simulator 当前不自动扣 WEAPON wear | 用 clone 前后 delta 分类 HERO/MINION/UNKNOWN；UNKNOWN 禁止，非击杀随从线给负 prior/零 effect reward；保留最小兼容约束 | hero health 10/9、target health =/> weapon damage、多个目标、durability 1/3、terminal/lethal 的 accepted transition | 离线规则通过；target ordering、真实 axe trigger/weapon consumption 待 E2E |

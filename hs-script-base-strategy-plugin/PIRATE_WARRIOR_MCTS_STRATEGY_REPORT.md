@@ -30,7 +30,7 @@
 | 南海船长 / `NEW1_027` (2) | 你的其他海盗获得 +1/+1。 | 多海盗场面、炮/经销商铺场后放大 board；不应给自己算自身光环。 | 其他海盗存在时升权；在已有攻击/炮触发顺序中由搜索决定。 | DB 高；光环更新时序待实测。 |
 | 海关执法者 / `VAC_440` (2) | 战吼：对手手牌中的随机海盗牌费用增加 2。 | 对海盗对局或可识别手牌有价值；不是纯 aggro face 动作。 | 低于能立即产生场面/伤害的海盗；对手信息不完整时降置信度。 | DB 高；对手手牌可见性/费用修改待实测。 |
 | 海盗之锚 / `DRG_025` (1) | 英雄攻击后，从牌库抽一张海盗牌。 | 装备后连续英雄攻击，补充海盗资源；与前锋战斧规则不同。 | 无存活武器时高；已有武器时谨慎，避免错误 replacement。 | DB 高；攻击触发/替换待实测。 |
-| 粗暴的猢狲 / `VAC_938` (2) | 本地文本为“每当你的英雄攻击后，使其 +1/+1”；实际对战目标/语言需要确认。 | 用户指定：场上有其他海盗时，相关海盗攻击 reward 按每个 +1 计。 | 仅作为模拟 reward/临时 buff，不永久改基础 stats；攻击事件后清理。 | DB 文本高；目标语义与触发时序高风险。 |
+| 粗暴的猢狲 / `VAC_938` (2) | 按用户确认的实际语义：打出时，使当时场上的其他 Pirate minions +1/+1；不包含触发者自身。第二张同名猢狲属于其他 Pirate，会被 buff。 | 只影响已在场的其他海盗；手牌 Pirate、非 Pirate 和触发者自身不计入。后续新下海盗不继承这次一次性 Battlecry。 | 打出时按场面兑现 +1/+1；不再把猢狲当作攻击事件临时 aura。攻击 reward 读取已经物化的 stats。 | ID/本地文本存在冲突；本轮按用户确认语义修正并用 offline state tests 锁定，真实 parser/Battlecry 仍待实测。 |
 | 钩拳-3000型 / `CORE_NX2_028` (2) | 英雄攻击后，获得 4 点护甲并抽一张牌。 | 当回合能打武器或已经装备武器时价值大；兼顾生存和资源。 | 最好仅在同回合可打武器/已装备武器时；无可用随从时才裸上战场。 | DB 高；武器攻击、抽牌、护甲 transition 待实测。 |
 | 雷纳索尔王子 / `CORE_REV_018`（1，传奇星标） | 起始生命值为 40。 | 40 张牌构筑许可/长局生命缓冲；不是战场节奏牌。 | 不把它当普通海盗联动；构筑 metadata 与实战起始血量需核验。 | DB 高；截图 card ID 可能为 `REV_018`，需运行时 identity 确认。 |
 | 前锋战斧 / `BAR_844`（截图未清晰显示复制数） | 3/3 武器；英雄攻击并消灭随从后抽一张牌。 | 只用来击杀随从触发抽牌；对手英雄血量 >=10 禁止直接打脸。 | hero-weapon attack 放在可行攻击序列最后；非击杀随从线负 prior/零 effect reward；英雄血量 <10 才评估打脸，斩杀优先。 | DB 高，在线卡页可核对；通用 AttackAction 无 target 字段，weapon wear/trigger 待实测。 |
@@ -57,6 +57,8 @@
 
 可通用化的是 parser-backed action generation、mana/board-full/taunt legality、候选 prior、clone rollout、状态 fingerprint、END_TURN、dispatch/return/confirmed/unconfirmed 区分。高风险 hard-code 是炮/经销商/任务的顺序、Patches mulligan、前锋战斧目标/血线/最后攻击约束、CAP_106 三空位门槛、南海/猢狲事件 reward 和英雄技能 near-last。随机炮击、Discover、generated cards、board-full token placement、weapon replacement 和 parser unknown actions 必须继续 fail-closed。
 
+补充语义边界：南海船长仍按 ongoing aura 计算；粗暴猢狲不再按攻击事件临时加攻，而是在 PlayAction 的模拟结果中只对当时已在场、且 entityId 不同的 Pirate minions 物化一次性 +1/+1。这样第二张同名猢狲会被第一张/当前张视为“其他 Pirate”，触发者自身、非 Pirate 和手牌 Pirate 不会被计算。
+
 ## Implementation readiness
 
 当前结论：**offline implementation checkpoint ready；release/E2E not ready**。
@@ -66,6 +68,8 @@
 发布前还需要：真实 parser card identity/action trace；weapon replacement/wear 与 BAR_844 draw trigger；CAP_106 token/extra-shot；炮击随机目标；Discover/generated card；任务计数；board-full placement；accepted/unconfirmed fingerprint；以及不与其他任务共享安装的 release mutex。当前轮按协作约束不 build/deploy，故不能宣称安装完成。
 
 ## Handoff evidence
+
+最终更新：Hozen 语义修正后的离线验证为 Golden 19/19 + Model 5/5 = 24/24，reactor `BUILD SUCCESS`；此前的 22/22 是战斧/CAP/英雄技能 checkpoint。该数字仍不构成真实 E2E 或 release evidence。
 
 - 本分支：`codex/pirate-warrior-mcts-followup`
 - 前一实现 checkpoint：`0ef9d9f3`；gotcha ledger checkpoint：`ac1f0134`

@@ -46,7 +46,7 @@ class PirateWarriorMctsModelTest {
     }
 
     @Test
-    fun `pirates receive southsea and attacking hozen reward bonus`() {
+    fun `pirates receive southsea reward without an attack-event hozen bonus`() {
         val war = testWar(turn = 2, mana = 4)
         val captain = testCard(PirateWarriorMctsModel.SOUTHSEA_CAPTAIN, cost = 3, attack = 3)
         val hozen = testCard(PirateWarriorMctsModel.HOZEN_ROUGHHOUSER, cost = 3, attack = 2)
@@ -55,7 +55,7 @@ class PirateWarriorMctsModelTest {
         war.addCard(hozen, war.me.playArea)
         war.addCard(attacker, war.me.playArea)
 
-        assertEquals(4, PirateWarriorMctsModel.effectivePirateAttack(attacker, war))
+        assertEquals(3, PirateWarriorMctsModel.effectivePirateAttack(attacker, war))
     }
 
     @Test

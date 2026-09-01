@@ -203,10 +203,7 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         val otherCaptains = war.me.playArea.cards.count {
             isCard(it, SOUTHSEA_CAPTAIN) && it.isAlive() && it.entityId != attacker.entityId
         }
-        val otherHozens = war.me.playArea.cards.count {
-            isCard(it, HOZEN_ROUGHHOUSER) && it.isAlive() && it.entityId != attacker.entityId
-        }
-        val temporaryBonus = otherCaptains + otherHozens
+        val temporaryBonus = otherCaptains
         if (temporaryBonus > 0) {
             attacker.atc += temporaryBonus
             attacker.mctsTemporaryAttackBonus += temporaryBonus
@@ -234,13 +231,26 @@ object PirateWarriorMctsModel : MctsDecisionModel {
                 return MctsDecisionModel.SimulationResult(expectedReward = 18.0)
             }
         }
+        if (action is PlayAction && creator != null && isCard(creator, HOZEN_ROUGHHOUSER)) {
+            // VAC_938 is a one-shot Battlecry: buff only the other Pirate
+            // minions already on this board. Excluding by entity ID allows a
+            // second Hozen to receive the buff, while the board-only scan
+            // excludes hand Pirates and non-Pirates.
+            after.me.playArea.cards
+                .filter { it.entityId != creator.entityId && isPirate(it) && it.isAlive() }
+                .forEach {
+                    it.atc += 1
+                    it.health += 1
+                }
+        }
         return MctsDecisionModel.SimulationResult()
     }
 
     /**
      * Reward attack lines using the attack that the live auras are expected
-     * to provide. Southsea Captain buffs other Pirates statically; each other
-     * Hozen Roughhouser buffs an attacking Pirate at the attack event.
+     * to provide. Southsea Captain is represented as an ongoing aura here;
+     * Hozen Roughhouser's one-shot Battlecry is materialized in card stats
+     * when it is played.
      */
     fun effectivePirateAttack(card: Card, war: War): Int {
         if (!isPirate(card)) return card.atc
@@ -251,17 +261,7 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         val captainBonus = (captains - if (isCard(card, SOUTHSEA_CAPTAIN)) 1 else 0)
             .coerceAtLeast(0)
 
-        val otherPirates = otherPirates(war, card)
-        val hozenCount = war.me.playArea.cards.count {
-            isCard(it, HOZEN_ROUGHHOUSER) && it.isAlive()
-        }
-        val hozenBonus = if (otherPirates > 0) {
-            (hozenCount - if (isCard(card, HOZEN_ROUGHHOUSER)) 1 else 0)
-                .coerceAtLeast(0)
-        } else {
-            0
-        }
-        return max(0, card.atc) + captainBonus + hozenBonus
+        return max(0, card.atc) + captainBonus
     }
 
     override fun scoreAdjustment(war: War): Double {
