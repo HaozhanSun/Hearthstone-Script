@@ -1,8 +1,10 @@
 package club.xiaojiawei.hsscript.listener.log
 
 import club.xiaojiawei.hsscript.bean.single.WarEx
+import club.xiaojiawei.hsscript.bean.DiskLogFile
 import club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME
 import club.xiaojiawei.hsscript.core.Core
+import club.xiaojiawei.hsscript.enums.GameLogModeEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
@@ -12,6 +14,7 @@ import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.utils.PowerLogUtil
+import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.StepEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
@@ -48,6 +51,10 @@ object PowerLogListener :
     @Volatile
     private var lastReadinessLogAt = 0L
 
+    /** Canonical path currently owned by this listener, not by the runner. */
+    @Volatile
+    private var attachedPowerLogPath: String? = null
+
     private const val RESERVE_SIZE_B = 4 * 1024 * 1024
 
     override fun dealOldLog() {
@@ -56,6 +63,7 @@ object PowerLogListener :
         terminalTailFence = false
 
         logFile?.let {
+            attachedPowerLogPath = canonicalPath(it.path())
             if (System.getProperty("hs.script.e2e") == "true") {
                 val baseline = it.length()
                 e2eReadinessGate.begin(
@@ -70,6 +78,11 @@ object PowerLogListener :
                     "E2E_READINESS_SESSION_STARTED runId=${System.getProperty("hs.script.e2e.run-id", "unknown")} " +
                         "pid=${ProcessHandle.current().pid()} path=${it.path()} baselineOffset=$baseline " +
                         "existingLog=${baseline > 0} old-tail-replay=false"
+                }
+                log.warn {
+                    "E2E_POWERLOG_ATTACH path=${it.path()} canonicalPath=${attachedPowerLogPath} " +
+                        "baselineOffset=$baseline runId=${System.getProperty("hs.script.e2e.run-id", "unknown")} " +
+                        "source=listener-dealOldLog"
                 }
                 return
             }
@@ -153,6 +166,9 @@ object PowerLogListener :
      */
     @Synchronized
     override fun dealNewLog() {
+        if (!AbstractPhaseStrategy.dealing) {
+            reattachToLatestPowerLogIfChanged()
+        }
         // The normal listener intentionally yields while a phase handler is
         // working. During a deliberate non-E2E replay, the replay flag allows
         // the cursor to read through EOF; the live scheduled listener keeps
@@ -188,6 +204,57 @@ object PowerLogListener :
             } ?: return
         }
     }
+
+    /**
+     * Reconcile the Java listener with Hearthstone's newest timestamped log
+     * directory.  The E2E runner can discover a new path before this JVM's
+     * listener does; updating a runner variable alone is not an attach.
+     * Switching here keeps the authoritative CREATE_GAME line on the same
+     * handle that drives WAR/E2ETrace.
+     */
+    private fun reattachToLatestPowerLogIfChanged(): Boolean {
+        if (ScriptStatus.gameLogMode !== GameLogModeEnum.DISK) return false
+        val current = logFile ?: return false
+        val latest = GameUtil.getLatestLogDir()
+            ?.resolve(GAME_WAR_LOG_NAME)
+            ?: return false
+        if (!latest.isFile) return false
+
+        val currentPath = canonicalPath(current.path())
+        val latestPath = canonicalPath(latest.path)
+        if (!shouldSwitchPowerLog(currentPath, latestPath, latest.exists())) {
+            return false
+        }
+
+        val replacement = runCatching { DiskLogFile(latestPath) }
+            .onFailure { error ->
+                log.warn(error) {
+                    "E2E_POWERLOG_REATTACH_FAILED oldPath=$currentPath newPath=$latestPath"
+                }
+            }
+            .getOrNull()
+            ?: return false
+
+        replaceLogFile(replacement)
+        log.warn {
+            "E2E_POWERLOG_PATH_SWITCH oldPath=$currentPath newPath=$latestPath " +
+                "runId=${System.getProperty("hs.script.e2e.run-id", "unknown")} " +
+                "source=listener-latest-log-dir handshake=listener-attached"
+        }
+        dealOldLog()
+        return true
+    }
+
+    private fun canonicalPath(path: String): String =
+        runCatching { File(path).canonicalPath }.getOrElse { File(path).absolutePath }
+
+    internal fun shouldSwitchPowerLog(
+        currentPath: String?,
+        latestPath: String?,
+        latestExists: Boolean,
+    ): Boolean = latestExists &&
+        !latestPath.isNullOrBlank() &&
+        currentPath != latestPath
 
     @Synchronized
     private fun resolveLog(line: String) {

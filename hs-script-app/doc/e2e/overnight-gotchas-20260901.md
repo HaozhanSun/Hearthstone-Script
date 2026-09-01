@@ -663,3 +663,30 @@
   and stopped. Route this to PaddleX/rank owner diagnosis; do not reuse this
   evidence lineage or start a new strict run until the fix is integrated and
   deployed.
+# Power.log path-switch attach contract (2026-09-01)
+
+- **Symptom:** v4.16.160 run `77249_6688` showed a real `CREATE_GAME` and a
+  terminal `PLAYSTATE=LOST/WON` in the fresh
+  `Hearthstone_2026_09_01_09_25_25/Power.log`, while the Java log recorded no
+  `E2E_GAME_BOUNDARY` and rejected the result as `game=0`.
+- **Why the old mechanism failed:** the watchdog updated its own
+  `$powerLogPath` after Hearthstone created a new timestamped directory, but
+  that variable is not the Java listener's `PowerLogListener.logFile` handle.
+  The listener stayed attached to the old
+  `Hearthstone_2026_09_01_09_16_50/Power.log`, so it could not consume the
+  authoritative boundary.
+- **Root cause:** external path rotation was treated as if it were a Java
+  listener re-attach. No in-process path reconciliation existed between the
+  old handle and the newest `Power.log`.
+- **Prevention:** every supervised run must bind `runId`, Hearthstone PID,
+  canonical fresh `Power.log` path, and baseline offset. The Java listener now
+  checks the newest timestamped log directory, safely opens the new path,
+  closes the old handle, re-runs its attach/baseline handshake, and only then
+  allows the new `CREATE_GAME` to drive `E2ETrace`. A stale path, old offset, or
+  run/PID identity mismatch remains fail-closed. A watchdog path update alone
+  is never evidence that Java has switched handles.
+- **Evidence contract:** append-only diagnostics must include the listener's
+  `E2E_POWERLOG_ATTACH` and `E2E_POWERLOG_PATH_SWITCH` records, including old
+  and new canonical paths, run ID, PID, and baseline. The result gate must
+  reject `game=0`; it must not convert a runner-only path observation into a
+  game success.

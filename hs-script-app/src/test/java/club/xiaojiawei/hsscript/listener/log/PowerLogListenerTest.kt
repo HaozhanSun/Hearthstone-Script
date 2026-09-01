@@ -5,6 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import club.xiaojiawei.hsscript.status.E2EReadinessGate
+import java.nio.file.Files
 
 class PowerLogListenerTest {
 
@@ -108,6 +109,44 @@ class PowerLogListenerTest {
                     "CREATE_GAME",
                     "TAG_CHANGE Entity=1 tag=PLAYSTATE value=PLAYING",
                 ),
+            ),
+        )
+    }
+
+    @Test
+    fun `newest timestamped Power log path is an actual listener switch boundary`() {
+        val root = Files.createTempDirectory("hs-powerlog-switch")
+        val oldPath = root.resolve("Hearthstone_2026_09_01_09_16_50/Power.log")
+        val newPath = root.resolve("Hearthstone_2026_09_01_09_25_25/Power.log")
+        Files.createDirectories(newPath.parent)
+        Files.writeString(
+            newPath,
+            "D 09:26:41 GameState.DebugPrintPower() - CREATE_GAME\r\n" +
+                "D 09:26:41 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=PLAYING\r\n",
+        )
+
+        assertTrue(
+            PowerLogListener.shouldSwitchPowerLog(
+                currentPath = oldPath.toString(),
+                latestPath = newPath.toString(),
+                latestExists = Files.isRegularFile(newPath),
+            ),
+        )
+
+        val gate = E2EReadinessGate(timeoutMs = 5_000L)
+        gate.begin("run-path-switch", 9001L, newPath.toString(), 0L, 1_000L)
+        val createGame = Files.readAllLines(newPath).first()
+        assertTrue(gate.observeLine("run-path-switch", 9001L, createGame.toByteArray().size + 2L, createGame))
+        assertEquals(E2EReadinessGate.State.READY, gate.evaluate("run-path-switch", 9001L, 2_000L).state)
+    }
+
+    @Test
+    fun `missing newest Power log cannot trigger a listener switch`() {
+        assertFalse(
+            PowerLogListener.shouldSwitchPowerLog(
+                currentPath = "old/Power.log",
+                latestPath = "new/Power.log",
+                latestExists = false,
             ),
         )
     }

@@ -171,6 +171,28 @@ abstract class AbstractLogListener(
         }
     }
 
+    /**
+     * Replace the file handle without restarting the listener thread.
+     *
+     * Hearthstone creates a new timestamped log directory during a client
+     * restart.  Keeping the old handle alive makes the listener permanently
+     * blind to the new Power.log even though an external watchdog has already
+     * discovered it.  Open the replacement first, then close the old handle,
+     * so a failed open cannot destroy the currently attached listener.
+     */
+    protected fun replaceLogFile(newLogFile: LogFile) {
+        synchronized(this) {
+            val oldLogFile = logFile
+            if (oldLogFile?.path() == newLogFile.path()) {
+                newLogFile.close()
+                return
+            }
+            logFile = newLogFile
+            runCatching { oldLogFile?.close() }
+                .onFailure { error -> log.warn(error) { "$logFileName 旧日志句柄关闭失败" } }
+        }
+    }
+
     private fun closeLogListener() {
         synchronized(this) {
             logScheduledFuture?.let {
