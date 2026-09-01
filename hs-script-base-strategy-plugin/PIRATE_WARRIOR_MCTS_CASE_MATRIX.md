@@ -75,6 +75,8 @@
 
 Hozen 语义修正 checkpoint：`PirateWarriorMctsGoldenScenarioTest` 19/19 passed + `PirateWarriorMctsModelTest` 5/5 passed = 24/24 passed；reactor `BUILD SUCCESS`。新增用例覆盖 0 个 Pirate、1 个其他 Pirate、2 个 Pirate、第二张同名猢狲、非 Pirate、手牌 Pirate 排除、触发者自身排除，以及 attack/health 两项状态。
 
+Dedicated replay/evaluator checkpoint：`PirateWarriorOfflineReplayTest` 1/1 passed；与上述两组相关测试合计 26/26 passed。7 个 synthetic fixtures 均打印策略、候选、理由和预期/实际选择；模型 evaluator 均为 `pass`，runtime review 均为 `needs-review`，没有真实 E2E 结论。
+
 ## Verification gotcha ledger
 
 下表专门记录容易把离线结果误读成真实 E2E 的验证陷阱。`status` 是本分支当前状态，不是发布结论。

@@ -52,6 +52,8 @@
 
 完整 26 个可见卡名的逐卡价值、ID、priority 和待实测项仍以本报告上方逐卡表为准；本节只固定本轮四张高风险语义牌。
 
+本轮新增专用离线 replay/evaluator suite：[`offline/pirate-warrior/fixtures.tsv`](<C:/Users/yzjsh/.codex/worktrees/pirate-warrior-mcts-followup/hs-script-base-strategy-plugin/src/test/resources/offline/pirate-warrior/fixtures.tsv>) 与 [`PirateWarriorOfflineReplayTest.kt`](<C:/Users/yzjsh/.codex/worktrees/pirate-warrior-mcts-followup/hs-script-base-strategy-plugin/src/test/java/club/xiaojiawei/hsscriptbasestrategy/strategy/PirateWarriorOfflineReplayTest.kt>)。它逐 fixture 打印 candidates、reason、expected/selected、`evaluator` 和 `runtime_review`；当前模型评估为 `pass`，运行时证据统一为 `needs-review`，没有误报为 E2E。
+
 - **P0 / hard mandatory**：从搜索候选中排除其他动作。当前只有“可支付船载火炮”最高；首回合“开进码头”是 deadline，且在没有 P0 炮时 mandatory；没有炮/首回合任务时，宝藏经销商是下一层 mandatory 开局器。
 - **高 prior**：只改变 action prior/访问顺序，不保证选择，也不等于合法性。英雄攻击、资源、联动和斩杀仍由 MCTS 比较。
 - **deferred / near-last**：英雄技能和前锋战斧非击杀攻击在仍有其他有价值动作时后置；只有真实候选集扫描后才允许成为最后手段。
@@ -86,5 +88,5 @@
 
 - 本分支：`codex/pirate-warrior-mcts-followup`
 - 前一实现 checkpoint：`0ef9d9f3`；gotcha ledger checkpoint：`ac1f0134`
-- 本轮前一提交：`682f8e7b Correct Pirate Warrior Hozen battlecry model`；本轮新增“猢狲不对后续才打出的 Pirate 形成持续光环”的反例测试后，需以新的收尾 commit/hash 为准。
+- 本轮前一提交：`682f8e7b Correct Pirate Warrior Hozen battlecry model`；本轮新增 dedicated replay/evaluator suite 后，最终提交/hash 以本轮收尾记录为准。
 - 上游对照：[Hearthstone-Script](https://github.com/HaozhanSun/Hearthstone-Script.git)，`origin/main` 对照 hash `942b09d8a693542202d0af6682d73d13b3cf97a5`；基线 `origin/master` 为 `c89e0b9ba1919b99c3535a5e780826a7830a3520`。
