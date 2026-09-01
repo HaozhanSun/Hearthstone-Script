@@ -225,7 +225,12 @@ object CurrentRankDetector {
         )
         if (!OcrRuntime.isLegacySelected()) {
             val ocrTexts = listOf(
-                OcrRuntime.recognize(rankRegion, "current-rank-paddlex-badge") { "" }
+                OcrRuntime.recognize(
+                    rankRegion,
+                    "current-rank-paddlex-badge",
+                    legacyOcr = { "" },
+                    allowEmptyProbeResult = true,
+                )
                     .replace(Regex("\\s+"), ""),
             )
             val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
@@ -439,7 +444,11 @@ object CurrentRankDetector {
             setPageSegMode(pageSegMode)
             setVariable("tessedit_char_whitelist", whitelist)
             setVariable("user_defined_dpi", "300")
-        }.doOCR(input, "current-rank-psm$pageSegMode-$suffix")
+        }.doOCR(
+            input,
+            "current-rank-psm$pageSegMode-$suffix",
+            allowEmptyProbeResult = true,
+        )
             .replace(Regex("\\s+"), "")
 
         if (pageSegMode == 10) {
@@ -483,7 +492,11 @@ object CurrentRankDetector {
             setLanguage(CHI_SIM_DATA)
             setPageSegMode(11)
             setVariable("user_defined_dpi", "200")
-        }.doOCR(scaleForOcr(image), "current-tier")
+        }.doOCR(
+            scaleForOcr(image),
+            "current-tier",
+            allowEmptyProbeResult = true,
+        )
             .replace(Regex("\\s+"), "")
 
     /**

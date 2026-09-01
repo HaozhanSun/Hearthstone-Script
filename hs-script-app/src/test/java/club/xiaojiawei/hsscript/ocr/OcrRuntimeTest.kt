@@ -215,4 +215,53 @@ class OcrRuntimeTest {
             }
         }
     }
+
+    @Test
+    fun emptyPaddleXProbeIsExpectedAndDoesNotInvokeLegacyFallback() {
+        OcrRuntime.providerModeProvider = { OcrProviderMode.AUTO }
+        OcrRuntime.settingsProvider = {
+            PaddleXOcrSettings(true, "python", "fake-module", "cpu", "", 1000)
+        }
+        var legacyCalled = false
+        OcrRuntime.paddleXBridgeFactory = {
+            object : OcrTextBridge {
+                override fun recognize(image: java.awt.image.BufferedImage, desc: String): String = ""
+
+                override fun healthCheck(): OcrHealth = OcrHealth(true, OcrProviderKind.PADDLEX, "ok")
+            }
+        }
+
+        val result = OcrRuntime.recognize(
+            TestImages.onePixel(),
+            "rank-probe-empty",
+            legacyOcr = {
+                legacyCalled = true
+                "legacy-must-not-run"
+            },
+            allowEmptyProbeResult = true,
+        )
+
+        assertEquals("", result)
+        assertFalse(legacyCalled)
+    }
+
+    @Test
+    fun emptyLegacyProbeIsExpectedButOrdinaryEmptyLegacyStillFails() {
+        OcrRuntime.providerModeProvider = { OcrProviderMode.LEGACY_ONLY }
+        OcrRuntime.settingsProvider = {
+            PaddleXOcrSettings(false, "python", "unused", "cpu", "", 1000)
+        }
+
+        val probe = OcrRuntime.recognize(
+            TestImages.onePixel(),
+            "legacy-rank-probe-empty",
+            legacyOcr = { "" },
+            allowEmptyProbeResult = true,
+        )
+        assertEquals("", probe)
+
+        kotlin.test.assertFailsWith<IllegalStateException> {
+            OcrRuntime.recognize(TestImages.onePixel(), "ordinary-empty") { "" }
+        }
+    }
 }

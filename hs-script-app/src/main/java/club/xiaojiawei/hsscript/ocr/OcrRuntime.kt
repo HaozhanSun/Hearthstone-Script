@@ -22,6 +22,13 @@ object OcrRuntime {
         image: BufferedImage?,
         desc: String = "",
         legacyOcr: () -> String,
+    ): String = recognize(image, desc, allowEmptyProbeResult = false, legacyOcr = legacyOcr)
+
+    fun recognize(
+        image: BufferedImage?,
+        desc: String = "",
+        allowEmptyProbeResult: Boolean = false,
+        legacyOcr: () -> String,
     ): String {
         if (image == null) {
             log.info {
@@ -31,16 +38,31 @@ object OcrRuntime {
         }
         val mode = currentMode()
         if (mode == OcrProviderMode.LEGACY_ONLY) {
-            val text = legacyOcrChecked(desc, legacyOcr)
+            val text = legacyOcr()
+            if (text.isBlank() && allowEmptyProbeResult) {
+                log.debug {
+                    "OCR_PROBE_EMPTY provider=LEGACY reason=expected-empty-probe " +
+                        "desc=${desc.ifBlank { "<none>" }}"
+                }
+                return text
+            }
+            val checked = legacyOcrChecked(desc) { text }
             log.info {
                 "OCR_PROVIDER_USED mode=$mode provider=LEGACY reason=legacy-selected " +
-                    "desc=${desc.ifBlank { "<none>" }} chars=${text.length}"
+                    "desc=${desc.ifBlank { "<none>" }} chars=${checked.length}"
             }
-            return text
+            return checked
         }
         val settings = settingsProvider()
         return runCatching {
             val text = paddleXBridgeFactory(settings).recognize(image, desc)
+            if (allowEmptyProbeResult && text.isBlank()) {
+                log.debug {
+                    "OCR_PROBE_EMPTY provider=PADDLEX reason=expected-empty-probe " +
+                        "desc=${desc.ifBlank { "<none>" }}"
+                }
+                return@runCatching text
+            }
             requireRecognizedText(text, "PADDLEX", desc)
             text
         }.getOrElse { error ->

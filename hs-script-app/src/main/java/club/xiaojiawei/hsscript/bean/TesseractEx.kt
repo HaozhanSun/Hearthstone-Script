@@ -23,7 +23,11 @@ class TesseractEx : Tesseract() {
 
     private val ocrDir = "ocr_res"
 
-    fun doOCR(p0: BufferedImage?, desc: String = ""): String {
+    fun doOCR(
+        p0: BufferedImage?,
+        desc: String = "",
+        allowEmptyProbeResult: Boolean = false,
+    ): String {
         if (ConfigUtil.getBoolean(ConfigEnum.SAVE_OCR_IMG)) {
             val ocrPath = Path(ROOT_PATH, ocrDir)
             if (!ocrPath.exists()) {
@@ -40,7 +44,12 @@ class TesseractEx : Tesseract() {
                 ImageIO.write(it, "png", ocrPath)
             }
         }
-        return OcrRuntime.recognize(p0, desc) { doLegacyOCR(p0) }
+        return OcrRuntime.recognize(
+            p0,
+            desc,
+            legacyOcr = { doLegacyOCR(p0) },
+            allowEmptyProbeResult = allowEmptyProbeResult,
+        )
     }
 
     private fun doLegacyOCR(image: BufferedImage?): String = super.doOCR(image)
