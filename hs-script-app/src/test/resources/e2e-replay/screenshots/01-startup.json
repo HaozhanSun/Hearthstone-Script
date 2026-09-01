@@ -1,0 +1,8 @@
+{
+  "stage": "startup",
+  "path": null,
+  "sourceEvidence": null,
+  "retained": false,
+  "captureRequired": false,
+  "note": "No startup image was retained in the source run."
+}

@@ -1,0 +1,8 @@
+{
+  "stage": "listener-attach",
+  "path": null,
+  "sourceEvidence": "powerlog-attach-diagnostic",
+  "retained": false,
+  "captureRequired": false,
+  "note": "Listener attachment is evidenced by the diagnostic log, not a screenshot."
+}

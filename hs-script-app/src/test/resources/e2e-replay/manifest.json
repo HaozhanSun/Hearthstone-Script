@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "v4.16.160-run-77249_6688-offline-replay",
+  "sourceRef": "4d08a94818cb6e9f30a007f26548ead090f4a2e4",
+  "upstreamRef": "e5d26c8698f1691f1523fd070a8bbd16680f36eb",
+  "playerGameId": "laz#12793",
+  "stages": [
+    {
+      "id": "startup",
+      "screenshot": { "manifest": "screenshots/01-startup.json", "imagePath": null, "captureRequired": false },
+      "ocr": { "path": "ocr/01-startup.json", "provider": "NONE", "status": "NOT_RUN", "text": "", "confidence": 0 },
+      "powerLogFragment": "powerlog/00-no-game-events.log",
+      "powerLogEvents": [],
+      "traceEvents": [],
+      "stateMachineInput": { "state": "STARTUP", "powerLogPath": null, "baselineOffset": 0, "listenerAttached": false, "foregroundConfirmed": false, "paused": false, "boundarySequence": 0, "milestones": [], "actions": ["SCREEN_PROBE"] },
+      "expectedOutput": { "state": "HUB", "powerLogPath": null, "baselineOffset": 0, "listenerAttached": false, "foregroundConfirmed": false, "paused": false, "boundarySequence": 0, "milestones": [], "terminalObserved": false, "dispatchAllowed": false },
+      "allowedActions": ["SCREEN_PROBE", "WAIT_FOR_LOGIN"],
+      "forbiddenActions": ["GAMEPLAY_CLICK", "PLAY_CARD", "END_TURN"],
+      "failureReasons": ["startup-screen-unclassified", "unexpected-gameplay-action"]
+    },
+    {
+      "id": "hub",
+      "screenshot": { "manifest": "screenshots/02-hub.json", "imagePath": "C:/Users/yzjsh/Documents/Codex/2026-08-15/for-all-these-delay-short-are-2/outputs/Hearthstone Script/log/debug-manual-current.png", "captureRequired": false },
+      "ocr": { "path": "ocr/02-hub.json", "provider": "PADDLEX", "status": "CONTRACT_ACCEPTED", "text": "传统对战 酒馆战棋 竞技模式 其他模式 我的收藏 商店", "confidence": 95 },
+      "powerLogFragment": "powerlog/00-no-game-events.log",
+      "powerLogEvents": [],
+      "traceEvents": ["SCREEN_RECOVERY_OBSERVATION detected=HUB"],
+      "stateMachineInput": { "state": "HUB", "powerLogPath": null, "baselineOffset": 0, "listenerAttached": false, "foregroundConfirmed": false, "paused": false, "boundarySequence": 0, "milestones": [], "actions": ["HUB_AFTER_ENTER"] },
+      "expectedOutput": { "state": "MODE_ENTRY", "powerLogPath": null, "baselineOffset": 0, "listenerAttached": false, "foregroundConfirmed": true, "paused": false, "boundarySequence": 0, "milestones": [], "terminalObserved": false, "dispatchAllowed": true },
+      "allowedActions": ["HUB_AFTER_ENTER", "DISMISS_HUB_POPUP"],
+      "forbiddenActions": ["PLAY_CARD", "END_TURN"],
+      "failureReasons": ["hub-ocr-contract-rejected", "hub-popup-not-dismissed", "foreground-unconfirmed"]
+    },
+    {
+      "id": "mode-entry",
+      "screenshot": { "manifest": "screenshots/03-mode-entry.json", "imagePath": null, "captureRequired": false },
+      "ocr": { "path": "ocr/03-mode-entry.json", "provider": "PADDLEX", "status": "CONTRACT_ACCEPTED", "text": "传统对战 狂野模式", "confidence": 95 },
+      "powerLogFragment": "powerlog/00-no-game-events.log",
+      "powerLogEvents": [],
+      "traceEvents": ["MODE_SELECTED mode=WILD"],
+      "stateMachineInput": { "state": "MODE_ENTRY", "powerLogPath": null, "baselineOffset": 0, "listenerAttached": false, "foregroundConfirmed": true, "paused": false, "boundarySequence": 0, "milestones": [], "actions": ["TOURNAMENT_ENTRY", "SELECT_WILD"] },
+      "expectedOutput": { "state": "MATCHMAKING", "powerLogPath": null, "baselineOffset": 0, "listenerAttached": false, "foregroundConfirmed": true, "paused": false, "boundarySequence": 0, "milestones": [], "terminalObserved": false, "dispatchAllowed": true },
+      "allowedActions": ["TOURNAMENT_ENTRY", "SELECT_WILD", "START_MATCHING"],
+      "forbiddenActions": ["PLAY_CARD", "MULLIGAN_INPUT", "END_TURN"],
+      "failureReasons": ["wild-mode-not-confirmed", "mode-entry-screen-unclassified"]
+    },
+    {
+      "id": "matchmaking",
+      "screenshot": { "manifest": "screenshots/04-matchmaking.json", "imagePath": null, "captureRequired": false },
+      "ocr": { "path": "ocr/04-matchmaking.json", "provider": "PADDLEX", "status": "CONTRACT_ACCEPTED", "text": "正在匹配", "confidence": 90 },
+      "powerLogFragment": "powerlog/00-no-game-events.log",
+      "powerLogEvents": [],
+      "traceEvents": ["MATCHMAKING_STARTED"],
+      "stateMachineInput": { "state": "MATCHMAKING", "powerLogPath": null, "baselineOffset": 0, "listenerAttached": false, "foregroundConfirmed": true, "paused": false, "boundarySequence": 0, "milestones": [], "actions": ["START_MATCHING", "WAIT_FOR_CREATE_GAME"] },
+      "expectedOutput": { "state": "LISTENER_ATTACH", "powerLogPath": null, "baselineOffset": 0, "listenerAttached": false, "foregroundConfirmed": true, "paused": false, "boundarySequence": 0, "milestones": [], "terminalObserved": false, "dispatchAllowed": false },
+      "allowedActions": ["START_MATCHING", "WAIT_FOR_CREATE_GAME"],
+      "forbiddenActions": ["PLAY_CARD", "MULLIGAN_INPUT", "END_TURN"],
+      "failureReasons": ["matchmaking-timeout", "create-game-not-observed"]
+    },
+    {
+      "id": "listener-attach",
+      "screenshot": { "manifest": "screenshots/05-listener-attach.json", "imagePath": null, "captureRequired": false },
+      "ocr": { "path": "ocr/05-listener-attach.json", "provider": "NONE", "status": "NOT_RUN", "text": "", "confidence": 0 },
+      "powerLogFragment": "powerlog/02-attach-diagnostic.log",
+      "powerLogEvents": ["E2E_POWERLOG_PATH_SWITCH", "handshake=listener-attached"],
+      "traceEvents": [],
+      "stateMachineInput": { "state": "LISTENER_ATTACH", "powerLogPath": "D:/Hearthstone/Logs/Hearthstone_2026_09_01_09_16_50/Power.log", "baselineOffset": 830530, "listenerAttached": false, "foregroundConfirmed": true, "paused": false, "boundarySequence": 0, "milestones": [], "actions": ["WAIT_FOR_LISTENER_ATTACH"] },
+      "expectedOutput": { "state": "READY_FOR_CREATE_GAME", "powerLogPath": "D:/Hearthstone/Logs/Hearthstone_2026_09_01_09_25_25/Power.log", "baselineOffset": 0, "listenerAttached": true, "foregroundConfirmed": true, "paused": false, "boundarySequence": 0, "milestones": [], "terminalObserved": false, "dispatchAllowed": false },
+      "allowedActions": ["WAIT_FOR_LISTENER_ATTACH"],
+      "forbiddenActions": ["GAMEPLAY_CLICK", "PLAY_CARD", "MULLIGAN_INPUT"],
+      "failureReasons": ["stale-power-log-path", "listener-attach-handshake-missing", "old-offset-reused"]
+    },
+    {
+      "id": "create-game",
+      "screenshot": { "manifest": "screenshots/06-create-game.json", "imagePath": null, "captureRequired": false },
+      "ocr": { "path": "ocr/06-create-game.json", "provider": "PADDLEX", "status": "CONTRACT_ACCEPTED", "text": "开始手牌 保留或替换卡牌", "confidence": 96 },
+      "powerLogFragment": "powerlog/03-fresh-power-log.log",
+      "powerLogEvents": ["CREATE_GAME", "BEGIN_MULLIGAN"],
+      "traceEvents": ["E2E_READINESS_READY", "E2E_GAME_BOUNDARY sequence=1"],
+      "stateMachineInput": { "state": "READY_FOR_CREATE_GAME", "powerLogPath": "D:/Hearthstone/Logs/Hearthstone_2026_09_01_09_25_25/Power.log", "baselineOffset": 0, "listenerAttached": true, "foregroundConfirmed": true, "paused": false, "boundarySequence": 0, "milestones": [], "actions": ["CONSUME_POWER_LOG"] },
+      "expectedOutput": { "state": "MULLIGAN", "powerLogPath": "D:/Hearthstone/Logs/Hearthstone_2026_09_01_09_25_25/Power.log", "baselineOffset": 0, "listenerAttached": true, "foregroundConfirmed": true, "paused": false, "boundarySequence": 1, "milestones": [], "terminalObserved": false, "dispatchAllowed": true },
+      "allowedActions": ["CONSUME_POWER_LOG", "SCREEN_PROBE"],
+      "forbiddenActions": ["PLAY_CARD", "END_TURN"],
+      "failureReasons": ["create-game-not-after-baseline", "game-boundary-missing", "stale-game-lineage"]
+    },
+    {
+      "id": "mulligan",
+      "screenshot": { "manifest": "screenshots/07-mulligan.json", "imagePath": "C:/Users/yzjsh/Documents/Codex/2026-08-15/for-all-these-delay-short-are-2/outputs/Hearthstone Script/log/mulligan/game-0001-after-selection-2-20260901-092712-527.png", "captureRequired": false },
+      "ocr": { "path": "ocr/07-mulligan.json", "provider": "PADDLEX", "status": "CONTRACT_ACCEPTED", "text": "起始手牌 替换", "confidence": 96 },
+      "powerLogFragment": "powerlog/03-fresh-power-log.log",
+      "powerLogEvents": ["BEGIN_MULLIGAN", "MAIN_ACTION"],
+      "traceEvents": ["MULLIGAN_INPUT_SENT", "E2E_MILESTONE milestone=mulligan"],
+      "stateMachineInput": { "state": "MULLIGAN", "powerLogPath": "D:/Hearthstone/Logs/Hearthstone_2026_09_01_09_25_25/Power.log", "baselineOffset": 0, "listenerAttached": true, "foregroundConfirmed": true, "paused": false, "boundarySequence": 1, "milestones": [], "actions": ["MULLIGAN_INPUT", "CONFIRM_MULLIGAN"] },
+      "expectedOutput": { "state": "GAMEPLAY", "powerLogPath": "D:/Hearthstone/Logs/Hearthstone_2026_09_01_09_25_25/Power.log", "baselineOffset": 0, "listenerAttached": true, "foregroundConfirmed": true, "paused": false, "boundarySequence": 1, "milestones": ["mulligan"], "terminalObserved": false, "dispatchAllowed": true },
+      "allowedActions": ["MULLIGAN_INPUT", "CONFIRM_MULLIGAN", "SCREEN_PROBE"],
+      "forbiddenActions": ["PLAY_CARD", "END_TURN"],
+      "failureReasons": ["mulligan-screen-not-confirmed", "mulligan-action-not-accepted", "milestone-before-boundary"]
+    },
+    {
+      "id": "gameplay-controls",
+      "screenshot": { "manifest": "screenshots/08-gameplay-controls.json", "imagePath": "C:/Users/yzjsh/Documents/Codex/2026-08-15/for-all-these-delay-short-are-2/outputs/Hearthstone Script/log/e2e-analysis-96862_2626/live-current-20260831-192956-872.png", "captureRequired": false },
+      "ocr": { "path": "ocr/08-gameplay-controls.json", "provider": "PADDLEX", "status": "CONTRACT_ACCEPTED", "text": "结束回合", "confidence": 96 },
+      "powerLogFragment": "powerlog/03-fresh-power-log.log",
+      "powerLogEvents": ["STEP value=MAIN_ACTION"],
+      "traceEvents": ["E2E_MILESTONE milestone=our-turn", "E2E_MILESTONE milestone=out-card", "PAUSE_ACTIVE source=F2", "RESUME_ACTIVE source=F1"],
+      "stateMachineInput": { "state": "GAMEPLAY", "powerLogPath": "D:/Hearthstone/Logs/Hearthstone_2026_09_01_09_25_25/Power.log", "baselineOffset": 0, "listenerAttached": true, "foregroundConfirmed": true, "paused": false, "boundarySequence": 1, "milestones": ["mulligan"], "actions": ["F2_PAUSE", "F1_RESUME", "PLAY_CARD", "ATTACK", "END_TURN_GUARD"] },
+      "expectedOutput": { "state": "GAMEPLAY", "powerLogPath": "D:/Hearthstone/Logs/Hearthstone_2026_09_01_09_25_25/Power.log", "baselineOffset": 0, "listenerAttached": true, "foregroundConfirmed": true, "paused": false, "boundarySequence": 1, "milestones": ["mulligan", "our-turn", "out-card"], "terminalObserved": false, "dispatchAllowed": true },
+      "controlTransitions": [ { "key": "F2", "beforePaused": false, "afterPaused": true }, { "key": "F1", "beforePaused": true, "afterPaused": false } ],
+      "allowedActions": ["F2_PAUSE", "F1_RESUME", "PLAY_CARD", "ATTACK", "END_TURN_GUARD"],
+      "forbiddenActions": ["INPUT_WHILE_PAUSED", "INPUT_WITHOUT_FOREGROUND"],
+      "failureReasons": ["foreground-unconfirmed", "input-sent-while-paused", "milestone-before-boundary", "end-turn-before-action-scan"]
+    },
+    {
+      "id": "terminal-wait",
+      "screenshot": { "manifest": "screenshots/09-terminal-wait.json", "imagePath": "C:/Users/yzjsh/Documents/Codex/2026-08-15/for-all-these-delay-short-are-2/outputs/Hearthstone Script/log/game-results/game-0001-draw-or-unknown-20260901-093154-619.png", "captureRequired": false },
+      "ocr": { "path": "ocr/09-terminal-wait.json", "provider": "PADDLEX", "status": "CONTRACT_ACCEPTED", "text": "游戏结束", "confidence": 96 },
+      "powerLogFragment": "powerlog/04-terminal.log",
+      "powerLogEvents": ["PLAYSTATE value=CONCEDED", "PLAYSTATE value=LOST"],
+      "traceEvents": ["E2E_GAME_RESULT_REJECTED"],
+      "stateMachineInput": { "state": "GAMEPLAY", "powerLogPath": "D:/Hearthstone/Logs/Hearthstone_2026_09_01_09_25_25/Power.log", "baselineOffset": 0, "listenerAttached": true, "foregroundConfirmed": true, "paused": false, "boundarySequence": 1, "milestones": ["mulligan", "our-turn", "out-card"], "actions": ["WAIT_FOR_TERMINAL"] },
+      "expectedOutput": { "state": "COMPLETE", "powerLogPath": "D:/Hearthstone/Logs/Hearthstone_2026_09_01_09_25_25/Power.log", "baselineOffset": 0, "listenerAttached": true, "foregroundConfirmed": true, "paused": false, "boundarySequence": 1, "milestones": ["mulligan", "our-turn", "out-card"], "terminalObserved": true, "dispatchAllowed": false },
+      "allowedActions": ["WAIT_FOR_TERMINAL", "RECORD_RESULT"],
+      "forbiddenActions": ["PLAY_CARD", "ATTACK", "END_TURN", "SURRENDER_BEFORE_TERMINAL"],
+      "failureReasons": ["terminal-not-authoritative", "terminal-wait-bypassed", "result-before-milestones"]
+    }
+  ]
+}
+

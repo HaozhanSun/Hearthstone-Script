@@ -1,0 +1,8 @@
+{
+  "stage": "matchmaking",
+  "path": null,
+  "sourceEvidence": null,
+  "retained": false,
+  "captureRequired": false,
+  "note": "Matchmaking image was not retained in the source run."
+}

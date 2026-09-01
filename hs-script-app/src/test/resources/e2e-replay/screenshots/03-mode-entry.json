@@ -1,0 +1,8 @@
+{
+  "stage": "mode-entry",
+  "path": null,
+  "sourceEvidence": null,
+  "retained": false,
+  "captureRequired": false,
+  "note": "Mode-entry image was not retained in the source run."
+}

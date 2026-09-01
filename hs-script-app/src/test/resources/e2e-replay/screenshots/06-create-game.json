@@ -1,0 +1,8 @@
+{
+  "stage": "create-game",
+  "path": null,
+  "sourceEvidence": "powerlog-fresh-session",
+  "retained": false,
+  "captureRequired": false,
+  "note": "CREATE_GAME is evidenced by the fresh Power.log fragment."
+}
