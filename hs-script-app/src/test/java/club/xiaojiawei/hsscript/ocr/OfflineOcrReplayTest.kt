@@ -43,6 +43,12 @@ class OfflineOcrReplayTest {
             assertTrue(frame.contract in setOf("ACCEPTED", "EXPECTED_EMPTY_PROBE", "REJECTED", "ERROR"))
             assertTrue(frame.confidence in 0..100, "${frame.id} confidence")
         }
+        val frameIds = fixture.frames.map { it.id }.toSet()
+        assertEquals(listOf("LOST", "LOST", "WIN"), fixture.onlineLikeSequences.map { it.expectedTerminalState })
+        fixture.onlineLikeSequences.forEach { sequence ->
+            assertTrue(sequence.frameIds.isNotEmpty(), "${sequence.id} is empty")
+            assertTrue(sequence.frameIds.all(frameIds::contains), "${sequence.id} references missing frame")
+        }
     }
 
     @Test
@@ -129,6 +135,21 @@ class OfflineOcrReplayTest {
     }
 
     @Test
+    fun sidecarErrorPaddleXOnlyFailsClosedWithoutLegacy() {
+        val probe = loadFixture().providerProbes.first { it.id == "paddlex-timeout-only" }
+        var legacyCalls = 0
+        configureRuntime(OcrProviderMode.PADDLEX_ONLY, probe.bridgeResult)
+
+        assertFailsWith<IllegalStateException> {
+            OcrRuntime.recognize(TestImages.onePixel(), probe.desc) {
+                legacyCalls++
+                probe.legacyResult
+            }
+        }
+        assertEquals(probe.expectedLegacyCalls, legacyCalls)
+    }
+
+    @Test
     fun defaultConfigurationStillAdvertisesPaddleXFirst() {
         assertEquals("AUTO", ConfigEnum.OCR_PROVIDER_MODE.defaultValue)
         assertEquals("true", ConfigEnum.USE_PADDLEX_OCR.defaultValue)
@@ -163,6 +184,7 @@ class OfflineOcrReplayTest {
         val description: String,
         val frames: List<Frame>,
         val providerProbes: List<ProviderProbe>,
+        val onlineLikeSequences: List<OnlineLikeSequence>,
     )
 
     @Serializable
@@ -194,5 +216,12 @@ class OfflineOcrReplayTest {
         val expectedResult: String,
         val expectedLegacyCalls: Int,
         val expectFailure: Boolean,
+    )
+
+    @Serializable
+    private data class OnlineLikeSequence(
+        val id: String,
+        val frameIds: List<String>,
+        val expectedTerminalState: String,
     )
 }

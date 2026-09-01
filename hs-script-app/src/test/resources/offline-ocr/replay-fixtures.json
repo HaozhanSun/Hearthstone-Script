@@ -243,6 +243,35 @@
       "expectedResult": "legacy-after-timeout",
       "expectedLegacyCalls": 1,
       "expectFailure": false
+    },
+    {
+      "id": "paddlex-timeout-only",
+      "mode": "PADDLEX_ONLY",
+      "provider": "PADDLEX",
+      "desc": "screen-recovery-timeout",
+      "bridgeResult": "__THROW__",
+      "legacyResult": "legacy-must-not-run",
+      "contract": "ERROR",
+      "expectedResult": "",
+      "expectedLegacyCalls": 0,
+      "expectFailure": true
+    }
+  ],
+  "onlineLikeSequences": [
+    {
+      "id": "offline-game-0001",
+      "frameIds": ["hub-main-menu", "matching-paddlex", "mulligan-paddlex", "rank-badge-empty-probe", "gameplay-paddlex", "lost-paddlex"],
+      "expectedTerminalState": "LOST"
+    },
+    {
+      "id": "offline-game-0002",
+      "frameIds": ["hub-main-menu", "matching-paddlex", "mulligan-paddlex", "gameplay-paddlex", "defeat-legacy", "result-unknown"],
+      "expectedTerminalState": "LOST"
+    },
+    {
+      "id": "offline-game-0003",
+      "frameIds": ["hub-main-menu", "matching-paddlex", "mulligan-paddlex", "gameplay-paddlex", "win-paddlex", "result-unknown"],
+      "expectedTerminalState": "WIN"
     }
   ]
 }

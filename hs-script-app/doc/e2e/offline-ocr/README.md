@@ -14,6 +14,8 @@ download a model, or claim an end-to-end game result.
 - `providerProbes`: deterministic fake-sidecar cases for valid PaddleX JSON,
   expected-empty rank probes, empty ordinary OCR, thrown sidecar errors, and
   `PADDLEX_ONLY` fail-closed behavior.
+- `onlineLikeSequences`: three offline state sequences whose terminal outcomes
+  are LOST, LOST, and WIN. They are replay assertions, not real-game outcomes.
 
 Each frame records:
 
