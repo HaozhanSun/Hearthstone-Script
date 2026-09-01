@@ -30,7 +30,22 @@ verified.
      Java/runner remains, then use one release slot to deploy a strictly higher
      version from this tree.
 
-3. **Fresh DebugRun E2E — queued**
+   - v4.16.137 release slot completed successfully after the v4.16.136 runner
+     packaging miss was fixed. Checked-in release tests: 118/118, 0 failures,
+     0 errors. Target and canonical JAR SHA-256:
+     `fb1b2fec401b2331aaa4ebc61230e0ab882c7ddac0a5a0dfa750711cf4e66bf6`.
+     Target and canonical ZIP SHA-256:
+     `4d119e7cc9b83e74ba2344708b1bfce5b59a37681a7b5a03c6fbf32894a03e40`.
+   - Source/deployed `run-debug.ps1` SHA-256:
+     `f5cb33ff2c81c85e02dfeba62a5e304a082b56e902346cf30eaa64d7c0cb4743`;
+     ZIP contains `run-debug.ps1` and the selected JAR. JAR marker inspection
+     confirms OCR config reconciliation, fresh `Power.log`/`CREATE_GAME`
+     readiness, and sentinel HWND handling.
+   - Desktop, Start Menu, and Taskbar shortcuts all target
+     `C:/Windows/System32/wscript.exe` with canonical
+     `launch-as-admin.vbs`. Process gate was clear after deployment.
+
+3. **Fresh DebugRun E2E — ready to start**
    - Start only after manifest/JAR/ZIP/runner/shortcut provenance is verified.
    - Every attempt gets a new run id and per-run ledger. Preserve all failed
      artifacts and append a gotcha on invalidation.
