@@ -58,6 +58,67 @@ class PirateWarriorOfflineReplayTest {
         }
     }
 
+    @Test
+    fun `online like scenarios print two lost and one won replay`() {
+        val scenarios = loadScenarios()
+        assertEquals(3, scenarios.size)
+        assertEquals(setOf("LOST", "WON"), scenarios.map { it.outcome }.toSet())
+        assertEquals(2, scenarios.count { it.outcome == "LOST" })
+        assertEquals(1, scenarios.count { it.outcome == "WON" })
+
+        scenarios.forEach { scenario ->
+            assertTrue(scenario.verdict in setOf("pass", "needs-review", "bug"))
+            val evaluation = when (scenario.id) {
+                "lost-axe-no-kill" -> scenarioEvaluation(
+                    scenario,
+                    listOf(
+                        ReplayStep(
+                            action = "BAR_844_ATTACK_MINION",
+                            evaluation = frontlineAxeNoKill(),
+                        ),
+                    ),
+                )
+                "lost-crowley-space-power" -> scenarioEvaluation(
+                    scenario,
+                    listOf(
+                        ReplayStep("CAP_106_PLAY", crowleySlots(2)),
+                        ReplayStep("HERO_01bp_POWER", warriorPowerLast()),
+                    ),
+                )
+                "won-axe-hozen" -> scenarioEvaluation(
+                    scenario,
+                    listOf(
+                        ReplayStep("BAR_844_ATTACK_MINION", frontlineAxeKill()),
+                        ReplayStep("VAC_938_PLAY", hozenOtherPirates()),
+                    ),
+                )
+                else -> error("Unknown online-like scenario: ${scenario.id}")
+            }
+
+            assertEquals(scenario.expectedSequence, evaluation.selectedSequence, scenario.id)
+            assertTrue(evaluation.matches, "${scenario.id}: ${scenario.reason}")
+            evaluation.steps.forEach { step ->
+                println(
+                    "PIRATE_WARRIOR_ONLINE_LIKE " +
+                        "scenario=${scenario.id} " +
+                        "outcome=${scenario.outcome} " +
+                        "action=${step.action} " +
+                        "reason=${step.evaluation.reason} " +
+                        "expected=${step.evaluation.selected} " +
+                        "verdict=${scenario.verdict} " +
+                        "evidence=offline-simulation " +
+                        "e2e=not-run",
+                )
+            }
+            println(
+                "PIRATE_WARRIOR_ONLINE_LIKE_SUMMARY " +
+                    "scenario=${scenario.id} outcome=${scenario.outcome} " +
+                    "expected=${scenario.expectedSequence} selected=${evaluation.selectedSequence} " +
+                    "verdict=${scenario.verdict} evidence=offline-simulation e2e=not-run",
+            )
+        }
+    }
+
     private fun frontlineAxeKill(): Evaluation {
         val war = frontlineAxeWar(heroHealth = 10, rivalHeroHealth = 30, minionHealth = 3)
         val actions = heroAttackActions(war)
@@ -194,6 +255,27 @@ class PirateWarriorOfflineReplayTest {
                 Fixture(fields[0], fields[1], fields[2], fields[3], fields[4], fields[5])
             }
 
+    private fun loadScenarios(): List<Scenario> =
+        requireNotNull(javaClass.getResourceAsStream("/offline/pirate-warrior/online-like-scenarios.tsv"))
+            .bufferedReader()
+            .readLines()
+            .filter { it.isNotBlank() && !it.startsWith("#") }
+            .map { line ->
+                val fields = line.split('|')
+                require(fields.size == 5) { "Malformed scenario row: $line" }
+                Scenario(fields[0], fields[1], fields[2], fields[3], fields[4])
+            }
+
+    private fun scenarioEvaluation(scenario: Scenario, steps: List<ReplayStep>): ScenarioEvaluation {
+        val selectedSequence = steps.joinToString("+") { it.evaluation.selected }
+        return ScenarioEvaluation(
+            steps = steps,
+            selectedSequence = selectedSequence,
+            reason = scenario.reason,
+            matches = steps.all { it.evaluation.matches } && selectedSequence == scenario.expectedSequence,
+        )
+    }
+
     private fun testWar(turn: Int, mana: Int): War {
         val war = War()
         val me = Player(playerId = "me", war = war)
@@ -288,6 +370,26 @@ class PirateWarriorOfflineReplayTest {
         val expected: String,
         val evaluator: String,
         val runtimeReview: String,
+    )
+
+    private data class Scenario(
+        val id: String,
+        val outcome: String,
+        val expectedSequence: String,
+        val reason: String,
+        val verdict: String,
+    )
+
+    private data class ReplayStep(
+        val action: String,
+        val evaluation: Evaluation,
+    )
+
+    private data class ScenarioEvaluation(
+        val steps: List<ReplayStep>,
+        val selectedSequence: String,
+        val reason: String,
+        val matches: Boolean,
     )
 
     private data class Evaluation(

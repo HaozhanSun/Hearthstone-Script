@@ -16,3 +16,9 @@ The `PirateWarriorOfflineReplayTest` prints one structured line per fixture:
 `evaluator`, and `runtime_review`. The test checks model behavior only; the
 runtime review label remains `needs-review` because this workstream does not
 start E2E or deploy a runtime.
+
+`online-like-scenarios.tsv` contains two synthetic `LOST` replays and one
+synthetic `WON` replay. These outcomes are labels for offline scenario
+evaluation, not claims about a real match. The test prints each replay step as
+`action`, `reason`, `expected`, `verdict`, `evidence=offline-simulation`, and
+`e2e=not-run`.
