@@ -4,24 +4,24 @@ Coordinator worktree: `C:/Users/yzjsh/.codex/worktrees/ab8c/Hearthstone Copilot`
 
 Coordinator branch: `codex/overnight-release-integration`
 
-Current checkpoint: pending commit (runner `44921340` on readiness/sentinel lineage
-`e53685c4`, plus OCR provider contract fix `1d64115a`). Worktree is intended to
-remain clean between evidence checkpoints. No canonical runtime or E2E credit
-is assigned to this source until a higher-version single-tree deployment is
-verified.
+Current checkpoint: `bdd63ba7` adds the hub visual recovery guard on top of the
+single-tree release lineage. The latest canonical deployment is v4.16.138;
+the worktree is intended to remain clean between evidence checkpoints. No E2E
+credit is assigned until real-game evidence passes the completion gate.
 
 ## Ordered queue
 
-1. **Offline integration gate — passed; release-script correction pending**
+1. **Offline integration gate — passed**
    - Verify OCR provider regression tests together with readiness, DebugRun
      lease, runner contract, Power.log, and action guards.
    - The combined test selection passed 85/85 with 0 failures and 0 errors.
      Reports are under `hs-script-app/target/surefire-reports`.
-   - The inherited checked-in release script named a nonexistent
-     `PaddleXRankDetectorTest`; it is being corrected to use only tests present
-     in this complete tree and to include the OCR/runner guard tests.
+   - The checked-in release script uses only tests present in this complete
+     tree and includes the OCR/runner/screen-recovery guard tests.
+   - v4.16.138 checked-in build tests passed 119/119 with 0 failures and 0
+     errors; the full 8-module reactor passed BUILD SUCCESS.
 
-2. **Release/CU mutex — blocked pending reconciliation**
+2. **Release/CU mutex — v4.16.138 deployed and provenance verified**
    - Canonical manifest currently points to v4.16.135-local-20260901-011404PDT,
      SHA-256 `6fccd713db787691bb497659283cd3dbd80e00d6049ab12f603d1352fc795545`.
    - That artifact matches readiness owner target output and does not contain
@@ -44,8 +44,18 @@ verified.
    - Desktop, Start Menu, and Taskbar shortcuts all target
      `C:/Windows/System32/wscript.exe` with canonical
      `launch-as-admin.vbs`. Process gate was clear after deployment.
+   - v4.16.138 manifest selected
+     `hs-script_v4.16.138-local-20260901-015730PDT.jar` with JAR SHA-256
+     `facb17909e2656ff750ce49a0bf25f1e5d988dc7dff0f4ef85f68f9c9e1b99b5`.
+     Target and canonical JAR hashes match. ZIP SHA-256 is
+     `ea1992d6d5ab1dbea821a15b20fa71878a5bfec069ff78c91e3664ff60c9ab26`.
+     The ZIP contains both the selected JAR and `run-debug.ps1`; the runner
+     SHA-256 remains
+     `f5cb33ff2c81c85e02dfeba62a5e304a082b56e902346cf30eaa64d7c0cb4743`.
+     Class markers confirm OCR reconciliation, hub visual recovery, fresh
+     Power.log/CREATE_GAME readiness, and sentinel HWND handling.
 
-3. **Fresh DebugRun E2E — ready to start**
+3. **Fresh DebugRun E2E — ready to start on v4.16.138**
    - Start only after manifest/JAR/ZIP/runner/shortcut provenance is verified.
    - Every attempt gets a new run id and per-run ledger. Preserve all failed
      artifacts and append a gotcha on invalidation.
