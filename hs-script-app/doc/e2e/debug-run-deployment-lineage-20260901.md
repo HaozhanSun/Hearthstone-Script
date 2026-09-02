@@ -108,3 +108,38 @@ failures: 7 `DebugRunLeaseTest` cases plus `DebugRunUiContractTest`.
 
 This is source/test evidence only. No new package was produced or deployed,
 and no manifest, runtime, launcher, or shortcut was changed in this addendum.
+
+## OCR/Legacy baseline integration — 2026-09-01 22:15 PDT
+
+For handoff, the DebugRun source was re-integrated in a separate clean
+worktree from the PaddleX/Legacy OCR baseline `c3c250ba` (`Release v4.16.170
+with OCR tessdata packaging`). The integration branch is
+`codex/debugrun-ocr-baseline-integration`.
+
+The only changes relative to that baseline are the DebugRun source/UI wiring,
+its lease and UI tests, and the two DebugRun evidence documents. The
+`WorkTimeListener` conflict was resolved by retaining the baseline's
+`activeScheduleWindow` model and applying the DebugRun gate as:
+
+```text
+scheduledDuringWorkDate = ordinary schedule result
+isDuringWorkDate = effectiveCanWork(ordinary schedule result, debug lease active)
+```
+
+The compiled output was checked after testing: `DebugRunLease.class` and
+`DebugRunController.class` exist under `hs-script-app/target/classes`, and the
+copied `target/classes/fxml/main.fxml` contains the DebugRun checkbox,
+`DEBUG_RUN_MODE`, and `debugRunStatus`.
+
+Verification on this baseline integration:
+
+- focused DebugRun/UI reactor run: 8 tests passed, 0 failures;
+- schedule/jitter reactor run: 15 tests passed, 0 failures, including
+  `DebugRunLeaseTest`, `DebugRunUiContractTest`, `StartupRunWindowTest`, and
+  `WorkTimeJitterTest`;
+- final integration worktree was clean at commit
+  `5237c40e` before this handoff-only documentation update.
+
+This remains an offline integration checkpoint. It intentionally does not
+claim a new JAR, manifest update, canonical installation, shortcut update, or
+live E2E result. Those actions require the daytime release slot.
