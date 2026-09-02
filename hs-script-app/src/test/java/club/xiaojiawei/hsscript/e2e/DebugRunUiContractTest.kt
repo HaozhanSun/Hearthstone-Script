@@ -52,6 +52,10 @@ class DebugRunUiContractTest {
         val runner = moduleRoot.resolve(Path.of("src", "main", "resources", "bat", "run-debug.ps1"))
         assertTrue(Files.readString(runner).contains("-Dhs.script.debugrun.prearm=true"))
 
+        val deploy = Files.readString(Path.of("build-and-deploy.ps1"))
+        assertTrue(deploy.contains("run-debug.ps1"))
+        assertTrue(deploy.contains("debugRunnerSource"))
+
         val lease = moduleRoot.resolve(Path.of(
             "src",
             "main",

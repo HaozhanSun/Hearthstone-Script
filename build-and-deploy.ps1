@@ -15,6 +15,8 @@ $targetRoot = Join-Path $projectRoot 'hs-script-app\target'
 $strategyTarget = Join-Path $projectRoot 'hs-script-base-strategy-plugin\target\hs-script-base-strategy-plugin.jar'
 $cardPluginTarget = Join-Path $projectRoot 'hs-script-base-card-plugin\target\hs-script-base-card-plugin.jar'
 $cardSdkTarget = Join-Path $projectRoot 'hs-script-card-sdk\target\hs-script-card-sdk-1.3.0.jar'
+$debugRunnerSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\run-debug.ps1'
+$debugRunnerCmdSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\run-debug.cmd'
 $manifestPath = Join-Path $runtimeRoot 'deployment-manifest.json'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
@@ -56,6 +58,9 @@ if (-not (Test-Path -LiteralPath $pomPath -PathType Leaf)) { throw "pom.xml miss
 if (-not (Test-Path -LiteralPath $mavenWrapper -PathType Leaf)) { throw "Maven wrapper missing: $mavenWrapper" }
 if (-not (Test-Path -LiteralPath $runtimeRoot -PathType Container)) { throw "Runtime root missing: $runtimeRoot" }
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'hs-script-app\assembly.xml') -PathType Leaf)) { throw 'Full reactor assembly descriptor is missing' }
+foreach ($runner in @($debugRunnerSource, $debugRunnerCmdSource)) {
+    if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw "Debug runner source missing: $runner" }
+}
 
 $pomText = [System.IO.File]::ReadAllText($pomPath)
 $currentVersion = Get-PomVersion $pomText
@@ -147,6 +152,11 @@ try {
     Copy-Item -LiteralPath $cardPluginTarget -Destination (Join-Path $runtimePlugin 'hs-script-base-card-plugin.jar') -Force
     Copy-Item -LiteralPath $cardSdkTarget -Destination (Join-Path $runtimeLib 'hs-script-card-sdk-1.3.0.jar') -Force
     Copy-Item -LiteralPath $builtZip -Destination (Join-Path $runtimeRoot (Split-Path -Leaf $builtZip)) -Force
+    # The E2E runner is a release-side script rather than an assembly entry.
+    # Copy it explicitly so a new runner property cannot be stranded in the
+    # source tree while the runtime keeps an older script.
+    Copy-Item -LiteralPath $debugRunnerSource -Destination (Join-Path $runtimeRoot 'run-debug.ps1') -Force
+    Copy-Item -LiteralPath $debugRunnerCmdSource -Destination (Join-Path $runtimeRoot 'run-debug.cmd') -Force
 } finally {
     if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
 }
