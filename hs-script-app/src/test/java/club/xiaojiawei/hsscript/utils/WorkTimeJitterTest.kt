@@ -1,5 +1,7 @@
 package club.xiaojiawei.hsscript.utils
 
+import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
 import java.util.ArrayDeque
 import java.util.Random
@@ -94,5 +96,34 @@ class WorkTimeJitterTest {
         }
 
         assertEquals(12, drawCount)
+    }
+
+    @Test
+    fun `jittered endpoints can still form a next-day cross-midnight occurrence`() {
+        val random =
+            object : Random() {
+                private val values = ArrayDeque(listOf(111, 25))
+
+                override fun nextInt(bound: Int): Int = values.removeFirst()
+            }
+
+        val window =
+            WorkTimeJitter.jitterWindow(
+                start = LocalTime.of(23, 42),
+                end = LocalTime.of(0, 16, 59),
+                maxSeconds = 60,
+                random = random,
+            )
+        val occurrence = WorkTimeWindow.occurrence(LocalDate.of(2026, 8, 30), window.start, window.end)
+
+        assertEquals(51, window.startOffsetSeconds)
+        assertEquals(-35, window.endOffsetSeconds)
+        assertEquals(LocalTime.of(23, 42, 51), window.start)
+        assertEquals(LocalTime.of(0, 16, 24), window.end)
+        assertEquals(LocalDateTime.of(2026, 8, 30, 23, 42, 51), occurrence.start)
+        assertEquals(LocalDateTime.of(2026, 8, 31, 0, 16, 24), occurrence.end)
+        assertEquals("cross-midnight-next-day", occurrence.interpretation)
+        assertTrue(occurrence.contains(LocalDateTime.of(2026, 8, 30, 23, 50)))
+        assertTrue(occurrence.contains(LocalDateTime.of(2026, 8, 31, 0, 5)))
     }
 }

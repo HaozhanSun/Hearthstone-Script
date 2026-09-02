@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WorkTimeRuleSetTest {
@@ -68,5 +69,14 @@ class WorkTimeRuleSetTest {
         assertTrue(json.contains("00:18"))
         assertEquals("23:43", restoredWorkTime.startTime)
         assertEquals("00:18", restoredWorkTime.endTime)
+    }
+
+    @Test
+    fun `invalid work time text remains invalid instead of becoming midnight`() {
+        val workTime = WorkTime("not-a-time", "00:18")
+
+        assertNull(workTime.parseStartTime())
+        assertEquals("00:18", workTime.endTime)
+        assertEquals("00:18", WorkTime.pattern.format(workTime.parseEndTime()))
     }
 }

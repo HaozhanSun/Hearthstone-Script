@@ -13,6 +13,12 @@ object WorkTimeWindow {
         val start: LocalDateTime,
         val end: LocalDateTime,
     ) {
+        val crossesMidnight: Boolean
+            get() = end.toLocalDate().isAfter(scheduleDate)
+
+        val interpretation: String
+            get() = if (crossesMidnight) "cross-midnight-next-day" else "same-day"
+
         fun contains(now: LocalDateTime): Boolean = !now.isBefore(start) && !now.isAfter(end)
 
         fun secondsUntilStart(now: LocalDateTime): Long = Duration.between(now, start).seconds

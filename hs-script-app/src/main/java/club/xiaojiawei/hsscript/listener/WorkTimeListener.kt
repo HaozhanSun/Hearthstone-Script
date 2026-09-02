@@ -194,10 +194,14 @@ object WorkTimeListener {
                     maxSeconds = jitterSeconds,
                     random = Random(),
                 )
+                val occurrence = WorkTimeWindow.occurrence(date, window.start, window.end)
                 log.info {
                     "SCHEDULE_EFFECTIVE_WINDOW timestamp=${timestamp()} date=$date " +
                         "ruleSet=$ruleSetId ruleIndex=$ruleIndex " +
                         "planned=$baseStart-$baseEnd effective=${window.start}-${window.end} " +
+                        "interpretation=${occurrence.interpretation} " +
+                        "occurrence=${occurrence.start}-${occurrence.end} " +
+                        "durationMinutes=${occurrence.durationMinutes()} " +
                         "offsets=${window.startOffsetSeconds},${window.endOffsetSeconds}s " +
                         "maxJitterSeconds=$jitterSeconds"
                 }

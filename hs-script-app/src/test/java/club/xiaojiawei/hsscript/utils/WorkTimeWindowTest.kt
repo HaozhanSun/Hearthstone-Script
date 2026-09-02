@@ -49,9 +49,25 @@ class WorkTimeWindowTest {
 
         assertEquals(LocalDateTime.of(2026, 8, 29, 23, 43), occurrence.start)
         assertEquals(LocalDateTime.of(2026, 8, 30, 0, 18), occurrence.end)
+        assertTrue(occurrence.crossesMidnight)
+        assertEquals("cross-midnight-next-day", occurrence.interpretation)
         assertEquals(35, occurrence.durationMinutes())
         assertTrue(occurrence.contains(LocalDateTime.of(2026, 8, 30, 0, 10)))
         assertTrue(WorkTimeWindow.contains(LocalTime.of(0, 18), start, end))
+    }
+
+    @Test
+    fun `screenshot-like cross-midnight boundaries are active before and after midnight`() {
+        val occurrence = WorkTimeWindow.occurrence(
+            LocalDate.of(2026, 8, 30),
+            LocalTime.of(23, 42, 51),
+            LocalTime.of(0, 16, 24),
+        )
+
+        assertTrue(occurrence.contains(LocalDateTime.of(2026, 8, 30, 23, 50)))
+        assertTrue(occurrence.contains(LocalDateTime.of(2026, 8, 31, 0, 5)))
+        assertFalse(occurrence.contains(LocalDateTime.of(2026, 8, 31, 0, 20)))
+        assertEquals(33, occurrence.durationMinutes())
     }
 
     @Test
@@ -80,5 +96,22 @@ class WorkTimeWindowTest {
 
         assertEquals(71, WorkTimeWindow.gapMinutes(LocalTime.of(0, 18), LocalTime.of(1, 29)))
         assertEquals(71, Duration.between(previous.end, next.start).toMinutes())
+    }
+
+    @Test
+    fun `start equals end keeps legacy same-day point semantics`() {
+        val occurrence = WorkTimeWindow.occurrence(
+            LocalDate.of(2026, 8, 30),
+            LocalTime.of(3, 17),
+            LocalTime.of(3, 17),
+        )
+
+        assertEquals(LocalDateTime.of(2026, 8, 30, 3, 17), occurrence.start)
+        assertEquals(LocalDateTime.of(2026, 8, 30, 3, 17), occurrence.end)
+        assertFalse(occurrence.crossesMidnight)
+        assertEquals("same-day", occurrence.interpretation)
+        assertEquals(0, occurrence.durationMinutes())
+        assertTrue(occurrence.contains(LocalDateTime.of(2026, 8, 30, 3, 17)))
+        assertFalse(occurrence.contains(LocalDateTime.of(2026, 8, 30, 3, 17, 1)))
     }
 }
