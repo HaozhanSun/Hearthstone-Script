@@ -82,3 +82,29 @@ worktree, increment the root/app version, run the checked-in
 
 No live runner, matchmaking, Hearthstone process, or Computer Use action was
 started for this diagnosis or checkpoint.
+
+## Read-only runtime recheck — 2026-09-01 22:03 PDT
+
+The canonical runtime advanced after the original diagnosis, so the current
+manifest and JAR were rechecked without writing either one:
+
+- Manifest-selected artifact: `hs-script_v4.16.170-local-20260901-213855PDT.jar`.
+- Manifest generated at `2026-09-01 21:42:29 PDT`.
+- Manifest SHA-256 and actual JAR SHA-256 both equal
+  `448f8c7fd6db588e145a6f45ec6760ffacec938dcd70af26d03038b976204eab`.
+- ZIP scan of v4.16.170 found `DebugRunClassCount=0`; its `fxml/main.fxml`
+  has no `debugRunModeCheckBox`, `DEBUG_RUN_MODE`, or `debugRunStatus`.
+- The last known-good package remains v4.16.133-003823PDT; the first bad
+  package remains v4.16.133-004329PDT.
+
+The integration worktree is still clean at `2ef1d4ae`, with the DebugRun
+source integration at `9a79d3b2`. A module-level source contract test was added
+at `hs-script-app/src/test/java/club/xiaojiawei/hsscript/e2e/DebugRunUiContractTest.kt`
+so that a build cannot silently omit the checkbox/config wiring while the
+lease code still compiles. It checks the FXML control, its `DEBUG_RUN_MODE`
+binding and `toggleDebugRun` handler, the disabled-by-default config, and the
+30-minute lease gate. The focused reactor verification ran 8 tests with 0
+failures: 7 `DebugRunLeaseTest` cases plus `DebugRunUiContractTest`.
+
+This is source/test evidence only. No new package was produced or deployed,
+and no manifest, runtime, launcher, or shortcut was changed in this addendum.
