@@ -90,8 +90,31 @@ object MouseUtil {
      * the result in the trace so focus failures are distinguishable from bad
      * coordinates.
      */
-    private fun focusE2EWindow(hwnd: HWND): Boolean = runCatching {
+    private fun focusE2EWindow(
+        hwnd: HWND,
+        allowE2EWindowRefresh: Boolean = true,
+    ): Boolean = runCatching {
         if (!User32.INSTANCE.IsWindow(hwnd)) {
+            // E2E deliberately keeps the discovered HWND stable to avoid a
+            // native poll on every action.  That is safe while the client is
+            // alive, but a manual or recovery restart replaces the Unity
+            // window and leaves the old handle unusable.  Refresh only at the
+            // point an input is already being rejected, then retry this one
+            // focus request against the newly discovered live window.
+            if (allowE2EWindowRefresh && e2eInputEnabled()) {
+                val refreshed = GameUtil.findGameHWND()
+                if (refreshed != null &&
+                    Pointer.nativeValue(refreshed.pointer) != Pointer.nativeValue(hwnd.pointer) &&
+                    User32.INSTANCE.IsWindow(refreshed)
+                ) {
+                    ScriptStatus.gameHWND = refreshed
+                    log.info {
+                        "E2E_INPUT_WINDOW_REFRESH old=$hwnd refreshed=$refreshed " +
+                            "reason=invalid-window-before-input"
+                    }
+                    return@runCatching focusE2EWindow(refreshed, allowE2EWindowRefresh = false)
+                }
+            }
             log.warn { "E2E_INPUT_ROBOT_FOREGROUND_UNAVAILABLE hwnd=$hwnd reason=invalid-window" }
             return@runCatching false
         }

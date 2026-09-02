@@ -33,16 +33,25 @@ object DeckStrategyManager {
     var currentDeckStrategy
         set(value) = currentDeckStrategyProperty.set(value)
         get():DeckStrategy? {
-            return configuredDeckStrategy()
+            return effectiveSelection(
+                highPrioritySchedule = ConfigUtil.getBoolean(ConfigEnum.WORK_TIME_RULE_HIGH_PRIORITY),
+                ordinaryScheduleActive = WorkTimeListener.isInsideConfiguredSchedule(),
+                scheduleSelection = WorkTimeListener.closestWorkTimeRule?.strategyId?.let { strategyId ->
+                    deckStrategies.find { it.id() == strategyId }
+                },
+                userSelection = currentDeckStrategyProperty.get(),
+            )
         }
 
     var currentRunMode
         set(value) = currentRunModeProperty.set(value)
         get():RunModeEnum? {
-            if (ConfigUtil.getBoolean(ConfigEnum.WORK_TIME_RULE_HIGH_PRIORITY)) {
-                return WorkTimeListener.closestWorkTimeRule?.runMode
-            }
-            return currentRunModeProperty.get()
+            return effectiveSelection(
+                highPrioritySchedule = ConfigUtil.getBoolean(ConfigEnum.WORK_TIME_RULE_HIGH_PRIORITY),
+                ordinaryScheduleActive = WorkTimeListener.isInsideConfiguredSchedule(),
+                scheduleSelection = WorkTimeListener.closestWorkTimeRule?.runMode,
+                userSelection = currentRunModeProperty.get(),
+            )
         }
 
     /**
@@ -97,13 +106,21 @@ object DeckStrategyManager {
             }.toList()
     }
 
-    private fun configuredDeckStrategy(): DeckStrategy? {
-        if (ConfigUtil.getBoolean(ConfigEnum.WORK_TIME_RULE_HIGH_PRIORITY)) {
-            return WorkTimeListener.closestWorkTimeRule?.strategyId?.let { strategyId ->
-                deckStrategies.find { it.id() == strategyId }
-            }
-        }
-        return currentDeckStrategyProperty.get()
+    /**
+     * A high-priority work-time rule is authoritative only while the ordinary
+     * schedule is actually active. DebugRun intentionally bypasses that gate
+     * without activating a preset rule; in that case the persisted UI choice
+     * remains the only valid deck/mode selection.
+     */
+    internal fun <T> effectiveSelection(
+        highPrioritySchedule: Boolean,
+        ordinaryScheduleActive: Boolean,
+        scheduleSelection: T?,
+        userSelection: T?,
+    ): T? = if (highPrioritySchedule && ordinaryScheduleActive) {
+        scheduleSelection ?: userSelection
+    } else {
+        userSelection
     }
 
     private fun reload() {
