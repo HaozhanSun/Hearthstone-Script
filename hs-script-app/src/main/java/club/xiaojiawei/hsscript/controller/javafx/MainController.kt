@@ -94,7 +94,7 @@ class MainController : MainView() {
     ) {
         versionText.text = "当前版本：" + VersionListener.currentRelease.tagName
         DebugRunController.resetAfterRestart()
-        debugRunModeCheckBox.isSelected = false
+        debugRunModeCheckBox.isSelected = DebugRunController.isActive()
         updateDebugRunStatus()
         addListener()
         initModeAndDeck()

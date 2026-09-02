@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit
 /** Application facade for the one-shot debug/test work-time override. */
 object DebugRunController {
     const val MAX_DURATION_MILLIS = DebugRunLease.MAX_DURATION_MILLIS
+    const val PREARM_PROPERTY = "hs.script.debugrun.prearm"
     private val timestampFormatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME.withZone(ZoneOffset.UTC)
     private val metadataLock = Any()
     private var activeRunId: String? = null
@@ -49,6 +50,30 @@ object DebugRunController {
         snapshot
     }
 
+    /**
+     * Arms the one-shot lease before WorkTimeListener is launched.  This is
+     * intentionally opt-in and is used by the isolated E2E runner so its
+     * first schedule poll cannot create a startup-window lease or emit the
+     * ordinary outside-hours path before the DebugRun gate exists.
+     *
+     * Unlike [enable], this method does not call back into WorkTimeListener:
+     * callers invoke it before that listener is started.  The first scheduled
+     * poll observes the already-active lease and performs the normal runtime
+     * reconciliation and suppression logging.
+     */
+    fun prearmBeforeScheduleChecks(): Boolean {
+        if (System.getProperty(PREARM_PROPERTY) != "true") return false
+        synchronized(metadataLock) {
+            if (lease.isActiveWithoutExpiring()) return true
+            val snapshot = lease.enable()
+            activeRunId = UUID.randomUUID().toString()
+            logSnapshot("DEBUG_OVERRIDE_PREARMED", snapshot, "process-prearm", activeRunId)
+            logSnapshot("DEBUG_OVERRIDE_ACTIVE", snapshot, "process-prearm", activeRunId)
+            logRuntime("ACTIVE", snapshot, activeRunId)
+            return true
+        }
+    }
+
     fun disable(reason: String = "toggle-off"): DebugRunLease.Snapshot = synchronized(metadataLock) {
         val runId = activeRunId
         val snapshot = lease.disable()
@@ -79,6 +104,10 @@ object DebugRunController {
     /** A persisted checkbox must never resurrect a live lease after restart. */
     fun resetAfterRestart() {
         synchronized(metadataLock) {
+            if (System.getProperty(PREARM_PROPERTY) == "true" && lease.isActiveWithoutExpiring()) {
+                log.info { "DEBUG_OVERRIDE_UI_PREARM_RETAINED runId=${activeRunId ?: "unknown"}" }
+                return
+            }
             val snapshot = lease.resetForRestart()
             ConfigUtil.putBoolean(ConfigEnum.DEBUG_RUN_MODE, false)
             logSnapshot("DEBUG_OVERRIDE_DISABLED", snapshot, "process-restart-no-live-lease", activeRunId)

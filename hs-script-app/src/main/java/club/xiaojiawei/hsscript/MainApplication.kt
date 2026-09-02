@@ -16,6 +16,7 @@ import club.xiaojiawei.hsscript.listener.VersionListener
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.DebugRunController
 import club.xiaojiawei.hsscript.status.RuntimeSafety
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.TaskManager
@@ -186,6 +187,9 @@ class MainApplication : Application() {
         }
         CardAction.commonActionFactory = Supplier { DEFAULT.createNewInstance() }
         Platform.setImplicitExit(false)
+        // The isolated E2E runner may pre-arm DebugRun before the first
+        // WorkTimeListener poll.  Normal launches remain unchanged.
+        DebugRunController.prearmBeforeScheduleChecks()
         launchService()
         LifecycleTrace.start()
         CardGroupUtil.applyEnabledCardGroups()

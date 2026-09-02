@@ -493,7 +493,11 @@ object WorkTimeListener {
 
                 // 检查时间有效性
                 if (startTime > endTime) {
-                    if (overrideInfoAtStart != null) {
+                    // A concurrent UI toggle can arm DebugRun while this
+                    // serialized schedule scan is in progress.  Suppress the
+                    // misleading warning if the override is active at either
+                    // end of the scan, and leave a structured marker below.
+                    if (overrideInfoAtStart != null || currentScheduleOverride() != null) {
                         suppressionReasons += "invalid-window"
                     } else {
                         log.warn { "工作时间规则无效：开始时间 $startTime 晚于结束时间 $endTime" }

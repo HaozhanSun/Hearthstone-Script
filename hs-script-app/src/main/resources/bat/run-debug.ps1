@@ -199,6 +199,7 @@ while ($true) {
         "-XX:HeapDumpPath=log",
         "-XX:ErrorFile=log\hs_err_pid%p.log",
         "-Dhs.script.autostart=true",
+        "-Dhs.script.debugrun.prearm=true",
         "-Dhs.script.e2e=true",
         "-Dhs.script.e2e.win-required=true",
         "-Dhs.script.e2e.skip-inject=true",

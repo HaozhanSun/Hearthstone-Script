@@ -37,6 +37,21 @@ class DebugRunUiContractTest {
         assertTrue(configText.contains("DEBUG_RUN_MODE"))
         assertTrue(configText.contains("defaultValueInitializer = { FALSE_STR }"))
 
+        val appText = Files.readString(moduleRoot.resolve(Path.of(
+            "src", "main", "java", "club", "xiaojiawei", "hsscript", "MainApplication.kt",
+        )))
+        assertTrue(appText.contains("prearmBeforeScheduleChecks()"))
+        assertTrue(appText.indexOf("prearmBeforeScheduleChecks()") < appText.indexOf("launchService()"))
+
+        val controllerText = Files.readString(moduleRoot.resolve(Path.of(
+            "src", "main", "java", "club", "xiaojiawei", "hsscript", "status", "DebugRunController.kt",
+        )))
+        assertTrue(controllerText.contains("PREARM_PROPERTY"))
+        assertTrue(controllerText.contains("DEBUG_OVERRIDE_UI_PREARM_RETAINED"))
+
+        val runner = moduleRoot.resolve(Path.of("src", "main", "resources", "bat", "run-debug.ps1"))
+        assertTrue(Files.readString(runner).contains("-Dhs.script.debugrun.prearm=true"))
+
         val lease = moduleRoot.resolve(Path.of(
             "src",
             "main",
