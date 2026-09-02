@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.github.xjw580.Hearthstone-Script</groupId>
         <artifactId>hs-script</artifactId>
-        <version>v4.16.178-local-20260902-040944PDT</version>
+        <version>v4.16.180-local-20260902-082137PDT</version>
     </parent>
 
     <groupId>com.github.xjw580</groupId>
