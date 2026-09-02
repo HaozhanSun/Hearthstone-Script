@@ -50,7 +50,13 @@ class DebugRunUiContractTest {
         assertTrue(controllerText.contains("DEBUG_OVERRIDE_UI_PREARM_RETAINED"))
 
         val runner = moduleRoot.resolve(Path.of("src", "main", "resources", "bat", "run-debug.ps1"))
-        assertTrue(Files.readString(runner).contains("-Dhs.script.debugrun.prearm=true"))
+        val runnerText = Files.readString(runner)
+        assertTrue(runnerText.contains("-Dhs.script.debugrun.prearm=true"))
+        assertTrue(runnerText.contains("deployment-manifest.json"))
+        assertTrue(runnerText.contains("manifest.appJar"))
+        assertTrue(runnerText.contains("manifest.appJarSha256"))
+        assertTrue(runnerText.contains("Get-FileHash"))
+        assertTrue(!runnerText.contains("\$jar = Get-ChildItem"))
 
         val deploy = Files.readString(Path.of("build-and-deploy.ps1"))
         assertTrue(deploy.contains("run-debug.ps1"))

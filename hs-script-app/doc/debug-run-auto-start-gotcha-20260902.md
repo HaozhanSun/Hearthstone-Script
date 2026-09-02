@@ -18,3 +18,9 @@ warning behavior. A fresh verification must still record a separate
 outside-hours baseline, then exercise the visible checkbox and prove the
 structured `SCHEDULE_OVERRIDE_SUPPRESSED_OUTSIDE_HOURS` marker on the new
 lineage.
+
+The release runtime also contains older versioned JARs. A 2026-09-02 fresh
+attempt demonstrated that selecting the JAR by `LastWriteTime` can start an
+older file when build timestamps are normalized. The debug runner must select
+the exact `appJar` named by `deployment-manifest.json` and verify its
+`appJarSha256`; file timestamps are not a release-selection signal.

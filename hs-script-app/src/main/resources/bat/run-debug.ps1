@@ -2,13 +2,27 @@ $ErrorActionPreference = "Stop"
 
 $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $javaPath = "C:\Program Files\Java\jdk-25.0.4\bin\java.exe"
-$jar = Get-ChildItem -LiteralPath $scriptDirectory -Filter "hs-script_*.jar" -File |
-    Where-Object { $_.Name -notmatch "\.before-|\.bak" } |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
-if (-not $jar) { throw "No deployed hs-script JAR was found in: $scriptDirectory" }
-$jarName = $jar.Name
-$jarPath = $jar.FullName
+$manifestPath = Join-Path $scriptDirectory "deployment-manifest.json"
+if (-not (Test-Path -LiteralPath $manifestPath)) {
+    throw "The deployment manifest was not found: $manifestPath"
+}
+$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+$jarName = [string]$manifest.appJar
+if ([string]::IsNullOrWhiteSpace($jarName)) {
+    throw "The deployment manifest does not specify appJar: $manifestPath"
+}
+$jarPath = Join-Path $scriptDirectory $jarName
+if (-not (Test-Path -LiteralPath $jarPath -PathType Leaf)) {
+    throw "The manifest-selected hs-script JAR was not found: $jarPath"
+}
+$expectedJarHash = ([string]$manifest.appJarSha256).ToLowerInvariant()
+if (-not [string]::IsNullOrWhiteSpace($expectedJarHash)) {
+    $actualJarHash = (Get-FileHash -LiteralPath $jarPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualJarHash -ne $expectedJarHash) {
+        throw "The manifest-selected JAR hash does not match. jar=$jarName expected=$expectedJarHash actual=$actualJarHash"
+    }
+}
+$deploymentId = [string]$manifest.deploymentId
 $logDirectory = Join-Path $scriptDirectory "log"
 $scriptLog = Join-Path $logDirectory "hs_script.log"
 $consoleLog = Join-Path $logDirectory "java-console-debug.log"
@@ -27,6 +41,8 @@ Set-Content -Path $consoleLog -Value @(
     "==== debug launcher start $(Get-Date -Format o) ====",
     "JAVA=$javaPath",
     "JAR=$jarName",
+    "DEPLOYMENT_ID=$deploymentId",
+    "JAR_SHA256=$expectedJarHash",
     "E2E watchdog max restarts=$maxRestarts",
     "E2E run id=$runId",
     "E2E wins required=$gamesRequired",
