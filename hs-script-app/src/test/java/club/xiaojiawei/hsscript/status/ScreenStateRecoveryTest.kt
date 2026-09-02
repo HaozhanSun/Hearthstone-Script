@@ -68,4 +68,17 @@ class ScreenStateRecoveryTest {
         assertTrue(ScreenStateRecovery.looksLikeLoadingVisual(0.499, 0.195, 0.01))
         assertFalse(ScreenStateRecovery.looksLikeLoadingVisual(0.069, 0.127, 0.54))
     }
+
+    @Test
+    fun `restarts only a confirmed stalled reconnect warning after the recovery threshold`() {
+        val warning = "本次连接较平常花费了更多时间。请检查你的网络连接。"
+        assertTrue(ScreenStateRecovery.looksLikeStalledReconnectLoadingText(warning))
+        assertEquals("LOADING", ScreenStateRecovery.classifyForTest(warning))
+        assertFalse(ScreenStateRecovery.looksLikeStalledReconnectLoadingText("正在加载，请稍候"))
+
+        val reconnectAt = 10_000L
+        assertFalse(ScreenStateRecovery.shouldRestartStalledReconnectForTest(reconnectAt, 129_999L))
+        assertTrue(ScreenStateRecovery.shouldRestartStalledReconnectForTest(reconnectAt, 130_000L))
+        assertFalse(ScreenStateRecovery.shouldRestartStalledReconnectForTest(0L, 999_999L))
+    }
 }

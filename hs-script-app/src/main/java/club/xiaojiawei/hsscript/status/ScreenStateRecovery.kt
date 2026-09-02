@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscript.bean.TesseractEx
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
+import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.strategy.mode.LoginModeStrategy
@@ -42,7 +43,14 @@ object ScreenStateRecovery {
     private const val RESULT_CONTINUE_GRAY_LIGHT_MIN = 0.025
     private const val RESULT_BANNER_LOW_SATURATION_MIN = 0.30
     private const val RECONNECT_RETRY_INTERVAL_MS = 60_000L
+    /**
+     * The client displays a distinct slow-connection warning only after a
+     * reconnect attempt. Give it two minutes before using the established
+     * client restart path.
+     */
+    private const val STALLED_RECONNECT_LOADING_RESTART_MS = 120_000L
     private val reconnectAttemptAt = AtomicLong(0L)
+    private val reconnectAcceptedAt = AtomicLong(0L)
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
@@ -394,6 +402,9 @@ object ScreenStateRecovery {
         if (looksLikeReconnectText(text)) {
             return Detection(ScreenKind.RECONNECT, ModeEnum.LOGIN, 96, "reconnect-disconnected-text")
         }
+        if (looksLikeStalledReconnectLoadingText(text)) {
+            return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 95, "reconnect-slow-loading-text")
+        }
         if (looksLikeLoadingText(text)) {
             return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 88, "loading-text")
         }
@@ -464,6 +475,23 @@ object ScreenStateRecovery {
             text.contains("读取中") ||
             text.contains("请稍候")
     }
+
+    /**
+     * Keep the post-reconnect warning separate from ordinary loading so
+     * matchmaking and normal scene transitions never trigger a restart.
+     */
+    internal fun looksLikeStalledReconnectLoadingText(ocrText: String): Boolean {
+        val text = ocrText.replace(Regex("\\s+"), "")
+        return text.contains("本次连接较平常花费了更多时间") &&
+            text.contains("检查你的网络连接")
+    }
+
+    internal fun shouldRestartStalledReconnectForTest(reconnectStartedAt: Long, now: Long): Boolean =
+        shouldRestartStalledReconnect(reconnectStartedAt, now)
+
+    private fun shouldRestartStalledReconnect(reconnectStartedAt: Long, now: Long): Boolean =
+        reconnectStartedAt > 0L && now >= reconnectStartedAt &&
+            now - reconnectStartedAt >= STALLED_RECONNECT_LOADING_RESTART_MS
 
     internal fun looksLikeLoadingVisual(
         centralDarkRatio: Double,
@@ -620,6 +648,9 @@ object ScreenStateRecovery {
                                 "SCREEN_RECOVERY_RECONNECT_DISPATCHED input=recovery-sendinput " +
                                     "accepted=$accepted"
                             }
+                            if (accepted) {
+                                reconnectAcceptedAt.set(System.currentTimeMillis())
+                            }
                         } else {
                             log.info { "SCREEN_RECOVERY_RECONNECT_SKIPPED reason=state-changed" }
                         }
@@ -648,7 +679,25 @@ object ScreenStateRecovery {
 
             ScreenKind.LOADING -> {
                 Mode.recover(ModeEnum.STARTUP, "visible-loading-screen", enterStrategy = false)
-                log.info { "SCREEN_RECOVERY_APPLIED screen=LOADING action=WAIT_FOR_CLIENT" }
+                val now = System.currentTimeMillis()
+                val reconnectStartedAt = reconnectAcceptedAt.get()
+                if (detection.evidence == "reconnect-slow-loading-text" &&
+                    shouldRestartStalledReconnect(reconnectStartedAt, now) &&
+                    reconnectAcceptedAt.compareAndSet(reconnectStartedAt, 0L)
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_APPLIED screen=LOADING action=RESTART_CLIENT " +
+                            "reason=stalled-reconnect-loading elapsedMs=${now - reconnectStartedAt} " +
+                            "thresholdMs=$STALLED_RECONNECT_LOADING_RESTART_MS"
+                    }
+                    // Reuse the fatal-error recovery primitive. It pauses
+                    // input, launches a fresh client, then lets the starter
+                    // rediscover that window. Generic loading never reaches
+                    // this path.
+                    Core.restart()
+                } else {
+                    log.info { "SCREEN_RECOVERY_APPLIED screen=LOADING action=WAIT_FOR_CLIENT" }
+                }
             }
 
             else -> {
