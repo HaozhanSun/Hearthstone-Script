@@ -71,6 +71,53 @@ const val DEFAULT_DECK_STRATEGY_ID = "e71234fa-1-radical-deck-97e9-1f4e126cd33b"
 private const val FALSE_STR = false.toString()
 private const val TRUE_STR = true.toString()
 
+private fun defaultWorkTimeRule(
+    startTime: String,
+    endTime: String,
+): WorkTimeRule =
+    WorkTimeRule(
+        WorkTime(startTime, endTime),
+        DEFAULT_OPERATIONS.toSet(),
+        DEFAULT_RUN_MODE_ENUM,
+        DEFAULT_DECK_STRATEGY_ID,
+        DEFAULT_DECK_POS.toSet(),
+        true,
+    )
+
+private fun defaultRandomAllDayWorkTimeRulesOne(): List<WorkTimeRule> =
+    listOf(
+        defaultWorkTimeRule("01:29", "02:03"),
+        defaultWorkTimeRule("03:18", "03:55"),
+        defaultWorkTimeRule("05:07", "05:31"),
+        defaultWorkTimeRule("06:46", "07:21"),
+        defaultWorkTimeRule("08:39", "09:07"),
+        defaultWorkTimeRule("10:16", "10:53"),
+        defaultWorkTimeRule("12:08", "12:41"),
+        defaultWorkTimeRule("14:02", "14:29"),
+        defaultWorkTimeRule("15:49", "16:27"),
+        defaultWorkTimeRule("17:42", "18:16"),
+        defaultWorkTimeRule("19:31", "20:09"),
+        defaultWorkTimeRule("21:28", "22:02"),
+        defaultWorkTimeRule("23:43", "00:17"),
+    )
+
+private fun defaultRandomAllDayWorkTimeRulesTwo(): List<WorkTimeRule> =
+    listOf(
+        defaultWorkTimeRule("01:22", "01:58"),
+        defaultWorkTimeRule("03:09", "03:33"),
+        defaultWorkTimeRule("04:49", "05:27"),
+        defaultWorkTimeRule("06:38", "07:13"),
+        defaultWorkTimeRule("08:32", "09:04"),
+        defaultWorkTimeRule("10:21", "10:59"),
+        defaultWorkTimeRule("12:18", "12:44"),
+        defaultWorkTimeRule("14:07", "14:39"),
+        defaultWorkTimeRule("15:54", "16:31"),
+        defaultWorkTimeRule("17:47", "18:19"),
+        defaultWorkTimeRule("19:38", "20:11"),
+        defaultWorkTimeRule("21:33", "22:09"),
+        defaultWorkTimeRule("23:26", "00:01"),
+    )
+
 enum class ConfigEnum(
     val group: ConfigGroup,
     private var defaultValueInitializer: (() -> String)? = null,
@@ -102,70 +149,12 @@ enum class ConfigEnum(
                 listOf(
                     WorkTimeRuleSet(
                         "预设1",
-                        listOf(
-                            WorkTimeRule(
-                                DEFAULT_WORK_TIME.clone(),
-                                DEFAULT_OPERATIONS.toSet(),
-                                DEFAULT_RUN_MODE_ENUM,
-                                DEFAULT_DECK_STRATEGY_ID,
-                                DEFAULT_DECK_POS.toSet(),
-                                true,
-                            ),
-                            WorkTimeRule(
-                                WorkTime("00:00", "06:30"),
-                                DEFAULT_OPERATIONS.toSet(),
-                                DEFAULT_RUN_MODE_ENUM,
-                                DEFAULT_DECK_STRATEGY_ID,
-                                DEFAULT_DECK_POS.toSet(),
-                                false,
-                            ),
-                            WorkTimeRule(
-                                WorkTime("12:30", "13:50"),
-                                DEFAULT_OPERATIONS.toSet(),
-                                DEFAULT_RUN_MODE_ENUM,
-                                DEFAULT_DECK_STRATEGY_ID,
-                                DEFAULT_DECK_POS.toSet(),
-                                false,
-                            ),
-                            WorkTimeRule(
-                                WorkTime("20:00", "23:59"),
-                                DEFAULT_OPERATIONS.toSet(),
-                                DEFAULT_RUN_MODE_ENUM,
-                                DEFAULT_DECK_STRATEGY_ID,
-                                DEFAULT_DECK_POS.toSet(),
-                                false,
-                            ),
-                        ),
+                        defaultRandomAllDayWorkTimeRulesOne(),
                         WORK_TIME_RULE_PRESETS_ONE,
                     ),
                     WorkTimeRuleSet(
                         "预设2",
-                        listOf(
-                            WorkTimeRule(
-                                DEFAULT_WORK_TIME.clone(),
-                                DEFAULT_OPERATIONS.toSet(),
-                                DEFAULT_RUN_MODE_ENUM,
-                                DEFAULT_DECK_STRATEGY_ID,
-                                DEFAULT_DECK_POS.toSet(),
-                                true,
-                            ),
-                            WorkTimeRule(
-                                WorkTime("00:00", "08:00"),
-                                DEFAULT_OPERATIONS.toSet(),
-                                DEFAULT_RUN_MODE_ENUM,
-                                DEFAULT_DECK_STRATEGY_ID,
-                                DEFAULT_DECK_POS.toSet(),
-                                false,
-                            ),
-                            WorkTimeRule(
-                                WorkTime("18:00", "23:59"),
-                                DEFAULT_OPERATIONS.toSet(),
-                                DEFAULT_RUN_MODE_ENUM,
-                                DEFAULT_DECK_STRATEGY_ID,
-                                DEFAULT_DECK_POS.toSet(),
-                                false,
-                            ),
-                        ),
+                        defaultRandomAllDayWorkTimeRulesTwo(),
                         WORK_TIME_RULE_PRESETS_TWO,
                     ),
                     WorkTimeRuleSet(
