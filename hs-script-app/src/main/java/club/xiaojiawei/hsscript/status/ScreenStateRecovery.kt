@@ -45,12 +45,14 @@ object ScreenStateRecovery {
     private const val RECONNECT_RETRY_INTERVAL_MS = 60_000L
     /**
      * The client displays a distinct slow-connection warning only after a
-     * reconnect attempt. Give it two minutes before using the established
-     * client restart path.
+     * reconnect attempt. A fresh script can attach after that click, so its
+     * first observation of the same exact warning also starts this timer.
+     * Give it two minutes before using the established client restart path.
      */
     private const val STALLED_RECONNECT_LOADING_RESTART_MS = 120_000L
     private val reconnectAttemptAt = AtomicLong(0L)
     private val reconnectAcceptedAt = AtomicLong(0L)
+    private val slowReconnectWarningObservedAt = AtomicLong(0L)
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
@@ -489,9 +491,37 @@ object ScreenStateRecovery {
     internal fun shouldRestartStalledReconnectForTest(reconnectStartedAt: Long, now: Long): Boolean =
         shouldRestartStalledReconnect(reconnectStartedAt, now)
 
+    internal fun stalledReconnectAnchorForTest(
+        acceptedReconnectAt: Long,
+        observedWarningAt: Long,
+        now: Long,
+    ): Long = stalledReconnectAnchor(acceptedReconnectAt, observedWarningAt, now)
+
     private fun shouldRestartStalledReconnect(reconnectStartedAt: Long, now: Long): Boolean =
         reconnectStartedAt > 0L && now >= reconnectStartedAt &&
             now - reconnectStartedAt >= STALLED_RECONNECT_LOADING_RESTART_MS
+
+    private fun stalledReconnectAnchor(
+        acceptedReconnectAt: Long,
+        observedWarningAt: Long,
+        now: Long,
+    ): Long = acceptedReconnectAt.takeIf { it > 0L } ?: observedWarningAt.takeIf { it > 0L } ?: now
+
+    private fun firstSlowReconnectWarningAt(now: Long): Long {
+        while (true) {
+            val previous = slowReconnectWarningObservedAt.get()
+            if (previous > 0L) return previous
+            if (slowReconnectWarningObservedAt.compareAndSet(0L, now)) return now
+        }
+    }
+
+    private fun consumeStalledReconnectAnchor(acceptedReconnectAt: Long, startedAt: Long): Boolean {
+        return if (acceptedReconnectAt > 0L) {
+            reconnectAcceptedAt.compareAndSet(acceptedReconnectAt, 0L)
+        } else {
+            slowReconnectWarningObservedAt.compareAndSet(startedAt, 0L)
+        }
+    }
 
     internal fun looksLikeLoadingVisual(
         centralDarkRatio: Double,
@@ -594,6 +624,9 @@ object ScreenStateRecovery {
             log.warn { "SCREEN_RECOVERY_SKIPPED reason=war-started detected=${detection.kind.code}" }
             return false
         }
+        if (detection.kind != ScreenKind.LOADING) {
+            slowReconnectWarningObservedAt.set(0L)
+        }
 
         when (detection.kind) {
             ScreenKind.DECK_SELECTION -> {
@@ -680,10 +713,20 @@ object ScreenStateRecovery {
             ScreenKind.LOADING -> {
                 Mode.recover(ModeEnum.STARTUP, "visible-loading-screen", enterStrategy = false)
                 val now = System.currentTimeMillis()
-                val reconnectStartedAt = reconnectAcceptedAt.get()
+                val acceptedReconnectAt = reconnectAcceptedAt.get()
+                val observedWarningAt = if (acceptedReconnectAt <= 0L &&
+                    detection.evidence == "reconnect-slow-loading-text"
+                ) {
+                    firstSlowReconnectWarningAt(now)
+                } else 0L
+                val reconnectStartedAt = stalledReconnectAnchor(
+                    acceptedReconnectAt,
+                    observedWarningAt,
+                    now,
+                )
                 if (detection.evidence == "reconnect-slow-loading-text" &&
                     shouldRestartStalledReconnect(reconnectStartedAt, now) &&
-                    reconnectAcceptedAt.compareAndSet(reconnectStartedAt, 0L)
+                    consumeStalledReconnectAnchor(acceptedReconnectAt, reconnectStartedAt)
                 ) {
                     log.warn {
                         "SCREEN_RECOVERY_APPLIED screen=LOADING action=RESTART_CLIENT " +

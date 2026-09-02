@@ -70,7 +70,7 @@ class ScreenStateRecoveryTest {
     }
 
     @Test
-    fun `restarts only a confirmed stalled reconnect warning after the recovery threshold`() {
+    fun `restarts a confirmed stalled reconnect warning after the recovery threshold`() {
         val warning = "本次连接较平常花费了更多时间。请检查你的网络连接。"
         assertTrue(ScreenStateRecovery.looksLikeStalledReconnectLoadingText(warning))
         assertEquals("LOADING", ScreenStateRecovery.classifyForTest(warning))
@@ -80,5 +80,11 @@ class ScreenStateRecoveryTest {
         assertFalse(ScreenStateRecovery.shouldRestartStalledReconnectForTest(reconnectAt, 129_999L))
         assertTrue(ScreenStateRecovery.shouldRestartStalledReconnectForTest(reconnectAt, 130_000L))
         assertFalse(ScreenStateRecovery.shouldRestartStalledReconnectForTest(0L, 999_999L))
+
+        // A script that attaches after the previous process clicked reconnect
+        // must arm the timer from its first explicit slow-reconnect warning.
+        assertEquals(10_000L, ScreenStateRecovery.stalledReconnectAnchorForTest(10_000L, 20_000L, 30_000L))
+        assertEquals(20_000L, ScreenStateRecovery.stalledReconnectAnchorForTest(0L, 20_000L, 30_000L))
+        assertEquals(30_000L, ScreenStateRecovery.stalledReconnectAnchorForTest(0L, 0L, 30_000L))
     }
 }
