@@ -6,7 +6,10 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.WindowEnum
 import club.xiaojiawei.hsscript.status.DebugRunController
 import club.xiaojiawei.hsscript.status.DebugRunLease
+import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.ScheduleOverrideInfo
+import club.xiaojiawei.hsscript.status.ScheduleOverrideLogGate
 import club.xiaojiawei.hsscript.status.TaskManager
 import club.xiaojiawei.hsscript.status.WorkTimeStatus
 import club.xiaojiawei.hsscript.utils.ConfigUtil
@@ -16,6 +19,7 @@ import club.xiaojiawei.hsscript.utils.WorkTimeJitter
 import club.xiaojiawei.hsscript.utils.StartupRunWindow
 import club.xiaojiawei.hsscript.utils.go
 import club.xiaojiawei.hsscript.utils.runUI
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscriptbase.bean.LRunnable
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
@@ -23,6 +27,7 @@ import club.xiaojiawei.hsscriptbase.util.isFalse
 import javafx.beans.property.SimpleBooleanProperty
 import javafx.beans.value.ChangeListener
 import javafx.stage.Stage
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZonedDateTime
@@ -53,13 +58,74 @@ object WorkTimeListener {
     private val jitterCache = mutableMapOf<JitterKey, WorkTimeJitter.Window>()
     private var jitterCacheObservedToday: LocalDate? = null
     private val startupRunWindow = StartupRunWindow()
+    private val overrideLogGate = ScheduleOverrideLogGate()
     private var startupWorkTimeRule: WorkTimeRule? = null
+    private var lastStartupOverrideInfo: ScheduleOverrideInfo? = null
     private var currentScheduleWindow: WorkTimeJitter.Window? = null
     private var currentScheduleRuleSetId: String? = null
     private var currentScheduleRuleIndex: Int? = null
     private var lastScheduleDecision: String? = null
 
     private fun timestamp(): String = ZonedDateTime.now().toString()
+
+    private fun currentModeName(): String = runCatching {
+        (Mode.currMode ?: Mode.nextMode)?.name ?: "UNKNOWN"
+    }.getOrDefault("UNKNOWN")
+
+    private fun currentProviderName(): String = runCatching {
+        OcrRuntime.currentProvider().name
+    }.getOrDefault("UNKNOWN")
+
+    /**
+     * Returns the active temporary gate, giving the explicit DebugRun lease
+     * precedence over the older startup window when both are present.
+     */
+    private fun currentScheduleOverride(): ScheduleOverrideInfo? {
+        DebugRunController.currentOverrideInfo()?.let { return it }
+        val snapshot = startupRunWindow.snapshot()
+        if (!snapshot.active || snapshot.deadline == null) return null
+        return ScheduleOverrideInfo(
+            source = "startup-window",
+            runId = snapshot.runId ?: "unknown",
+            deadline = snapshot.deadline,
+            mode = currentModeName(),
+            provider = currentProviderName(),
+        )
+    }
+
+    private fun reconcileStartupRuntime(overrideInfo: ScheduleOverrideInfo?) {
+        val previous = lastStartupOverrideInfo
+        if (overrideInfo?.source == "startup-window") {
+            if (previous?.runId != overrideInfo.runId) {
+                logStartupRuntime("STARTED", overrideInfo)
+            }
+            lastStartupOverrideInfo = overrideInfo
+            return
+        }
+        if (previous != null) {
+            val event = if (!Instant.now().isBefore(previous.deadline)) "EXPIRED" else "STOPPED"
+            logStartupRuntime(event, previous)
+            lastStartupOverrideInfo = null
+        }
+    }
+
+    private fun logStartupRuntime(event: String, info: ScheduleOverrideInfo) {
+        log.info {
+            "SCHEDULE_RUNTIME timestamp=${timestamp()} event=$event source=${info.source} " +
+                "runId=${info.runId} deadline=${info.deadline} mode=${info.mode} " +
+                "provider=${info.provider} normalScheduleActive=$scheduledDuringWorkDate"
+        }
+    }
+
+    private fun logOverrideSuppression(info: ScheduleOverrideInfo, reasons: Set<String>, normalScheduleActive: Boolean) {
+        if (!overrideLogGate.consume(info)) return
+        log.info {
+            "SCHEDULE_OVERRIDE_SUPPRESSED_OUTSIDE_HOURS source=${info.source} " +
+                "runId=${info.runId} deadline=${info.deadline} mode=${info.mode} " +
+                "provider=${info.provider} reasons=${reasons.joinToString(",")} " +
+                "normalScheduleActive=$normalScheduleActive"
+        }
+    }
 
     private fun scheduleWindowDescription(): String {
         val window = currentScheduleWindow
@@ -273,6 +339,7 @@ object WorkTimeListener {
                 if (startupWorkTimeRule != null) {
                     closestWorkTimeRule = startupWorkTimeRule
                 }
+                reconcileStartupRuntime(currentScheduleOverride())
                 log.info {
                     "启动后强制运行已开始：${durationMinutes}分钟，截止=${startupRunWindow.deadline()}；到期后恢复正常时间表"
                 }
@@ -280,6 +347,7 @@ object WorkTimeListener {
         } else {
             startupRunWindow.clear()
             startupWorkTimeRule = null
+            reconcileStartupRuntime(null)
         }
         return canWork()
     }
@@ -382,6 +450,8 @@ object WorkTimeListener {
     @Synchronized
     fun checkWork() {
         var canWork = false
+        val overrideInfoAtStart = currentScheduleOverride()
+        val suppressionReasons = linkedSetOf<String>()
         var closestWorkTimeRule: WorkTimeRule? = null
         var activeScheduleWindow: WorkTimeJitter.Window? = null
         var activeScheduleRuleSetId: String? = null
@@ -391,8 +461,16 @@ object WorkTimeListener {
         val dayIndex = LocalDate.now().dayOfWeek.value - 1
         if (dayIndex >= readOnlyWorkTimeSetting.size) {
             isDuringWorkDate = false
+            scheduledDuringWorkDate = false
             currentWorkTimeRule = null
             prevClosestWorkTimeRule = null
+            val overrideInfo = currentScheduleOverride()
+            if (overrideInfo != null) {
+                isDuringWorkDate = true
+                suppressionReasons += "outside-hours"
+                logOverrideSuppression(overrideInfo, suppressionReasons, false)
+            }
+            reconcileStartupRuntime(overrideInfo)
             return
         }
 
@@ -415,7 +493,11 @@ object WorkTimeListener {
 
                 // 检查时间有效性
                 if (startTime > endTime) {
-                    log.warn { "工作时间规则无效：开始时间 $startTime 晚于结束时间 $endTime" }
+                    if (overrideInfoAtStart != null) {
+                        suppressionReasons += "invalid-window"
+                    } else {
+                        log.warn { "工作时间规则无效：开始时间 $startTime 晚于结束时间 $endTime" }
+                    }
                     continue
                 }
 
@@ -440,17 +522,23 @@ object WorkTimeListener {
         }
 
         scheduledDuringWorkDate = canWork
-        isDuringWorkDate = DebugRunLease.effectiveCanWork(canWork, DebugRunController.isActive())
+        var overrideInfo = currentScheduleOverride()
+        isDuringWorkDate = DebugRunLease.effectiveCanWork(canWork, overrideInfo?.source == "debug-run")
         currentScheduleWindow = activeScheduleWindow
         currentScheduleRuleSetId = activeScheduleRuleSetId
         currentScheduleRuleIndex = activeScheduleRuleIndex
         if (canWork) {
             startupRunWindow.clear()
             startupWorkTimeRule = null
+            // The normal schedule takes precedence.  Re-read after clearing
+            // a stale startup window so its lifecycle is logged as stopped.
+            overrideInfo = currentScheduleOverride()
+            isDuringWorkDate = DebugRunLease.effectiveCanWork(canWork, overrideInfo?.source == "debug-run")
         }
+        reconcileStartupRuntime(overrideInfo)
         prevClosestWorkTimeRule = closestWorkTimeRule
 
-        val startupOverrideActive = startupRunWindow.isActive()
+        val startupOverrideActive = overrideInfo?.source == "startup-window"
         val decision = if (canWork) {
             "ACTIVE:${currentScheduleRuleSetId ?: "?"}:${currentScheduleRuleIndex ?: "?"}"
         } else if (DebugRunController.isActive()) {
@@ -469,8 +557,17 @@ object WorkTimeListener {
             }
         }
 
-        // 调试日志
-        if (!canWork && prevClosestWorkTimeRule != null) {
+        if (!canWork && overrideInfo != null) {
+            suppressionReasons += "outside-hours"
+            logOverrideSuppression(overrideInfo, suppressionReasons, canWork)
+        }
+        if (suppressionReasons.isNotEmpty() && overrideInfo == null && overrideInfoAtStart != null) {
+            logOverrideSuppression(overrideInfoAtStart, suppressionReasons, canWork)
+        }
+
+        // 调试日志：retain this warning for the normal schedule only.  An
+        // active temporary override already has an explicit auditable record.
+        if (!canWork && prevClosestWorkTimeRule != null && overrideInfo == null) {
             log.debug { "当前不在工作时间，最近结束的工作时间段：${prevClosestWorkTimeRule?.workTime}" }
         }
     }

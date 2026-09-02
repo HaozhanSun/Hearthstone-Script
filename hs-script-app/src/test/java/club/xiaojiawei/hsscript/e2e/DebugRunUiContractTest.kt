@@ -51,5 +51,34 @@ class DebugRunUiContractTest {
         val leaseText = Files.readString(lease)
         assertTrue(leaseText.contains("MAX_DURATION_MILLIS"))
         assertTrue(leaseText.contains("effectiveCanWork"))
+
+        val listener = moduleRoot.resolve(Path.of(
+            "src",
+            "main",
+            "java",
+            "club",
+            "xiaojiawei",
+            "hsscript",
+            "listener",
+            "WorkTimeListener.kt",
+        ))
+        assertTrue(Files.isRegularFile(listener), "WorkTimeListener.kt must remain checked in")
+        val listenerText = Files.readString(listener)
+        assertTrue(listenerText.contains("SCHEDULE_OVERRIDE_SUPPRESSED_OUTSIDE_HOURS"))
+        assertTrue(listenerText.contains("overrideLogGate"))
+        assertTrue(listenerText.contains("normalScheduleActive"))
+        assertTrue(listenerText.contains("overrideInfo == null"))
+
+        val override = moduleRoot.resolve(Path.of(
+            "src",
+            "main",
+            "java",
+            "club",
+            "xiaojiawei",
+            "hsscript",
+            "status",
+            "ScheduleOverride.kt",
+        ))
+        assertTrue(Files.isRegularFile(override), "ScheduleOverride.kt must remain checked in")
     }
 }
