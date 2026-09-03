@@ -26,7 +26,7 @@ jobs:
 
       - name: Build package
         shell: pwsh
-        run: .\mvnw.cmd -f pom.xml -pl hs-script-app -am -Pjvm -Djava.version=24 -Dproject.build.outputTimestamp=0 -DskipTests package
+        run: .\mvnw.cmd -f pom.xml -pl hs-script-app -am -Pjvm "-Djava.version=24" "-Dproject.build.outputTimestamp=0" "-DskipTests" package
 
       - name: Upload channel artifact
         uses: actions/upload-artifact@v4
