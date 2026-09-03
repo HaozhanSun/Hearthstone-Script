@@ -33,6 +33,7 @@ if ($BranchName -eq 'main') {
     if ($version -match '(?i)(-beta|SNAPSHOT)') {
         throw "main contains a beta/snapshot application version: $version"
     }
+    if ($config.iconFileName -ne 'hs-script.exe') { throw 'stable channel must use the application icon' }
     Write-Output "RELEASE_CHANNEL=stable"
 }
 elseif ($BranchName -like 'beta/*') {
@@ -43,6 +44,7 @@ elseif ($BranchName -like 'beta/*') {
         $config.shortcutName -ne 'Hearthstone Script Beta.lnk') {
         throw 'beta channel must use the isolated Hearthstone Script Beta runtime and shortcut'
     }
+    if ($config.iconFileName -ne 'hs-script-beta.ico') { throw 'beta channel must use hs-script-beta.ico' }
     Write-Output "RELEASE_CHANNEL=beta"
 }
 else {

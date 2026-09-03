@@ -2,13 +2,14 @@
 param(
     [string]$RuntimeRoot = "C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script",
     [string]$ShortcutName = "Hearthstone Script.lnk",
-    [string]$Description = ""
+    [string]$Description = "",
+    [string]$IconPath = ""
 )
 
 $ErrorActionPreference = "Stop"
 $runtimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\')
 $launcher = Join-Path $runtimeRoot "launch-as-admin.vbs"
-$icon = Join-Path $runtimeRoot "hs-script.exe"
+$icon = if ([string]::IsNullOrWhiteSpace($IconPath)) { Join-Path $runtimeRoot "hs-script.exe" } else { [System.IO.Path]::GetFullPath($IconPath) }
 if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) { throw "Stable launcher missing: $launcher" }
 if (-not (Test-Path -LiteralPath $icon -PathType Leaf)) { throw "Application icon missing: $icon" }
 
