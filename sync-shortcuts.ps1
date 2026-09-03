@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$RuntimeRoot = "C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script"
+    [string]$RuntimeRoot = "C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script",
+    [string]$ShortcutName = "Hearthstone Script.lnk",
+    [string]$Description = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,7 +12,6 @@ $icon = Join-Path $runtimeRoot "hs-script.exe"
 if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) { throw "Stable launcher missing: $launcher" }
 if (-not (Test-Path -LiteralPath $icon -PathType Leaf)) { throw "Application icon missing: $icon" }
 
-$shortcutName = "Hearthstone Script.lnk"
 $shortcutDirectories = @(
     [Environment]::GetFolderPath("Desktop"),
     (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"),
@@ -29,7 +30,9 @@ foreach ($directory in $shortcutDirectories) {
     $shortcut.Arguments = $arguments
     $shortcut.WorkingDirectory = $runtimeRoot
     $shortcut.IconLocation = "$icon,0"
-    $shortcut.Description = "Hearthstone Script（管理员启动，自动使用最新构建）"
+    $shortcut.Description = if ([string]::IsNullOrWhiteSpace($Description)) {
+        "$($shortcutName -replace '\.lnk$','')（管理员启动，自动使用最新构建）"
+    } else { $Description }
     $shortcut.WindowStyle = 1
     $shortcut.Save()
     $updated.Add($shortcutPath)

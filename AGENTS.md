@@ -32,3 +32,16 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
 - Confirm the built artifact exists and the deployment manifest names that exact artifact and hash.
 - Confirm Desktop, Start Menu, and Taskbar shortcuts all target `wscript.exe` with the stable launcher as their argument.
 - Confirm the stable launcher resolves the manifest's current JAR.
+
+## Stable and beta release channels
+
+- GitHub `main` is the stable branch. Keep it on the last known-good source
+  line; do not merge experimental work merely because it compiles.
+- Experimental work belongs on `beta/*` branches and must declare `channel:
+  beta` in `release-channel.json`.
+- Stable and beta deployments use separate runtime roots, manifests, PIDs,
+  logs, and shortcut names. A beta deployment must never overwrite the stable
+  `Hearthstone Script` runtime or its shortcuts.
+- Promote beta to `main` only after the exact beta artifact passes the online
+  E2E completion gate. The checked-in channel validation workflow must pass
+  before promotion.
