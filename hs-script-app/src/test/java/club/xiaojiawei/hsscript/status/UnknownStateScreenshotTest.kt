@@ -17,6 +17,63 @@ import javax.imageio.ImageIO
 class UnknownStateScreenshotTest {
 
     @Test
+    fun `diagnostic lines are rendered outside the marked ROI`() {
+        val root = Files.createTempDirectory("rank-diagnostic-panel-").toFile()
+        try {
+            val image = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
+            val graphics = image.createGraphics()
+            graphics.color = Color(35, 90, 130)
+            graphics.fillRect(0, 0, image.width, image.height)
+            graphics.dispose()
+
+            val saved = assertNotNull(
+                UnknownStateScreenshot.save(
+                    image = image,
+                    regions = listOf(
+                        UnknownStateScreenshot.UnknownRegion(
+                            Rectangle(23, 941, 57, 47),
+                            "rank-badge-rank-resolved",
+                        ),
+                    ),
+                    trigger = "rank-ocr-resolved",
+                    state = "rank=10|tier=SILVER",
+                    phase = "pre-mulligan-rank-check",
+                    annotationLines = listOf(
+                        "stage=pre-mulligan-rank-check runId=test-run",
+                        "provider=PADDLEX",
+                        "roi=x=23 y=941 w=57 h=47",
+                        "rawOCR=商8",
+                        "normalizedOCR=商8",
+                        "numericRank=8",
+                        "tier=SILVER",
+                        "unknownReason=none",
+                        "finalDecision=RANK_RESOLVED",
+                    ),
+                    rootDirectory = root,
+                    clock = Clock.fixed(
+                        Instant.parse("2026-09-03T12:34:56.789Z"),
+                        ZoneId.of("America/Los_Angeles"),
+                    ),
+                ),
+            )
+
+            val annotated = assertNotNull(ImageIO.read(saved.file))
+            val hasDarkPanelPixel = (12..100).any { x ->
+                (12..50).any { y ->
+                    val pixel = Color(annotated.getRGB(x, y), true)
+                    pixel.red < 30 && pixel.green < 70 && pixel.blue < 100
+                }
+            }
+            assertTrue(hasDarkPanelPixel)
+            // The panel is placed in the top-left corner and does not cover
+            // the rank badge lower in the image.
+            assertEquals(Color(35, 90, 130).rgb, annotated.getRGB(50, 960))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `dummy e2e saves timestamped annotated screenshot in dated folder`() {
         val configuredOutput = System.getProperty("hs.script.unknown-state.test-output")
         val root = configuredOutput?.let(::File) ?: Files.createTempDirectory("unknown-state-e2e-").toFile()

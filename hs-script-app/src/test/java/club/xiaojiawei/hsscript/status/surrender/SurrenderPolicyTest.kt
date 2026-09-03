@@ -190,14 +190,20 @@ class SurrenderPolicyTest {
         assertEquals(10, CurrentRankDetector.parseRankText("白银10"))
         assertEquals(9, CurrentRankDetector.parseRankText("当前等级：9"))
         assertEquals(8, CurrentRankDetector.parseRankText("\uFF18"))
+        assertEquals(8, CurrentRankDetector.parseRankText("商8"))
     }
 
     @Test
     fun rankOcrParserRejectsUnrelatedOrInvalidNumbers() {
         assertNull(CurrentRankDetector.parseRankText("Kenneth Sun"))
+        assertNull(CurrentRankDetector.parseRankText("laz8"))
+        assertNull(CurrentRankDetector.parseRankText("laz 8"))
+        assertNull(CurrentRankDetector.parseRankText("等级：8，名字：laz8"))
         assertNull(CurrentRankDetector.parseRankText("等级：11"))
         assertNull(CurrentRankDetector.parseRankText("等级：0"))
         assertNull(CurrentRankDetector.parseRankText("01404"))
+        assertNull(CurrentRankDetector.parseRankText("8 9"))
+        assertNull(CurrentRankDetector.parseRankText(""))
     }
 
     @Test
@@ -242,6 +248,20 @@ class SurrenderPolicyTest {
                 visualTenHint = true,
             ),
         )
+    }
+
+    @Test
+    fun `historical rank OCR samples stay numeric-only and fail closed`() {
+        // 2026-08-31 PaddleX sample: the badge was visible, but the old wide
+        // ROI returned the username-like text "Ke恶魔".
+        assertNull(CurrentRankDetector.parseRankText("Ke恶魔"))
+        // 2026-09-02 legacy sample: the clean numeric OCR result is valid.
+        assertEquals(10, CurrentRankDetector.parseRankText("10"))
+        // 2026-09-03 PaddleX sample: a localized prefix is allowed when the
+        // only numeric token is an in-range rank.
+        assertEquals(8, CurrentRankDetector.parseRankText("商8"))
+        assertNull(CurrentRankDetector.parseRankText("等级：8，名字：laz8"))
+        assertNull(CurrentRankDetector.parseRankText("8 9"))
     }
 
     @Test
@@ -310,8 +330,8 @@ class SurrenderPolicyTest {
         val expanded = CurrentRankDetector.rankExpandedBoundsForTest(1920, 1080)
         val digit = CurrentRankDetector.rankDigitBoundsForTest(1920, 1080)
 
-        assertEquals(Rectangle(0, 920, 100, 90), badge)
-        assertTrue(badge.x + badge.width <= 100)
+        assertEquals(Rectangle(23, 941, 57, 47), badge)
+        assertTrue(badge.x + badge.width <= 80)
         assertTrue(expanded.x + expanded.width <= 100)
         assertTrue(digit.x + digit.width <= 70)
         assertTrue(digit.y >= 950)
@@ -352,10 +372,65 @@ class SurrenderPolicyTest {
 
             assertEquals(10, detection?.rank)
             assertEquals(listOf("current-rank-paddlex-badge"), calls)
-            assertEquals(listOf(100 to 90), roiSizes)
+            assertEquals(listOf(57 to 47), roiSizes)
         } finally {
             OcrRuntime.settingsProvider = originalSettingsProvider
             OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
+        }
+    }
+
+    @Test
+    fun `rank evidence saves diagnostic panel for resolved and unresolved OCR`() {
+        val originalSettingsProvider = OcrRuntime.settingsProvider
+        val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
+        val originalOutput = System.getProperty("hs.script.unknown-state.dir")
+        val root = Files.createTempDirectory("rank-evidence-regression-").toFile()
+        try {
+            System.setProperty("hs.script.unknown-state.dir", root.absolutePath)
+            var ocrText = "10"
+            OcrRuntime.settingsProvider = {
+                PaddleXOcrSettings(
+                    enabled = true,
+                    pythonExecutable = "python",
+                    modulePath = "fake-module",
+                    device = "cpu",
+                    modelCachePath = "",
+                    timeoutMs = 1000,
+                )
+            }
+            OcrRuntime.paddleXBridgeFactory = {
+                object : OcrTextBridge {
+                    override fun recognize(image: BufferedImage, desc: String): String = ocrText
+
+                    override fun healthCheck(): OcrHealth =
+                        OcrHealth(true, OcrProviderKind.PADDLEX, "ok")
+                }
+            }
+
+            val screen = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
+            val resolved = CurrentRankDetector.detectCapturedImage(screen, saveEvidence = true)
+            assertEquals(10, resolved?.rank)
+            ocrText = "商8"
+            val unresolved = CurrentRankDetector.detectCapturedImage(screen, saveEvidence = true)
+            assertNull(unresolved?.rank)
+            val files = root.walkTopDown().filter { it.isFile && it.extension == "png" }.toList()
+            assertEquals(2, files.size)
+            assertTrue(files.any { it.name.contains("RANK_RESOLVED") })
+            assertTrue(files.any { it.name.contains("UNKNOWN_FAIL_CLOSED") })
+            // The image-side diagnostic keeps the extracted numeric token
+            // visible even though the single PaddleX pass remains unresolved
+            // by the conservative multi-pass policy.
+            assertTrue(files.all { ImageIO.read(it).width == 1920 })
+            assertTrue(files.all { it.length() > 0 })
+        } finally {
+            OcrRuntime.settingsProvider = originalSettingsProvider
+            OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
+            if (originalOutput == null) {
+                System.clearProperty("hs.script.unknown-state.dir")
+            } else {
+                System.setProperty("hs.script.unknown-state.dir", originalOutput)
+            }
+            root.deleteRecursively()
         }
     }
 

@@ -17,12 +17,12 @@ from .provider import DetectedText
 
 @dataclass(frozen=True)
 class RankBadgeBounds:
-    """Normalized full-screen ROI; tuned from the saved 1920x1080 captures."""
+    """Normalized full-screen ROI for the inner numeric rank frame."""
 
-    left: float = 0.0
-    top: float = 0.852
-    width: float = 0.0521
-    height: float = 0.0833
+    left: float = 0.01198
+    top: float = 0.87130
+    width: float = 0.02969
+    height: float = 0.04352
     scale: int = 4
 
     def pixels(self, image_width: int, image_height: int) -> tuple[int, int, int, int]:
@@ -45,21 +45,25 @@ class _OcrProvider(Protocol):
 
 
 def parse_numeric_rank(raw_text: str) -> int | None:
-    """Accept only a single clean rank token, with explicit precedence for 10."""
+    """Accept one numeric token and reject username/other Latin contamination."""
 
     normalized = raw_text.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
-    runs = re.findall(r"\d{1,2}", normalized)
-    if "10" in runs:
-        return 10
-    digits = "".join(re.findall(r"\d", normalized))
-    if len(digits) != 1:
+    if re.search(r"[A-Za-z]", normalized):
         return None
-    value = int(digits)
+    runs = re.findall(r"\d+", normalized)
+    if len(runs) != 1:
+        return None
+    token = runs[0]
+    if token == "10":
+        return 10
+    if len(token) != 1:
+        return None
+    value = int(token)
     return value if 1 <= value <= 9 else None
 
 
 class RankBadgeProbe:
-    """Crop, upscale, and OCR only the numeric badge region."""
+    """Crop, upscale, and OCR only the inner numeric rank region."""
 
     def __init__(self, ocr_provider: _OcrProvider, bounds: RankBadgeBounds | None = None) -> None:
         self._ocr_provider = ocr_provider

@@ -35,19 +35,21 @@ object CurrentRankDetector {
 
     private const val MIN_RANK = 1
     private const val MAX_RANK = 10
-    private const val RANK_REGION_LEFT = 0.0
-    // The rank badge is the small numeric shield at the extreme lower-left.
-    // Keep the crop away from the player name, timer, and other HUD numbers.
-    // Keep this aligned with experiments/paddlex-vision RankBadgeBounds.
-    // At 1920x1080 this is (0,920)-(100,1010); the player's name begins to
-    // the right of this box and must never be part of rank OCR input.
-    private const val RANK_REGION_TOP = 0.852
-    private const val RANK_REGION_WIDTH = 0.0521
-    private const val RANK_REGION_HEIGHT = 0.0833
-    private const val RANK_EXPANDED_LEFT = 0.0
-    private const val RANK_EXPANDED_TOP = 0.82
-    private const val RANK_EXPANDED_WIDTH = 0.0521
-    private const val RANK_EXPANDED_HEIGHT = 0.13
+    // The inner red frame in the supplied 389x341 diagnostic reference was
+    // mapped against the recorded legacy frame (0,885,144,140). At the
+    // current 1920x1080 layout that maps to (23,941,57,47). This deliberately
+    // contains the numeral only, excluding the shield artwork and username.
+    private const val RANK_REGION_LEFT = 0.01198
+    private const val RANK_REGION_TOP = 0.87130
+    private const val RANK_REGION_WIDTH = 0.02969
+    private const val RANK_REGION_HEIGHT = 0.04352
+    // Keep the legacy tier probe inside the same numeric-only frame. The
+    // product decision is numeric rank; broad tier/name OCR is intentionally
+    // no longer allowed to reintroduce username pixels.
+    private const val RANK_EXPANDED_LEFT = 0.01198
+    private const val RANK_EXPANDED_TOP = 0.87130
+    private const val RANK_EXPANDED_WIDTH = 0.02969
+    private const val RANK_EXPANDED_HEIGHT = 0.04352
     // The former broad crop contained the portrait, shield ornament, rank
     // numeral, and first pixels of the player name. Feeding it to Tesseract
     // produced values such as 939/51/191.
@@ -81,18 +83,20 @@ object CurrentRankDetector {
                 else -> char
             }
         }.joinToString("")
-        val numericRuns = Regex("\\d{1,2}")
+        // Numeric-only means one complete numeric token, not merely one digit
+        // somewhere in arbitrary OCR text. Latin letters are rejected because
+        // the rank ROI must never turn a username such as "laz8" into rank 8;
+        // Chinese/localized prefixes such as "商8" remain valid.
+        if (normalized.any { it in 'a'..'z' || it in 'A'..'Z' }) return null
+        val numericRuns = Regex("\\d+")
             .findAll(normalized)
             .map { it.value }
             .toList()
-        if (numericRuns.any { it == "10" }) return 10
-
-        // A single clean digit is required for ranks 1..9.  Taking the first
-        // valid substring from noisy OCR such as "01404" can turn unrelated
-        // HUD numbers into a false surrender decision.
-        val digitsOnly = normalized.filter(Char::isDigit)
-        if (digitsOnly.length != 1) return null
-        return digitsOnly.toIntOrNull()?.takeIf { it in MIN_RANK until MAX_RANK }
+        if (numericRuns.size != 1) return null
+        val token = numericRuns.single()
+        if (token == "10") return 10
+        if (token.length != 1) return null
+        return token.toIntOrNull()?.takeIf { it in MIN_RANK until MAX_RANK }
     }
 
     /** Parse an explicit localized/English league name when it is visible. */
@@ -257,35 +261,18 @@ object CurrentRankDetector {
                     "tierCandidates=<visual-only> visualTenHint=$visualTenHint " +
                     "tier=${tier.name} rank=${rank ?: "UNKNOWN"} unknownReason=$unknownReason"
             }
-            if (saveEvidence && (tier === RankTier.UNKNOWN || rank == null)) {
-                val evidence = UnknownStateScreenshot.save(
-                    image = screen,
-                    regions = listOf(
-                        UnknownStateScreenshot.UnknownRegion(
-                            rankRegionBounds,
-                            "rank-badge-unresolved",
-                        ),
-                    ),
-                    category = "rank-detection",
-                    trigger = "rank-ocr-unresolved",
-                    state = "rank=${rank ?: "UNKNOWN"}|tier=${tier.name}",
-                    phase = "pre-mulligan-rank-check",
-                    ocrText = ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } },
+            if (saveEvidence) {
+                saveRankEvidence(
+                    screen = screen,
+                    roiBounds = rankRegionBounds,
+                    provider = "PADDLEX",
+                    rawOcrTexts = rawOcrTexts,
+                    normalizedOcrText = ocrText,
+                    numericRank = extractNumericRank(ocrTexts),
+                    rank = rank,
+                    tier = tier,
+                    unknownReason = unknownReason,
                 )
-                log.warn {
-                    "RANK_OCR_EVIDENCE provider=PADDLEX rank=${rank ?: "UNKNOWN"} tier=${tier.name} " +
-                        "unknownReason=$unknownReason " +
-                        "path=${evidence?.file?.absolutePath ?: "not-saved"} " +
-                        "link=${evidence?.link ?: "none"}"
-                }
-                log.warn {
-                    "RANK_OCR_ROI provider=PADDLEX x=${rankRegionBounds.x} y=${rankRegionBounds.y} " +
-                        "width=${rankRegionBounds.width} height=${rankRegionBounds.height} " +
-                        "raw=${rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
-                        "normalized=${ocrText.ifBlank { "<empty>" }} confidence=unavailable " +
-                        "unknownReason=$unknownReason " +
-                        "screenshot=${evidence?.file?.absolutePath ?: "not-saved"}"
-                }
             }
             return Detection(rank, tier, ocrText, bounds)
         }
@@ -332,35 +319,18 @@ object CurrentRankDetector {
                 "tierCandidates=${tierOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
                 "visualTenHint=$visualTenHint tier=${tier.name} rank=${rank ?: "UNKNOWN"} unknownReason=$unknownReason"
         }
-        if (saveEvidence && (tier === RankTier.UNKNOWN || rank == null)) {
-            val evidence = UnknownStateScreenshot.save(
-                image = screen,
-                regions = listOf(
-                    UnknownStateScreenshot.UnknownRegion(
-                        rankRegionBounds,
-                        "rank-badge-unresolved",
-                    ),
-                ),
-                category = "rank-detection",
-                trigger = "rank-ocr-unresolved",
-                state = "rank=${rank ?: "UNKNOWN"}|tier=${tier.name}",
-                phase = "pre-mulligan-rank-check",
-                ocrText = (ocrTexts + tierOcrTexts).joinToString("|") { it.ifBlank { "<empty>" } },
+        if (saveEvidence) {
+            saveRankEvidence(
+                screen = screen,
+                roiBounds = digitRegionBounds,
+                provider = "LEGACY",
+                rawOcrTexts = rawOcrTexts,
+                normalizedOcrText = ocrText,
+                numericRank = extractNumericRank(ocrTexts),
+                rank = rank,
+                tier = tier,
+                unknownReason = unknownReason,
             )
-            log.warn {
-                "RANK_OCR_EVIDENCE provider=LEGACY rank=${rank ?: "UNKNOWN"} tier=${tier.name} " +
-                    "unknownReason=$unknownReason " +
-                    "path=${evidence?.file?.absolutePath ?: "not-saved"} " +
-                    "link=${evidence?.link ?: "none"}"
-            }
-            log.warn {
-                "RANK_OCR_ROI provider=LEGACY x=${rankRegionBounds.x} y=${rankRegionBounds.y} " +
-                    "width=${rankRegionBounds.width} height=${rankRegionBounds.height} " +
-                    "raw=${rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
-                    "normalized=${ocrText.ifBlank { "<empty>" }} confidence=unavailable " +
-                    "unknownReason=$unknownReason " +
-                    "screenshot=${evidence?.file?.absolutePath ?: "not-saved"}"
-            }
         }
         Detection(rank, tier, ocrText, bounds)
     }.getOrElse { error ->
@@ -371,6 +341,75 @@ object CurrentRankDetector {
         }
         null
     }
+
+    private fun saveRankEvidence(
+        screen: BufferedImage,
+        roiBounds: Rectangle,
+        provider: String,
+        rawOcrTexts: List<String>,
+        normalizedOcrText: String,
+        numericRank: Int?,
+        rank: Int?,
+        tier: RankTier,
+        unknownReason: String,
+    ) {
+        val phase = "pre-mulligan-rank-check"
+        val extractedRank = numericRank?.toString() ?: "UNKNOWN"
+        val resolvedRank = rank?.toString() ?: "UNKNOWN"
+        val finalDecision = if (rank == null) "UNKNOWN_FAIL_CLOSED" else "RANK_RESOLVED"
+        val raw = rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }
+        val normalized = normalizedOcrText.ifBlank { "<empty>" }
+        val runId = System.getProperty("hs.script.e2e.run-id", "normal")
+        val annotationLines = listOf(
+            "stage=$phase runId=$runId",
+            "provider=$provider",
+            "roi=x=${roiBounds.x} y=${roiBounds.y} w=${roiBounds.width} h=${roiBounds.height}",
+            "rawOCR=$raw",
+            "normalizedOCR=$normalized",
+            "numericRank=$extractedRank",
+            "resolvedRank=$resolvedRank",
+            "confidence=unavailable",
+            "tier=${tier.name}",
+            "unknownReason=$unknownReason",
+            "finalDecision=$finalDecision",
+        )
+        val evidence = UnknownStateScreenshot.save(
+            image = screen,
+            regions = listOf(
+                UnknownStateScreenshot.UnknownRegion(
+                    rankBadgeBoundsForTest(screen.width, screen.height),
+                    "rank-badge-${finalDecision.lowercase(Locale.ROOT)}",
+                ),
+            ),
+            category = "rank-detection",
+            trigger = "rank-ocr-$finalDecision",
+            state = "rank=$resolvedRank|numericRank=$extractedRank|tier=${tier.name}",
+            phase = phase,
+            ocrText = raw,
+            annotationLines = annotationLines,
+            logWarning = rank == null,
+        )
+        val evidencePath = evidence?.file?.absolutePath ?: "not-saved"
+        val evidenceMessage = {
+            "RANK_OCR_EVIDENCE provider=$provider numericRank=$extractedRank rank=$resolvedRank tier=${tier.name} " +
+                "unknownReason=$unknownReason finalDecision=$finalDecision " +
+                "path=$evidencePath link=${evidence?.link ?: "none"}"
+        }
+        if (rank == null) log.warn(evidenceMessage) else log.info(evidenceMessage)
+        val roiMessage = {
+            "RANK_OCR_ROI provider=$provider x=${roiBounds.x} y=${roiBounds.y} " +
+                "width=${roiBounds.width} height=${roiBounds.height} raw=$raw " +
+                "normalized=$normalized confidence=unavailable unknownReason=$unknownReason " +
+                "screenshot=$evidencePath"
+        }
+        if (rank == null) log.warn(roiMessage) else log.info(roiMessage)
+    }
+
+    /** Return a numeric extraction only when every valid OCR pass agrees. */
+    private fun extractNumericRank(ocrTexts: List<String>): Int? = ocrTexts
+        .mapNotNull(::parseRankText)
+        .distinct()
+        .singleOrNull()
 
     private fun cropRankRegion(image: BufferedImage): BufferedImage {
         return crop(image, RANK_REGION_LEFT, RANK_REGION_TOP, RANK_REGION_WIDTH, RANK_REGION_HEIGHT)
