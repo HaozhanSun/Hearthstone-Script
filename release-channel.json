@@ -5,6 +5,7 @@
   "displayName": "Hearthstone Script",
   "runtimeDirectoryName": "Hearthstone Script",
   "shortcutName": "Hearthstone Script.lnk",
+  "iconFileName": "hs-script.exe",
   "artifactLabel": "stable",
   "promotionRule": "Only promote a beta commit after the online E2E completion gate passes."
 }
