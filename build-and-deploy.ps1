@@ -40,6 +40,9 @@ $cardPluginTarget = Join-Path $projectRoot 'hs-script-base-card-plugin\target\hs
 $cardSdkTarget = Join-Path $projectRoot 'hs-script-card-sdk\target\hs-script-card-sdk-1.3.0.jar'
 $debugRunnerSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\run-debug.ps1'
 $debugRunnerCmdSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\run-debug.cmd'
+$launcherVbsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-as-admin.vbs'
+$launcherPsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-newest-as-admin.ps1'
+$deploymentContractSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\deployment-contract.ps1'
 $manifestPath = Join-Path $runtimeRoot 'deployment-manifest.json'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
@@ -155,6 +158,12 @@ if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
 
 $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("hs-script-deploy-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $staging -Force | Out-Null
+# A newly-created channel runtime has no extracted plugin/lib directories yet.
+# Create both destinations before copying assembled artifacts so stable and
+# beta installs follow the same deploy contract on a clean runtime.
+$runtimeLib = Join-Path $runtimeRoot 'lib'
+$runtimePlugin = Join-Path $runtimeRoot 'plugin'
+New-Item -ItemType Directory -Path $runtimeLib, $runtimePlugin -Force | Out-Null
 try {
     [System.IO.Compression.ZipFile]::ExtractToDirectory($builtZip, $staging)
     foreach ($item in @('resources', 'lib', 'hs_cards.db', 'logback.xml', 'create-aot.bat', 'debug-hs-script.bat', 'hs-script.bat', 'unlock.bat', 'card-update-util.exe', 'force-stop.exe', 'hs-script.exe', 'inject-util.exe', 'install-drive.exe', 'update.exe', (Split-Path -Leaf $builtJar))) {
@@ -167,8 +176,6 @@ try {
             Copy-Item -LiteralPath $pluginJar.FullName -Destination (Join-Path $runtimeRoot "plugin\$($pluginJar.Name)") -Force
         }
     }
-    $runtimeLib = Join-Path $runtimeRoot 'lib'
-    $runtimePlugin = Join-Path $runtimeRoot 'plugin'
     Copy-Item -LiteralPath $strategyTarget -Destination (Join-Path $runtimeLib 'hs-script-base-strategy-plugin-1.1.6.jar') -Force
     Copy-Item -LiteralPath $cardPluginTarget -Destination (Join-Path $runtimeLib 'hs-script-base-card-plugin-1.1.4.jar') -Force
     Copy-Item -LiteralPath $strategyTarget -Destination (Join-Path $runtimePlugin 'hs-script-base-strategy-plugin.jar') -Force
@@ -180,6 +187,9 @@ try {
     # source tree while the runtime keeps an older script.
     Copy-Item -LiteralPath $debugRunnerSource -Destination (Join-Path $runtimeRoot 'run-debug.ps1') -Force
     Copy-Item -LiteralPath $debugRunnerCmdSource -Destination (Join-Path $runtimeRoot 'run-debug.cmd') -Force
+    Copy-Item -LiteralPath $launcherVbsSource -Destination (Join-Path $runtimeRoot 'launch-as-admin.vbs') -Force
+    Copy-Item -LiteralPath $launcherPsSource -Destination (Join-Path $runtimeRoot 'launch-newest-as-admin.ps1') -Force
+    Copy-Item -LiteralPath $deploymentContractSource -Destination (Join-Path $runtimeRoot 'deployment-contract.ps1') -Force
 } finally {
     if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
 }
