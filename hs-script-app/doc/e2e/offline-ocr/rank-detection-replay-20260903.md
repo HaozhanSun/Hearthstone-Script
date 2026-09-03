@@ -48,3 +48,28 @@ diagnostic panel containing time, stage, run id, provider, ROI, raw/normalized
 OCR, numeric/resolved rank, confidence, tier, unknown reason, and final
 decision. Successful evidence is logged at INFO; unresolved evidence is WARN.
 The panel is placed in a corner that avoids the marked ROI where possible.
+
+## Timing Analysis and Experimental Gate
+
+Historical application evidence showed the old rank check firing repeatedly
+after the match click, while `warPhase=DRAWN_INIT_CARD` was still a transition
+frame. The first capture at `00:06:16` was blank; later captures at
+`00:06:31`, `00:06:42`, `00:06:52`, `00:07:03`, and `00:07:17` returned
+`商8`. The match click was at `00:06:00`, GAMEPLAY appeared at `00:06:01`,
+and the phase report was at `00:06:03`; the run was then F2-paused. This is
+evidence of an early/unstable capture window, not evidence of a HUB false
+positive.
+
+| observed phase | rank OCR trigger | reason |
+|---|---:|---|
+| startup/desktop | no | no active war and `FILL_DECK` |
+| HUB/matchmaking | no | no verified interactive game phase |
+| `DRAWN_INIT_CARD` transition | no | badge can be blank or stale; historical run retried here |
+| interactive mulligan `REPLACE_CARD` | yes | stable pre-mulligan rank decision point |
+| normal `GAME_TURN` | no | rank policy is already outside its decision window |
+
+The experimental gate is therefore `inWar && phase == REPLACE_CARD`. Rank
+evidence records `provider`, `trigger=rank-policy-<phase>`, and `phase` in
+both the OCR and screenshot evidence logs. The gate is fail-closed: if the
+interactive phase is never observed, rank OCR does not invent a surrender
+decision and the bounded existing retry/continue policy remains in charge.

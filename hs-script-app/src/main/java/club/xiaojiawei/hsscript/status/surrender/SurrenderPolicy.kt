@@ -392,7 +392,10 @@ object SurrenderPolicy {
         lastRankInspectionAt = now
         rankInspectionAttempts++
 
-        val detection = CurrentRankDetector.detect()
+        val detection = CurrentRankDetector.detect(
+            trigger = "rank-policy-${phase.name}",
+            phase = phase.name,
+        )
         val rank = detection?.rank
         if (rank == null) {
             evaluateWinRateGuard()?.let { result ->
@@ -537,18 +540,15 @@ object SurrenderPolicy {
         null
     }
 
-    private val PRE_MULLIGAN_PHASES = setOf(
-        WarPhaseEnum.DRAWN_INIT_CARD,
-        WarPhaseEnum.REPLACE_CARD,
-    )
+    private val PRE_MULLIGAN_PHASES = setOf(WarPhaseEnum.REPLACE_CARD)
 
     /**
      * Rank OCR is destructive because a resolved rank below ten immediately
      * concedes.  A phase name alone is not proof that a real game exists:
      * during deck selection, matchmaking, and initial entity creation the
      * parser can still be left at FILL_DECK while Mode/WarEx have already
-     * switched to GAMEPLAY.  Only the initial-hand phases expose the stable
-     * rank HUD, and they must also have an active WarEx lifecycle flag, so
+     * switched to GAMEPLAY.  Only the interactive mulligan page exposes the
+     * stable rank HUD, and it must also have an active WarEx lifecycle flag, so
      * transition-screen HUD numbers cannot become a surrender decision.
      */
     internal fun isRankInspectionEligible(inWar: Boolean, phase: WarPhaseEnum): Boolean =

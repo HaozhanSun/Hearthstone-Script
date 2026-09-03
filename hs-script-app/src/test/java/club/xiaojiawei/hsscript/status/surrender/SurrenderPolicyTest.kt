@@ -556,7 +556,7 @@ class SurrenderPolicyTest {
                 phase = WarPhaseEnum.FILL_DECK,
             ),
         )
-        assertTrue(
+        assertFalse(
             SurrenderPolicy.isRankInspectionEligible(
                 inWar = true,
                 phase = WarPhaseEnum.DRAWN_INIT_CARD,
@@ -574,6 +574,16 @@ class SurrenderPolicyTest {
                 phase = WarPhaseEnum.GAME_OVER,
             ),
         )
+    }
+
+    @Test
+    fun rankInspectionStageContractBlocksStartupHubAndTransitionFrames() {
+        assertFalse(SurrenderPolicy.isRankInspectionEligible(false, WarPhaseEnum.FILL_DECK))
+        assertFalse(SurrenderPolicy.isRankInspectionEligible(false, WarPhaseEnum.GAME_TURN))
+        assertFalse(SurrenderPolicy.isRankInspectionEligible(true, WarPhaseEnum.FILL_DECK))
+        assertFalse(SurrenderPolicy.isRankInspectionEligible(true, WarPhaseEnum.DRAWN_INIT_CARD))
+        assertTrue(SurrenderPolicy.isRankInspectionEligible(true, WarPhaseEnum.REPLACE_CARD))
+        assertFalse(SurrenderPolicy.isRankInspectionEligible(true, WarPhaseEnum.GAME_TURN))
     }
 
     @Test

@@ -161,7 +161,10 @@ object CurrentRankDetector {
     }
 
     /** Capture and OCR the rank badge without touching the Hearthstone input path. */
-    fun detect(): Detection? = runCatching {
+    fun detect(
+        trigger: String = "current-rank-paddlex-badge",
+        phase: String = "pre-mulligan-rank-check",
+    ): Detection? = runCatching {
         if (GraphicsEnvironment.isHeadless()) return null
         val allScreens = GraphicsEnvironment
             .getLocalGraphicsEnvironment()
@@ -187,9 +190,19 @@ object CurrentRankDetector {
         if (bounds.width < 400 || bounds.height < 300) return null
 
         val screen = Robot().createScreenCapture(bounds)
-        return@runCatching detectCapturedImage(screen, bounds, saveEvidence = true)
+        return@runCatching detectCapturedImage(
+            screen,
+            bounds,
+            saveEvidence = true,
+            evidenceTrigger = trigger,
+            evidencePhase = phase,
+        )
     }.getOrElse { error ->
-        log.warn(error) { "RANK_OCR_FAILED" }
+        val provider = if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
+        log.warn(error) {
+            "RANK_OCR_FAILED provider=$provider trigger=$trigger phase=$phase " +
+                "unknownReason=${error.javaClass.simpleName}:${error.message ?: "no-message"}"
+        }
         null
     }
 
@@ -202,6 +215,8 @@ object CurrentRankDetector {
         screen: BufferedImage,
         bounds: Rectangle = Rectangle(0, 0, screen.width, screen.height),
         saveEvidence: Boolean = false,
+        evidenceTrigger: String = "current-rank-paddlex-badge",
+        evidencePhase: String = "pre-mulligan-rank-check",
     ): Detection? = runCatching {
         val rankRegion = cropRankRegion(screen)
         val rankRegionBounds = rankBadgeBoundsForTest(screen.width, screen.height)
@@ -240,7 +255,7 @@ object CurrentRankDetector {
             val rawOcrTexts = listOf(
                 OcrRuntime.recognize(
                     rankRegion,
-                    "current-rank-paddlex-badge",
+                    evidenceTrigger,
                     legacyOcr = { "" },
                     allowEmptyProbeResult = true,
                 ),
@@ -253,7 +268,8 @@ object CurrentRankDetector {
             val tier = detectTierVisual(rankRegion)
             val unknownReason = unknownReason(rank, tier, ocrTexts)
             log.info {
-                "RANK_OCR provider=PADDLEX passes=${ocrTexts.size} bounds=$bounds " +
+                "RANK_OCR provider=PADDLEX trigger=$evidenceTrigger phase=$evidencePhase " +
+                    "passes=${ocrTexts.size} bounds=$bounds " +
                     "roi=x${rankRegionBounds.x},y${rankRegionBounds.y},w${rankRegionBounds.width},h${rankRegionBounds.height} " +
                     "raw=${rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
                     "normalized=${ocrText.ifBlank { "<empty>" }} confidence=unavailable " +
@@ -272,6 +288,8 @@ object CurrentRankDetector {
                     rank = rank,
                     tier = tier,
                     unknownReason = unknownReason,
+                    trigger = evidenceTrigger,
+                    phase = evidencePhase,
                 )
             }
             return Detection(rank, tier, ocrText, bounds)
@@ -311,7 +329,7 @@ object CurrentRankDetector {
         val digitRegionBounds = rankDigitBoundsForTest(screen.width, screen.height)
         val unknownReason = unknownReason(rank, tier, ocrTexts)
         log.info {
-            "RANK_OCR provider=LEGACY bounds=$bounds " +
+            "RANK_OCR provider=LEGACY trigger=$evidenceTrigger phase=$evidencePhase bounds=$bounds " +
                 "roi=x${digitRegionBounds.x},y${digitRegionBounds.y},w${digitRegionBounds.width},h${digitRegionBounds.height} " +
                 "raw=${rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
                 "normalized=${ocrText.ifBlank { "<empty>" }} confidence=unavailable " +
@@ -330,13 +348,15 @@ object CurrentRankDetector {
                 rank = rank,
                 tier = tier,
                 unknownReason = unknownReason,
+                trigger = evidenceTrigger,
+                phase = evidencePhase,
             )
         }
         Detection(rank, tier, ocrText, bounds)
     }.getOrElse { error ->
         val provider = if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
         log.warn(error) {
-            "RANK_OCR_FAILED provider=$provider confidence=unavailable " +
+            "RANK_OCR_FAILED provider=$provider trigger=$evidenceTrigger phase=$evidencePhase confidence=unavailable " +
                 "unknownReason=${error.javaClass.simpleName}:${error.message ?: "no-message"}"
         }
         null
@@ -352,8 +372,9 @@ object CurrentRankDetector {
         rank: Int?,
         tier: RankTier,
         unknownReason: String,
+        trigger: String,
+        phase: String,
     ) {
-        val phase = "pre-mulligan-rank-check"
         val extractedRank = numericRank?.toString() ?: "UNKNOWN"
         val resolvedRank = rank?.toString() ?: "UNKNOWN"
         val finalDecision = if (rank == null) "UNKNOWN_FAIL_CLOSED" else "RANK_RESOLVED"
@@ -361,7 +382,7 @@ object CurrentRankDetector {
         val normalized = normalizedOcrText.ifBlank { "<empty>" }
         val runId = System.getProperty("hs.script.e2e.run-id", "normal")
         val annotationLines = listOf(
-            "stage=$phase runId=$runId",
+            "stage=$phase trigger=$trigger runId=$runId",
             "provider=$provider",
             "roi=x=${roiBounds.x} y=${roiBounds.y} w=${roiBounds.width} h=${roiBounds.height}",
             "rawOCR=$raw",
@@ -382,7 +403,7 @@ object CurrentRankDetector {
                 ),
             ),
             category = "rank-detection",
-            trigger = "rank-ocr-$finalDecision",
+            trigger = "$trigger-$finalDecision",
             state = "rank=$resolvedRank|numericRank=$extractedRank|tier=${tier.name}",
             phase = phase,
             ocrText = raw,
@@ -391,13 +412,14 @@ object CurrentRankDetector {
         )
         val evidencePath = evidence?.file?.absolutePath ?: "not-saved"
         val evidenceMessage = {
-            "RANK_OCR_EVIDENCE provider=$provider numericRank=$extractedRank rank=$resolvedRank tier=${tier.name} " +
+            "RANK_OCR_EVIDENCE provider=$provider trigger=$trigger phase=$phase " +
+                "numericRank=$extractedRank rank=$resolvedRank tier=${tier.name} " +
                 "unknownReason=$unknownReason finalDecision=$finalDecision " +
                 "path=$evidencePath link=${evidence?.link ?: "none"}"
         }
         if (rank == null) log.warn(evidenceMessage) else log.info(evidenceMessage)
         val roiMessage = {
-            "RANK_OCR_ROI provider=$provider x=${roiBounds.x} y=${roiBounds.y} " +
+            "RANK_OCR_ROI provider=$provider trigger=$trigger phase=$phase x=${roiBounds.x} y=${roiBounds.y} " +
                 "width=${roiBounds.width} height=${roiBounds.height} raw=$raw " +
                 "normalized=$normalized confidence=unavailable unknownReason=$unknownReason " +
                 "screenshot=$evidencePath"
