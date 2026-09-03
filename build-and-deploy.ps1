@@ -25,6 +25,8 @@ if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
     $RuntimeRoot = Join-Path $parent ([string]$channelConfig.runtimeDirectoryName)
 }
 if ([string]::IsNullOrWhiteSpace($ShortcutName)) { $ShortcutName = [string]$channelConfig.shortcutName }
+$iconFileName = [string]$channelConfig.iconFileName
+if ([string]::IsNullOrWhiteSpace($iconFileName)) { throw 'release-channel.json iconFileName is missing' }
 $runtimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\')
 $runtimeExists = Test-Path -LiteralPath $runtimeRoot -PathType Container
 if (-not $runtimeExists -and $Channel -eq 'beta') {
@@ -183,6 +185,14 @@ try {
 }
 
 $deployedJar = Join-Path $runtimeRoot (Split-Path -Leaf $builtJar)
+$iconPath = Join-Path $runtimeRoot $iconFileName
+if ($Channel -eq 'beta') {
+    $iconGenerator = Join-Path $projectRoot 'tools\create-beta-icon.ps1'
+    if (-not (Test-Path -LiteralPath $iconGenerator -PathType Leaf)) { throw "Beta icon generator missing: $iconGenerator" }
+    & $iconGenerator -SourceExe (Join-Path $runtimeRoot 'hs-script.exe') -OutputPath $iconPath
+    if ($LASTEXITCODE -ne 0) { throw "Beta icon generation failed with exit code $LASTEXITCODE" }
+}
+if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) { throw "Application icon missing: $iconPath" }
 $appHash = (Get-FileHash -LiteralPath $deployedJar -Algorithm SHA256).Hash.ToLowerInvariant()
 $manifestText = Get-JarManifest $deployedJar
 $unwrappedManifest = $manifestText -replace "\r?\n ", ''
@@ -206,6 +216,7 @@ $manifest = [ordered]@{
     releaseChannel = $Channel
     runtimeDirectoryName = [string]$channelConfig.runtimeDirectoryName
     shortcutName = $ShortcutName
+    iconFile = $iconFileName
     deploymentId = "$(Split-Path -Leaf $deployedJar)|$($appHash.Substring(0, 16))"
     generatedAt = (Get-Date).ToUniversalTime().ToString('o')
     appJar = Split-Path -Leaf $deployedJar
@@ -220,7 +231,7 @@ $manifest = [ordered]@{
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
-& (Join-Path $projectRoot 'sync-shortcuts.ps1') -RuntimeRoot $runtimeRoot -ShortcutName $ShortcutName
+& (Join-Path $projectRoot 'sync-shortcuts.ps1') -RuntimeRoot $runtimeRoot -ShortcutName $ShortcutName -IconPath $iconPath
 if ($LASTEXITCODE -ne 0) { throw "Shortcut synchronization failed with exit code $LASTEXITCODE" }
 
 Write-Output "DEPLOYED_JAR=$deployedJar"

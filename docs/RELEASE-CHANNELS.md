@@ -19,6 +19,9 @@ This repository has two intentionally separate release channels.
 - Beta deploys use a separate `Hearthstone Script Beta` runtime and
   `Hearthstone Script Beta.lnk` shortcuts, so they cannot overwrite stable
   files, manifests, PIDs, logs, or launcher selection.
+- Beta shortcuts use `hs-script-beta.ico`, which is generated from the stable
+  application icon with a visible `B` badge. Stable shortcuts continue to use
+  the application icon embedded in `hs-script.exe`.
 - Beta is allowed to fail or change behavior while it is under investigation;
   it must never be promoted to `main` merely because it compiles.
 - CI labels beta artifacts as beta and validates that the branch metadata and
