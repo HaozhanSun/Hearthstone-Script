@@ -720,6 +720,27 @@ enum class ConfigEnum(
     ),
 
     /**
+     * Screen recovery debug screenshot retention cap in bytes. Only the
+     * dedicated debug-screenshots directory is managed by this setting.
+     */
+    SCREEN_RECOVERY_SCREENSHOT_MAX_BYTES(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "268435456" },
+    ),
+
+    /** Maximum number of screen recovery debug screenshots to retain. */
+    SCREEN_RECOVERY_SCREENSHOT_MAX_FILES(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "60" },
+    ),
+
+    /** Minimum interval between recovery debug screenshot writes. */
+    SCREEN_RECOVERY_SCREENSHOT_COOLDOWN_MS(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "1500" },
+    ),
+
+    /**
      * 启用控制台热键
      */
     ENABLE_CONSOLE_HOTKEY(
