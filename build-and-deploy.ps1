@@ -1,6 +1,9 @@
 [CmdletBinding()]
 param(
-    [string]$RuntimeRoot = "C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script",
+    [string]$RuntimeRoot = "",
+    [ValidateSet('Stable', 'Beta')]
+    [string]$Channel = "",
+    [string]$ShortcutName = "",
     [switch]$SkipTests
 )
 
@@ -8,7 +11,25 @@ $ErrorActionPreference = "Stop"
 [System.Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem') | Out-Null
 
 $projectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $MyInvocation.MyCommand.Path)).TrimEnd('\')
+$channelConfigPath = Join-Path $projectRoot 'release-channel.json'
+if (-not (Test-Path -LiteralPath $channelConfigPath -PathType Leaf)) { throw "Release channel configuration missing: $channelConfigPath" }
+$channelConfig = Get-Content -LiteralPath $channelConfigPath -Raw | ConvertFrom-Json
+$configuredChannel = ([string]$channelConfig.channel).ToLowerInvariant()
+if ([string]::IsNullOrWhiteSpace($Channel)) { $Channel = $configuredChannel }
+$Channel = $Channel.ToLowerInvariant()
+if ($Channel -notin @('stable', 'beta')) { throw "Unsupported release channel: $Channel" }
+if ($Channel -ne $configuredChannel) { throw "Requested channel $Channel does not match release-channel.json channel $configuredChannel" }
+$stableRoot = "C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script"
+if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
+    $parent = Split-Path -Parent $stableRoot
+    $RuntimeRoot = Join-Path $parent ([string]$channelConfig.runtimeDirectoryName)
+}
+if ([string]::IsNullOrWhiteSpace($ShortcutName)) { $ShortcutName = [string]$channelConfig.shortcutName }
 $runtimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\')
+$runtimeExists = Test-Path -LiteralPath $runtimeRoot -PathType Container
+if (-not $runtimeExists -and $Channel -eq 'beta') {
+    New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
+}
 $pomPath = Join-Path $projectRoot 'pom.xml'
 $mavenWrapper = Join-Path $projectRoot 'mvnw.cmd'
 $targetRoot = Join-Path $projectRoot 'hs-script-app\target'
@@ -182,6 +203,9 @@ $strategyHash = (Get-FileHash -LiteralPath $strategyLib -Algorithm SHA256).Hash.
 $cardSdkHash = (Get-FileHash -LiteralPath $cardSdkLib -Algorithm SHA256).Hash.ToLowerInvariant()
 $manifest = [ordered]@{
     schema = 1
+    releaseChannel = $Channel
+    runtimeDirectoryName = [string]$channelConfig.runtimeDirectoryName
+    shortcutName = $ShortcutName
     deploymentId = "$(Split-Path -Leaf $deployedJar)|$($appHash.Substring(0, 16))"
     generatedAt = (Get-Date).ToUniversalTime().ToString('o')
     appJar = Split-Path -Leaf $deployedJar
@@ -196,7 +220,7 @@ $manifest = [ordered]@{
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
-& (Join-Path $projectRoot 'sync-shortcuts.ps1') -RuntimeRoot $runtimeRoot
+& (Join-Path $projectRoot 'sync-shortcuts.ps1') -RuntimeRoot $runtimeRoot -ShortcutName $ShortcutName
 if ($LASTEXITCODE -ne 0) { throw "Shortcut synchronization failed with exit code $LASTEXITCODE" }
 
 Write-Output "DEPLOYED_JAR=$deployedJar"
