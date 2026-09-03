@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "channel": "stable",
+  "branch": "main",
+  "displayName": "Hearthstone Script",
+  "runtimeDirectoryName": "Hearthstone Script",
+  "shortcutName": "Hearthstone Script.lnk",
+  "artifactLabel": "stable",
+  "promotionRule": "Only promote a beta commit after the online E2E completion gate passes."
+}
