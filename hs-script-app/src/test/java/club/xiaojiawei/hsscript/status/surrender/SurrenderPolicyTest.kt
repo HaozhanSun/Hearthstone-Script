@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
+import java.awt.Rectangle
 import java.nio.file.Files
 import java.nio.file.Path
 import java.awt.Color
@@ -304,10 +305,24 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun rankRoiMatchesKnownGood1920LayoutAndExcludesPlayerName() {
+        val badge = CurrentRankDetector.rankBadgeBoundsForTest(1920, 1080)
+        val expanded = CurrentRankDetector.rankExpandedBoundsForTest(1920, 1080)
+        val digit = CurrentRankDetector.rankDigitBoundsForTest(1920, 1080)
+
+        assertEquals(Rectangle(0, 920, 100, 90), badge)
+        assertTrue(badge.x + badge.width <= 100)
+        assertTrue(expanded.x + expanded.width <= 100)
+        assertTrue(digit.x + digit.width <= 70)
+        assertTrue(digit.y >= 950)
+    }
+
+    @Test
     fun paddleXRankDetectionUsesSingleSidecarPass() {
         val originalSettingsProvider = OcrRuntime.settingsProvider
         val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
         val calls = mutableListOf<String>()
+        val roiSizes = mutableListOf<Pair<Int, Int>>()
         try {
             OcrRuntime.settingsProvider = {
                 PaddleXOcrSettings(
@@ -323,6 +338,7 @@ class SurrenderPolicyTest {
                 object : OcrTextBridge {
                     override fun recognize(image: BufferedImage, desc: String): String {
                         calls += desc
+                        roiSizes += image.width to image.height
                         return "10"
                     }
 
@@ -336,6 +352,7 @@ class SurrenderPolicyTest {
 
             assertEquals(10, detection?.rank)
             assertEquals(listOf("current-rank-paddlex-badge"), calls)
+            assertEquals(listOf(100 to 90), roiSizes)
         } finally {
             OcrRuntime.settingsProvider = originalSettingsProvider
             OcrRuntime.paddleXBridgeFactory = originalBridgeFactory

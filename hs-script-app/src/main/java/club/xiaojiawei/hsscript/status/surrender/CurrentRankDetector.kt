@@ -38,16 +38,19 @@ object CurrentRankDetector {
     private const val RANK_REGION_LEFT = 0.0
     // The rank badge is the small numeric shield at the extreme lower-left.
     // Keep the crop away from the player name, timer, and other HUD numbers.
-    private const val RANK_REGION_TOP = 0.82
-    private const val RANK_REGION_WIDTH = 0.075
-    private const val RANK_REGION_HEIGHT = 0.13
+    // Keep this aligned with experiments/paddlex-vision RankBadgeBounds.
+    // At 1920x1080 this is (0,920)-(100,1010); the player's name begins to
+    // the right of this box and must never be part of rank OCR input.
+    private const val RANK_REGION_TOP = 0.852
+    private const val RANK_REGION_WIDTH = 0.0521
+    private const val RANK_REGION_HEIGHT = 0.0833
     private const val RANK_EXPANDED_LEFT = 0.0
-    private const val RANK_EXPANDED_TOP = 0.78
-    private const val RANK_EXPANDED_WIDTH = 0.12
-    private const val RANK_EXPANDED_HEIGHT = 0.20
-    // The full badge contains the portrait, shield ornament, rank numeral,
-    // and (at this resolution) the first pixels of the player name.  Feeding
-    // that whole image to Tesseract produces values such as 939/51/191.
+    private const val RANK_EXPANDED_TOP = 0.82
+    private const val RANK_EXPANDED_WIDTH = 0.0521
+    private const val RANK_EXPANDED_HEIGHT = 0.13
+    // The former broad crop contained the portrait, shield ornament, rank
+    // numeral, and first pixels of the player name. Feeding it to Tesseract
+    // produced values such as 939/51/191.
     // This inner window is centered on the white numeral row in the 1920x1080
     // Hearthstone HUD and deliberately excludes the portrait and name.
     private const val RANK_DIGIT_LEFT = 0.018
@@ -197,10 +200,16 @@ object CurrentRankDetector {
         saveEvidence: Boolean = false,
     ): Detection? = runCatching {
         val rankRegion = cropRankRegion(screen)
+        val rankRegionBounds = rankBadgeBoundsForTest(screen.width, screen.height)
         val tessData = File(TESS_DATA_PATH)
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
         if (OcrRuntime.isLegacySelected() && !chiSim.isFile) {
-            log.info { "RANK_OCR_SKIPPED reason=missing-tessdata path=${chiSim.absolutePath}" }
+            log.info {
+                "RANK_OCR_SKIPPED provider=LEGACY " +
+                    "RANK_OCR_ROI x=${rankRegionBounds.x} y=${rankRegionBounds.y} " +
+                    "width=${rankRegionBounds.width} height=${rankRegionBounds.height} " +
+                    "reason=missing-tessdata path=${chiSim.absolutePath}"
+            }
             return null
         }
         // The badge contains Arabic numerals.  Tesseract's English model is
@@ -224,39 +233,36 @@ object CurrentRankDetector {
             RANK_DIGIT_HEIGHT,
         )
         if (!OcrRuntime.isLegacySelected()) {
-            val ocrTexts = listOf(
+            val rawOcrTexts = listOf(
                 OcrRuntime.recognize(
                     rankRegion,
                     "current-rank-paddlex-badge",
                     legacyOcr = { "" },
                     allowEmptyProbeResult = true,
-                )
-                    .replace(Regex("\\s+"), ""),
+                ),
             )
+            val ocrTexts = rawOcrTexts.map(::normalizeOcrText)
             val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
             val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
                 looksLikeTwoDigitRank(rankRegion)
             val rank = resolveRankCandidates(ocrTexts, visualTenHint)
             val tier = detectTierVisual(rankRegion)
+            val unknownReason = unknownReason(rank, tier, ocrTexts)
             log.info {
                 "RANK_OCR provider=PADDLEX passes=${ocrTexts.size} bounds=$bounds " +
-                    "region=${rankRegion.width}x${rankRegion.height} " +
-                    "text=${ocrText.ifBlank { "<empty>" }} " +
+                    "roi=x${rankRegionBounds.x},y${rankRegionBounds.y},w${rankRegionBounds.width},h${rankRegionBounds.height} " +
+                    "raw=${rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
+                    "normalized=${ocrText.ifBlank { "<empty>" }} confidence=unavailable " +
                     "candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
                     "tierCandidates=<visual-only> visualTenHint=$visualTenHint " +
-                    "tier=${tier.name} rank=${rank ?: "UNKNOWN"}"
+                    "tier=${tier.name} rank=${rank ?: "UNKNOWN"} unknownReason=$unknownReason"
             }
             if (saveEvidence && (tier === RankTier.UNKNOWN || rank == null)) {
                 val evidence = UnknownStateScreenshot.save(
                     image = screen,
                     regions = listOf(
                         UnknownStateScreenshot.UnknownRegion(
-                            Rectangle(
-                                0,
-                                (screen.height * RANK_REGION_TOP).toInt(),
-                                (screen.width * RANK_REGION_WIDTH).toInt(),
-                                (screen.height * RANK_REGION_HEIGHT).toInt(),
-                            ),
+                            rankRegionBounds,
                             "rank-badge-unresolved",
                         ),
                     ),
@@ -268,8 +274,17 @@ object CurrentRankDetector {
                 )
                 log.warn {
                     "RANK_OCR_EVIDENCE provider=PADDLEX rank=${rank ?: "UNKNOWN"} tier=${tier.name} " +
+                        "unknownReason=$unknownReason " +
                         "path=${evidence?.file?.absolutePath ?: "not-saved"} " +
                         "link=${evidence?.link ?: "none"}"
+                }
+                log.warn {
+                    "RANK_OCR_ROI provider=PADDLEX x=${rankRegionBounds.x} y=${rankRegionBounds.y} " +
+                        "width=${rankRegionBounds.width} height=${rankRegionBounds.height} " +
+                        "raw=${rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
+                        "normalized=${ocrText.ifBlank { "<empty>" }} confidence=unavailable " +
+                        "unknownReason=$unknownReason " +
+                        "screenshot=${evidence?.file?.absolutePath ?: "not-saved"}"
                 }
             }
             return Detection(rank, tier, ocrText, bounds)
@@ -285,9 +300,10 @@ object CurrentRankDetector {
             digitRegion to 11,
             digitRegion to 13,
         )
-        val ocrTexts = ocrInputs.map { (image, pageSegMode) ->
+        val rawOcrTexts = ocrInputs.map { (image, pageSegMode) ->
             ocrRank(image, tessData, pageSegMode, rankLanguage)
         }
+        val ocrTexts = rawOcrTexts.map(::normalizeOcrText)
         val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
         val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
             looksLikeTwoDigitRank(rankRegion)
@@ -305,23 +321,23 @@ object CurrentRankDetector {
         } else {
             detectTierVisual(rankRegion)
         }
+        val digitRegionBounds = rankDigitBoundsForTest(screen.width, screen.height)
+        val unknownReason = unknownReason(rank, tier, ocrTexts)
         log.info {
-            "RANK_OCR bounds=$bounds region=${rankRegion.width}x${rankRegion.height} " +
-                "text=${ocrText.ifBlank { "<empty>" }} candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
+            "RANK_OCR provider=LEGACY bounds=$bounds " +
+                "roi=x${digitRegionBounds.x},y${digitRegionBounds.y},w${digitRegionBounds.width},h${digitRegionBounds.height} " +
+                "raw=${rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
+                "normalized=${ocrText.ifBlank { "<empty>" }} confidence=unavailable " +
+                "candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
                 "tierCandidates=${tierOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
-                "visualTenHint=$visualTenHint tier=${tier.name} rank=${rank ?: "UNKNOWN"}"
+                "visualTenHint=$visualTenHint tier=${tier.name} rank=${rank ?: "UNKNOWN"} unknownReason=$unknownReason"
         }
         if (saveEvidence && (tier === RankTier.UNKNOWN || rank == null)) {
             val evidence = UnknownStateScreenshot.save(
                 image = screen,
                 regions = listOf(
                     UnknownStateScreenshot.UnknownRegion(
-                        Rectangle(
-                            0,
-                            (screen.height * RANK_REGION_TOP).toInt(),
-                            (screen.width * RANK_REGION_WIDTH).toInt(),
-                            (screen.height * RANK_REGION_HEIGHT).toInt(),
-                        ),
+                        rankRegionBounds,
                         "rank-badge-unresolved",
                     ),
                 ),
@@ -332,19 +348,72 @@ object CurrentRankDetector {
                 ocrText = (ocrTexts + tierOcrTexts).joinToString("|") { it.ifBlank { "<empty>" } },
             )
             log.warn {
-                "RANK_OCR_EVIDENCE rank=${rank ?: "UNKNOWN"} tier=${tier.name} " +
+                "RANK_OCR_EVIDENCE provider=LEGACY rank=${rank ?: "UNKNOWN"} tier=${tier.name} " +
+                    "unknownReason=$unknownReason " +
                     "path=${evidence?.file?.absolutePath ?: "not-saved"} " +
                     "link=${evidence?.link ?: "none"}"
+            }
+            log.warn {
+                "RANK_OCR_ROI provider=LEGACY x=${rankRegionBounds.x} y=${rankRegionBounds.y} " +
+                    "width=${rankRegionBounds.width} height=${rankRegionBounds.height} " +
+                    "raw=${rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
+                    "normalized=${ocrText.ifBlank { "<empty>" }} confidence=unavailable " +
+                    "unknownReason=$unknownReason " +
+                    "screenshot=${evidence?.file?.absolutePath ?: "not-saved"}"
             }
         }
         Detection(rank, tier, ocrText, bounds)
     }.getOrElse { error ->
-        log.warn(error) { "RANK_OCR_FAILED" }
+        val provider = if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
+        log.warn(error) {
+            "RANK_OCR_FAILED provider=$provider confidence=unavailable " +
+                "unknownReason=${error.javaClass.simpleName}:${error.message ?: "no-message"}"
+        }
         null
     }
 
     private fun cropRankRegion(image: BufferedImage): BufferedImage {
         return crop(image, RANK_REGION_LEFT, RANK_REGION_TOP, RANK_REGION_WIDTH, RANK_REGION_HEIGHT)
+    }
+
+    internal fun rankBadgeBoundsForTest(imageWidth: Int, imageHeight: Int): Rectangle =
+        normalizedBounds(
+            imageWidth,
+            imageHeight,
+            RANK_REGION_LEFT,
+            RANK_REGION_TOP,
+            RANK_REGION_WIDTH,
+            RANK_REGION_HEIGHT,
+        )
+
+    internal fun rankExpandedBoundsForTest(imageWidth: Int, imageHeight: Int): Rectangle =
+        normalizedBounds(
+            imageWidth,
+            imageHeight,
+            RANK_EXPANDED_LEFT,
+            RANK_EXPANDED_TOP,
+            RANK_EXPANDED_WIDTH,
+            RANK_EXPANDED_HEIGHT,
+        )
+
+    internal fun rankDigitBoundsForTest(imageWidth: Int, imageHeight: Int): Rectangle =
+        normalizedBounds(
+            imageWidth,
+            imageHeight,
+            RANK_DIGIT_LEFT,
+            RANK_DIGIT_TOP,
+            RANK_DIGIT_WIDTH,
+            RANK_DIGIT_HEIGHT,
+        )
+
+    private fun normalizeOcrText(text: String): String = text.replace(Regex("\\s+"), "")
+
+    private fun unknownReason(rank: Int?, tier: RankTier, ocrTexts: List<String>): String = when {
+        rank == null && tier === RankTier.UNKNOWN && ocrTexts.all(String::isBlank) -> "empty-text-and-tier"
+        rank == null && tier === RankTier.UNKNOWN -> "rank-and-tier-unresolved"
+        rank == null -> "rank-unresolved"
+        tier === RankTier.UNKNOWN -> "tier-unresolved"
+        else -> "none"
     }
 
     /**
@@ -424,13 +493,29 @@ object CurrentRankDetector {
         widthRatio: Double,
         heightRatio: Double,
     ): BufferedImage {
-        val x = (image.width * left).toInt().coerceIn(0, image.width - 1)
-        val y = (image.height * top).toInt().coerceIn(0, image.height - 1)
-        val width = (image.width * widthRatio).toInt().coerceAtLeast(1)
-            .coerceAtMost(image.width - x)
-        val height = (image.height * heightRatio).toInt().coerceAtLeast(1)
-            .coerceAtMost(image.height - y)
-        return image.getSubimage(x, y, width, height)
+        val bounds = normalizedBounds(image.width, image.height, left, top, widthRatio, heightRatio)
+        return image.getSubimage(bounds.x, bounds.y, bounds.width, bounds.height)
+    }
+
+    private fun normalizedBounds(
+        imageWidth: Int,
+        imageHeight: Int,
+        left: Double,
+        top: Double,
+        widthRatio: Double,
+        heightRatio: Double,
+    ): Rectangle {
+        require(imageWidth > 0 && imageHeight > 0) { "image dimensions must be positive" }
+        val x = (imageWidth * left).toInt().coerceIn(0, imageWidth - 1)
+        val y = (imageHeight * top).toInt().coerceIn(0, imageHeight - 1)
+        val right = (imageWidth * (left + widthRatio)).toInt().coerceAtMost(imageWidth)
+        val bottom = (imageHeight * (top + heightRatio)).toInt().coerceAtMost(imageHeight)
+        return Rectangle(
+            x,
+            y,
+            (right - x).coerceAtLeast(1),
+            (bottom - y).coerceAtLeast(1),
+        )
     }
 
     private fun ocrRank(image: BufferedImage, tessData: File, pageSegMode: Int, language: String): String {
@@ -449,7 +534,6 @@ object CurrentRankDetector {
             "current-rank-psm$pageSegMode-$suffix",
             allowEmptyProbeResult = true,
         )
-            .replace(Regex("\\s+"), "")
 
         if (pageSegMode == 10) {
             // The badge's outlined 1 and 0 touch visually after scaling. OCR
