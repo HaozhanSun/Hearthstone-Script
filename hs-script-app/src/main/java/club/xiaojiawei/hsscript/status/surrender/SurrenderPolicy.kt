@@ -13,6 +13,7 @@ import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.statistics.Record
 import club.xiaojiawei.hsscript.statistics.RecordDaoEx
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
+import club.xiaojiawei.hsscript.status.PauseStatus
 import java.time.LocalDateTime
 
 /**
@@ -79,7 +80,6 @@ object SurrenderPolicy {
     private const val NAME_RESOLUTION_TIMEOUT_MS = 3_000L
     private const val NAME_RESOLUTION_POLL_MS = 100L
     private const val RANK_RETRY_INTERVAL_MS = 750L
-    private const val MAX_RANK_INSPECTION_ATTEMPTS = 8
     private const val WIN_RATE_GUARD_THRESHOLD_PERCENT = 45.0
     private const val WIN_RATE_GUARD_MIN_GAMES = 5
     /** Protect the next game after seven persisted concessions. */
@@ -356,8 +356,9 @@ object SurrenderPolicy {
     }
 
     /**
-     * The rank gate is the primary policy: Silver 10 is the floor, so Silver
-     * 9..1 and every tier above Silver surrender before mulligan. The old
+     * The rank gate is the primary policy: rank 5 and rank 10 are the only
+     * safe targets, regardless of tier, so every other confirmed rank
+     * surrenders before mulligan. The old
      * 45% win-rate gate is a secondary insurance and is evaluated from every
      * completed result for the selected strategy, including our own
      * concessions. Otherwise a win-rate-triggered surrender would never enter
@@ -406,14 +407,8 @@ object SurrenderPolicy {
                 }
                 return result
             }
-            if (rankInspectionAttempts >= MAX_RANK_INSPECTION_ATTEMPTS) {
-                rankCheckCompleted = true
-                log.warn {
-                    "RANK_POLICY_CONTINUE reason=rank-ocr-unresolved " +
-                        "attempts=$rankInspectionAttempts"
-                }
-            }
-            return null
+            rankCheckCompleted = true
+            return blockForUnresolvedRank(rankInspectionAttempts)
         }
 
         rankCheckCompleted = true
@@ -440,26 +435,36 @@ object SurrenderPolicy {
         return result
     }
 
+    @Suppress("UNUSED_PARAMETER")
     internal fun evaluateCurrentRank(
         rank: Int,
         tier: CurrentRankDetector.RankTier = CurrentRankDetector.RankTier.UNKNOWN,
     ): SurrenderRuleResult? {
-        if (tier.order > CurrentRankDetector.RankTier.SILVER.order) {
-            return SurrenderRuleResult(
-                ruleId = "current-tier-above-silver-10",
-                matched = false,
-                shouldSurrender = true,
-                reason = "current-tier=${tier.name.lowercase()}-rank=$rank",
-            )
-        }
-        if (tier === CurrentRankDetector.RankTier.BRONZE) return null
-        if (rank !in 1..10 || rank == 10) return null
+        if (rank !in 1..10 || rank == 5 || rank == 10) return null
         return SurrenderRuleResult(
-            ruleId = "current-rank-is-not-10",
+            ruleId = "current-rank-is-not-target",
             matched = false,
             shouldSurrender = true,
-            reason = "current-rank=$rank",
+            reason = "current-rank=$rank target-ranks=5,10",
         )
+    }
+
+    internal fun unresolvedRankDecision(attempts: Int): SurrenderRuleResult =
+        SurrenderRuleResult(
+            ruleId = "rank-ocr-unresolved",
+            matched = false,
+            shouldSurrender = false,
+            reason = "rank-ocr-unresolved attempts=$attempts",
+        )
+
+    internal fun blockForUnresolvedRank(attempts: Int): SurrenderRuleResult {
+        val result = unresolvedRankDecision(attempts)
+        PauseStatus.isPause = true
+        log.error {
+            "RANK_POLICY_BLOCKED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                "rule=${result.ruleId} reason=${result.reason} action=PAUSE ocrFailure=true"
+        }
+        return result
     }
 
     data class WinRateSnapshot(

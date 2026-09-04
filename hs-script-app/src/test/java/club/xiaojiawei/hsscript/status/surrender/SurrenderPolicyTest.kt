@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.ocr.OcrTextBridge
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
 import club.xiaojiawei.hsscript.status.DebugScreenshotRing
+import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
@@ -215,25 +216,40 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun rankResolverPrefersExplicitTenOverPartialOneReads() {
+    fun rankResolverUsesTheHighestConfidenceCandidate() {
         assertEquals(
-            10,
+            1,
             CurrentRankDetector.resolveRankCandidates(listOf("1", "", "10", "1")),
+        )
+        assertEquals(
+            8,
+            CurrentRankDetector.resolveRankCandidates(listOf("8", "8", "10")),
         )
     }
 
     @Test
-    fun rankResolverDoesNotPromoteARealLowerRankFromAVisualHint() {
+    fun rankResolverUsesTheBestNumericCandidateFromAVisualHint() {
         assertEquals(
             7,
             CurrentRankDetector.resolveRankCandidates(listOf("7", "7", "7"), visualTenHint = true),
         )
-        assertNull(
+        assertEquals(
+            2,
             CurrentRankDetector.resolveRankCandidates(listOf("", "2", "", ""), visualTenHint = true),
         )
-        assertNull(
+        assertEquals(
+            1,
             CurrentRankDetector.resolveRankCandidates(listOf("9", "1", "", "1"), visualTenHint = true),
         )
+    }
+
+    @Test
+    fun rankResolverReportsTopCandidateConfidence() {
+        val candidate = CurrentRankDetector.resolveRankCandidate(listOf("9", "1", "", "1"))
+
+        assertTrue(candidate != null)
+        assertEquals(1, candidate!!.rank)
+        assertEquals(2.0 / 3.0, candidate.confidence, 0.001)
     }
 
     @Test
@@ -411,15 +427,18 @@ class SurrenderPolicyTest {
             val resolved = CurrentRankDetector.detectCapturedImage(screen, saveEvidence = true)
             assertEquals(10, resolved?.rank)
             ocrText = "商8"
+            val resolvedLowerRank = CurrentRankDetector.detectCapturedImage(screen, saveEvidence = true)
+            assertEquals(8, resolvedLowerRank?.rank)
+            ocrText = ""
             val unresolved = CurrentRankDetector.detectCapturedImage(screen, saveEvidence = true)
             assertNull(unresolved?.rank)
             val files = root.walkTopDown().filter { it.isFile && it.extension == "png" }.toList()
-            assertEquals(2, files.size)
-            assertTrue(files.any { it.name.contains("RANK_RESOLVED") })
+            assertEquals(3, files.size)
+            assertEquals(2, files.count { it.name.contains("RANK_RESOLVED") })
             assertTrue(files.any { it.name.contains("UNKNOWN_FAIL_CLOSED") })
-            // The image-side diagnostic keeps the extracted numeric token
-            // visible even though the single PaddleX pass remains unresolved
-            // by the conservative multi-pass policy.
+            // The image-side diagnostic keeps the extracted numeric token and
+            // confidence visible, while a completely empty result remains
+            // unresolved and fail-closed.
             assertTrue(files.all { ImageIO.read(it).width == 1920 })
             assertTrue(files.all { it.length() > 0 })
         } finally {
@@ -454,17 +473,18 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun rankResolverRequiresAgreementAndTreatsRepeatedOneAsAmbiguous() {
-        assertNull(CurrentRankDetector.resolveRankCandidates(listOf("1", "", "")))
-        assertNull(CurrentRankDetector.resolveRankCandidates(listOf("1", "1", "")))
-        assertNull(CurrentRankDetector.resolveRankCandidates(listOf("1", "1", ""), visualTenHint = true))
+    fun rankResolverUsesTheTopCandidateAndOnlyEmptyInputIsUnresolved() {
+        assertEquals(1, CurrentRankDetector.resolveRankCandidates(listOf("1", "", "")))
+        assertEquals(1, CurrentRankDetector.resolveRankCandidates(listOf("1", "1", "")))
+        assertEquals(1, CurrentRankDetector.resolveRankCandidates(listOf("1", "1", ""), visualTenHint = true))
         assertEquals(2, CurrentRankDetector.resolveRankCandidates(listOf("2", "2", "")))
         assertEquals(9, CurrentRankDetector.resolveRankCandidates(listOf("9", "9", "19")))
     }
 
     @Test
-    fun rankResolverRejectsConflictingDigitsFromTransitionFrame() {
-        assertNull(
+    fun rankResolverUsesTheHighestCountFromAConflictingTransitionFrame() {
+        assertEquals(
+            4,
             CurrentRankDetector.resolveRankCandidates(
                 listOf("", "2", "4", "4", "", "3"),
             ),
@@ -477,20 +497,11 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun silverTenIsTheSafeFloorButGoldTenRequestsSurrender() {
-        assertNull(
-            SurrenderPolicy.evaluateCurrentRank(
-                rank = 10,
-                tier = CurrentRankDetector.RankTier.SILVER,
-            ),
-        )
-        val result = SurrenderPolicy.evaluateCurrentRank(
-            rank = 10,
-            tier = CurrentRankDetector.RankTier.GOLD,
-        )
-        assertTrue(result != null)
-        assertTrue(result!!.shouldSurrender)
-        assertEquals("current-tier-above-silver-10", result.ruleId)
+    fun ranksFiveAndTenAreSafeRegardlessOfTier() {
+        for (tier in CurrentRankDetector.RankTier.values()) {
+            assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 5, tier = tier))
+            assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 10, tier = tier))
+        }
     }
 
     @Test
@@ -592,7 +603,34 @@ class SurrenderPolicyTest {
 
         assertTrue(result != null)
         assertTrue(result!!.shouldSurrender)
-        assertEquals("current-rank=9", result.reason)
+        assertEquals("current-rank-is-not-target", result.ruleId)
+        assertEquals("current-rank=9 target-ranks=5,10", result.reason)
+    }
+
+    @Test
+    fun everyOtherConfirmedRankRequestsSurrenderRegardlessOfTier() {
+        for (rank in listOf(1, 2, 3, 4, 6, 7, 8, 9)) {
+            for (tier in CurrentRankDetector.RankTier.values()) {
+                val result = SurrenderPolicy.evaluateCurrentRank(rank = rank, tier = tier)
+                assertTrue(result != null)
+                assertTrue(result!!.shouldSurrender)
+                assertEquals("current-rank-is-not-target", result.ruleId)
+            }
+        }
+    }
+
+    @Test
+    fun unresolvedRankFailsClosedAndRequestsPause() {
+        val previousPause = PauseStatus.isPause
+        try {
+            PauseStatus.isPause = false
+            val result = SurrenderPolicy.blockForUnresolvedRank(attempts = 8)
+            assertFalse(result.shouldSurrender)
+            assertEquals("rank-ocr-unresolved", result.ruleId)
+            assertTrue(PauseStatus.isPause)
+        } finally {
+            PauseStatus.isPause = previousPause
+        }
     }
 
     @Test

@@ -72,7 +72,13 @@ object CurrentRankDetector {
         val rank: Int?,
         val tier: RankTier,
         val ocrText: String,
+        val confidence: Double?,
         val captureBounds: Rectangle,
+    )
+
+    data class RankCandidate(
+        val rank: Int,
+        val confidence: Double,
     )
 
     /** Parse only valid constructed ranks, preventing unrelated HUD numbers from becoming a decision. */
@@ -114,15 +120,16 @@ object CurrentRankDetector {
     }
 
     /**
-     * Resolve several independent OCR passes conservatively.  Hearthstone's
-     * stylized two-digit "10" is sometimes read as just "1".  A lone
-     * one-digit result is therefore not strong enough to trigger surrender;
-     * rank 10 wins immediately when any pass sees it, while ranks 1..9 need
-     * two agreeing passes.
+     * Select the strongest numeric candidate.  PaddleX may return one text
+     * result while legacy OCR returns several passes; both paths use the same
+     * count-weighted confidence so an imperfect result still produces a
+     * deterministic best guess instead of silently becoming "continue".
      */
-    internal fun resolveRankCandidates(candidates: List<String>, visualTenHint: Boolean = false): Int? {
+    internal fun resolveRankCandidate(
+        candidates: List<String>,
+        visualTenHint: Boolean = false,
+    ): RankCandidate? {
         val parsed = candidates.mapNotNull(::parseRankText)
-        if (parsed.contains(10)) return 10
         // On the real rank-10 badge, all OCR passes can be contaminated by
         // the shield artwork and return only invalid multi-digit noise (for
         // example 939|51|191|91).  If the independent visual check confirms
@@ -130,35 +137,22 @@ object CurrentRankDetector {
         // stronger evidence for rank 10 than accepting an arbitrary lower
         // rank.  Keep the numeric-evidence requirement so an empty/blank
         // screen cannot become rank 10 from the visual hint alone.
-        if (visualTenHint && parsed.isEmpty() && candidates.any { it.any(Char::isDigit) }) return 10
-        // A visual hint is only allowed to recover rank 10 when OCR produced
-        // no valid rank at all.  If OCR consistently sees a real lower rank
-        // (for example 7/8/9), promoting it to 10 is a dangerous false safe
-        // result: the surrender policy would then refuse a surrender.  The
-        // explicit "10" branch above remains authoritative.
+        if (visualTenHint && parsed.isEmpty() && candidates.any { it.any(Char::isDigit) }) {
+            return RankCandidate(rank = 10, confidence = 0.50)
+        }
         val counts = parsed.groupingBy { it }.eachCount()
-        val candidatesBelowTen = counts.entries
-            .filter { (rank, count) -> rank in MIN_RANK until MAX_RANK && count >= 2 }
-        if (candidatesBelowTen.isEmpty()) return null
-
-        // A transition frame or an unrelated HUD number can produce two
-        // agreeing OCR passes for one digit while other passes produce a
-        // different digit (for example 2|4|4|3 on the visible rank-10
-        // badge).  That is not enough evidence to surrender.  Lower-rank
-        // policy is destructive, so require a single unambiguous consensus.
-        val best = candidatesBelowTen.maxByOrNull { it.value } ?: return null
-        val highestCount = best.value
-        if (candidatesBelowTen.count { it.value == highestCount } > 1) return null
-        if (parsed.any { it != best.key }) return null
-        // A stylized rank-10 badge is commonly read as "1" by every OCR
-        // pass when the zero is faint or cropped.  A visual-width hint can
-        // also be produced by badge artwork when the numeral is absent (as
-        // on the matchmaking/mulligan screen).  Neither case is sufficient
-        // to distinguish rank 1 from rank 10, so repeated one-only OCR must
-        // remain unresolved and must never cause an irreversible surrender.
-        if (best.key == 1) return null
-        return best.key
+        val best = counts.entries
+            .filter { (rank, _) -> rank in MIN_RANK..MAX_RANK }
+            .maxWithOrNull(compareBy<Map.Entry<Int, Int>> { it.value }.thenBy { if (it.key == 10) 1 else 0 })
+            ?: return null
+        return RankCandidate(
+            rank = best.key,
+            confidence = best.value.toDouble() / parsed.size.coerceAtLeast(1),
+        )
     }
+
+    internal fun resolveRankCandidates(candidates: List<String>, visualTenHint: Boolean = false): Int? =
+        resolveRankCandidate(candidates, visualTenHint)?.rank
 
     /** Capture and OCR the rank badge without touching the Hearthstone input path. */
     fun detect(
@@ -264,7 +258,9 @@ object CurrentRankDetector {
             val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
             val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
                 looksLikeTwoDigitRank(rankRegion)
-            val rank = resolveRankCandidates(ocrTexts, visualTenHint)
+            val rankCandidate = resolveRankCandidate(ocrTexts, visualTenHint)
+            val rank = rankCandidate?.rank
+            val confidence = rankCandidate?.confidence
             val tier = detectTierVisual(rankRegion)
             val unknownReason = unknownReason(rank, tier, ocrTexts)
             log.info {
@@ -272,7 +268,7 @@ object CurrentRankDetector {
                     "passes=${ocrTexts.size} bounds=$bounds " +
                     "roi=x${rankRegionBounds.x},y${rankRegionBounds.y},w${rankRegionBounds.width},h${rankRegionBounds.height} " +
                     "raw=${rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
-                    "normalized=${ocrText.ifBlank { "<empty>" }} confidence=unavailable " +
+                    "normalized=${ocrText.ifBlank { "<empty>" }} confidence=${formatConfidence(confidence)} " +
                     "candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
                     "tierCandidates=<visual-only> visualTenHint=$visualTenHint " +
                     "tier=${tier.name} rank=${rank ?: "UNKNOWN"} unknownReason=$unknownReason"
@@ -284,15 +280,16 @@ object CurrentRankDetector {
                     provider = "PADDLEX",
                     rawOcrTexts = rawOcrTexts,
                     normalizedOcrText = ocrText,
-                    numericRank = extractNumericRank(ocrTexts),
+                    numericRank = rank,
                     rank = rank,
+                    confidence = confidence,
                     tier = tier,
                     unknownReason = unknownReason,
                     trigger = evidenceTrigger,
                     phase = evidencePhase,
                 )
             }
-            return Detection(rank, tier, ocrText, bounds)
+            return Detection(rank, tier, ocrText, confidence, bounds)
         }
         val ocrInputs = listOf(
             // Rank OCR must only see the small numeral window.  Running OCR
@@ -312,7 +309,9 @@ object CurrentRankDetector {
         val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
         val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
             looksLikeTwoDigitRank(rankRegion)
-        val rank = resolveRankCandidates(ocrTexts, visualTenHint)
+        val rankCandidate = resolveRankCandidate(ocrTexts, visualTenHint)
+        val rank = rankCandidate?.rank
+        val confidence = rankCandidate?.confidence
         val tierOcrTexts = listOf(rankRegion, expandedRegion).map { image ->
             ocrTier(image, tessData)
         }
@@ -332,7 +331,7 @@ object CurrentRankDetector {
             "RANK_OCR provider=LEGACY trigger=$evidenceTrigger phase=$evidencePhase bounds=$bounds " +
                 "roi=x${digitRegionBounds.x},y${digitRegionBounds.y},w${digitRegionBounds.width},h${digitRegionBounds.height} " +
                 "raw=${rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
-                "normalized=${ocrText.ifBlank { "<empty>" }} confidence=unavailable " +
+                "normalized=${ocrText.ifBlank { "<empty>" }} confidence=${formatConfidence(confidence)} " +
                 "candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
                 "tierCandidates=${tierOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
                 "visualTenHint=$visualTenHint tier=${tier.name} rank=${rank ?: "UNKNOWN"} unknownReason=$unknownReason"
@@ -344,15 +343,16 @@ object CurrentRankDetector {
                 provider = "LEGACY",
                 rawOcrTexts = rawOcrTexts,
                 normalizedOcrText = ocrText,
-                numericRank = extractNumericRank(ocrTexts),
+                numericRank = rank,
                 rank = rank,
+                confidence = confidence,
                 tier = tier,
                 unknownReason = unknownReason,
                 trigger = evidenceTrigger,
                 phase = evidencePhase,
             )
         }
-        Detection(rank, tier, ocrText, bounds)
+        Detection(rank, tier, ocrText, confidence, bounds)
     }.getOrElse { error ->
         val provider = if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
         log.warn(error) {
@@ -370,6 +370,7 @@ object CurrentRankDetector {
         normalizedOcrText: String,
         numericRank: Int?,
         rank: Int?,
+        confidence: Double?,
         tier: RankTier,
         unknownReason: String,
         trigger: String,
@@ -389,7 +390,7 @@ object CurrentRankDetector {
             "normalizedOCR=$normalized",
             "numericRank=$extractedRank",
             "resolvedRank=$resolvedRank",
-            "confidence=unavailable",
+            "confidence=${formatConfidence(confidence)}",
             "tier=${tier.name}",
             "unknownReason=$unknownReason",
             "finalDecision=$finalDecision",
@@ -414,24 +415,21 @@ object CurrentRankDetector {
         val evidenceMessage = {
             "RANK_OCR_EVIDENCE provider=$provider trigger=$trigger phase=$phase " +
                 "numericRank=$extractedRank rank=$resolvedRank tier=${tier.name} " +
-                "unknownReason=$unknownReason finalDecision=$finalDecision " +
+                "confidence=${formatConfidence(confidence)} unknownReason=$unknownReason finalDecision=$finalDecision " +
                 "path=$evidencePath link=${evidence?.link ?: "none"}"
         }
         if (rank == null) log.warn(evidenceMessage) else log.info(evidenceMessage)
         val roiMessage = {
             "RANK_OCR_ROI provider=$provider trigger=$trigger phase=$phase x=${roiBounds.x} y=${roiBounds.y} " +
                 "width=${roiBounds.width} height=${roiBounds.height} raw=$raw " +
-                "normalized=$normalized confidence=unavailable unknownReason=$unknownReason " +
+                "normalized=$normalized confidence=${formatConfidence(confidence)} unknownReason=$unknownReason " +
                 "screenshot=$evidencePath"
         }
         if (rank == null) log.warn(roiMessage) else log.info(roiMessage)
     }
 
-    /** Return a numeric extraction only when every valid OCR pass agrees. */
-    private fun extractNumericRank(ocrTexts: List<String>): Int? = ocrTexts
-        .mapNotNull(::parseRankText)
-        .distinct()
-        .singleOrNull()
+    private fun formatConfidence(confidence: Double?): String =
+        confidence?.let { String.format(Locale.ROOT, "%.2f", it) } ?: "unavailable"
 
     private fun cropRankRegion(image: BufferedImage): BufferedImage {
         return crop(image, RANK_REGION_LEFT, RANK_REGION_TOP, RANK_REGION_WIDTH, RANK_REGION_HEIGHT)
