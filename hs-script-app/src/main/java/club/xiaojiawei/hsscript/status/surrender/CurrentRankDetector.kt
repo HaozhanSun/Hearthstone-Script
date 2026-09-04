@@ -264,6 +264,10 @@ object CurrentRankDetector {
             val rankCandidate = resolveRankCandidate(ocrTexts, visualTenHint, recognition.confidence)
             val rank = rankCandidate?.rank
             val confidence = rankCandidate?.confidence
+            // PaddleX text is read from the complete badge crop so a
+            // non-numeric Legendary rating remains observable. The visual
+            // classifier consumes that same badge-local crop; the expanded
+            // crop remains diagnostic/tier-OCR input only.
             val tier = detectTierVisual(rankRegion)
             val unknownReason = unknownReason(rank, tier, ocrTexts)
             log.info {
@@ -557,9 +561,108 @@ object CurrentRankDetector {
      * has no broad red outer field.  HSB keeps the test stable across modest
      * brightness changes without accepting arbitrary red pixels.
      */
-    internal fun detectLegendaryBadgeVisual(image: BufferedImage): Boolean {
-        if (image.width < 16 || image.height < 16) return false
+    internal data class LegendaryVisualMetrics(
+        val warmPixels: Int,
+        val scannedPixels: Int,
+        val warmBounds: Rectangle?,
+        val activeColumnCount: Int,
+        val digitSegments: Int,
+        val digitSpan: Int,
+        val confirmed: Boolean,
+    )
 
+    internal fun detectLegendaryBadgeVisual(image: BufferedImage): Boolean =
+        legendaryVisualMetrics(image).confirmed
+
+    internal fun legendaryVisualMetrics(image: BufferedImage): LegendaryVisualMetrics {
+        if (image.width < 40 || image.height < 40) {
+            return LegendaryVisualMetrics(0, 0, null, 0, 0, 0, false)
+        }
+        val scanRight = (image.width * 0.80).toInt().coerceAtMost(image.width)
+        val scanBottom = (image.height * 0.82).toInt().coerceAtMost(image.height)
+        var warm = 0
+        var minX = image.width
+        var minY = image.height
+        var maxX = -1
+        var maxY = -1
+        for (y in 0 until scanBottom) {
+            for (x in 0 until scanRight) {
+                val rgb = image.getRGB(x, y)
+                val red = rgb ushr 16 and 0xff
+                val green = rgb ushr 8 and 0xff
+                val blue = rgb and 0xff
+                val hsb = Color.RGBtoHSB(red, green, blue, null)
+                if (hsb[0] * 360f in 22f..68f && hsb[1] >= 0.28f && hsb[2] >= 0.25f) {
+                    warm++
+                    minX = minOf(minX, x)
+                    minY = minOf(minY, y)
+                    maxX = maxOf(maxX, x)
+                    maxY = maxOf(maxY, y)
+                }
+            }
+        }
+        val scannedPixels = scanRight * scanBottom
+        if (maxX < minX || maxY < minY) {
+            return LegendaryVisualMetrics(warm, scannedPixels, null, 0, 0, 0, false)
+        }
+        val warmBounds = Rectangle(minX, minY, maxX - minX + 1, maxY - minY + 1)
+        if (warmBounds.width < 55 || warmBounds.height < 45 ||
+            warm.toDouble() / scannedPixels < 0.12
+        ) {
+            return LegendaryVisualMetrics(warm, scannedPixels, warmBounds, 0, 0, 0, false)
+        }
+
+        // The badge frame is saturated gold, while the rating glyphs are
+        // pale/near-neutral. Count bright columns rather than requiring
+        // artificial gaps between adjacent glyphs after client scaling.
+        val digitLeft = warmBounds.x + (warmBounds.width * 0.08).toInt()
+        val digitTop = warmBounds.y + (warmBounds.height * 0.16).toInt()
+        val digitBottom = (warmBounds.y + warmBounds.height * 0.78).toInt().coerceAtMost(scanBottom)
+        val activeColumns = mutableListOf<Int>()
+        val digitRight = minOf(warmBounds.x + warmBounds.width, scanRight)
+        for (x in digitLeft until digitRight) {
+            var bright = 0
+            for (y in digitTop until digitBottom) {
+                val rgb = image.getRGB(x, y)
+                val red = rgb ushr 16 and 0xff
+                val green = rgb ushr 8 and 0xff
+                val blue = rgb and 0xff
+                val hsb = Color.RGBtoHSB(red, green, blue, null)
+                if (hsb[2] >= 0.70f && hsb[1] <= 0.55f && red + green + blue > 420) bright++
+            }
+            if (bright >= 3) activeColumns += x
+        }
+        val strongColorSignature = legacyColorSignature(image)
+        if (activeColumns.isEmpty()) {
+            return LegendaryVisualMetrics(warm, scannedPixels, warmBounds, 0, 0, 0, strongColorSignature)
+        }
+        val segments = mutableListOf<Int>()
+        var start = activeColumns.first()
+        var previous = start
+        for (column in activeColumns.drop(1)) {
+            if (column > previous + 3) {
+                segments += previous - start + 1
+                start = column
+            }
+            previous = column
+        }
+        segments += previous - start + 1
+        val digitSegments = segments.count { it in 10..35 }
+        val digitSpan = activeColumns.last() - activeColumns.first() + 1
+        val confirmedByGlyphs = activeColumns.size >= 50 && digitSpan >= 60
+        val confirmed = strongColorSignature || confirmedByGlyphs
+        return LegendaryVisualMetrics(
+            warmPixels = warm,
+            scannedPixels = scannedPixels,
+            warmBounds = warmBounds,
+            activeColumnCount = activeColumns.size,
+            digitSegments = digitSegments,
+            digitSpan = digitSpan,
+            confirmed = confirmed,
+        )
+    }
+
+    private fun legacyColorSignature(image: BufferedImage): Boolean {
         val centerLeft = (image.width * 0.22).toInt()
         val centerTop = (image.height * 0.18).toInt()
         val centerRight = (image.width * 0.78).toInt().coerceAtMost(image.width)
@@ -570,20 +673,14 @@ object CurrentRankDetector {
         var warmCenter = 0
         var warmOuter = 0
         var redOuter = 0
-
         for (y in 0 until image.height) {
             for (x in 0 until image.width) {
                 val center = x in centerLeft until centerRight && y in centerTop until centerBottom
                 val rgb = image.getRGB(x, y)
-                val red = rgb ushr 16 and 0xff
-                val green = rgb ushr 8 and 0xff
-                val blue = rgb and 0xff
-                val hsb = Color.RGBtoHSB(red, green, blue, null)
-                val hueDegrees = hsb[0] * 360f
-                val warm = hueDegrees in 22f..68f && hsb[1] >= 0.28f && hsb[2] >= 0.25f
-                val saturatedRed = (hueDegrees <= 18f || hueDegrees >= 345f) &&
-                    hsb[1] >= 0.38f && hsb[2] >= 0.20f
-
+                val hsb = Color.RGBtoHSB(rgb ushr 16 and 0xff, rgb ushr 8 and 0xff, rgb and 0xff, null)
+                val hue = hsb[0] * 360f
+                val warm = hue in 22f..68f && hsb[1] >= 0.28f && hsb[2] >= 0.25f
+                val saturatedRed = (hue <= 18f || hue >= 345f) && hsb[1] >= 0.38f && hsb[2] >= 0.20f
                 if (center) {
                     centerPixels++
                     if (warm) warmCenter++
@@ -595,7 +692,6 @@ object CurrentRankDetector {
                 if (warm) warmMetal++
             }
         }
-
         if (centerPixels == 0 || outerPixels == 0) return false
         val warmRatio = warmMetal.toDouble() / (centerPixels + outerPixels)
         val warmCenterRatio = warmCenter.toDouble() / centerPixels

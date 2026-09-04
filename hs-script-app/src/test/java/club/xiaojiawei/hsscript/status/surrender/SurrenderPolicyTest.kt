@@ -520,7 +520,8 @@ class SurrenderPolicyTest {
         graphics.fillOval(69, 61, 26, 46)
         graphics.dispose()
 
-        assertTrue(CurrentRankDetector.detectLegendaryBadgeVisual(legendary))
+        val metrics = CurrentRankDetector.legendaryVisualMetrics(legendary)
+        assertTrue(metrics.confirmed, metrics.toString())
         assertEquals(CurrentRankDetector.RankTier.LEGEND, CurrentRankDetector.detectTierVisual(legendary))
     }
 
@@ -541,6 +542,18 @@ class SurrenderPolicyTest {
         goldGraphics.fillRect(35, 35, 94, 98)
         goldGraphics.dispose()
         assertFalse(CurrentRankDetector.detectLegendaryBadgeVisual(gold))
+    }
+
+    @Test
+    fun activeLegendaryWatchdogScreenshotUsesBroadBadgeProbeRoi() {
+        val file = File(
+            "C:/Users/yzjsh/Documents/Codex/2026-08-15/for-all-these-delay-short-are-2/outputs/Hearthstone Script Beta/log/unknown-states/screen-watchdog/2026-09-04/unknown-state-20260904-131032-989-screen-watchdog-normal-surrender-retry-2f2b75b1-efa0-43a3-b113-9d1844c18d05.png",
+        )
+        if (!file.isFile) return
+        val image = ImageIO.read(file)
+        val bounds = Rectangle(0, (image.height * 0.82).toInt(), (image.width * 0.075).toInt(), (image.height * 0.13).toInt())
+        val badge = image.getSubimage(bounds.x, bounds.y, bounds.width, bounds.height)
+        assertEquals(CurrentRankDetector.RankTier.LEGEND, CurrentRankDetector.detectTierVisual(badge))
     }
 
     @Test
