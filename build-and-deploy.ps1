@@ -80,6 +80,28 @@ function Get-JarEntrySha256([string]$JarPath, [string]$EntryName) {
     } finally { $zip.Dispose() }
 }
 
+function Test-UsableCardDatabase([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    if ((Get-Item -LiteralPath $Path).Length -le 0) { return $false }
+    $python = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($null -eq $python) { return $false }
+    $probe = @'
+import sqlite3,sys
+connection=sqlite3.connect(sys.argv[1])
+row=connection.execute("select 1 from sqlite_master where type='table' and name='cards' limit 1").fetchone()
+connection.close()
+sys.exit(0 if row else 1)
+'@
+    & $python.Source -c $probe $Path *> $null
+    return $LASTEXITCODE -eq 0
+}
+
+function Assert-UsableCardDatabase([string]$Path, [string]$Context) {
+    if (-not (Test-UsableCardDatabase $Path)) {
+        throw "$Context does not contain a usable SQLite cards table: $Path"
+    }
+}
+
 function ConvertTo-IniPath([string]$Path) {
     return $Path.Replace('\', '/').Replace(':', '\:')
 }
@@ -211,7 +233,18 @@ try {
     if ((Get-Item -LiteralPath $stagedCardDb).Length -le 0) {
         throw "Assembled deployment contains an empty hs_cards.db: $builtZip"
     }
-    foreach ($item in @('resources', 'lib', 'hs_cards.db', 'logback.xml', 'create-aot.bat', 'debug-hs-script.bat', 'hs-script.bat', 'unlock.bat', 'card-update-util.exe', 'force-stop.exe', 'hs-script.exe', 'inject-util.exe', 'install-drive.exe', 'update.exe', (Split-Path -Leaf $builtJar))) {
+    Assert-UsableCardDatabase $stagedCardDb 'Assembled deployment'
+    $runtimeCardDb = Join-Path $runtimeRoot 'hs_cards.db'
+    if (Test-Path -LiteralPath $runtimeCardDb -PathType Leaf) {
+        $backupName = "hs_cards.db.backup-$((Get-Date).ToString('yyyyMMdd-HHmmssfff'))-$([guid]::NewGuid().ToString('N')).bak"
+        $backupPath = Join-Path $runtimeRoot $backupName
+        Copy-Item -LiteralPath $runtimeCardDb -Destination $backupPath -Force
+        Write-Output "CARD_DB_BACKUP=$backupPath"
+    }
+    Copy-Item -LiteralPath $stagedCardDb -Destination $runtimeCardDb -Force
+    Assert-UsableCardDatabase $runtimeCardDb 'Deployed runtime'
+    Write-Output "CARD_DB_VERIFIED=$runtimeCardDb"
+    foreach ($item in @('resources', 'lib', 'logback.xml', 'create-aot.bat', 'debug-hs-script.bat', 'hs-script.bat', 'unlock.bat', 'card-update-util.exe', 'force-stop.exe', 'hs-script.exe', 'inject-util.exe', 'install-drive.exe', 'update.exe', (Split-Path -Leaf $builtJar))) {
         $source = Join-Path $staging $item
         if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $runtimeRoot -Recurse -Force }
     }
@@ -238,6 +271,8 @@ try {
 } finally {
     if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
 }
+
+Assert-UsableCardDatabase $runtimeCardDb 'Post-deployment runtime'
 
 Sync-PaddleXOcrConfig $runtimeRoot
 

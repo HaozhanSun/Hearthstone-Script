@@ -85,6 +85,10 @@ class BuildChannelUiContractTest {
         val deploy = Files.readString(root.resolve("build-and-deploy.ps1"))
         assertTrue(deploy.contains("Assembled deployment is missing hs_cards.db"))
         assertTrue(deploy.contains("Assembled deployment contains an empty hs_cards.db"))
+        assertTrue(deploy.contains("does not contain a usable SQLite cards table"))
+        assertTrue(deploy.contains("CARD_DB_BACKUP="))
+        assertTrue(deploy.contains("Copy-Item -LiteralPath \$stagedCardDb -Destination \$runtimeCardDb -Force"))
+        assertTrue(deploy.contains("Post-deployment runtime"))
         assertEquals(
             "hs-script-show-main.beta.request",
             ExistingInstanceSignal.requestPathForChannel("Beta").fileName.toString(),
