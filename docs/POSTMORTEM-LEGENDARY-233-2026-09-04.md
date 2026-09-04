@@ -66,6 +66,12 @@ The precise offline structured run, including the real PaddleX raw/normalized
 text, provider contract result, current detector output, and all crop paths,
 is saved by the diagnostic harness before the implementation change.
 
+The final visual probe is intentionally smaller than the original diagnostic
+crop: at 1920x1080 it is approximately `x=0,y=885,w=105,h=130`. Numeric OCR
+continues to use the independent narrow `x=23,y=941,w=57,h=47` ROI. The
+smaller visual crop removes the player-name pixels and excess lower background
+without clipping the active Legendary badge.
+
 ## Root cause hypothesis to verify offline
 
 The failure is not a Gold-versus-Platinum rule issue. The complete badge is

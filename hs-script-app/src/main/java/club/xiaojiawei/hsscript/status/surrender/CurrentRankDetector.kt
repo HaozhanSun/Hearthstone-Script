@@ -49,8 +49,11 @@ object CurrentRankDetector {
     // the player name and other HUD numbers but retains the shield artwork.
     private const val RANK_BADGE_VISUAL_LEFT = 0.0
     private const val RANK_BADGE_VISUAL_TOP = 0.82
-    private const val RANK_BADGE_VISUAL_WIDTH = 0.075
-    private const val RANK_BADGE_VISUAL_HEIGHT = 0.13
+    // The active 1920x1080 screenshot places the badge inside roughly
+    // x=0..100,y=885..1013. Keep a small safety margin without carrying the
+    // player name or the empty lower background into visual classification.
+    private const val RANK_BADGE_VISUAL_WIDTH = 0.055
+    private const val RANK_BADGE_VISUAL_HEIGHT = 0.12
     private const val RANK_EXPANDED_LEFT = 0.01198
     private const val RANK_EXPANDED_TOP = 0.87130
     private const val RANK_EXPANDED_WIDTH = 0.02969
