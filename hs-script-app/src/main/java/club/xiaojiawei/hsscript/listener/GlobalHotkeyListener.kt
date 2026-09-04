@@ -3,6 +3,7 @@ package club.xiaojiawei.hsscript.listener
 import club.xiaojiawei.hsscript.bean.HotKey
 import club.xiaojiawei.hsscript.dll.CSystemDll
 import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
@@ -219,9 +220,25 @@ object GlobalHotkeyListener : HotkeyListener {
     }
 
     private fun setPauseState(paused: Boolean, source: String) {
+        if (paused) {
+            log.warn {
+                "PAUSE_REQUESTED source=$source pauseBefore=${PauseStatus.isPause} " +
+                    "workingBefore=${WorkTimeListener.working}"
+            }
+        } else {
+            log.info {
+                "RESUME_REQUESTED source=$source pauseBefore=${PauseStatus.isPause} " +
+                    "workingBefore=${WorkTimeListener.working}"
+            }
+        }
+        if (paused) WorkTimeListener.working = false
         PauseStatus.isPause = paused
         log.info {
             "捕捉到热键[$source]，${if (paused) "暂停脚本" else "开始脚本"}"
+        }
+        log.info {
+                "${if (paused) "PAUSE_ACTIVE" else "RESUME_ACTIVE"} source=$source " +
+                "pause=${PauseStatus.isPause} working=${WorkTimeListener.working}"
         }
     }
 

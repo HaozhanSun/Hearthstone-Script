@@ -28,6 +28,7 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
 
     private val changeCardScheduled = AtomicBoolean(false)
     private val mulliganStageConfirmed = AtomicBoolean(false)
+    private val mulliganInputConfirmed = AtomicBoolean(false)
 
     @Volatile
     private var latestMyMulliganState: MulliganStateEnum? = null
@@ -59,6 +60,7 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
     fun resetForNewGame() {
         changeCardScheduled.set(false)
         mulliganStageConfirmed.set(false)
+        mulliganInputConfirmed.set(false)
         latestMyMulliganState = null
         replayedMulliganInput = null
         pendingUnknownMulliganInputs.clear()
@@ -131,6 +133,25 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         if (PowerLogListener.replayingExistingLog) {
             replayedMulliganInput = tagChangeEntity
             log.info { "E2E恢复回放：跳过历史换牌点击，等待实时日志继续" }
+            return
+        }
+
+        // This is the first authoritative event that proves the local
+        // mulligan UI exists. Rank OCR is not allowed before this boundary.
+        mulliganInputConfirmed.set(true)
+        val rankDecision = SurrenderPolicy.evaluateCurrentRankBeforeMulligan()
+        if (rankDecision != null) {
+            dispatchSurrenderDecision(rankDecision, "mulligan-input-preflight")
+            return
+        }
+        if (System.getProperty("hs.script.e2e.skip-surrender-policy") != "true" &&
+            SurrenderPolicy.currentRankInspectionState() !==
+            club.xiaojiawei.hsscript.status.surrender.RankInspectionState.RESOLVED
+        ) {
+            log.warn {
+                "MULLIGAN_ACTION_WAITING_FOR_RANK state=${SurrenderPolicy.currentRankInspectionState()} " +
+                    "action=WAIT dispatch=false"
+            }
             return
         }
 
@@ -224,6 +245,13 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         }
         return false
     }
+
+    /** True only after a live local MULLIGAN_STATE=INPUT has been classified. */
+    fun isRankInspectionReady(): Boolean =
+        mulliganInputConfirmed.get() &&
+            latestMyMulliganState === MulliganStateEnum.INPUT &&
+            war.currentPhase === WarPhaseEnum.REPLACE_CARD &&
+            !PowerLogListener.replayingExistingLog
 
     private fun hasPlayerIdentity(): Boolean =
         war.me.gameId.isNotBlank() ||

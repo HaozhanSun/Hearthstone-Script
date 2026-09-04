@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.ocr.OcrTextBridge
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
 import club.xiaojiawei.hsscript.status.DebugScreenshotRing
+import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
@@ -72,6 +73,21 @@ class SurrenderPolicyTest {
             "consecutive-surrenders-over-seven",
             SurrenderPolicy.evaluatePersistentStreakGuard(snapshot)?.ruleId,
         )
+    }
+
+    @Test
+    fun streakGuardRequestsSurrenderAfterFiveWinsAndBlocksAfterSevenSurrenders() {
+        val winDecision = SurrenderPolicy.persistentStreakDecision(
+            PersistentStreakSnapshot(consecutiveSurrenders = 0, consecutiveWins = 5),
+        )
+        assertTrue(winDecision!!.shouldSurrender)
+        assertFalse(winDecision.blocksAutomaticSurrender)
+
+        val surrenderDecision = SurrenderPolicy.persistentStreakDecision(
+            PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
+        )
+        assertFalse(surrenderDecision!!.shouldSurrender)
+        assertTrue(surrenderDecision.blocksAutomaticSurrender)
     }
 
     @Test
@@ -617,6 +633,58 @@ class SurrenderPolicyTest {
                 assertEquals("current-rank-is-not-target", result.ruleId)
             }
         }
+    }
+
+    @Test
+    fun rankSevenIsRejectedByNumberAloneAndDoesNotDependOnTier() {
+        for (tier in CurrentRankDetector.RankTier.values()) {
+            val result = SurrenderPolicy.evaluateCurrentRank(rank = 7, tier = tier)
+            assertTrue(result!!.shouldSurrender)
+            assertEquals("current-rank=7 target-ranks=5,10", result.reason)
+        }
+    }
+
+    @Test
+    fun earlyRankUnknownWaitsWithoutPauseOrSurrender() {
+        val first = SurrenderPolicy.classifyRankInspection(
+            rank = null,
+            detectionAvailable = true,
+            attempt = 1,
+        )
+        assertEquals(RankInspectionState.WAITING_FOR_RANK, first.state)
+        assertTrue(first.wait)
+        assertFalse(first.pause)
+
+        val sidecarFailure = SurrenderPolicy.classifyRankInspection(
+            rank = null,
+            detectionAvailable = false,
+            attempt = 2,
+        )
+        assertEquals("provider-failure-or-capture-failure", sidecarFailure.reason)
+        assertTrue(sidecarFailure.wait)
+        assertFalse(sidecarFailure.pause)
+    }
+
+    @Test
+    fun exhaustedRankUnknownPausesAndNeverRequestsSurrender() {
+        val decision = SurrenderPolicy.classifyRankInspection(
+            rank = null,
+            detectionAvailable = false,
+            attempt = 3,
+        )
+        assertEquals(RankInspectionState.BLOCKED, decision.state)
+        assertTrue(decision.pause)
+        assertFalse(decision.wait)
+        val action = SurrenderPolicy.unresolvedRankDecision(3)
+        assertFalse(action.shouldSurrender)
+        assertTrue(action.blocksAutomaticSurrender)
+    }
+
+    @Test
+    fun actionDispatchGateRejectsPausedOrNonWorkingState() {
+        assertFalse(ActionDispatchGate.allowedForState(paused = true, working = true))
+        assertFalse(ActionDispatchGate.allowedForState(paused = false, working = false))
+        assertTrue(ActionDispatchGate.allowedForState(paused = false, working = true))
     }
 
     @Test

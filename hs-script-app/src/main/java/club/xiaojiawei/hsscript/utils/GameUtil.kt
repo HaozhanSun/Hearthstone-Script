@@ -13,6 +13,7 @@ import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.RuntimeSafety
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
@@ -26,6 +27,8 @@ import club.xiaojiawei.hsscriptbase.bean.LRunnable
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
+import club.xiaojiawei.hsscriptbase.enums.StepEnum
+import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import club.xiaojiawei.hsscriptbase.util.isFalse
 import club.xiaojiawei.hsscriptbase.util.randomSelectOrNull
@@ -74,6 +77,21 @@ object GameUtil {
 
     internal fun isSurrenderStateConfirmed(mode: ModeEnum?, inWar: Boolean): Boolean =
         SurrenderPolicy.hasConfirmedGameState(mode, inWar)
+
+    /**
+     * Terminal state always wins over a late surrender request.  The phase
+     * and turn markers are authoritative in the event stream; the result IDs
+     * cover the short interval where PLAYSTATE has arrived but phase parsing
+     * has not caught up.  A live settlement task is also a terminal-page
+     * marker and must not be reused as a surrender opportunity.
+     */
+    internal fun isTerminalGameState(): Boolean =
+        WAR.currentPhase == WarPhaseEnum.GAME_OVER ||
+            WAR.currentTurnStep == StepEnum.FINAL_GAMEOVER ||
+            WAR.won.isNotBlank() ||
+            WAR.lost.isNotBlank() ||
+            WAR.conceded.isNotBlank() ||
+            gameEndTasks.isNotEmpty()
 
     /**
      * The first stale-result recovery click is deliberately deterministic so
@@ -609,6 +627,16 @@ object GameUtil {
             log.info { "Power.log恢复回放：跳过历史投降请求" }
             return
         }
+        if (isTerminalGameState()) {
+            log.info {
+                "SURRENDER_ACTION_BLOCKED reason=terminal-state-priority " +
+                    "phase=${WAR.currentPhase.name} step=${WAR.currentTurnStep?.name ?: "NONE"} " +
+                    "won=${WAR.won.isNotBlank()} lost=${WAR.lost.isNotBlank()} " +
+                    "conceded=${WAR.conceded.isNotBlank()} settlementTask=${gameEndTasks.isNotEmpty()} dispatch=false"
+            }
+            return
+        }
+        if (!ActionDispatchGate.allow("surrender.request")) return
 //        SystemUtil.frontWindow(ScriptStaticData.getGameHWND());
 //        按ESC键弹出投降界面
 //        ScriptStaticData.ROBOT.keyPress(27);
@@ -653,6 +681,8 @@ object GameUtil {
                 {
                     fun stopSurrenderTask() = cancelGameEndTask()
                     if (PauseStatus.isPause) {
+                        stopSurrenderTask()
+                    } else if (!ActionDispatchGate.allow("surrender.retry")) {
                         stopSurrenderTask()
                     } else if (WarEx.warCount > warCount || (isGamePlay && Mode.currMode !== ModeEnum.GAMEPLAY)) {
                         stopSurrenderTask()
@@ -745,13 +775,29 @@ object GameUtil {
                                 "mode=${Mode.currMode} inWar=${WarEx.inWar}"
                         }
                         if (!skipEndTurn) {
+                            if (!ActionDispatchGate.allow("surrender.retry.before-end-turn")) {
+                                stopSurrenderTask()
+                                return@scheduleWithFixedDelay
+                            }
                             END_TURN_RECT.lClick()
                         }
                         SystemUtil.delayTiny()
+                        if (!ActionDispatchGate.allow("surrender.retry.before-menu")) {
+                            stopSurrenderTask()
+                            return@scheduleWithFixedDelay
+                        }
                         lClickSettings()
                         SystemUtil.delayShortMedium()
+                        if (!ActionDispatchGate.allow("surrender.retry.before-confirm")) {
+                            stopSurrenderTask()
+                            return@scheduleWithFixedDelay
+                        }
                         SURRENDER_RECT.lClick()
                         SystemUtil.delayTiny()
+                        if (!ActionDispatchGate.allow("surrender.retry.before-restart")) {
+                            stopSurrenderTask()
+                            return@scheduleWithFixedDelay
+                        }
                         RESTART_GAME_RECT.lClick()
                     }
                 },
