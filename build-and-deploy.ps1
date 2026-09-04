@@ -80,6 +80,44 @@ function Get-JarEntrySha256([string]$JarPath, [string]$EntryName) {
     } finally { $zip.Dispose() }
 }
 
+function ConvertTo-IniPath([string]$Path) {
+    return $Path.Replace('\', '/').Replace(':', '\:')
+}
+
+function Sync-PaddleXOcrConfig([string]$Root) {
+    $configPath = Join-Path $Root 'config\script.ini'
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return }
+
+    $userHome = [Environment]::GetFolderPath('UserProfile')
+    $python = [Environment]::GetEnvironmentVariable('PADDLEX_OCR_PYTHON')
+    if ([string]::IsNullOrWhiteSpace($python) -and -not [string]::IsNullOrWhiteSpace($userHome)) {
+        $venvPython = Join-Path $userHome '.codex\paddlex-ocr-venv\Scripts\python.exe'
+        if (Test-Path -LiteralPath $venvPython -PathType Leaf) { $python = $venvPython }
+    }
+    $modulePath = Join-Path $Root 'resources\paddlex-vision\src'
+    $cachePath = if ([string]::IsNullOrWhiteSpace($userHome)) { '' } else { Join-Path $userHome '.cache\paddlex-ocr-models' }
+    $defaults = [ordered]@{
+        PADDLEX_OCR_PYTHON = $python
+        PADDLEX_OCR_MODULE_PATH = $modulePath
+        PADDLEX_OCR_MODEL_CACHE = $cachePath
+    }
+
+    $content = [System.IO.File]::ReadAllText($configPath)
+    $updated = $content
+    foreach ($entry in $defaults.GetEnumerator()) {
+        if ([string]::IsNullOrWhiteSpace($entry.Value)) { continue }
+        $pattern = "(?m)^([ \t]*$([regex]::Escape($entry.Key))[ \t]*=[ \t]*)[ \t]*$"
+        $value = ConvertTo-IniPath ([string]$entry.Value)
+        $updated = [regex]::Replace($updated, $pattern, { param($match) $match.Groups[1].Value + $value })
+    }
+    if ($updated -ne $content) {
+        [System.IO.File]::WriteAllText($configPath, $updated, $utf8NoBom)
+        Write-Output "PADDLEX_CONFIG_SYNC=$configPath"
+    } else {
+        Write-Output "PADDLEX_CONFIG_SYNC=unchanged:$configPath"
+    }
+}
+
 if (-not (Test-Path -LiteralPath $pomPath -PathType Leaf)) { throw "pom.xml missing: $pomPath" }
 if (-not (Test-Path -LiteralPath $mavenWrapper -PathType Leaf)) { throw "Maven wrapper missing: $mavenWrapper" }
 if (-not (Test-Path -LiteralPath $runtimeRoot -PathType Container)) { throw "Runtime root missing: $runtimeRoot" }
@@ -193,6 +231,8 @@ try {
 } finally {
     if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
 }
+
+Sync-PaddleXOcrConfig $runtimeRoot
 
 $deployedJar = Join-Path $runtimeRoot (Split-Path -Leaf $builtJar)
 $iconPath = Join-Path $runtimeRoot $iconFileName

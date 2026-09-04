@@ -648,7 +648,7 @@ enum class ConfigEnum(
     ),
 
     /**
-     * PaddleX OCR Python 可执行文件；空值使用 python 或 PADDLEX_OCR_PYTHON
+     * PaddleX OCR Python 可执行文件；空值按独立 venv、环境变量、python 顺序解析
      */
     PADDLEX_OCR_PYTHON(
         group = DEV_CONFIG_GROUP,
@@ -672,7 +672,7 @@ enum class ConfigEnum(
     ),
 
     /**
-     * PaddleX/Paddle 模型缓存目录；空值使用 PaddleX/Paddle 默认缓存
+     * PaddleX/Paddle 模型缓存目录；空值使用用户目录下的 .cache/paddlex-ocr-models
      */
     PADDLEX_OCR_MODEL_CACHE(
         group = DEV_CONFIG_GROUP,

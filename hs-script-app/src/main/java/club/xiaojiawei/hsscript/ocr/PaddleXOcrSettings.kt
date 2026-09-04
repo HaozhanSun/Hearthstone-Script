@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.utils.getLong
 import club.xiaojiawei.hsscript.utils.getString
 import java.nio.file.Path
 import kotlin.io.path.exists
+import kotlin.io.path.isRegularFile
 
 data class PaddleXOcrSettings(
     val enabled: Boolean,
@@ -30,7 +31,7 @@ data class PaddleXOcrSettings(
                 enabled = OcrProviderMode.fromConfig().usesPaddleX,
                 pythonExecutable = ConfigEnum.PADDLEX_OCR_PYTHON.getString()
                     .ifBlank { System.getenv("PADDLEX_OCR_PYTHON").orEmpty() }
-                    .ifBlank { DEFAULT_PYTHON_EXECUTABLE },
+                    .ifBlank { defaultPythonExecutable() },
                 modulePath = ConfigEnum.PADDLEX_OCR_MODULE_PATH.getString()
                     .ifBlank { System.getenv("PADDLEX_OCR_MODULE_PATH").orEmpty() }
                     .ifBlank { defaultModulePath() },
@@ -38,7 +39,8 @@ data class PaddleXOcrSettings(
                     .ifBlank { System.getenv("PADDLEX_OCR_DEVICE").orEmpty() }
                     .ifBlank { DEFAULT_DEVICE },
                 modelCachePath = ConfigEnum.PADDLEX_OCR_MODEL_CACHE.getString()
-                    .ifBlank { System.getenv("PADDLEX_OCR_MODEL_CACHE").orEmpty() },
+                    .ifBlank { System.getenv("PADDLEX_OCR_MODEL_CACHE").orEmpty() }
+                    .ifBlank { defaultModelCachePath() },
                 timeoutMs = ConfigEnum.PADDLEX_OCR_TIMEOUT_MS.getLong()
                     .takeIf { it > 0L }
                     ?: DEFAULT_TIMEOUT_MS,
@@ -50,6 +52,28 @@ data class PaddleXOcrSettings(
             if (packaged.exists()) return packaged.toString()
             val experiment = Path.of(ROOT_PATH, "experiments", "paddlex-vision", "src")
             return if (experiment.exists()) experiment.toString() else packaged.toString()
+        }
+
+        private fun defaultPythonExecutable(): String {
+            val home = System.getProperty("user.home").orEmpty()
+            if (home.isBlank()) return DEFAULT_PYTHON_EXECUTABLE
+            val candidates = if (System.getProperty("os.name").orEmpty().contains("win", ignoreCase = true)) {
+                listOf(
+                    Path.of(home, ".codex", "paddlex-ocr-venv", "Scripts", "python.exe"),
+                    Path.of(home, ".venv", "Scripts", "python.exe"),
+                )
+            } else {
+                listOf(
+                    Path.of(home, ".codex", "paddlex-ocr-venv", "bin", "python"),
+                    Path.of(home, ".venv", "bin", "python"),
+                )
+            }
+            return candidates.firstOrNull { it.isRegularFile() }?.toString() ?: DEFAULT_PYTHON_EXECUTABLE
+        }
+
+        private fun defaultModelCachePath(): String {
+            val home = System.getProperty("user.home").orEmpty()
+            return if (home.isBlank()) "" else Path.of(home, ".cache", "paddlex-ocr-models").toString()
         }
     }
 }

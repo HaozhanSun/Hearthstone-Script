@@ -27,6 +27,15 @@ class OcrRuntimeTest {
     }
 
     @Test
+    fun blankPaddleXPathsResolveToPackagedModuleAndStableLocalDefaults() {
+        val settings = PaddleXOcrSettings.fromConfig()
+
+        assertTrue(settings.pythonExecutable.isNotBlank())
+        assertTrue(settings.modulePath.isNotBlank())
+        assertTrue(settings.modelCachePath.isNotBlank())
+    }
+
+    @Test
     fun legacyOnlyUsesLegacyOcrAndDoesNotConstructPaddleXBridge() {
         OcrRuntime.providerModeProvider = { OcrProviderMode.LEGACY_ONLY }
         OcrRuntime.settingsProvider = {
