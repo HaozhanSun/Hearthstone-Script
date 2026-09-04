@@ -68,4 +68,24 @@ class UiLogFormatterTest {
         assertTrue(UiLogFormatter.isHiddenFromUi(message))
         assertFalse(UiLogFormatter.isHiddenFromUi("当前处于：回合结束阶段"))
     }
+
+    @Test
+    fun `native E2E skip diagnostics stay out of the user feed`() {
+        val messages = listOf(
+            "E2E_NATIVE_SKIP CreateMutex",
+            "E2E_NATIVE_SKIP UpdateGameWindow polling",
+            "E2E_NATIVE_SKIP system proxy lookup enabled=false",
+        )
+
+        assertTrue(messages.all(UiLogFormatter::isHiddenFromUi))
+        assertTrue(messages.map(UiLogFormatter::format).all { it.startsWith("端到端诊断") })
+    }
+
+    @Test
+    fun `safe termination audit stays in the file log only even when repeated`() {
+        val repeated = List(3) { "E2E_SAFE_TERMINATE target=Hearthstone.exe pid=${1000 + it}" }
+
+        assertTrue(repeated.all(UiLogFormatter::isHiddenFromUi))
+        assertFalse(UiLogFormatter.isHiddenFromUi("E2E_PROCESS_CHECK expected=Hearthstone.exe tasklistFound=true"))
+    }
 }
