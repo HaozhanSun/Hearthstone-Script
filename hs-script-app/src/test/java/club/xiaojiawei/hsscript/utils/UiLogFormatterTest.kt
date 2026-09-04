@@ -88,4 +88,10 @@ class UiLogFormatterTest {
         assertTrue(repeated.all(UiLogFormatter::isHiddenFromUi))
         assertFalse(UiLogFormatter.isHiddenFromUi("E2E_PROCESS_CHECK expected=Hearthstone.exe tasklistFound=true"))
     }
+
+    @Test
+    fun `rank ROI evidence is retained in file logs but hidden from compact feed`() {
+        assertTrue(UiLogFormatter.isHiddenFromUi("RANK_OCR_ROI provider=PADDLEX screenshot=rank.png"))
+        assertFalse(UiLogFormatter.isHiddenFromUi("RANK_OCR_EVIDENCE provider=PADDLEX path=rank.png"))
+    }
 }

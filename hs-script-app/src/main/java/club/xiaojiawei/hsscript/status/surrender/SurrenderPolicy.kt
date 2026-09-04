@@ -342,6 +342,23 @@ object SurrenderPolicy {
     }
 
     /**
+     * Never Surrender disables the five-win protective surrender, but it must
+     * not disable the independent seven-concession fail-closed pause.
+     */
+    private fun enforcePersistentStreakGuardForCurrentPolicy(): SurrenderRuleResult? =
+        enforcePersistentStreakGuard()?.let { result ->
+            if (NeverSurrenderPolicy.enabled() && result.shouldSurrender) {
+                log.info {
+                    "SURRENDER_POLICY_BYPASS reason=never-surrender rule=${result.ruleId} " +
+                        "action=CONTINUE dispatch=false queue=false retry=false replan=false"
+                }
+                null
+            } else {
+                result
+            }
+        }
+
+    /**
      * Evaluate the rival hero as soon as the live model has a resolved hero
      * entity during the pre-mulligan phases.  Unknown/placeholder names are
      * ignored here: an early surrender is safe only after the portrait's
@@ -352,7 +369,11 @@ object SurrenderPolicy {
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") {
             return null
         }
-        enforcePersistentStreakGuard()?.let { return it }
+        if (NeverSurrenderPolicy.enabled()) {
+            log.info { "SURRENDER_POLICY_BYPASS reason=never-surrender stage=${SurrenderCheckStage.OPPONENT_HERO_RESOLVED.name} action=CONTINUE" }
+            return null
+        }
+        enforcePersistentStreakGuardForCurrentPolicy()?.let { return it }
         if (war.currentPhase !in setOf(
                 WarPhaseEnum.FILL_DECK,
                 WarPhaseEnum.DRAWN_INIT_CARD,
@@ -455,7 +476,7 @@ object SurrenderPolicy {
             log.debug { "RANK_POLICY_SKIP reason=historical-power-log-replay" }
             return null
         }
-        enforcePersistentStreakGuard()?.let { return it }
+        enforcePersistentStreakGuardForCurrentPolicy()?.let { return it }
         if (!ReplaceCardPhaseStrategy.isRankInspectionReady()) {
             rankInspectionState = RankInspectionState.NOT_READY
             log.info {
@@ -516,6 +537,29 @@ object SurrenderPolicy {
 
         rankCheckCompleted = true
         rankInspectionState = RankInspectionState.RESOLVED
+        if (NeverSurrenderPolicy.enabled()) {
+            if (NeverSurrenderPolicy.rankIsIneligible(rank)) {
+                rankInspectionState = RankInspectionState.BLOCKED
+                PauseStatus.isPause = true
+                log.error {
+                    "RANK_POLICY_BLOCKED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                        "rank=$rank tier=${detection.tier.name} reason=never-surrender-rank-ineligible " +
+                        "action=PAUSE surrender=false dispatch=false"
+                }
+                return SurrenderRuleResult(
+                    ruleId = "rank-is-not-target-never-surrender",
+                    matched = true,
+                    shouldSurrender = false,
+                    reason = "current-rank=$rank target-ranks=5,10 never-surrender=true",
+                    blocksAutomaticSurrender = true,
+                )
+            }
+            log.info {
+                "SURRENDER_POLICY_BYPASS stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                    "rank=$rank tier=${detection.tier.name} reason=never-surrender action=CONTINUE"
+            }
+            return null
+        }
         val result = evaluateCurrentRank(rank, detection.tier) ?: run {
             evaluateWinRateGuard()?.let { winRateResult ->
                 rankCheckCompleted = true
@@ -713,7 +757,11 @@ object SurrenderPolicy {
             log.info { "E2E_TEST_ONLY surrender policy bypassed for card-play/attack verification" }
             return null
         }
-        enforcePersistentStreakGuard()?.let { return it }
+        if (NeverSurrenderPolicy.enabled()) {
+            log.info { "SURRENDER_POLICY_BYPASS reason=never-surrender stage=${SurrenderCheckStage.TURN_START.name} action=CONTINUE" }
+            return null
+        }
+        enforcePersistentStreakGuardForCurrentPolicy()?.let { return it }
         val rivalHero = war.rival.playArea.hero
         val rawHeroName = awaitOpponentHeroName(rivalHero)
         val normalizedHeroName = normalizeOpponentHeroName(rawHeroName)

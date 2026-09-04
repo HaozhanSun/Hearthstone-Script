@@ -53,6 +53,11 @@
                     <TitledPane fx:id="surrenderTitled" text="投降"
                                 styleClass="titled-pane-ui, titled-pane-ui-big, titled-pane-ui-pure, item-titled-pane">
                         <VBox styleClass="item-v-box">
+                            <SettingHBox name="Never Surrender（永不投降）" beta="true"
+                                         tip="Beta：勾选后禁止脚本主动投降；不会屏蔽真实的胜负和结算状态"
+                                         tabWindow="STRATEGY_SETTINGS" group="投降">
+                                <ConfigSwitch notificationManager="${notificationManager}" config="NEVER_SURRENDER"/>
+                            </SettingHBox>
                             <SettingHBox name="超回合投降" tip="指定我方回合数后自动投降" tabWindow="STRATEGY_SETTINGS"
                                          group="投降">
                                 <ConfigNumberField notificationManager="${notificationManager}"

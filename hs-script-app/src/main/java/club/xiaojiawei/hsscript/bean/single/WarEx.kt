@@ -228,7 +228,7 @@ object WarEx {
     private fun printResult(): Boolean {
         return war.run {
             var flag = false
-            if (won == me.gameId) {
+            if (isOurWin(won, me.gameId)) {
                 winCount++
                 winStreak++
                 flag = true
@@ -241,6 +241,10 @@ object WarEx {
             flag
         }
     }
+
+    /** Empty/unresolved player IDs must never be treated as an equal winner. */
+    internal fun isOurWin(winnerId: String, ourId: String): Boolean =
+        winnerId.isNotBlank() && ourId.isNotBlank() && winnerId == ourId
 
     @Synchronized
     fun getPlayer(playerId: String): Player {

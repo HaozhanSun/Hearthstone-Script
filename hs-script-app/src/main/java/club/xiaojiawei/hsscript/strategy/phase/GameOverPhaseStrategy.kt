@@ -225,15 +225,26 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
             if (e2eEnabled && !scriptControlledGame) {
                 "draw-or-unknown"
             } else {
-                when {
-                    WarEx.isWin -> "win"
-                    war.won.isNotBlank() -> "opponent-win"
-                    war.lost == war.me.gameId -> "loss"
-                    war.conceded == war.me.gameId -> "conceded"
-                    else -> "draw-or-unknown"
-                }
+            classifyResultOutcome(
+                isWin = WarEx.isWin,
+                wonId = war.won,
+                lostId = war.lost,
+                concededId = war.conceded,
+                ourId = war.me.gameId,
+                localSurrenderRequested = currentPlayerConceded,
+            )
             }
         } else null
+
+        club.xiaojiawei.hsscriptbase.config.log.info {
+            "TERMINAL_RESULT_CLASSIFIED outcome=${resultOutcome ?: "none"} " +
+                "authoritative=${authoritativeOutcome ?: "UNKNOWN"} modelWin=${WarEx.isWin} " +
+                "won=${war.won.ifBlank { "<blank>" }} " +
+                "lost=${war.lost.ifBlank { "<blank>" }} " +
+                "conceded=${war.conceded.ifBlank { "<blank>" }} " +
+                "ourId=${war.me.gameId.ifBlank { "<blank>" }} " +
+                "localSurrenderRequested=$currentPlayerConceded"
+        }
 
         if (e2eEnabled) {
             if (scriptControlledGame) {
@@ -318,9 +329,38 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
                 if (war.me.gameId.isBlank()) false else war.conceded != war.me.gameId
             else -> null
         }
-        return modelOutcome ?: E2ETrace.readPowerLogResult(
+        val powerLogOutcome = E2ETrace.readPowerLogResult(
             PowerLogListener.logFile?.path(),
             war.me.gameId,
         )
+        return powerLogOutcome ?: if (WarEx.surrenderRequested || E2ETrace.surrenderRequested) {
+            // Fast surrender can reach GAME_OVER before the player ID is
+            // copied into war.me. Do not let unresolved IDs become UNKNOWN or
+            // leak the previous game's result; the local surrender request is
+            // a conservative loss fallback, and the structured line makes the
+            // missing authoritative-ID correlation explicit.
+            club.xiaojiawei.hsscriptbase.config.log.warn {
+                "TERMINAL_RESULT_FALLBACK outcome=LOST source=local-surrender-request " +
+                    "reason=player-id-unresolved powerLogOutcome=UNKNOWN " +
+                    "ourId=${war.me.gameId.ifBlank { "<blank>" }}"
+            }
+            false
+        } else null
     }
+}
+
+internal fun classifyResultOutcome(
+    isWin: Boolean,
+    wonId: String,
+    lostId: String,
+    concededId: String,
+    ourId: String,
+    localSurrenderRequested: Boolean,
+): String = when {
+    isWin -> "win"
+    wonId.isNotBlank() -> "opponent-win"
+    lostId.isNotBlank() && lostId == ourId -> "loss"
+    concededId.isNotBlank() && concededId == ourId -> "conceded"
+    localSurrenderRequested -> "conceded"
+    else -> "draw-or-unknown"
 }

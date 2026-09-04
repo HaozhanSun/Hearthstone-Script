@@ -509,6 +509,11 @@ enum class ConfigEnum(
     KILLED_SURRENDER(group = STRATEGY_CONFIG_GROUP, defaultValueInitializer = { FALSE_STR }),
 
     /**
+     * Beta diagnostic safety switch: prevent every script-initiated surrender.
+     */
+    NEVER_SURRENDER(group = STRATEGY_CONFIG_GROUP, defaultValueInitializer = { FALSE_STR }),
+
+    /**
      * 只打人机
      */
     ONLY_ROBOT(group = STRATEGY_CONFIG_GROUP, defaultValueInitializer = { FALSE_STR }, service = OnlyRobotService),

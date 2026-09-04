@@ -20,6 +20,7 @@ import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.ScreenWatchdog
 import club.xiaojiawei.hsscript.status.ScreenWatchdogRecoveryAction
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
+import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.strategy.phase.GameOverPhaseStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil.CHOOSE_ONE_RECTS
 import club.xiaojiawei.hsscript.utils.SystemUtil.delay
@@ -636,6 +637,7 @@ object GameUtil {
             }
             return
         }
+        if (NeverSurrenderPolicy.blockSurrender("GameUtil.surrender")) return
         if (!ActionDispatchGate.allow("surrender.request")) return
 //        SystemUtil.frontWindow(ScriptStaticData.getGameHWND());
 //        按ESC键弹出投降界面
