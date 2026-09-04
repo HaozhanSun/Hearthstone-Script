@@ -139,6 +139,20 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         // This is the first authoritative event that proves the local
         // mulligan UI exists. Rank OCR is not allowed before this boundary.
         mulliganInputConfirmed.set(true)
+        val opponentHeroDecision = SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war)
+        if (opponentHeroDecision != null) {
+            dispatchSurrenderDecision(opponentHeroDecision, "opponent-hero")
+            return
+        }
+        if (SurrenderPolicy.currentOpponentHeroInspectionState() !==
+            club.xiaojiawei.hsscript.status.surrender.OpponentHeroInspectionState.ORIGINAL_HERO_ALLOWED
+        ) {
+            log.info {
+                "MULLIGAN_ACTION_WAITING_FOR_OPPONENT_HERO " +
+                    "state=${SurrenderPolicy.currentOpponentHeroInspectionState()} action=WAIT dispatch=false"
+            }
+            return
+        }
         val rankDecision = SurrenderPolicy.evaluateCurrentRankBeforeMulligan()
         if (rankDecision != null) {
             dispatchSurrenderDecision(rankDecision, "mulligan-input-preflight")

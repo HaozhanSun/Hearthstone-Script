@@ -37,6 +37,13 @@ enum class RankInspectionState {
     BLOCKED,
 }
 
+enum class OpponentHeroInspectionState {
+    NOT_RESOLVED,
+    WAITING_FOR_HERO,
+    ORIGINAL_HERO_ALLOWED,
+    SURRENDER_REQUESTED,
+}
+
 data class SurrenderRuleContext(
     val stage: SurrenderCheckStage,
     val rivalHeroNameRaw: String,
@@ -117,8 +124,11 @@ object SurrenderPolicy {
     private var rankInspectionAttempts = 0
     private var lastRankInspectionAt = 0L
     private var lastHeroEvidenceKey = ""
+    private var rankDetectorInvocationCount = 0
     @Volatile
     private var rankInspectionState = RankInspectionState.NOT_READY
+    @Volatile
+    private var opponentHeroInspectionState = OpponentHeroInspectionState.NOT_RESOLVED
 
     /**
      * The ten original constructed-game hero portraits.  The value comes
@@ -203,7 +213,9 @@ object SurrenderPolicy {
         rankInspectionAttempts = 0
         lastRankInspectionAt = 0L
         lastHeroEvidenceKey = ""
+        rankDetectorInvocationCount = 0
         rankInspectionState = RankInspectionState.NOT_READY
+        opponentHeroInspectionState = OpponentHeroInspectionState.NOT_RESOLVED
     }
 
     /**
@@ -404,10 +416,20 @@ object SurrenderPolicy {
         // not inspect the default UNKNOWN_PLAYER placeholder.
         if (!war.me.isValid() || !war.rival.isValid()) return null
 
-        val rivalHero = war.rival.playArea.hero ?: return null
+        val rivalHero = war.rival.playArea.hero
+        if (rivalHero == null) {
+            opponentHeroInspectionState = OpponentHeroInspectionState.WAITING_FOR_HERO
+            log.info {
+                "SURRENDER_CHECK stage=${SurrenderCheckStage.OPPONENT_HERO_RESOLVED.name} " +
+                    "rule=rival-hero-is-original-class-hero heroResolved=false action=WAIT " +
+                    "reason=opponent-hero-entity-not-available"
+            }
+            return null
+        }
         val rawHeroName = rivalHero.entityName.trim()
         val heroCardId = rivalHero.cardId.trim()
         if (!isResolvedOpponentHeroName(rawHeroName)) {
+            opponentHeroInspectionState = OpponentHeroInspectionState.WAITING_FOR_HERO
             captureHeroEvidence(
                 stage = SurrenderCheckStage.OPPONENT_HERO_RESOLVED,
                 rawName = rawHeroName,
@@ -432,6 +454,11 @@ object SurrenderPolicy {
         lastPreMulliganHeroName = normalizedHeroName
 
         val result = evaluateOpponentHero(rawHeroName, heroCardId)
+        opponentHeroInspectionState = if (result.shouldSurrender) {
+            OpponentHeroInspectionState.SURRENDER_REQUESTED
+        } else {
+            OpponentHeroInspectionState.ORIGINAL_HERO_ALLOWED
+        }
         val context = SurrenderRuleContext(
             stage = SurrenderCheckStage.OPPONENT_HERO_RESOLVED,
             rivalHeroNameRaw = rawHeroName,
@@ -487,6 +514,25 @@ object SurrenderPolicy {
     fun evaluateCurrentRankBeforeMulligan(): SurrenderRuleResult? {
         enforcePersistentStreakGuardForCurrentPolicy()?.let { return it }
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") return null
+        when (opponentHeroInspectionState) {
+            OpponentHeroInspectionState.ORIGINAL_HERO_ALLOWED -> Unit
+            OpponentHeroInspectionState.SURRENDER_REQUESTED -> {
+                log.info {
+                    "RANK_POLICY_SKIP reason=opponent-hero-surrender-already-requested " +
+                        "action=SKIP rankDetector=false"
+                }
+                return null
+            }
+            OpponentHeroInspectionState.NOT_RESOLVED,
+            OpponentHeroInspectionState.WAITING_FOR_HERO,
+            -> {
+                log.info {
+                    "RANK_POLICY_WAITING_FOR_OPPONENT_HERO state=$opponentHeroInspectionState " +
+                        "action=WAIT rankDetector=false"
+                }
+                return null
+            }
+        }
         // Historical Power.log replay reconstructs the in-memory model but
         // does not represent the pixels of the current game.  In particular,
         // rank OCR during replay can inspect a matchmaking/mulligan frame and
@@ -520,6 +566,7 @@ object SurrenderPolicy {
         lastRankInspectionAt = now
         rankInspectionAttempts++
 
+        rankDetectorInvocationCount++
         val detection = CurrentRankDetector.detect(
             trigger = "rank-policy-${phase.name}",
             phase = phase.name,
@@ -797,6 +844,11 @@ object SurrenderPolicy {
         inWar && phase in PRE_MULLIGAN_PHASES
 
     internal fun currentRankInspectionState(): RankInspectionState = rankInspectionState
+
+    internal fun currentOpponentHeroInspectionState(): OpponentHeroInspectionState =
+        opponentHeroInspectionState
+
+    internal fun rankDetectorInvocationCountForTest(): Int = rankDetectorInvocationCount
 
     /**
      * Evaluate all turn-start rules and return the first surrender request.

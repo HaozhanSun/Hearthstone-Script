@@ -210,6 +210,41 @@ class SurrenderPolicyTest {
         val result = SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war)
 
         assertTrue(result == null)
+        assertEquals(OpponentHeroInspectionState.ORIGINAL_HERO_ALLOWED, SurrenderPolicy.currentOpponentHeroInspectionState())
+    }
+
+    @Test
+    fun nonOriginalHeroShortCircuitsRankDetectorAndRequestsUnifiedSurrender() {
+        val war = warWithRivalHero("星界雪怒")
+
+        SurrenderPolicy.resetForNewGame()
+        val result = SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war)
+        assertTrue(result?.shouldSurrender == true)
+        assertEquals(OpponentHeroInspectionState.SURRENDER_REQUESTED, SurrenderPolicy.currentOpponentHeroInspectionState())
+
+        assertNull(SurrenderPolicy.evaluateCurrentRankBeforeMulligan())
+        assertEquals(0, SurrenderPolicy.rankDetectorInvocationCountForTest())
+    }
+
+    @Test
+    fun unresolvedOpponentHeroWaitsAndNeverStartsRankDetector() {
+        val war = warWithRivalHero("")
+
+        SurrenderPolicy.resetForNewGame()
+        assertNull(SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war))
+        assertEquals(OpponentHeroInspectionState.WAITING_FOR_HERO, SurrenderPolicy.currentOpponentHeroInspectionState())
+        assertNull(SurrenderPolicy.evaluateCurrentRankBeforeMulligan())
+        assertEquals(0, SurrenderPolicy.rankDetectorInvocationCountForTest())
+    }
+
+    @Test
+    fun originalHeroIsTheOnlyEarlyStateThatAllowsRankInspection() {
+        val war = warWithRivalHero("雷克萨")
+
+        SurrenderPolicy.resetForNewGame()
+        assertNull(SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war))
+        assertEquals(OpponentHeroInspectionState.ORIGINAL_HERO_ALLOWED, SurrenderPolicy.currentOpponentHeroInspectionState())
+        assertEquals(0, SurrenderPolicy.rankDetectorInvocationCountForTest())
     }
 
     @Test
@@ -553,7 +588,7 @@ class SurrenderPolicyTest {
         val image = ImageIO.read(file)
         val bounds = CurrentRankDetector.rankBadgeVisualBoundsForTest(image.width, image.height)
         assertEquals(105, bounds.width)
-        assertEquals(108, bounds.height)
+        assertEquals(92, bounds.height)
         val badge = image.getSubimage(bounds.x, bounds.y, bounds.width, bounds.height)
         assertEquals(CurrentRankDetector.RankTier.LEGEND, CurrentRankDetector.detectTierVisual(badge))
     }
