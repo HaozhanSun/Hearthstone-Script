@@ -8,6 +8,8 @@ import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.spi.FilterReply
 import club.xiaojiawei.hsscript.consts.ARG_AOT
 import club.xiaojiawei.hsscript.consts.PROGRAM_NAME
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscript.enums.MouseControlModeEnum
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.E2ETrace
@@ -181,7 +183,7 @@ private fun setLogPath() {
 }
 
 private fun createProgramLock(): Boolean {
-    val name = "${PROGRAM_NAME}.lock"
+    val name = programLockNameForChannel(BuildInfo.RELEASE_CHANNEL)
 
     val h = Kernel32.INSTANCE.CreateMutex(null, true, name)
 
@@ -190,3 +192,6 @@ private fun createProgramLock(): Boolean {
         else -> true
     }
 }
+
+internal fun programLockNameForChannel(channel: String?): String =
+    "${PROGRAM_NAME}.${BuildChannel.identityToken(channel)}.lock"

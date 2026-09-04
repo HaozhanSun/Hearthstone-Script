@@ -31,12 +31,13 @@ class VersionMsgController : Initializable {
         resourceBundle: ResourceBundle?,
     ) {
 
-        version.text = BuildInfo.VERSION
+        version.text = "${BuildInfo.VERSION} · 渠道：${BuildInfo.RELEASE_CHANNEL_LABEL}"
         //        TODO 版本更新时修改！！！
         versionDescription.setMarkdown(
             """
             本地构建基线：${BuildInfo.UPSTREAM_BASELINE_VERSION}
             本地构建时间（Pacific）：${BuildInfo.BUILD_TIMESTAMP_PACIFIC}
+            发布渠道：${BuildInfo.RELEASE_CHANNEL_LABEL}
 
             🔧 重构与优化
             1. 相关工具更新成64位以适配游戏

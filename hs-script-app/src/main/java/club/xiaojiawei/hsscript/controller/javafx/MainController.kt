@@ -35,6 +35,7 @@ import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.config.submitExtra
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum.Companion.fromString
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.util.isFalse
 import club.xiaojiawei.hsscriptbase.util.isTrue
 import club.xiaojiawei.hsscriptstrategysdk.DeckStrategy
@@ -92,7 +93,7 @@ class MainController : MainView() {
         url: URL?,
         resourceBundle: ResourceBundle?,
     ) {
-        versionText.text = "当前版本：" + VersionListener.currentRelease.tagName
+        versionText.text = formatVersionText(VersionListener.currentRelease.tagName, BuildInfo.RELEASE_CHANNEL_LABEL)
         DebugRunController.resetAfterRestart()
         debugRunModeCheckBox.isSelected = DebugRunController.isActive()
         updateDebugRunStatus()
@@ -644,3 +645,6 @@ class MainController : MainView() {
 
     fun getNotificationManagerInstance(): NotificationManager<Any> = notificationManger
 }
+
+internal fun formatVersionText(version: String, channelLabel: String): String =
+    "当前版本：$version · 渠道：$channelLabel"

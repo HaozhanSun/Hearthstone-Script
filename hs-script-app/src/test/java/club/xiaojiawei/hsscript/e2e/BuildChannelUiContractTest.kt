@@ -1,0 +1,58 @@
+package club.xiaojiawei.hsscript.e2e
+
+import club.xiaojiawei.hsscript.controller.javafx.formatVersionText
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import java.nio.file.Files
+import java.nio.file.Path
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+class BuildChannelUiContractTest {
+
+    @Test
+    fun `version text renders the injected channel label`() {
+        assertEquals("Stable", BuildChannel.label("stable"))
+        assertEquals("Beta", BuildChannel.label(" BETA "))
+        assertEquals("Unknown", BuildChannel.label("nightly"))
+        assertEquals("stable", BuildChannel.identityToken("stable"))
+        assertEquals("beta", BuildChannel.identityToken("beta"))
+        assertEquals("unknown", BuildChannel.identityToken("nightly"))
+        assertEquals(
+            "当前版本：v4.16.194 · 渠道：Beta",
+            formatVersionText("v4.16.194", "Beta"),
+        )
+        assertEquals(
+            "当前版本：v4.16.194 · 渠道：Stable",
+            formatVersionText("v4.16.194", "Stable"),
+        )
+    }
+
+    @Test
+    fun `release channel is injected through build metadata and deploy arguments`() {
+        val root = repositoryRoot()
+        val channel = Files.readString(root.resolve("release-channel.json"))
+        assertTrue(channel.contains("\"channel\": \"beta\""))
+
+        val buildInfo = Files.readString(root.resolve("hs-script-app/src/main/resources-filtered/build.info"))
+        assertTrue(buildInfo.contains("channel=\${build-channel}"))
+
+        val pom = Files.readString(root.resolve("pom.xml"))
+        assertTrue(pom.contains("<build-channel>UNKNOWN</build-channel>"))
+
+        val deploy = Files.readString(root.resolve("build-and-deploy.ps1"))
+        assertTrue(deploy.contains("-Dbuild-channel=\$Channel"))
+
+        val controller = Files.readString(root.resolve(
+            "hs-script-app/src/main/java/club/xiaojiawei/hsscript/controller/javafx/MainController.kt",
+        ))
+        assertTrue(controller.contains("BuildInfo.RELEASE_CHANNEL_LABEL"))
+    }
+
+    private fun repositoryRoot(): Path {
+        val current = Path.of("").toAbsolutePath().normalize()
+        return sequenceOf(current, current.parent)
+            .filterNotNull()
+            .first { Files.isRegularFile(it.resolve("release-channel.json")) }
+    }
+}

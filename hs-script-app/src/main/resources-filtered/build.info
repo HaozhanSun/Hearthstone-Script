@@ -3,3 +3,4 @@ artifactId=${project.artifactId}
 softRunMode=${run.mode}
 upstreamBaselineVersion=${upstream-baseline-version}
 buildTimestampPacific=${local-build-timestamp-pacific}
+channel=${build-channel}

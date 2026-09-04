@@ -1,5 +1,7 @@
 package club.xiaojiawei.hsscript.utils
 
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscript.enums.WindowEnum
 import club.xiaojiawei.hsscript.status.LifecycleTrace
 import java.nio.charset.StandardCharsets
@@ -16,8 +18,14 @@ import kotlin.concurrent.thread
  */
 object ExistingInstanceSignal {
     private val requestPath: Path by lazy {
-        Path.of(System.getProperty("java.io.tmpdir"), "hs-script-show-main.request")
+        requestPathForChannel(BuildInfo.RELEASE_CHANNEL)
     }
+
+    internal fun requestPathForChannel(channel: String?): Path =
+        Path.of(
+            System.getProperty("java.io.tmpdir"),
+            "hs-script-show-main.${BuildChannel.identityToken(channel)}.request",
+        )
 
     fun requestShowMain() {
         runCatching {
