@@ -78,7 +78,7 @@ object CurrentRankDetector {
 
     data class RankCandidate(
         val rank: Int,
-        val confidence: Double,
+        val confidence: Double?,
     )
 
     /** Parse only valid constructed ranks, preventing unrelated HUD numbers from becoming a decision. */
@@ -122,12 +122,15 @@ object CurrentRankDetector {
     /**
      * Select the strongest numeric candidate.  PaddleX may return one text
      * result while legacy OCR returns several passes; both paths use the same
-     * count-weighted confidence so an imperfect result still produces a
      * deterministic best guess instead of silently becoming "continue".
+     * PaddleX's native recognition score is used when supplied; legacy OCR
+     * has no native score, so repeated candidates only select the most common
+     * number and never become a fabricated confidence value.
      */
     internal fun resolveRankCandidate(
         candidates: List<String>,
         visualTenHint: Boolean = false,
+        nativeConfidence: Double? = null,
     ): RankCandidate? {
         val parsed = candidates.mapNotNull(::parseRankText)
         // On the real rank-10 badge, all OCR passes can be contaminated by
@@ -138,7 +141,7 @@ object CurrentRankDetector {
         // rank.  Keep the numeric-evidence requirement so an empty/blank
         // screen cannot become rank 10 from the visual hint alone.
         if (visualTenHint && parsed.isEmpty() && candidates.any { it.any(Char::isDigit) }) {
-            return RankCandidate(rank = 10, confidence = 0.50)
+            return RankCandidate(rank = 10, confidence = nativeConfidence)
         }
         val counts = parsed.groupingBy { it }.eachCount()
         val best = counts.entries
@@ -147,7 +150,7 @@ object CurrentRankDetector {
             ?: return null
         return RankCandidate(
             rank = best.key,
-            confidence = best.value.toDouble() / parsed.size.coerceAtLeast(1),
+            confidence = nativeConfidence,
         )
     }
 
@@ -246,19 +249,18 @@ object CurrentRankDetector {
             RANK_DIGIT_HEIGHT,
         )
         if (!OcrRuntime.isLegacySelected()) {
-            val rawOcrTexts = listOf(
-                OcrRuntime.recognize(
-                    rankRegion,
-                    evidenceTrigger,
-                    legacyOcr = { "" },
-                    allowEmptyProbeResult = true,
-                ),
+            val recognition = OcrRuntime.recognizeResult(
+                rankRegion,
+                evidenceTrigger,
+                legacyOcr = { "" },
+                allowEmptyProbeResult = true,
             )
+            val rawOcrTexts = listOf(recognition.text)
             val ocrTexts = rawOcrTexts.map(::normalizeOcrText)
             val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
             val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
                 looksLikeTwoDigitRank(rankRegion)
-            val rankCandidate = resolveRankCandidate(ocrTexts, visualTenHint)
+            val rankCandidate = resolveRankCandidate(ocrTexts, visualTenHint, recognition.confidence)
             val rank = rankCandidate?.rank
             val confidence = rankCandidate?.confidence
             val tier = detectTierVisual(rankRegion)

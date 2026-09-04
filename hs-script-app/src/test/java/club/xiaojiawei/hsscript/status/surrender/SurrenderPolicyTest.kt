@@ -244,12 +244,12 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun rankResolverReportsTopCandidateConfidence() {
+    fun rankResolverDoesNotInventConfidenceWithoutNativeScore() {
         val candidate = CurrentRankDetector.resolveRankCandidate(listOf("9", "1", "", "1"))
 
         assertTrue(candidate != null)
         assertEquals(1, candidate!!.rank)
-        assertEquals(2.0 / 3.0, candidate.confidence, 0.001)
+        assertNull(candidate.confidence)
     }
 
     @Test

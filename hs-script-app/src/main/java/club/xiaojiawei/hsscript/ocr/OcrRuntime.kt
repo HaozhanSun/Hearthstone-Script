@@ -29,12 +29,19 @@ object OcrRuntime {
         desc: String = "",
         allowEmptyProbeResult: Boolean = false,
         legacyOcr: () -> String,
-    ): String {
+    ): String = recognizeResult(image, desc, allowEmptyProbeResult, legacyOcr).text
+
+    fun recognizeResult(
+        image: BufferedImage?,
+        desc: String = "",
+        allowEmptyProbeResult: Boolean = false,
+        legacyOcr: () -> String,
+    ): OcrRecognition {
         if (image == null) {
             log.info {
                 "OCR_PROVIDER_USED mode=${currentMode()} provider=LEGACY reason=null-image desc=${desc.ifBlank { "<none>" }}"
             }
-            return legacyOcr()
+            return OcrRecognition(legacyOcr(), confidence = null)
         }
         val mode = currentMode()
         if (mode == OcrProviderMode.LEGACY_ONLY) {
@@ -44,27 +51,27 @@ object OcrRuntime {
                     "OCR_PROBE_EMPTY provider=LEGACY reason=expected-empty-probe " +
                         "desc=${desc.ifBlank { "<none>" }}"
                 }
-                return text
+                return OcrRecognition(text, confidence = null)
             }
             val checked = legacyOcrChecked(desc) { text }
             log.info {
                 "OCR_PROVIDER_USED mode=$mode provider=LEGACY reason=legacy-selected " +
                     "desc=${desc.ifBlank { "<none>" }} chars=${checked.length}"
             }
-            return checked
+            return OcrRecognition(checked, confidence = null)
         }
         val settings = settingsProvider()
         return runCatching {
-            val text = paddleXBridgeFactory(settings).recognize(image, desc)
-            if (allowEmptyProbeResult && text.isBlank()) {
+            val recognition = paddleXBridgeFactory(settings).recognizeWithConfidence(image, desc)
+            if (allowEmptyProbeResult && recognition.text.isBlank()) {
                 log.debug {
                     "OCR_PROBE_EMPTY provider=PADDLEX reason=expected-empty-probe " +
                         "desc=${desc.ifBlank { "<none>" }}"
                 }
-                return@runCatching text
+                return@runCatching recognition
             }
-            requireRecognizedText(text, "PADDLEX", desc)
-            text
+            requireRecognizedText(recognition.text, "PADDLEX", desc)
+            recognition
         }.getOrElse { error ->
             if (mode.allowsLegacyFallback) {
                 log.warn(error) {
@@ -74,10 +81,10 @@ object OcrRuntime {
                         "device=${settings.device} modelCache=${settings.modelCachePath.ifBlank { "<paddlex-default>" }} " +
                         "timeoutMs=${settings.timeoutMs}"
                 }
-                return legacyOcrChecked(desc, legacyOcr).also { text ->
+                return OcrRecognition(legacyOcrChecked(desc, legacyOcr), confidence = null).also { result ->
                     log.info {
                         "OCR_PROVIDER_USED mode=$mode provider=LEGACY reason=paddlex-fallback " +
-                            "desc=${desc.ifBlank { "<none>" }} chars=${text.length}"
+                            "desc=${desc.ifBlank { "<none>" }} chars=${result.text.length}"
                     }
                 }
             }

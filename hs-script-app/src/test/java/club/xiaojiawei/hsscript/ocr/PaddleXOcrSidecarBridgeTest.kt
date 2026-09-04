@@ -23,6 +23,23 @@ class PaddleXOcrSidecarBridgeTest {
     }
 
     @Test
+    fun preservesNativeConfidenceFromPaddleXTextScores() {
+        val bridge = bridgeWithRunner {
+            SidecarProcessResult(
+                exitCode = 0,
+                stdout = "{\"schema_version\":1,\"ocr_text\":\"8\",\"objects\":[]," +
+                    "\"texts\":[{\"text\":\"8\",\"score\":0.73,\"bbox\":[0,0,1,1]}],\"relations\":[]}",
+                stderr = "",
+            )
+        }
+
+        val result = bridge.recognizeWithConfidence(TestImages.onePixel(), "native-score")
+
+        assertEquals("8", result.text)
+        assertEquals(0.73, result.confidence)
+    }
+
+    @Test
     fun throwsWhenSidecarExitsNonZero() {
         val bridge = bridgeWithRunner {
             SidecarProcessResult(exitCode = 2, stdout = "", stderr = "missing paddlex")

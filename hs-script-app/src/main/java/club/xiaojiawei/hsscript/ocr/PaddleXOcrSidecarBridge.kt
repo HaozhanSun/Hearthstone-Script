@@ -13,8 +13,15 @@ import javax.imageio.ImageIO
 
 interface OcrTextBridge {
     fun recognize(image: BufferedImage, desc: String = ""): String
+    fun recognizeWithConfidence(image: BufferedImage, desc: String = ""): OcrRecognition =
+        OcrRecognition(recognize(image, desc), confidence = null)
     fun healthCheck(): OcrHealth
 }
+
+data class OcrRecognition(
+    val text: String,
+    val confidence: Double?,
+)
 
 data class OcrHealth(
     val ok: Boolean,
@@ -47,6 +54,10 @@ class PaddleXOcrSidecarBridge(
 ) : OcrTextBridge {
 
     override fun recognize(image: BufferedImage, desc: String): String {
+        return recognizeWithConfidence(image, desc).text
+    }
+
+    override fun recognizeWithConfidence(image: BufferedImage, desc: String): OcrRecognition {
         val input = writeTempImage(image, desc)
         try {
             val result = processRunner.run(
@@ -71,9 +82,13 @@ class PaddleXOcrSidecarBridge(
                     "PaddleX OCR sidecar failed exit=${result.exitCode} stderr=${result.stderr.takeForLog()}"
                 )
             }
-            val text = parseOcrText(result.stdout)
-            log.info { "OCR_PROVIDER_USED provider=PADDLEX desc=${desc.ifBlank { "<none>" }} chars=${text.length}" }
-            return text
+            val recognition = parseOcrResult(result.stdout)
+            log.info {
+                "OCR_PROVIDER_USED provider=PADDLEX desc=${desc.ifBlank { "<none>" }} " +
+                    "chars=${recognition.text.length} nativeConfidence=" +
+                    formatConfidence(recognition.confidence)
+            }
+            return recognition
         } finally {
             runCatching { Files.deleteIfExists(input.toPath()) }
         }
@@ -152,7 +167,7 @@ class PaddleXOcrSidecarBridge(
         return environment
     }
 
-    private fun parseOcrText(stdout: String): String {
+    private fun parseOcrResult(stdout: String): OcrRecognition {
         val start = stdout.indexOf('{')
         val end = stdout.lastIndexOf('}')
         if (start < 0 || end < start) {
@@ -170,8 +185,20 @@ class PaddleXOcrSidecarBridge(
         if (textNode == null || !textNode.isTextual) {
             throw PaddleXOcrException("PaddleX OCR sidecar JSON missing text field ocr_text")
         }
-        return textNode.asText()
+        val confidence = root.path("ocr_confidence")
+            .takeIf { it.isNumber }
+            ?.asDouble()
+            ?: root.path("texts")
+                .takeIf { it.isArray }
+                ?.elements()
+                ?.asSequence()
+                ?.mapNotNull { it.path("score").takeIf { score -> score.isNumber }?.asDouble() }
+                ?.maxOrNull()
+        return OcrRecognition(textNode.asText(), confidence)
     }
+
+    private fun formatConfidence(confidence: Double?): String =
+        confidence?.let { String.format(Locale.ROOT, "%.2f", it) } ?: "unavailable"
 
     private fun writeTempImage(image: BufferedImage, desc: String): File {
         val safeDesc = desc
