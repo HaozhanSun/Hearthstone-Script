@@ -44,9 +44,13 @@ object CurrentRankDetector {
     private const val RANK_REGION_TOP = 0.87130
     private const val RANK_REGION_WIDTH = 0.02969
     private const val RANK_REGION_HEIGHT = 0.04352
-    // Keep the legacy tier probe inside the same numeric-only frame. The
-    // product decision is numeric rank; broad tier/name OCR is intentionally
-    // no longer allowed to reintroduce username pixels.
+    // Tier/Legendary visual detection needs the complete badge frame, while
+    // numeric OCR remains confined to RANK_REGION above. This crop excludes
+    // the player name and other HUD numbers but retains the shield artwork.
+    private const val RANK_BADGE_VISUAL_LEFT = 0.0
+    private const val RANK_BADGE_VISUAL_TOP = 0.82
+    private const val RANK_BADGE_VISUAL_WIDTH = 0.075
+    private const val RANK_BADGE_VISUAL_HEIGHT = 0.13
     private const val RANK_EXPANDED_LEFT = 0.01198
     private const val RANK_EXPANDED_TOP = 0.87130
     private const val RANK_EXPANDED_WIDTH = 0.02969
@@ -242,6 +246,13 @@ object CurrentRankDetector {
             RANK_EXPANDED_WIDTH,
             RANK_EXPANDED_HEIGHT,
         )
+        val badgeVisualRegion = crop(
+            screen,
+            RANK_BADGE_VISUAL_LEFT,
+            RANK_BADGE_VISUAL_TOP,
+            RANK_BADGE_VISUAL_WIDTH,
+            RANK_BADGE_VISUAL_HEIGHT,
+        )
         val digitRegion = crop(
             screen,
             RANK_DIGIT_LEFT,
@@ -264,11 +275,10 @@ object CurrentRankDetector {
             val rankCandidate = resolveRankCandidate(ocrTexts, visualTenHint, recognition.confidence)
             val rank = rankCandidate?.rank
             val confidence = rankCandidate?.confidence
-            // PaddleX text is read from the complete badge crop so a
-            // non-numeric Legendary rating remains observable. The visual
-            // classifier consumes that same badge-local crop; the expanded
-            // crop remains diagnostic/tier-OCR input only.
-            val tier = detectTierVisual(rankRegion)
+            // PaddleX numeric text stays on the narrow contract above, while
+            // the independent visual classifier consumes the complete badge
+            // crop so a non-numeric Legendary rating remains observable.
+            val tier = detectTierVisual(badgeVisualRegion)
             val unknownReason = unknownReason(rank, tier, ocrTexts)
             log.info {
                 "RANK_OCR provider=PADDLEX trigger=$evidenceTrigger phase=$evidencePhase " +
@@ -330,7 +340,7 @@ object CurrentRankDetector {
         val tier = if (tierFromOcr !== RankTier.UNKNOWN) {
             tierFromOcr
         } else {
-            detectTierVisual(rankRegion)
+            detectTierVisual(badgeVisualRegion)
         }
         val digitRegionBounds = rankDigitBoundsForTest(screen.width, screen.height)
         val unknownReason = unknownReason(rank, tier, ocrTexts)
@@ -460,6 +470,16 @@ object CurrentRankDetector {
             RANK_EXPANDED_TOP,
             RANK_EXPANDED_WIDTH,
             RANK_EXPANDED_HEIGHT,
+        )
+
+    internal fun rankBadgeVisualBoundsForTest(imageWidth: Int, imageHeight: Int): Rectangle =
+        normalizedBounds(
+            imageWidth,
+            imageHeight,
+            RANK_BADGE_VISUAL_LEFT,
+            RANK_BADGE_VISUAL_TOP,
+            RANK_BADGE_VISUAL_WIDTH,
+            RANK_BADGE_VISUAL_HEIGHT,
         )
 
     internal fun rankDigitBoundsForTest(imageWidth: Int, imageHeight: Int): Rectangle =

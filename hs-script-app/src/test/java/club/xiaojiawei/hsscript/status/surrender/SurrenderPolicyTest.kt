@@ -551,7 +551,7 @@ class SurrenderPolicyTest {
         )
         if (!file.isFile) return
         val image = ImageIO.read(file)
-        val bounds = Rectangle(0, (image.height * 0.82).toInt(), (image.width * 0.075).toInt(), (image.height * 0.13).toInt())
+        val bounds = CurrentRankDetector.rankBadgeVisualBoundsForTest(image.width, image.height)
         val badge = image.getSubimage(bounds.x, bounds.y, bounds.width, bounds.height)
         assertEquals(CurrentRankDetector.RankTier.LEGEND, CurrentRankDetector.detectTierVisual(badge))
     }
