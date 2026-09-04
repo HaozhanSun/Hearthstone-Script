@@ -62,7 +62,9 @@
             <outputDirectory>resources/tessdata/</outputDirectory>
         </fileSet>
         <fileSet>
-            <directory>${project.basedir}</directory>
+            <!-- The assembly lives in hs-script-app, while the canonical
+                 card database is tracked at the multi-module repository root. -->
+            <directory>${project.parent.basedir}</directory>
             <includes>
                 <include>*.db</include>
             </includes>

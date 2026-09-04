@@ -44,6 +44,20 @@ class NeverSurrenderPolicyTest {
     }
 
     @Test
+    fun `never surrender cannot bypass seven-concession fail-closed block`() {
+        val decision = SurrenderPolicy.persistentStreakDecision(
+            PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
+        )!!
+
+        assertFalse(decision.shouldSurrender)
+        assertTrue(decision.blocksAutomaticSurrender)
+        assertTrue(
+            SurrenderPolicy.applyNeverSurrenderStreakPolicy(decision, neverSurrenderEnabled = true)
+                ?.blocksAutomaticSurrender == true,
+        )
+    }
+
+    @Test
     fun `beta setting is visible and uses the persisted config switch`() {
         val root = repositoryRoot()
         val fxml = Files.readString(root.resolve("hs-script-app/src/main/resources/fxml/settings/strategySettings.fxml"))

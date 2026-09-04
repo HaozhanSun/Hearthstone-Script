@@ -66,6 +66,7 @@ class BuildChannelUiContractTest {
         val instanceSignal = Files.readString(root.resolve(
             "hs-script-app/src/main/java/club/xiaojiawei/hsscript/utils/ExistingInstanceSignal.kt",
         ))
+        val assembly = Files.readString(root.resolve("hs-script-app/assembly.xml"))
 
         assertTrue(mainApplication.contains("BETA_TRAY_INIT mode=AWT"))
         assertTrue(mainApplication.contains("BETA_TRAY_READY mode=AWT"))
@@ -79,6 +80,11 @@ class BuildChannelUiContractTest {
         assertTrue(main.contains("programLockNameForChannel"))
         assertTrue(main.contains("ExistingInstanceSignal.requestShowMain()"))
         assertTrue(instanceSignal.contains("requestPathForChannel"))
+        assertTrue(assembly.contains("<directory>\${project.parent.basedir}</directory>"))
+        assertTrue(assembly.contains("<include>*.db</include>"))
+        val deploy = Files.readString(root.resolve("build-and-deploy.ps1"))
+        assertTrue(deploy.contains("Assembled deployment is missing hs_cards.db"))
+        assertTrue(deploy.contains("Assembled deployment contains an empty hs_cards.db"))
         assertEquals(
             "hs-script-show-main.beta.request",
             ExistingInstanceSignal.requestPathForChannel("Beta").fileName.toString(),

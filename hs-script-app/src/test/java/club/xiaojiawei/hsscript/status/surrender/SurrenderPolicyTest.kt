@@ -47,7 +47,7 @@ class SurrenderPolicyTest {
             SurrenderPolicy.persistentStreakSnapshot(records),
         )
         assertEquals(
-            "consecutive-wins-over-four",
+            "consecutive-wins-over-five",
             SurrenderPolicy.evaluatePersistentStreakGuard(
                 PersistentStreakSnapshot(consecutiveSurrenders = 0, consecutiveWins = 5),
             )?.ruleId,
@@ -88,6 +88,26 @@ class SurrenderPolicyTest {
         )
         assertFalse(surrenderDecision!!.shouldSurrender)
         assertTrue(surrenderDecision.blocksAutomaticSurrender)
+    }
+
+    @Test
+    fun `never surrender bypasses five-win request but preserves seven-surrender block`() {
+        val fiveWins = SurrenderPolicy.persistentStreakDecision(
+            PersistentStreakSnapshot(consecutiveSurrenders = 0, consecutiveWins = 5),
+        )!!
+        val sevenSurrenders = SurrenderPolicy.persistentStreakDecision(
+            PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
+        )!!
+
+        assertNull(SurrenderPolicy.applyNeverSurrenderStreakPolicy(fiveWins, neverSurrenderEnabled = true))
+        assertEquals(
+            sevenSurrenders,
+            SurrenderPolicy.applyNeverSurrenderStreakPolicy(sevenSurrenders, neverSurrenderEnabled = true),
+        )
+        assertTrue(
+            SurrenderPolicy.applyNeverSurrenderStreakPolicy(sevenSurrenders, neverSurrenderEnabled = true)
+                ?.blocksAutomaticSurrender == true,
+        )
     }
 
     @Test

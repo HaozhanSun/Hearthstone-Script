@@ -245,7 +245,7 @@ object SurrenderPolicy {
             reason = "consecutive-surrenders=${snapshot.consecutiveSurrenders} threshold=$MAX_CONSECUTIVE_SURRENDERS",
         )
         snapshot.consecutiveWins >= MAX_CONSECUTIVE_WINS -> PersistentStreakGuard(
-            ruleId = "consecutive-wins-over-four",
+            ruleId = "consecutive-wins-over-five",
             reason = "consecutive-wins=${snapshot.consecutiveWins} threshold=$MAX_CONSECUTIVE_WINS",
         )
         else -> null
@@ -270,6 +270,23 @@ object SurrenderPolicy {
                 reason = guard.reason,
             )
         }
+    }
+
+    /**
+     * Never Surrender intentionally bypasses the five-win protective
+     * surrender, but it must never bypass the seven-surrender fail-closed
+     * block. Keeping this decision pure makes that distinction testable
+     * without depending on persisted configuration.
+     */
+    internal fun applyNeverSurrenderStreakPolicy(
+        result: SurrenderRuleResult,
+        neverSurrenderEnabled: Boolean,
+    ): SurrenderRuleResult? = if (
+        neverSurrenderEnabled && result.shouldSurrender && !result.blocksAutomaticSurrender
+    ) {
+        null
+    } else {
+        result
     }
 
     /**
@@ -347,14 +364,15 @@ object SurrenderPolicy {
      */
     private fun enforcePersistentStreakGuardForCurrentPolicy(): SurrenderRuleResult? =
         enforcePersistentStreakGuard()?.let { result ->
-            if (NeverSurrenderPolicy.enabled() && result.shouldSurrender) {
+            val applied = applyNeverSurrenderStreakPolicy(result, NeverSurrenderPolicy.enabled())
+            if (applied == null) {
                 log.info {
                     "SURRENDER_POLICY_BYPASS reason=never-surrender rule=${result.ruleId} " +
                         "action=CONTINUE dispatch=false queue=false retry=false replan=false"
                 }
                 null
             } else {
-                result
+                applied
             }
         }
 
@@ -366,6 +384,7 @@ object SurrenderPolicy {
      */
     @Synchronized
     fun evaluateOpponentHeroBeforeMulligan(war: War): SurrenderRuleResult? {
+        enforcePersistentStreakGuardForCurrentPolicy()?.let { return it }
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") {
             return null
         }
@@ -373,7 +392,6 @@ object SurrenderPolicy {
             log.info { "SURRENDER_POLICY_BYPASS reason=never-surrender stage=${SurrenderCheckStage.OPPONENT_HERO_RESOLVED.name} action=CONTINUE" }
             return null
         }
-        enforcePersistentStreakGuardForCurrentPolicy()?.let { return it }
         if (war.currentPhase !in setOf(
                 WarPhaseEnum.FILL_DECK,
                 WarPhaseEnum.DRAWN_INIT_CARD,
@@ -467,6 +485,7 @@ object SurrenderPolicy {
      */
     @Synchronized
     fun evaluateCurrentRankBeforeMulligan(): SurrenderRuleResult? {
+        enforcePersistentStreakGuardForCurrentPolicy()?.let { return it }
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") return null
         // Historical Power.log replay reconstructs the in-memory model but
         // does not represent the pixels of the current game.  In particular,
@@ -476,7 +495,6 @@ object SurrenderPolicy {
             log.debug { "RANK_POLICY_SKIP reason=historical-power-log-replay" }
             return null
         }
-        enforcePersistentStreakGuardForCurrentPolicy()?.let { return it }
         if (!ReplaceCardPhaseStrategy.isRankInspectionReady()) {
             rankInspectionState = RankInspectionState.NOT_READY
             log.info {
@@ -749,6 +767,7 @@ object SurrenderPolicy {
      * identified.
      */
     fun evaluateTurnStart(war: War): SurrenderRuleResult? {
+        enforcePersistentStreakGuardForCurrentPolicy()?.let { return it }
         // Test-only escape hatch for the real-input E2E harness. Normal runs
         // never set this property, so the production eligibility rules remain
         // unchanged; the harness must be able to reach card-play/attack turns
@@ -761,7 +780,6 @@ object SurrenderPolicy {
             log.info { "SURRENDER_POLICY_BYPASS reason=never-surrender stage=${SurrenderCheckStage.TURN_START.name} action=CONTINUE" }
             return null
         }
-        enforcePersistentStreakGuardForCurrentPolicy()?.let { return it }
         val rivalHero = war.rival.playArea.hero
         val rawHeroName = awaitOpponentHeroName(rivalHero)
         val normalizedHeroName = normalizeOpponentHeroName(rawHeroName)
