@@ -147,6 +147,7 @@ object ScreenStateRecovery {
         val detection = detect(ocrText, capture.visual)
         log.info {
             "SCREEN_RECOVERY_OBSERVATION " +
+                "provider=${OcrRuntime.lastProviderUsed().name} " +
                 "ocr=${ocrText.ifBlank { "<empty>" }.take(MAX_OCR_TEXT_LENGTH)} " +
                 "detected=${detection?.kind?.code ?: "UNKNOWN"} " +
                 "confidence=${detection?.confidence ?: 0} " +
@@ -388,8 +389,23 @@ object ScreenStateRecovery {
         if (looksLikeMatchmakingText(text)) {
             return Detection(ScreenKind.MATCHMAKING, ModeEnum.TOURNAMENT, 95, "matchmaking-text")
         }
-        if (text.contains("我的收藏") || text.contains("收藏管理")) {
-            return Detection(ScreenKind.COLLECTION, ModeEnum.COLLECTIONMANAGER, 95, "collection-text")
+        val hubLabels = hubNavigationLabels(text)
+        if (hubLabels.size >= 2) {
+            return Detection(
+                ScreenKind.HOME,
+                ModeEnum.HUB,
+                95,
+                "HOME/HUB：识别到${hubLabels.joinToString("、")}",
+            )
+        }
+        val collectionLabels = collectionPageLabels(text)
+        if (collectionLabels.isNotEmpty()) {
+            return Detection(
+                ScreenKind.COLLECTION,
+                ModeEnum.COLLECTIONMANAGER,
+                95,
+                "收藏页：识别到${collectionLabels.joinToString("、")}",
+            )
         }
         // Reward pages advertise unopened packs too.  A bare "卡牌包" is
         // therefore not evidence that the pack-opening scene is visible.
@@ -438,6 +454,28 @@ object ScreenStateRecovery {
         if (visual.warmRatio > 0.0 || visual.blueRatio > 0.0) return null
         return null
     }
+
+    /**
+     * The hub exposes several primary mode buttons at once. The persistent
+     * bottom navigation label "我的收藏" is intentionally excluded: it is
+     * present on the hub and must not override the primary mode cluster.
+     */
+    private fun hubNavigationLabels(ocrText: String): List<String> {
+        val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+        return listOf("传统对战", "酒馆战棋", "竞技模式", "其他模式")
+            .filter(text::contains)
+    }
+
+    /** Collection-page labels are specific to the opened collection view. */
+    private fun collectionPageLabels(ocrText: String): List<String> {
+        val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+        return listOf("收藏管理", "我的套牌", "卡牌制作")
+            .filter(text::contains)
+    }
+
+    internal fun looksLikeHubText(ocrText: String): Boolean = hubNavigationLabels(ocrText).size >= 2
+
+    internal fun looksLikeCollectionText(ocrText: String): Boolean = collectionPageLabels(ocrText).isNotEmpty()
 
     internal fun looksLikeMatchmakingText(ocrText: String): Boolean {
         val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
@@ -541,6 +579,18 @@ object ScreenStateRecovery {
             resultBannerLowSaturationRatio = 0.0,
         ),
     )?.kind?.code
+
+    internal fun classificationEvidenceForTest(ocrText: String): String? = detect(
+        ocrText,
+        VisualSignature(
+            sampleHash = 0L,
+            warmRatio = 0.0,
+            blueRatio = 0.0,
+            loadingCentralDarkRatio = 0.0,
+            resultContinueGrayLightRatio = 0.0,
+            resultBannerLowSaturationRatio = 0.0,
+        ),
+    )?.evidence
 
     /**
      * Result pages have a stable action label even when the outcome title is

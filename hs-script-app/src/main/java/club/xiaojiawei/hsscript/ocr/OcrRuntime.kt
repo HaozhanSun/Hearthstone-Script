@@ -11,6 +11,11 @@ object OcrRuntime {
     internal var paddleXBridgeFactory: (PaddleXOcrSettings) -> OcrTextBridge = { PaddleXOcrSidecarBridge(it) }
     internal var providerModeProvider: () -> OcrProviderMode = OcrProviderMode::fromConfig
 
+    @Volatile
+    private var lastProviderUsed: OcrProviderKind = OcrProviderKind.LEGACY
+
+    internal fun lastProviderUsed(): OcrProviderKind = lastProviderUsed
+
     fun currentProvider(): OcrProviderKind =
         if (currentMode().usesPaddleX) OcrProviderKind.PADDLEX else OcrProviderKind.LEGACY
 
@@ -38,6 +43,7 @@ object OcrRuntime {
         legacyOcr: () -> String,
     ): OcrRecognition {
         if (image == null) {
+            lastProviderUsed = OcrProviderKind.LEGACY
             log.info {
                 "OCR_PROVIDER_USED mode=${currentMode()} provider=LEGACY reason=null-image desc=${desc.ifBlank { "<none>" }}"
             }
@@ -45,6 +51,7 @@ object OcrRuntime {
         }
         val mode = currentMode()
         if (mode == OcrProviderMode.LEGACY_ONLY) {
+            lastProviderUsed = OcrProviderKind.LEGACY
             val text = legacyOcr()
             if (text.isBlank() && allowEmptyProbeResult) {
                 log.debug {
@@ -63,6 +70,7 @@ object OcrRuntime {
         val settings = settingsProvider()
         return runCatching {
             val recognition = paddleXBridgeFactory(settings).recognizeWithConfidence(image, desc)
+            lastProviderUsed = OcrProviderKind.PADDLEX
             if (allowEmptyProbeResult && recognition.text.isBlank()) {
                 log.debug {
                     "OCR_PROBE_EMPTY provider=PADDLEX reason=expected-empty-probe " +
@@ -74,6 +82,7 @@ object OcrRuntime {
             recognition
         }.getOrElse { error ->
             if (mode.allowsLegacyFallback) {
+                lastProviderUsed = OcrProviderKind.LEGACY
                 log.warn(error) {
                     "PADDLEX_FALLBACK_TO_LEGACY mode=$mode reason=${error.javaClass.simpleName} " +
                         "configKey=${ConfigEnum.OCR_PROVIDER_MODE.name} desc=${desc.ifBlank { "<none>" }} " +
@@ -88,6 +97,7 @@ object OcrRuntime {
                     }
                 }
             }
+            lastProviderUsed = OcrProviderKind.PADDLEX
             log.warn(error) {
                 "OCR_PROVIDER_FAILED mode=$mode provider=PADDLEX fallback=false " +
                     "configKey=${ConfigEnum.OCR_PROVIDER_MODE.name} desc=${desc.ifBlank { "<none>" }} " +

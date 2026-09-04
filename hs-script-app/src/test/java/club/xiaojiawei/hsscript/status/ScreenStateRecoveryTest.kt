@@ -70,6 +70,33 @@ class ScreenStateRecoveryTest {
     }
 
     @Test
+    fun `primary hub modes outrank the persistent collection navigation label`() {
+        val hub = "传统对战 酒馆战棋 竞技模式 其他模式 开包 我的收藏 商店"
+        val twoModesWithCollection = "传统对战 酒馆战棋 我的收藏 商店"
+        val collection = "我的套牌 卡牌制作 查找 39/40 卡牌"
+
+        assertTrue(ScreenStateRecovery.looksLikeHubText(hub))
+        assertEquals("HOME", ScreenStateRecovery.classifyForTest(hub))
+        assertTrue(ScreenStateRecovery.looksLikeHubText(twoModesWithCollection))
+        assertEquals("HOME", ScreenStateRecovery.classifyForTest(twoModesWithCollection))
+        assertFalse(ScreenStateRecovery.looksLikeCollectionText(hub))
+        assertTrue(ScreenStateRecovery.classificationEvidenceForTest(hub)
+            ?.contains("HOME/HUB：识别到传统对战、酒馆战棋、竞技模式、其他模式") == true)
+
+        assertTrue(ScreenStateRecovery.looksLikeCollectionText(collection))
+        assertEquals("COLLECTION", ScreenStateRecovery.classifyForTest(collection))
+        assertTrue(ScreenStateRecovery.classificationEvidenceForTest(collection)
+            ?.contains("收藏页：识别到我的套牌、卡牌制作") == true)
+    }
+
+    @Test
+    fun `persistent collection navigation label alone is not an opened collection page`() {
+        assertFalse(ScreenStateRecovery.looksLikeHubText("我的收藏"))
+        assertFalse(ScreenStateRecovery.looksLikeCollectionText("我的收藏"))
+        assertEquals(null, ScreenStateRecovery.classifyForTest("我的收藏"))
+    }
+
+    @Test
     fun `restarts a confirmed stalled reconnect warning after the recovery threshold`() {
         val warning = "本次连接较平常花费了更多时间。请检查你的网络连接。"
         assertTrue(ScreenStateRecovery.looksLikeStalledReconnectLoadingText(warning))
