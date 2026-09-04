@@ -524,11 +524,32 @@ object SurrenderPolicy {
             trigger = "rank-policy-${phase.name}",
             phase = phase.name,
         )
+        if (isLegendaryDetection(detection)) {
+            rankCheckCompleted = true
+            rankInspectionState = RankInspectionState.RESOLVED
+            log.info {
+                "RANK_POLICY_CONTINUE stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                    "rank=LEGENDARY tier=${detection?.tier?.name ?: "UNKNOWN"} reason=legendary-badge-confirmed " +
+                    "surrender=false pause=false"
+            }
+            return null
+        }
         val rank = detection?.rank
         if (rank == null) {
+            if (detection != null) {
+                rankCheckCompleted = true
+                rankInspectionState = RankInspectionState.RESOLVED
+                val result = unresolvedRankSurrenderDecision(detection.tier)
+                log.warn {
+                    "SURRENDER_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                        "rule=${result.ruleId} reason=${result.reason} " +
+                        "detectionAvailable=true tier=${detection.tier.name} action=SURRENDER pause=false"
+                }
+                return result
+            }
             val readDecision = classifyRankInspection(
                 rank = null,
-                detectionAvailable = detection != null,
+                detectionAvailable = false,
                 attempt = rankInspectionAttempts,
             )
             if (readDecision.wait) {
@@ -615,6 +636,10 @@ object SurrenderPolicy {
         )
     }
 
+    /** Legendary is a confirmed non-numeric terminal rank, not UNKNOWN. */
+    internal fun isLegendaryDetection(detection: CurrentRankDetector.Detection?): Boolean =
+        detection?.rank == null && detection?.tier == CurrentRankDetector.RankTier.LEGEND
+
     internal fun unresolvedRankDecision(attempts: Int): SurrenderRuleResult =
         SurrenderRuleResult(
             ruleId = "rank-ocr-unresolved",
@@ -622,6 +647,20 @@ object SurrenderPolicy {
             shouldSurrender = false,
             reason = "rank-ocr-unresolved attempts=$attempts",
             blocksAutomaticSurrender = true,
+        )
+
+    /**
+     * An active rank frame with no valid number and no Legendary badge is
+     * unsafe to play through.  Keep the decision explicit: surrender rather
+     * than silently continue; provider/capture failure (detection == null)
+     * still uses the separate fail-closed retry/pause path above.
+     */
+    internal fun unresolvedRankSurrenderDecision(tier: CurrentRankDetector.RankTier): SurrenderRuleResult =
+        SurrenderRuleResult(
+            ruleId = "rank-ocr-unresolved-surrender",
+            matched = true,
+            shouldSurrender = true,
+            reason = "rank-unresolved-without-legendary tier=${tier.name} target-ranks=5,10",
         )
 
     internal fun classifyRankInspection(

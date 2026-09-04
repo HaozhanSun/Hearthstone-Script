@@ -509,6 +509,93 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun legendaryBadgeClassifierRequiresWarmCenterAndRedBadgeField() {
+        val legendary = BufferedImage(163, 168, BufferedImage.TYPE_INT_RGB)
+        val graphics = legendary.createGraphics()
+        graphics.color = Color(150, 35, 28)
+        graphics.fillRect(0, 0, legendary.width, legendary.height)
+        graphics.color = Color(226, 171, 61)
+        graphics.fillOval(35, 25, 94, 112)
+        graphics.color = Color(30, 20, 15)
+        graphics.fillOval(69, 61, 26, 46)
+        graphics.dispose()
+
+        assertTrue(CurrentRankDetector.detectLegendaryBadgeVisual(legendary))
+        assertEquals(CurrentRankDetector.RankTier.LEGEND, CurrentRankDetector.detectTierVisual(legendary))
+    }
+
+    @Test
+    fun legendaryBadgeClassifierRejectsRedOverlayAndPlainGoldBadge() {
+        val redOverlay = BufferedImage(163, 168, BufferedImage.TYPE_INT_RGB)
+        val redGraphics = redOverlay.createGraphics()
+        redGraphics.color = Color(190, 30, 25)
+        redGraphics.fillRect(0, 0, redOverlay.width, redOverlay.height)
+        redGraphics.dispose()
+        assertFalse(CurrentRankDetector.detectLegendaryBadgeVisual(redOverlay))
+
+        val gold = BufferedImage(163, 168, BufferedImage.TYPE_INT_RGB)
+        val goldGraphics = gold.createGraphics()
+        goldGraphics.color = Color(220, 165, 65)
+        goldGraphics.fillRect(0, 0, gold.width, gold.height)
+        goldGraphics.color = Color(30, 30, 30)
+        goldGraphics.fillRect(35, 35, 94, 98)
+        goldGraphics.dispose()
+        assertFalse(CurrentRankDetector.detectLegendaryBadgeVisual(gold))
+    }
+
+    @Test
+    fun suppliedLegendaryBadgeIsUsedAsAnOfflineFixtureWhenPresent() {
+        val file = File("C:/Users/yzjsh/AppData/Local/Temp/codex-clipboard-6776757e-df10-4931-a627-2ef7a2f188b3.png")
+        if (!file.isFile) return
+        val image = ImageIO.read(file)
+        assertTrue(image != null)
+        assertEquals(CurrentRankDetector.RankTier.LEGEND, CurrentRankDetector.detectTierVisual(image))
+
+        val closeUp = File("C:/Users/yzjsh/AppData/Local/Temp/codex-clipboard-9d4f4025-4999-4665-bda1-88b1f487adee.png")
+        if (closeUp.isFile) {
+            val partial = ImageIO.read(closeUp)
+            assertTrue(partial != null)
+            // The close-up is intentionally insufficient as a standalone
+            // badge: a metal fragment must not promote a red overlay.
+            assertFalse(CurrentRankDetector.detectLegendaryBadgeVisual(partial))
+        }
+    }
+
+    @Test
+    fun legendaryDetectionPrecedesUnknownRankFallback() {
+        val detection = CurrentRankDetector.Detection(
+            rank = null,
+            tier = CurrentRankDetector.RankTier.LEGEND,
+            ocrText = "230",
+            confidence = null,
+            captureBounds = Rectangle(0, 0, 57, 47),
+        )
+        assertTrue(SurrenderPolicy.isLegendaryDetection(detection))
+        assertFalse(SurrenderPolicy.isLegendaryDetection(null))
+        assertFalse(
+            SurrenderPolicy.isLegendaryDetection(detection.copy(tier = CurrentRankDetector.RankTier.UNKNOWN)),
+        )
+    }
+
+    @Test
+    fun activeRankFrameWithoutNumberOrLegendaryRequestsSurrenderInsteadOfPausing() {
+        val result = SurrenderPolicy.unresolvedRankSurrenderDecision(CurrentRankDetector.RankTier.UNKNOWN)
+
+        assertTrue(result.shouldSurrender)
+        assertFalse(result.blocksAutomaticSurrender)
+        assertEquals("rank-ocr-unresolved-surrender", result.ruleId)
+        assertTrue(result.reason.orEmpty().contains("without-legendary"))
+    }
+
+    @Test
+    fun providerFailureStillUsesTheSeparateFailClosedDecision() {
+        val result = SurrenderPolicy.unresolvedRankDecision(attempts = 3)
+
+        assertFalse(result.shouldSurrender)
+        assertTrue(result.blocksAutomaticSurrender)
+    }
+
+    @Test
     fun rankResolverUsesTheTopCandidateAndOnlyEmptyInputIsUnresolved() {
         assertEquals(1, CurrentRankDetector.resolveRankCandidates(listOf("1", "", "")))
         assertEquals(1, CurrentRankDetector.resolveRankCandidates(listOf("1", "1", "")))

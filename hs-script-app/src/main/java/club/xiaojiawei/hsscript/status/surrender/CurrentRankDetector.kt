@@ -7,6 +7,7 @@ import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
 import club.xiaojiawei.hsscriptbase.config.log
+import java.awt.Color
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
 import java.awt.RenderingHints
@@ -515,6 +516,7 @@ object CurrentRankDetector {
      * sample the badge perimeter and ignore the portrait/number interior.
      */
     internal fun detectTierVisual(image: BufferedImage): RankTier {
+        if (detectLegendaryBadgeVisual(image)) return RankTier.LEGEND
         val right = (image.width * 0.72).toInt().coerceAtMost(image.width)
         val bottom = (image.height * 0.82).toInt().coerceAtMost(image.height)
         val insetX = (image.width * 0.18).toInt()
@@ -545,6 +547,64 @@ object CurrentRankDetector {
         if (gold >= 12 && gold >= silver * 1.25) return RankTier.GOLD
         if (silver >= 12 && silver >= gold * 1.25) return RankTier.SILVER
         return RankTier.UNKNOWN
+    }
+
+    /**
+     * Detect the constructed-game Legendary badge when its rating is not a
+     * 1..10 rank.  The probe is deliberately geometric and badge-local:
+     * Legendary has a saturated red/orange field around a warm-metal center,
+     * while a red UI overlay has no metal evidence and a normal gold badge
+     * has no broad red outer field.  HSB keeps the test stable across modest
+     * brightness changes without accepting arbitrary red pixels.
+     */
+    internal fun detectLegendaryBadgeVisual(image: BufferedImage): Boolean {
+        if (image.width < 16 || image.height < 16) return false
+
+        val centerLeft = (image.width * 0.22).toInt()
+        val centerTop = (image.height * 0.18).toInt()
+        val centerRight = (image.width * 0.78).toInt().coerceAtMost(image.width)
+        val centerBottom = (image.height * 0.82).toInt().coerceAtMost(image.height)
+        var centerPixels = 0
+        var outerPixels = 0
+        var warmMetal = 0
+        var warmCenter = 0
+        var warmOuter = 0
+        var redOuter = 0
+
+        for (y in 0 until image.height) {
+            for (x in 0 until image.width) {
+                val center = x in centerLeft until centerRight && y in centerTop until centerBottom
+                val rgb = image.getRGB(x, y)
+                val red = rgb ushr 16 and 0xff
+                val green = rgb ushr 8 and 0xff
+                val blue = rgb and 0xff
+                val hsb = Color.RGBtoHSB(red, green, blue, null)
+                val hueDegrees = hsb[0] * 360f
+                val warm = hueDegrees in 22f..68f && hsb[1] >= 0.28f && hsb[2] >= 0.25f
+                val saturatedRed = (hueDegrees <= 18f || hueDegrees >= 345f) &&
+                    hsb[1] >= 0.38f && hsb[2] >= 0.20f
+
+                if (center) {
+                    centerPixels++
+                    if (warm) warmCenter++
+                } else {
+                    outerPixels++
+                    if (warm) warmOuter++
+                    if (saturatedRed) redOuter++
+                }
+                if (warm) warmMetal++
+            }
+        }
+
+        if (centerPixels == 0 || outerPixels == 0) return false
+        val warmRatio = warmMetal.toDouble() / (centerPixels + outerPixels)
+        val warmCenterRatio = warmCenter.toDouble() / centerPixels
+        val warmOuterRatio = warmOuter.toDouble() / outerPixels
+        val redOuterRatio = redOuter.toDouble() / outerPixels
+        return warmRatio >= 0.12 &&
+            warmCenterRatio >= 0.12 &&
+            redOuterRatio >= 0.22 &&
+            warmCenterRatio >= warmOuterRatio * 0.55
     }
 
     private fun crop(
