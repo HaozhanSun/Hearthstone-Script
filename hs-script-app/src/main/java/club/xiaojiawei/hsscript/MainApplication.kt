@@ -22,10 +22,11 @@ import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.TaskManager
 import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.utils.*
-import club.xiaojiawei.hsscript.utils.SystemUtil.addTray
+import club.xiaojiawei.hsscript.utils.SystemUtil.addTrayWithLabel
 import club.xiaojiawei.hsscript.utils.SystemUtil.shutdownSoft
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.config.submitExtra
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.const.SoftRunMode
 import club.xiaojiawei.hsscriptbase.util.isFalse
@@ -242,6 +243,17 @@ class MainApplication : Application() {
 
     @Deprecated("")
     private fun setSystemTray() {
+        val channelLabel = "${BuildInfo.RELEASE_CHANNEL_LABEL} · $PROGRAM_NAME"
+        val showWindowItem = MenuItem("显示窗口（${BuildInfo.RELEASE_CHANNEL_LABEL}）")
+        showWindowItem.addActionListener(
+            object : AbstractAction() {
+                override fun actionPerformed(e: ActionEvent?) {
+                    WindowUtil.showStage(WindowEnum.MAIN)
+                    LifecycleTrace.mark("tray-show-main channel=${BuildInfo.RELEASE_CHANNEL_LABEL}")
+                }
+            },
+        )
+
         val isPauseItem = MenuItem("开始")
         isPauseItem.addActionListener(
             object : AbstractAction() {
@@ -276,7 +288,8 @@ class MainApplication : Application() {
             },
         )
 
-        addTray(
+        val initialized = addTrayWithLabel(
+            channelLabel,
             Consumer { e: MouseEvent? ->
 //            左键点击
                 if (e?.button == 1) {
@@ -288,10 +301,18 @@ class MainApplication : Application() {
                         }
                 }
             },
+            showWindowItem,
             isPauseItem,
             settingsItem,
             quitItem,
         )
+        if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta") {
+            if (initialized) {
+                log.info { "BETA_TRAY_READY mode=AWT label=$channelLabel show=available exit=available" }
+            } else {
+                log.error { "BETA_TRAY_UNAVAILABLE label=$channelLabel show=unavailable exit=unavailable" }
+            }
+        }
     }
 
     private var trayItemArr: CSystemDll.TrayItem.Reference? = null
@@ -516,10 +537,17 @@ class MainApplication : Application() {
             // deterministic while the normal UI remains paused by default.
             checkArg()
             if (RuntimeSafety.safeNative) {
-                // Do not even construct the native tray callback structures in
-                // the stability harness. Normal desktop runs still initialize
-                // the tray exactly as before.
-                log.info { "E2E运行：跳过系统托盘结构初始化" }
+                // Beta E2E must retain a visible tray because closing the
+                // window is intentionally hide-only. Stable E2E keeps the
+                // native-tray skip used by the stability harness.
+                val betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
+                if (betaChannel) {
+                    val channelLabel = "${BuildInfo.RELEASE_CHANNEL_LABEL} · $PROGRAM_NAME"
+                    log.info { "BETA_TRAY_INIT mode=AWT label=$channelLabel" }
+                    setSystemTray()
+                } else {
+                    log.info { "E2E运行：跳过系统托盘结构初始化" }
+                }
             } else {
                 initTrayMenu
             }

@@ -1,7 +1,9 @@
 package club.xiaojiawei.hsscript.e2e
 
 import club.xiaojiawei.hsscript.controller.javafx.formatVersionText
+import club.xiaojiawei.hsscript.utils.ExistingInstanceSignal
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -47,6 +49,40 @@ class BuildChannelUiContractTest {
             "hs-script-app/src/main/java/club/xiaojiawei/hsscript/controller/javafx/MainController.kt",
         ))
         assertTrue(controller.contains("BuildInfo.RELEASE_CHANNEL_LABEL"))
+    }
+
+    @Test
+    fun `beta hidden-window lifecycle has a labeled tray and single-instance show signal`() {
+        val root = repositoryRoot()
+        val mainApplication = Files.readString(root.resolve(
+            "hs-script-app/src/main/java/club/xiaojiawei/hsscript/MainApplication.kt",
+        ))
+        val systemUtil = Files.readString(root.resolve(
+            "hs-script-app/src/main/java/club/xiaojiawei/hsscript/utils/SystemUtil.kt",
+        ))
+        val main = Files.readString(root.resolve(
+            "hs-script-app/src/main/java/club/xiaojiawei/hsscript/Main.kt",
+        ))
+        val instanceSignal = Files.readString(root.resolve(
+            "hs-script-app/src/main/java/club/xiaojiawei/hsscript/utils/ExistingInstanceSignal.kt",
+        ))
+
+        assertTrue(mainApplication.contains("BETA_TRAY_INIT mode=AWT"))
+        assertTrue(mainApplication.contains("BETA_TRAY_READY mode=AWT"))
+        assertTrue(mainApplication.contains("显示窗口（\${BuildInfo.RELEASE_CHANNEL_LABEL}）"))
+        assertTrue(mainApplication.contains("WindowUtil.showStage(WindowEnum.MAIN)"))
+        assertTrue(mainApplication.contains("shutdownSoft()"))
+        assertTrue(mainApplication.contains("setSystemTray()"))
+        assertTrue(systemUtil.contains("fun addTrayWithLabel"))
+        assertTrue(systemUtil.contains("TrayIcon(image, displayName"))
+        assertTrue(systemUtil.contains("TRAY_ALREADY_INITIALIZED"))
+        assertTrue(main.contains("programLockNameForChannel"))
+        assertTrue(main.contains("ExistingInstanceSignal.requestShowMain()"))
+        assertTrue(instanceSignal.contains("requestPathForChannel"))
+        assertEquals(
+            "hs-script-show-main.beta.request",
+            ExistingInstanceSignal.requestPathForChannel("Beta").fileName.toString(),
+        )
     }
 
     private fun repositoryRoot(): Path {
