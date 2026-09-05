@@ -193,7 +193,7 @@ class OfflinePaddleXOcrMulliganE2ETest {
             },
         )
         assertEquals(ScreenWatchdogKind.UNKNOWN, unknown.kind)
-        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_PAUSE_UNKNOWN, unknown.action)
+        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN, unknown.action)
         assertEquals(OcrProviderKind.PADDLEX.name, unknown.provider)
         assertFalse(PauseStatus.isPause)
         assertTrue(unknown.reason.isNotBlank(), "the bounded recovery reason must be auditable")
@@ -207,7 +207,7 @@ class OfflinePaddleXOcrMulliganE2ETest {
             ocrProvider = { error("OCR must not run after capture failure") },
         )
         assertEquals(ScreenWatchdogKind.CAPTURE_FAILED, captureFailed.kind)
-        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_PAUSE_UNKNOWN, captureFailed.action)
+        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN, captureFailed.action)
         assertEquals(null, captureFailed.screenshotPath)
         assertFalse(PauseStatus.isPause)
     }
