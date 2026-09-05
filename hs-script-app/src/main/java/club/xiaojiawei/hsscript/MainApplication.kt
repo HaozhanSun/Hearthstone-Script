@@ -1,7 +1,6 @@
 package club.xiaojiawei.hsscript
 
 import club.xiaojiawei.hsscript.bean.CommonCardAction.Companion.DEFAULT
-import club.xiaojiawei.hsscript.bean.Release
 import club.xiaojiawei.hsscript.config.InitializerConfig
 import club.xiaojiawei.hsscript.config.ShutdownHookConfig
 import club.xiaojiawei.hsscript.consts.*
@@ -49,7 +48,6 @@ import java.net.URLClassLoader
 import java.util.Locale.getDefault
 import java.util.function.Consumer
 import java.util.function.Supplier
-import java.util.prefs.Preferences
 import javax.swing.AbstractAction
 import kotlin.system.exitProcess
 
@@ -508,21 +506,10 @@ class MainApplication : Application() {
             Thread.sleep(1000)
             PauseStatus.isPause = false
         } else {
-            val preferences = Preferences.userNodeForPackage(this::class.java)
-            val key = "used"
-            val version = ConfigUtil.getString(ConfigEnum.CURRENT_VERSION)
-            if (Release.compareVersion(BuildInfo.VERSION, version) > 0) {
-                runUI {
-                    WindowUtil.showStage(WindowEnum.ABOUT)
-                    WindowUtil.showStage(WindowEnum.VERSION_MSG, WindowUtil.getStage(WindowEnum.MAIN))
-                    ConfigUtil.putString(ConfigEnum.CURRENT_VERSION, BuildInfo.VERSION)
-                }
-            } else {
-                if (preferences.get(key, "").isNullOrBlank()) {
-                    WindowUtil.showStage(WindowEnum.ABOUT)
-                }
-            }
-            preferences.put(key, "true")
+            // Keep normal launches quiet.  The About and Version windows
+            // remain available from the main UI, but an upgrade or first run
+            // must not cover the game/script window automatically.
+            log.info { "启动提示窗口已跳过：项目介绍和版本说明可从主界面手动打开" }
         }
     }
 
