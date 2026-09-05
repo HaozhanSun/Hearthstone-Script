@@ -10,7 +10,6 @@ import club.xiaojiawei.hsscript.interfaces.closer.ThreadCloser
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.TaskManager
-import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
@@ -137,22 +136,22 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
 
     /**
      * Keep policy intent separate from client input. A non-surrender result
-     * that blocks automation must pause and never fall through to the generic
-     * surrender click path.
+     * blocks only that surrender request; it must never pause the runtime or
+     * cancel the normal phase worker. The game continues through its ordinary
+     * phase handling.
      */
     protected fun dispatchSurrenderDecision(
         result: club.xiaojiawei.hsscript.status.surrender.SurrenderRuleResult,
         source: String,
     ): Boolean {
-        cancelAllTask()
         if (result.blocksAutomaticSurrender || !result.shouldSurrender) {
-            PauseStatus.isPause = true
-            log.error {
+            log.warn {
                 "SURRENDER_ACTION_BLOCKED source=$source rule=${result.ruleId} " +
-                    "reason=${result.reason ?: "none"} pause=true dispatch=false"
+                    "reason=${result.reason ?: "none"} pause=false dispatch=false continue=true"
             }
-            return true
+            return false
         }
+        cancelAllTask()
         log.warn {
             "SURRENDER_ACTION_REQUESTED source=$source rule=${result.ruleId} " +
                 "reason=${result.reason ?: "none"} dispatch=requested"

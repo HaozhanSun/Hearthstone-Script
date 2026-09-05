@@ -13,7 +13,6 @@ import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.statistics.Record
 import club.xiaojiawei.hsscript.statistics.RecordDaoEx
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
-import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.utils.ConfigUtil
@@ -62,7 +61,7 @@ data class SurrenderRuleResult(
     val matched: Boolean,
     val shouldSurrender: Boolean,
     val reason: String? = null,
-    /** True when automation must stop instead of dispatching surrender. */
+    /** True when this particular surrender request must be blocked. */
     val blocksAutomaticSurrender: Boolean = false,
 )
 
@@ -313,10 +312,12 @@ object SurrenderPolicy {
 
     /**
      * Re-read durable history before any early surrender decision. Seven
-     * persisted concessions block the next automatic game and pause because
-     * continuing would extend the surrender streak. Five persisted wins
-     * request surrender for the next game, according to the configured
-     * protection rule. The evidence includes recent durable records so a
+     * persisted concessions block the next automatic surrender request, but
+     * never pause the runtime. The caller may still apply a higher-priority
+     * rule, such as the non-original-opponent-hero rule, and normal play must
+     * continue when no surrender is dispatched. Five persisted wins request
+     * surrender for the next game, according to the configured protection
+     * rule. The evidence includes recent durable records so a
      * result/classification regression is diagnosable.
      */
     private fun enforcePersistentStreakGuard(): SurrenderRuleResult? = runCatching {
@@ -334,12 +335,11 @@ object SurrenderPolicy {
             }
         val decision = persistentStreakDecision(snapshot) ?: return null
         if (decision.blocksAutomaticSurrender) {
-            PauseStatus.isPause = true
-            log.error {
+            log.warn {
                 "PERSISTENT_STREAK_GUARD_BLOCKED strategy=$strategyId rule=${guard.ruleId} " +
                     "reason=${guard.reason} consecutiveSurrenders=${snapshot.consecutiveSurrenders} " +
-                    "consecutiveWins=${snapshot.consecutiveWins} action=PAUSE " +
-                    "surrenderPolicyPass=BLOCKED dispatch=false evidence=$evidence source=statistics.db"
+                    "consecutiveWins=${snapshot.consecutiveWins} action=BLOCK_SURRENDER " +
+                    "surrenderPolicyPass=BLOCKED dispatch=false pause=false evidence=$evidence source=statistics.db"
             }
             decision
         } else {
@@ -359,16 +359,17 @@ object SurrenderPolicy {
         reason: String,
         error: Throwable? = null,
     ): SurrenderRuleResult {
-        PauseStatus.isPause = true
         if (error == null) {
             log.error {
                 "PERSISTENT_STREAK_GUARD_BLOCKED rule=persistent-streak-guard-unavailable " +
-                    "reason=$reason action=PAUSE surrenderPolicyPass=BLOCKED dispatch=false"
+                    "reason=$reason action=BLOCK_SURRENDER surrenderPolicyPass=BLOCKED " +
+                    "dispatch=false pause=false"
             }
         } else {
             log.error(error) {
                 "PERSISTENT_STREAK_GUARD_BLOCKED rule=persistent-streak-guard-unavailable " +
-                    "reason=$reason action=PAUSE surrenderPolicyPass=BLOCKED dispatch=false"
+                    "reason=$reason action=BLOCK_SURRENDER surrenderPolicyPass=BLOCKED " +
+                    "dispatch=false pause=false"
             }
         }
         return SurrenderRuleResult(
@@ -382,7 +383,8 @@ object SurrenderPolicy {
 
     /**
      * Never Surrender disables the five-win protective surrender, but it must
-     * not disable the independent seven-concession fail-closed pause.
+     * not disable the independent seven-concession surrender block. Neither
+     * branch is allowed to pause the runtime.
      */
     private fun enforcePersistentStreakGuardForCurrentPolicy(): SurrenderRuleResult? =
         enforcePersistentStreakGuard()?.let { result ->
@@ -406,7 +408,13 @@ object SurrenderPolicy {
      */
     @Synchronized
     fun evaluateOpponentHeroBeforeMulligan(war: War): SurrenderRuleResult? {
-        enforcePersistentStreakGuardForCurrentPolicy()?.let { return it }
+        enforcePersistentStreakGuardForCurrentPolicy()?.let { streakDecision ->
+            if (!streakDecision.blocksAutomaticSurrender) return streakDecision
+            log.info {
+                "PERSISTENT_STREAK_GUARD_DEFERRED stage=${SurrenderCheckStage.OPPONENT_HERO_RESOLVED.name} " +
+                    "rule=${streakDecision.ruleId} reason=opponent-hero-rule-has-priority action=CONTINUE"
+            }
+        }
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") {
             return null
         }
@@ -547,7 +555,16 @@ object SurrenderPolicy {
      */
     @Synchronized
     fun evaluateCurrentRankBeforeMulligan(): SurrenderRuleResult? {
-        enforcePersistentStreakGuardForCurrentPolicy()?.let { return it }
+        enforcePersistentStreakGuardForCurrentPolicy()?.let { streakDecision ->
+            if (!streakDecision.blocksAutomaticSurrender) return streakDecision
+            rankCheckCompleted = true
+            rankInspectionState = RankInspectionState.RESOLVED
+            log.info {
+                "RANK_POLICY_CONTINUE stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                    "reason=${streakDecision.reason} rankDetector=false surrender=false pause=false"
+            }
+            return null
+        }
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") return null
         when (opponentHeroInspectionState) {
             OpponentHeroInspectionState.ORIGINAL_HERO_ALLOWED -> Unit
@@ -673,20 +690,12 @@ object SurrenderPolicy {
         rankInspectionState = RankInspectionState.RESOLVED
         if (NeverSurrenderPolicy.enabled()) {
             if (NeverSurrenderPolicy.rankIsIneligible(rank)) {
-                rankInspectionState = RankInspectionState.BLOCKED
-                PauseStatus.isPause = true
-                log.error {
-                    "RANK_POLICY_BLOCKED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                log.info {
+                    "RANK_POLICY_CONTINUE stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
                         "rank=$rank tier=${detection.tier.name} reason=never-surrender-rank-ineligible " +
-                        "action=PAUSE surrender=false dispatch=false"
+                        "action=CONTINUE surrender=false pause=false dispatch=false"
                 }
-                return SurrenderRuleResult(
-                    ruleId = "rank-is-not-target-never-surrender",
-                    matched = true,
-                    shouldSurrender = false,
-                    reason = "current-rank=$rank target-ranks=5,10 never-surrender=true",
-                    blocksAutomaticSurrender = true,
-                )
+                return null
             }
             log.info {
                 "SURRENDER_POLICY_BYPASS stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
@@ -745,10 +754,10 @@ object SurrenderPolicy {
         )
 
     /**
-     * An active rank frame with no valid number and no Legendary badge is
-     * unsafe to play through.  Keep the decision explicit: surrender rather
-     * than silently continue; provider/capture failure (detection == null)
-     * still uses the separate fail-closed retry/pause path above.
+     * An active rank frame with no valid number and no Legendary badge remains
+     * an explicit surrender decision. Provider/capture failure (detection ==
+     * null) is a non-surrender continuation after the retry budget; it must
+     * not pause the runtime.
      */
     internal fun unresolvedRankSurrenderDecision(tier: CurrentRankDetector.RankTier): SurrenderRuleResult =
         SurrenderRuleResult(
@@ -783,7 +792,7 @@ object SurrenderPolicy {
         return RankInspectionReadDecision(
             state = RankInspectionState.BLOCKED,
             wait = false,
-            pause = true,
+            pause = false,
             reason = if (detectionAvailable) "empty-or-unmapped" else "provider-failure-or-capture-failure",
         )
     }
@@ -802,11 +811,11 @@ object SurrenderPolicy {
 
     internal fun blockForUnresolvedRank(attempts: Int): SurrenderRuleResult {
         val result = unresolvedRankDecision(attempts)
-        rankInspectionState = RankInspectionState.BLOCKED
-        PauseStatus.isPause = true
-        log.error {
+        rankInspectionState = RankInspectionState.RESOLVED
+        log.warn {
             "RANK_POLICY_BLOCKED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                "rule=${result.ruleId} reason=${result.reason} action=PAUSE ocrFailure=true"
+                "rule=${result.ruleId} reason=${result.reason} action=CONTINUE " +
+                "surrender=false pause=false ocrFailure=true"
         }
         return result
     }
@@ -918,7 +927,14 @@ object SurrenderPolicy {
      * identified.
      */
     fun evaluateTurnStart(war: War): SurrenderRuleResult? {
-        enforcePersistentStreakGuardForCurrentPolicy()?.let { return it }
+        enforcePersistentStreakGuardForCurrentPolicy()?.let { streakDecision ->
+            if (!streakDecision.blocksAutomaticSurrender) return streakDecision
+            log.info {
+                "TURN_POLICY_CONTINUE reason=${streakDecision.reason} " +
+                    "rule=${streakDecision.ruleId} surrender=false pause=false"
+            }
+            return null
+        }
         // Test-only escape hatch for the real-input E2E harness. Normal runs
         // never set this property, so the production eligibility rules remain
         // unchanged; the harness must be able to reach card-play/attack turns

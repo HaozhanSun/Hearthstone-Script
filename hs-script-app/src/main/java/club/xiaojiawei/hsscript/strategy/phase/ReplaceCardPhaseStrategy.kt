@@ -140,8 +140,9 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         // mulligan UI exists. Rank OCR is not allowed before this boundary.
         mulliganInputConfirmed.set(true)
         val opponentHeroDecision = SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war)
-        if (opponentHeroDecision != null) {
+        if (opponentHeroDecision != null &&
             dispatchSurrenderDecision(opponentHeroDecision, "opponent-hero")
+        ) {
             return
         }
         if (SurrenderPolicy.currentOpponentHeroInspectionState() !==
@@ -154,8 +155,9 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             return
         }
         val rankDecision = SurrenderPolicy.evaluateCurrentRankBeforeMulligan()
-        if (rankDecision != null) {
+        if (rankDecision != null &&
             dispatchSurrenderDecision(rankDecision, "mulligan-input-preflight")
+        ) {
             return
         }
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") != "true" &&

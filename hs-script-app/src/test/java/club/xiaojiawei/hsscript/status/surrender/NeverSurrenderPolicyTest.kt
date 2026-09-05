@@ -26,7 +26,7 @@ class NeverSurrenderPolicyTest {
     }
 
     @Test
-    fun `streak guard thresholds retain seven-concession pause and five-win surrender semantics`() {
+    fun `streak guard thresholds retain seven-concession block and five-win surrender semantics`() {
         val surrenderGuard = SurrenderPolicy.evaluatePersistentStreakGuard(
             PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
         )
@@ -44,7 +44,7 @@ class NeverSurrenderPolicyTest {
     }
 
     @Test
-    fun `never surrender cannot bypass seven-concession fail-closed block`() {
+    fun `never surrender cannot bypass seven-concession surrender block`() {
         val decision = SurrenderPolicy.persistentStreakDecision(
             PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
         )!!

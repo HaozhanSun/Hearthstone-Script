@@ -989,14 +989,14 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun exhaustedRankUnknownPausesAndNeverRequestsSurrender() {
+    fun exhaustedRankUnknownContinuesWithoutPausingOrRequestingSurrender() {
         val decision = SurrenderPolicy.classifyRankInspection(
             rank = null,
             detectionAvailable = false,
             attempt = 3,
         )
         assertEquals(RankInspectionState.BLOCKED, decision.state)
-        assertTrue(decision.pause)
+        assertFalse(decision.pause)
         assertFalse(decision.wait)
         val action = SurrenderPolicy.unresolvedRankDecision(3)
         assertFalse(action.shouldSurrender)
@@ -1011,14 +1011,16 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun unresolvedRankFailsClosedAndRequestsPause() {
+    fun unresolvedRankBlocksOnlyTheSurrenderAndKeepsRuntimeActive() {
         val previousPause = PauseStatus.isPause
         try {
             PauseStatus.isPause = false
             val result = SurrenderPolicy.blockForUnresolvedRank(attempts = 8)
             assertFalse(result.shouldSurrender)
             assertEquals("rank-ocr-unresolved", result.ruleId)
-            assertTrue(PauseStatus.isPause)
+            assertTrue(result.blocksAutomaticSurrender)
+            assertFalse(PauseStatus.isPause)
+            assertEquals(RankInspectionState.RESOLVED, SurrenderPolicy.currentRankInspectionState())
         } finally {
             PauseStatus.isPause = previousPause
         }
