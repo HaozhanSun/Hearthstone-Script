@@ -135,7 +135,19 @@ class MonteCarloTreeNode(
                 val shouldDefer = arg.decisionModel?.shouldDefer(card, war)
                     ?: CardTimingPolicy.shouldDefer(card, war)
                 if (shouldDefer) {
-                    if (CardTimingPolicy.isEndOfTurnCostReductionCard(card)) {
+                    // Deferral is a timing preference, not a legality bypass.
+                    // In particular, a dynamic-cost card must not be put back
+                    // into the root action set while it is still unaffordable;
+                    // doing so makes the controller believe that progress is
+                    // available and can cause repeated stale replans.
+                    val timingCardCurrentlyPlayable =
+                        !card.isUncertain &&
+                            me.usableResource >= card.cost &&
+                            !(playArea.isFull &&
+                                card.cardType !== CardTypeEnum.HERO &&
+                                card.cardType !== CardTypeEnum.SPELL &&
+                                card.cardType !== CardTypeEnum.WEAPON)
+                    if (CardTimingPolicy.isEndOfTurnCostReductionCard(card) && timingCardCurrentlyPlayable) {
                         val deferredPlayActions = runCatching { card.action.generatePlayActions(war, me) }
                             .getOrElse {
                                 scanCard(card, "FILTERED", "deferred-play-action-generation-error:${it::class.java.simpleName}")
@@ -146,6 +158,17 @@ class MonteCarloTreeNode(
                         } else if (arg.decisionModel?.canCreateOpaqueAction(card, war) == true) {
                             deferredTimingActions.add(createOpaquePlayAction(card))
                         }
+                    } else if (CardTimingPolicy.isEndOfTurnCostReductionCard(card)) {
+                        scanCard(
+                            card,
+                            "FILTERED",
+                            when {
+                                card.isUncertain -> "deferred-card-uncertain"
+                                me.usableResource < card.cost -> "deferred-card-insufficient-mana"
+                                playArea.isFull -> "deferred-card-board-full"
+                                else -> "deferred-card-currently-unplayable"
+                            },
+                        )
                     }
                     scanCard(card, "FILTERED", "decision-model-should-defer")
                     if (parent == null && arg.debugName.isNotBlank()) {
@@ -325,10 +348,10 @@ class MonteCarloTreeNode(
         val filteredActions = if (nonEndTurnActions.isNotEmpty()) {
             deferredActions
         } else {
-            // EndTurn is not a useful action for this decision.  When every
-            // currently generated action is deferred, retain those deferred
-            // actions and add the explicitly supported timing-card fallback
-            // instead of treating EndTurn as proof that work is complete.
+            // EndTurn is not a useful action for this decision. When every
+            // currently generated action is deferred, retain only deferred
+            // timing actions that passed the same payment/board checks above.
+            // An unaffordable timing card must not be resurrected here.
             (result + deferredTimingActions).distinct()
         }
         if (deferredTimingActions.isNotEmpty() && nonEndTurnActions.isEmpty()) {
@@ -365,9 +388,9 @@ class MonteCarloTreeNode(
     /**
      * Coin is useful here only as a one-mana conversion that immediately
      * unlocks another legal action. This prevents MCTS from selecting
-     * Coin -> one-mana hero power when it could simply use that power without
-     * consuming Coin, while preserving Coin when it enables a two-mana card
-     * or a two-mana hero power.
+     * Coin -> hero power when it is not also unlocking a non-power card. The
+     * deck model can still explicitly force Coin for a meaningful sequence
+     * through its mandatory-action hook.
      */
     private fun hasCoinPayoff(war: War): Boolean {
         val me = war.me
@@ -382,10 +405,13 @@ class MonteCarloTreeNode(
                 card.cost <= coinMana &&
                 (!boardFull || card.cardType === CardTypeEnum.HERO || card.cardType === CardTypeEnum.SPELL || card.cardType === CardTypeEnum.WEAPON)
         }
-        val powerPayoff = me.playArea.power?.let { power ->
-            !power.isExhausted && power.cost > currentMana && power.cost <= coinMana && power.canPower()
-        } == true
-        return handPayoff || powerPayoff
+        // Coin is a resource-conversion bridge for a non-power card only.
+        // Spending it solely to unlock the one action that the player could
+        // otherwise take later is not a payoff: the live executor must not
+        // turn Coin -> hero power into a default sequence.  A deck model may
+        // still force Coin for a genuinely important card (for example the
+        // cannon opening) through its mandatory-action hook.
+        return handPayoff
     }
 
     /**

@@ -4,7 +4,9 @@ import club.xiaojiawei.hsscriptstrategysdk.DeckStrategy
 import club.xiaojiawei.hsscriptcardsdk.bean.EmptyAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Action
 import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
+import club.xiaojiawei.hsscriptcardsdk.bean.InitAction
 import club.xiaojiawei.hsscriptcardsdk.bean.MCTSArg
+import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeNode
 import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.TurnOverAction
@@ -24,6 +26,7 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
  * @date 2025/1/22 17:04
  */
 abstract class MCTSDeckStrategy : DeckStrategy() {
+    private val maxEmptySearchRescans = 3
     @Volatile
     private var lastExperimentalTurnHadUnconfirmedDispatch = false
 
@@ -68,7 +71,6 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
         val model = activeDecisionModel
         val suppressed = suppressedExperimentalCreatorIds()
         val result = linkedSetOf<String>()
-        val deferredTimingCreatorIds = linkedSetOf<String>()
         val decisions = mutableListOf<Map<String, Any?>>()
         fun decision(details: Map<String, Any?>) {
             decisions += details
@@ -92,12 +94,12 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "board-full-for-permanent"))
                 return@forEach
             }
-            // Mirror MonteCarloTreeNode: a card filtered by a deck timing
-            // hook is not an actionable residual for the end-turn guard.
-            if (model?.shouldDefer(card, war) == true) {
-                if (CardTimingPolicy.isEndOfTurnCostReductionCard(card)) {
-                    deferredTimingCreatorIds += card.entityId
-                }
+            // Mirror MonteCarloTreeNode exactly: timing deferral is not a
+            // legality bypass, and the default timing policy must also apply
+            // when a strategy has no deck-specific model.
+            val shouldDefer = model?.shouldDefer(card, war)
+                ?: CardTimingPolicy.shouldDefer(card, war)
+            if (shouldDefer) {
                 decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "decision-model-should-defer"))
                 return@forEach
             }
@@ -207,15 +209,6 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             val opaquePower = model?.canCreateOpaquePowerAction(power, war) == true
             if (opaquePower) result += power.entityId
             decision(mapOf("kind" to "HERO_POWER", "entityId" to power.entityId, "outcome" to if (power.entityId in result) "ACTIONABLE" else "FILTERED", "reason" to if (opaquePower) "opaque-power-fallback" else "power-actions-or-not-powerable"))
-        }
-        if (result.isEmpty() && deferredTimingCreatorIds.isNotEmpty()) {
-            result += deferredTimingCreatorIds
-            decisions += mapOf(
-                "kind" to "ACTION_FILTER",
-                "outcome" to "FALLBACK_ALLOWED",
-                "reason" to "deferred-timing-card-is-only-remaining-useful-work",
-                "entityIds" to deferredTimingCreatorIds,
-            )
         }
         MctsReplayTrace.record(
             war,
@@ -387,6 +380,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
         val turnDeadline = System.currentTimeMillis() + template.experimentalTurnBudgetMillis
         val search = MonteCarloTreeSearch()
         var actionCount = 0
+        var emptySearchRescans = 0
         val blockedCreatorIds = suppressedExperimentalCreatorIds().toMutableSet()
         while (war.isMyTurn && System.currentTimeMillis() < turnDeadline && actionCount < 16) {
             val searchStart = System.currentTimeMillis()
@@ -414,7 +408,78 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             )
             val path = search.searchBestNode(war, arg)
                 .filter { it.applyAction !is EmptyAction }
-            val node = path.firstOrNull() ?: run {
+            var action = path.firstOrNull()?.applyAction
+            if (action == null || action === TurnOverAction) {
+                // The search snapshot can be one parser update behind the
+                // live WAR (notably after a summon/attack animation).  Never
+                // accept an empty/EndTurn result while the same live scan
+                // still exposes a creator.  Re-scan and, when possible, use a
+                // legal action generated from that fresh state.  This is an
+                // MCTS root-action recovery path, not a legacy hard-coded
+                // play order, and it prevents the app guard from spending its
+                // re-plan budget on an already stale EndTurn result.
+                val liveCreators = actionableCreatorIds(war, "search-empty-or-end-turn-rescan")
+                val fallback = if (liveCreators.isNotEmpty()) {
+                    liveFallbackAction(war, arg, blockedCreatorIds)
+                } else {
+                    null
+                }
+                if (fallback != null) {
+                    emptySearchRescans = 0
+                    action = fallback
+                    MctsReplayTrace.record(
+                        war,
+                        "controller_branch",
+                        "search-result-replaced-by-fresh-live-mcts-action",
+                        mapOf(
+                            "strategy" to name(),
+                            "step" to actionCount + 1,
+                            "originalResult" to if (path.isEmpty()) "EMPTY" else "END_TURN",
+                            "liveActionableCreatorIds" to liveCreators,
+                            "action" to describeAction(fallback),
+                        ),
+                    )
+                } else if (liveCreators.isNotEmpty() && emptySearchRescans < maxEmptySearchRescans) {
+                    emptySearchRescans++
+                    MctsReplayTrace.record(
+                        war,
+                        "controller_branch",
+                        "search-result-empty-live-retry",
+                        mapOf(
+                            "strategy" to name(),
+                            "step" to actionCount + 1,
+                            "attempt" to emptySearchRescans,
+                            "maxAttempts" to maxEmptySearchRescans,
+                            "originalResult" to if (path.isEmpty()) "EMPTY" else "END_TURN",
+                            "liveActionableCreatorIds" to liveCreators,
+                        ),
+                    )
+                    Thread.sleep(120L)
+                    continue
+                } else if (liveCreators.isNotEmpty()) {
+                    // Do not reinterpret a live actionability result as a
+                    // legitimate EndTurn merely because the fresh root could
+                    // not materialize the action after bounded retries.  The
+                    // caller's turn-end guard must receive the live evidence
+                    // and decide whether another re-plan is safe; this
+                    // controller returns without dispatching EndTurn.
+                    MctsReplayTrace.record(
+                        war,
+                        "controller_branch",
+                        "search-result-live-action-unresolved-after-bounded-retries",
+                        mapOf(
+                            "strategy" to name(),
+                            "step" to actionCount + 1,
+                            "maxAttempts" to maxEmptySearchRescans,
+                            "liveActionableCreatorIds" to liveCreators,
+                        ),
+                    )
+                    break
+                }
+            } else {
+                emptySearchRescans = 0
+            }
+            if (action == null) {
                 MctsReplayTrace.record(
                     war,
                     "turn_end_candidate",
@@ -434,8 +499,9 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 )
                 break
             }
-            val action = node.applyAction
             if (action === TurnOverAction) {
+                // A fresh scan was already attempted above.  If it still
+                // finds no creator, this is a genuine EndTurn-only state.
                 MctsReplayTrace.record(
                     war,
                     "turn_end_candidate",
@@ -631,6 +697,29 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             mapOf("strategy" to name(), "actions" to actionCount, "remainingMana" to war.me.usableResource),
         )
         log.info { "MCTS_EXPERIMENT_TURN_DONE strategy=${name()} actions=$actionCount" }
+    }
+
+    /**
+     * Build a fresh root against the live WAR and return one executable
+     * non-EndTurn action.  The normal search remains the owner of all
+     * decisions; this is used only when its snapshot returned no action while
+     * the independent live scan proved that work is still available.
+     */
+    private fun liveFallbackAction(
+        war: War,
+        arg: MCTSArg,
+        blockedCreatorIds: Set<String>,
+    ): Action? {
+        val root = MonteCarloTreeNode(war, InitAction, arg)
+        val candidates = root.actions.filter { action ->
+            action !== TurnOverAction &&
+                action.creator?.entityId?.let { it !in blockedCreatorIds } != false &&
+                action !is EmptyAction
+        }
+        return candidates.maxWithOrNull(
+            compareBy<Action> { arg.decisionModel?.actionPrior(it, war) ?: 0.0 }
+                .thenBy { describeAction(it) },
+        )
     }
 
     private fun awaitStateChange(war: War, before: String, turnDeadline: Long): Boolean {
