@@ -648,20 +648,15 @@ object SurrenderPolicy {
         }
         val rank = detection?.rank
         if (rank == null) {
-            if (detection != null) {
-                rankCheckCompleted = true
-                rankInspectionState = RankInspectionState.RESOLVED
-                val result = unresolvedRankSurrenderDecision(detection.tier)
-                log.warn {
-                    "SURRENDER_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                        "rule=${result.ruleId} reason=${result.reason} " +
-                        "detectionAvailable=true tier=${detection.tier.name} action=SURRENDER pause=false"
-                }
-                return result
-            }
+            // A provider can return a Detection object even when it found no
+            // usable number (for example, a badge-color match with empty OCR).
+            // That is not evidence for a surrender: only a confirmed numeric
+            // rank 1..10 may trigger this rule, while a confirmed Legendary
+            // result is handled above. Retry the same way for provider output
+            // and provider failure, then block the surrender if unresolved.
             val readDecision = classifyRankInspection(
                 rank = null,
-                detectionAvailable = false,
+                detectionAvailable = detection != null,
                 attempt = rankInspectionAttempts,
             )
             if (readDecision.wait) {
@@ -759,14 +754,6 @@ object SurrenderPolicy {
      * null) is a non-surrender continuation after the retry budget; it must
      * not pause the runtime.
      */
-    internal fun unresolvedRankSurrenderDecision(tier: CurrentRankDetector.RankTier): SurrenderRuleResult =
-        SurrenderRuleResult(
-            ruleId = "rank-ocr-unresolved-surrender",
-            matched = true,
-            shouldSurrender = true,
-            reason = "rank-unresolved-without-legendary tier=${tier.name} target-ranks=5,10",
-        )
-
     internal fun classifyRankInspection(
         rank: Int?,
         detectionAvailable: Boolean,

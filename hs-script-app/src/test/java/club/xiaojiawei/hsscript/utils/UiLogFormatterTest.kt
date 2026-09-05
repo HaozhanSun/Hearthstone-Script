@@ -108,4 +108,16 @@ class UiLogFormatterTest {
             )
         )
     }
+
+    @Test
+    fun `surrender decision feed includes the rule and reason`() {
+        val message = UiLogFormatter.format(
+            "SURRENDER_POLICY_TRIGGERED stage=CURRENT_RANK_RESOLVED " +
+                "rule=rank-ocr-unresolved-surrender reason=rank-unresolved-without-legendary " +
+                "tier=UNKNOWN action=SURRENDER"
+        )
+
+        assertTrue(message.startsWith("等级策略 · 触发投降"))
+        assertTrue(message.contains("rank-unresolved-without-legendary"))
+    }
 }

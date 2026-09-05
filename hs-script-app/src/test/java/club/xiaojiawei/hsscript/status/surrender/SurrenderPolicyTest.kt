@@ -727,13 +727,12 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun activeRankFrameWithoutNumberOrLegendaryRequestsSurrenderInsteadOfPausing() {
-        val result = SurrenderPolicy.unresolvedRankSurrenderDecision(CurrentRankDetector.RankTier.UNKNOWN)
+    fun activeRankFrameWithoutNumberOrLegendaryBlocksSurrenderInsteadOfRequestingIt() {
+        val result = SurrenderPolicy.unresolvedRankDecision(attempts = 3)
 
-        assertTrue(result.shouldSurrender)
-        assertFalse(result.blocksAutomaticSurrender)
-        assertEquals("rank-ocr-unresolved-surrender", result.ruleId)
-        assertTrue(result.reason.orEmpty().contains("without-legendary"))
+        assertFalse(result.shouldSurrender)
+        assertTrue(result.blocksAutomaticSurrender)
+        assertEquals("rank-ocr-unresolved", result.ruleId)
     }
 
     @Test

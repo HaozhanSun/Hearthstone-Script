@@ -95,6 +95,17 @@ object GameUtil {
             gameEndTasks.isNotEmpty()
 
     /**
+     * A new CREATE_GAME/TURN=1 boundary supersedes any result-page cleanup
+     * task left by the previous game. Without this reset, a stale task makes
+     * the next rank-triggered surrender look terminal and silently rejects
+     * the request before it can send input.
+     */
+    @Synchronized
+    fun resetForNewGame() {
+        cancelGameEndTask()
+    }
+
+    /**
      * The first stale-result recovery click is deliberately deterministic so
      * the center of the visible continue control is exercised before the
      * bounded, humanized retry points are used.
@@ -634,10 +645,10 @@ object GameUtil {
     /**
      * 游戏里投降
      */
-    fun surrender(skipEndTurn: Boolean = false) {
+    fun surrender(skipEndTurn: Boolean = false): Boolean {
         if (PowerLogListener.replayingExistingLog) {
             log.info { "Power.log恢复回放：跳过历史投降请求" }
-            return
+            return false
         }
         if (isTerminalGameState()) {
             log.info {
@@ -646,15 +657,21 @@ object GameUtil {
                     "won=${WAR.won.isNotBlank()} lost=${WAR.lost.isNotBlank()} " +
                     "conceded=${WAR.conceded.isNotBlank()} settlementTask=${gameEndTasks.isNotEmpty()} dispatch=false"
             }
-            return
+            return false
         }
-        if (NeverSurrenderPolicy.blockSurrender("GameUtil.surrender")) return
-        if (!ActionDispatchGate.allow("surrender.request")) return
+        if (NeverSurrenderPolicy.blockSurrender("GameUtil.surrender")) return false
+        if (!ActionDispatchGate.allow("surrender.request")) return false
 //        SystemUtil.frontWindow(ScriptStaticData.getGameHWND());
 //        按ESC键弹出投降界面
 //        ScriptStaticData.ROBOT.keyPress(27);
 //        ScriptStaticData.ROBOT.keyRelease(27);
-        if (gameEndTasks.isNotEmpty()) return
+        if (gameEndTasks.isNotEmpty()) {
+            log.warn {
+                "SURRENDER_ACTION_BLOCKED reason=stale-settlement-task " +
+                    "settlementTask=true dispatch=false pause=false continue=true"
+            }
+            return false
+        }
         val initialMode = Mode.currMode
         val initialInWar = WarEx.inWar
         if (!isSurrenderStateConfirmed(initialMode, initialInWar)) {
@@ -664,7 +681,7 @@ object GameUtil {
                     "warCount=${WarEx.warCount} " +
                     "reason=mode-not-gameplay-and-war-not-active"
             }
-            return
+            return false
         }
         // Keep a process-local ownership signal for statistics. A fast
         // surrender can reach GAME_OVER before PLAYSTATE=CONCEDED is parsed
@@ -818,6 +835,7 @@ object GameUtil {
                 TimeUnit.MILLISECONDS,
             ),
         )
+        return true
     }
 
     /**
