@@ -49,7 +49,19 @@ asserts the resulting state, action, retry schedule, provider, and
 
 Run it with the targeted reactor test command:
 
-`mvnw.cmd -pl hs-script-app -am -Dtest=OfflinePaddleXOcrMulliganE2ETest,OcrRuntimeTest,PaddleXOcrSidecarBridgeTest,ScreenWatchdogTest,SurrenderPolicyTest -Dsurefire.failIfNoSpecifiedTests=false test`
+`mvnw.cmd -pl hs-script-app -am -Dtest=MulliganRankPreflightTest,OfflinePaddleXOcrMulliganE2ETest,OcrRuntimeTest,PaddleXOcrSidecarBridgeTest,ScreenWatchdogTest,SurrenderPolicyTest -Dsurefire.failIfNoSpecifiedTests=false test`
+
+`MulliganRankPreflightTest` covers the live scheduling contract around that
+fixture: the first read starts after a 7-second grace period, retries are
+independent of new Power.log lines and bounded, each read is cancellable after
+5 seconds, and duplicate `MULLIGAN_STATE=INPUT` reserves only one change-card
+action. Empty/UNKNOWN/exception/timeout reads continue without pausing;
+phase transitions and surrender requests cancel pending work before another
+click. Its timing values can be overridden with
+`hs.script.mulligan.rank.initial-delay-ms`,
+`hs.script.mulligan.rank.retry-interval-ms`,
+`hs.script.mulligan.rank.max-attempts`, and
+`hs.script.mulligan.rank.attempt-timeout-ms`.
 
 ## Routing rules
 

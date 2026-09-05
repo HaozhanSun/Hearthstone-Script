@@ -17,6 +17,7 @@ import club.xiaojiawei.hsscript.utils.MulliganScreenshot
 import club.xiaojiawei.hsscript.utils.MctsRoundScreenshot
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscript.utils.go
+import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.enums.StepEnum
@@ -123,6 +124,12 @@ object DeckStrategyActuator {
         val mulliganDelay = RandomUtil.getMulliganDelay(distortionEnabled)
         log.info { "自动换牌等待${mulliganDelay}毫秒（畸变：$distortionEnabled）" }
         SystemUtil.delay(mulliganDelay)
+        if (!ReplaceCardPhaseStrategy.isMulliganActionStillAllowed()) {
+            log.info {
+                "自动换牌请求被取消：排位预检或换牌阶段已结束 action=NO_ACTION pause=false"
+            }
+            return false
+        }
         val canExecute = canExec()
         log.info { "自动换牌延迟结束，当前状态可执行：$canExecute" }
         if (!canExecute) {
@@ -130,7 +137,12 @@ object DeckStrategyActuator {
             return false
         }
 
-        if (PauseStatus.isPause) return false
+        if (PauseStatus.isPause || !ReplaceCardPhaseStrategy.isMulliganActionStillAllowed()) {
+            log.info {
+                "自动换牌请求被取消：当前阶段不再允许输入 action=NO_ACTION pause=${PauseStatus.isPause}"
+            }
+            return false
+        }
         log.info { "执行换牌策略" }
         war.run {
             log.info { "1号玩家牌库数量：" + player1.deckArea.cards.size }
@@ -203,6 +215,10 @@ object DeckStrategyActuator {
             }
             val mulliganCardIndices = handCards.indices.filter { handCards[it].cardId != COIN_CARD_ID }
             val mulliganClickPositions = mulliganCardIndices.map { mulliganCardRect(it).getCenterClickPos() }
+            if (!ReplaceCardPhaseStrategy.isMulliganActionStillAllowed()) {
+                log.info { "换牌输入被取消：交互检查前阶段已结束 action=NO_ACTION pause=false" }
+                return false
+            }
             val mulliganUiReady = MulliganScreenshot.awaitInteractiveHand(mulliganClickPositions)
             if (!mulliganUiReady) {
                 log.warn {
@@ -215,6 +231,10 @@ object DeckStrategyActuator {
             // of matchmaking.
             MulliganScreenshot.capture("before-selection", WarEx.warCount + 1)
             for (handIndex in handCards.indices) {
+                if (!ReplaceCardPhaseStrategy.isMulliganActionStillAllowed()) {
+                    log.info { "换牌输入被取消：阶段或投降请求已改变 action=NO_ACTION pause=false" }
+                    return false
+                }
                 val card = handCards[handIndex]
                 if (card.cardId == COIN_CARD_ID) continue
                 if (!copyHandCards.contains(card) && mulliganUiReady) {
@@ -265,14 +285,20 @@ object DeckStrategyActuator {
             // control and use the shared randomized short delay.
             try {
                 for (i in 0..2) {
-                    if (Thread.currentThread().isInterrupted) break
+                    if (Thread.currentThread().isInterrupted ||
+                        !ReplaceCardPhaseStrategy.isMulliganActionStillAllowed()
+                    ) break
                     GameUtil.CONFIRM_RECT.lClick(false)
                     SystemUtil.delayShort()
                 }
-                if (!Thread.currentThread().isInterrupted) {
+                if (!Thread.currentThread().isInterrupted &&
+                    ReplaceCardPhaseStrategy.isMulliganActionStillAllowed()
+                ) {
                     GameUtil.CENTER_RECT.lClick(false)
                 }
-                log.info { "自动换牌确认已提交" }
+                log.info {
+                    "自动换牌确认${if (ReplaceCardPhaseStrategy.isMulliganActionStillAllowed()) "已提交" else "已取消"}"
+                }
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
                 log.warn { "自动换牌确认被中断" }

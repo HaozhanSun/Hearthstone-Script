@@ -16,6 +16,7 @@ import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.utils.ConfigUtil
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import java.time.LocalDateTime
 
 /**
@@ -127,6 +128,7 @@ object SurrenderPolicy {
      */
     private var lastPreMulliganHeroName = ""
     private var earlySurrenderTriggered = false
+    @Volatile
     private var rankCheckCompleted = false
     private var rankInspectionAttempts = 0
     private var lastRankInspectionAt = 0L
@@ -677,8 +679,17 @@ object SurrenderPolicy {
                 }
                 return result
             }
-            rankCheckCompleted = true
-            return blockForUnresolvedRank(rankInspectionAttempts)
+            // A blank/failed OCR read is retryable.  Returning a non-null
+            // SurrenderRuleResult here used to make the generic caller treat
+            // an unresolved read as a surrender request, while marking the
+            // check complete prevented any later retry.  The mulligan
+            // preflight owns the bounded retry and fail-soft decision.
+            log.warn {
+                "RANK_POLICY_WAITING_FOR_RANK stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                    "attempt=$rankInspectionAttempts provider=${if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"} " +
+                    "action=RETRY pause=false surrender=false"
+            }
+            return null
         }
 
         rankCheckCompleted = true
@@ -810,6 +821,9 @@ object SurrenderPolicy {
         }
         return result
     }
+
+    /** True when a rank read already produced a final safe or unsafe result. */
+    internal fun currentRankCheckCompleted(): Boolean = rankCheckCompleted
 
     data class WinRateSnapshot(
         val games: Int,

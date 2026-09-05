@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.TaskManager
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
+import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.PowerLogUtil
@@ -130,6 +131,12 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
 
     private fun surrenderImmediatelyForCurrentRank(): Boolean {
         if (GameUtil.isTerminalGameState()) return true
+        if (war.currentPhase == WarPhaseEnum.REPLACE_CARD) {
+            // The rank read belongs to ReplaceCardPhaseStrategy's bounded
+            // asynchronous preflight.  Never let PaddleX or Tesseract block
+            // the Power.log listener or consume the mulligan window here.
+            return false
+        }
         val result = SurrenderPolicy.evaluateCurrentRankBeforeMulligan() ?: return false
         return dispatchSurrenderDecision(result, "current-rank")
     }
@@ -152,8 +159,12 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
             return false
         }
         cancelAllTask()
+        if (war.currentPhase == WarPhaseEnum.REPLACE_CARD) {
+            ReplaceCardPhaseStrategy.cancelRankPreflight("surrender-requested-$source")
+        }
         log.warn {
             "SURRENDER_ACTION_REQUESTED source=$source rule=${result.ruleId} " +
+                "reason=${result.reason ?: "none"} dispatch=requested"
                 "reason=${result.reason ?: "none"} dispatch=requested"
         }
         val dispatched = GameUtil.surrender(skipEndTurn = true)
