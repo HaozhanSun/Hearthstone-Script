@@ -35,7 +35,7 @@ enum class ScreenWatchdogRecoveryAction {
     STOP_SURRENDER_AND_CLEAR_RESULT,
     STOP_SURRENDER_AND_RECOVER_MATCHMAKING,
     STOP_SURRENDER_AND_RECOVER_MAIN_MENU,
-    STOP_SURRENDER_AND_PAUSE_UNKNOWN,
+    STOP_SURRENDER_AND_CONTINUE_UNKNOWN,
 }
 
 data class ScreenWatchdogObservation(
@@ -110,7 +110,7 @@ object ScreenWatchdog {
         if (image == null) {
             return ScreenWatchdogObservation(
                 kind = ScreenWatchdogKind.CAPTURE_FAILED,
-                action = ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_PAUSE_UNKNOWN,
+                action = ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN,
                 ocrText = "",
                 screenshotPath = null,
                 provider = provider,
@@ -217,7 +217,7 @@ object ScreenWatchdog {
         ScreenWatchdogKind.GAMEPLAY -> ScreenWatchdogRecoveryAction.CONTINUE_ACTION
         ScreenWatchdogKind.UNKNOWN,
         ScreenWatchdogKind.CAPTURE_FAILED,
-        -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_PAUSE_UNKNOWN
+        -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN
     }
 
     private fun captureScreen(): BufferedImage? = runCatching {

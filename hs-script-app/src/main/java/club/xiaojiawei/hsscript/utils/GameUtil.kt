@@ -699,16 +699,15 @@ object GameUtil {
                     } else if (++surrenderAttempts > maxSurrenderAttempts) {
                         // Never keep clicking a potentially stale coordinate
                         // forever.  If the game did not leave GAMEPLAY after
-                        // bounded retries, the screen/state contract is
-                        // broken; pausing is safer than repeatedly opening
-                        // the options menu on another screen.
+                        // bounded retries, stop only this surrender request;
+                        // the normal game worker must remain active.
                         log.error {
                             "投降重试熔断：未观察到对局结束或模式切换，停止盲点 " +
                                 "attempts=$surrenderAttempts mode=${Mode.currMode} " +
-                                "inWar=${WarEx.inWar} warCount=${WarEx.warCount}"
+                                "inWar=${WarEx.inWar} warCount=${WarEx.warCount} " +
+                                "action=STOP_SURRENDER_AND_CONTINUE pause=false dispatch=false"
                         }
                         stopSurrenderTask()
-                        PauseStatus.isPause = true
                     } else {
                         val watchdogTiming = ScreenWatchdog.shouldInspect(
                             startedAt = surrenderStartedAt,
@@ -754,14 +753,14 @@ object GameUtil {
                                     Mode.recover(ModeEnum.HUB, "screen-watchdog-main-menu", enterStrategy = true)
                                     return@scheduleWithFixedDelay
                                 }
-                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_PAUSE_UNKNOWN -> {
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN -> {
                                     stopSurrenderTask()
-                                    log.error {
+                                    log.warn {
                                         "SCREEN_WATCHDOG_BLOCKED reason=unknown-or-capture-failed " +
                                             "kind=${observation.kind} attempts=$surrenderAttempts " +
-                                            "screenshot=${observation.screenshotPath ?: "not-saved"}"
+                                            "screenshot=${observation.screenshotPath ?: "not-saved"} " +
+                                            "action=STOP_SURRENDER_AND_CONTINUE pause=false dispatch=false"
                                     }
-                                    PauseStatus.isPause = true
                                     return@scheduleWithFixedDelay
                                 }
                             }

@@ -47,11 +47,11 @@ class ScreenWatchdogTest {
     }
 
     @Test
-    fun `unknown screen pauses bounded recovery instead of repeating action`() {
+    fun `unknown screen stops surrender without pausing bounded recovery`() {
         val kind = ScreenWatchdog.classifyForTest("一些无法判定的文字")
         assertEquals(ScreenWatchdogKind.UNKNOWN, kind)
         assertEquals(
-            ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_PAUSE_UNKNOWN,
+            ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN,
             ScreenWatchdog.decideForTest(kind),
         )
     }
@@ -65,7 +65,7 @@ class ScreenWatchdogTest {
             ocrProvider = { error("should not OCR without capture") },
         )
         assertEquals(ScreenWatchdogKind.CAPTURE_FAILED, observation.kind)
-        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_PAUSE_UNKNOWN, observation.action)
+        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN, observation.action)
         assertEquals(null, observation.screenshotPath)
     }
 

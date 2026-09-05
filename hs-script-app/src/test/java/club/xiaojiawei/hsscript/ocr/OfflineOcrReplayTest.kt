@@ -56,9 +56,9 @@ class OfflineOcrReplayTest {
         loadFixture().frames.forEach { frame ->
             val actual = ScreenWatchdog.classifyForTest(frame.ocrText)
             assertEquals(ScreenWatchdogKind.valueOf(frame.expectedWatchdogKind), actual, frame.id)
-            val shouldPause = ScreenWatchdog.decideForTest(actual) ==
-                club.xiaojiawei.hsscript.status.ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_PAUSE_UNKNOWN
-            assertEquals(frame.expectedFailClosed, shouldPause, frame.id)
+            val shouldStopSurrender = ScreenWatchdog.decideForTest(actual) ==
+                club.xiaojiawei.hsscript.status.ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN
+            assertEquals(frame.expectedFailClosed, shouldStopSurrender, frame.id)
         }
     }
 
