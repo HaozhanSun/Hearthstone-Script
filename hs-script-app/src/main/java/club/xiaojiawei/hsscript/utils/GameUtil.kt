@@ -466,14 +466,25 @@ object GameUtil {
      * 左击套牌位置
      */
     fun lClickDeckPos(count: Int = 1) {
-        val chooseDeckPos = if (ConfigUtil.getBoolean(ConfigEnum.WORK_TIME_RULE_HIGH_PRIORITY)) {
-            WorkTimeListener.getCurrentWorkTimeRule()?.deckPos?.toMutableList() ?: ConfigExUtil.getChooseDeckPos()
-        } else ConfigExUtil.getChooseDeckPos()
+        val activeScheduleRule = WorkTimeListener
+            .getCurrentWorkTimeRule()
+            ?.takeIf { WorkTimeListener.isInsideConfiguredSchedule() }
+        val globalDeckPositions = ConfigExUtil.getChooseDeckPos()
+        val chooseDeckPos = DeckPositionSelector.resolve(activeScheduleRule, globalDeckPositions)
 
-        if (chooseDeckPos.isEmpty()) return
+        if (chooseDeckPos.isEmpty()) {
+            log.warn { "没有设置可用卡组位" }
+            return
+        }
         val deckPos = chooseDeckPos.randomSelectOrNull() ?: let {
             log.warn { "没有设置可用卡组位" }
             return
+        }
+        log.info {
+            "DECK_POSITION_SELECTION source=${if (activeScheduleRule != null) "schedule" else "global"} " +
+                "scheduleRule=${activeScheduleRule?.strategyId ?: "none"} " +
+                "candidates=${chooseDeckPos.sorted()} selected=$deckPos " +
+                "highPriority=${ConfigUtil.getBoolean(ConfigEnum.WORK_TIME_RULE_HIGH_PRIORITY)}"
         }
         DECK_POS_RECTS.getOrNull(deckPos - 1)?.let { rect ->
             repeat(count) {

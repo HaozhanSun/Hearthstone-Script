@@ -152,7 +152,7 @@
                         <HBox alignment="CENTER" style="-fx-padding: 5;-fx-spacing: 20.0">
                             <ConfigCheckBox text="高优先" styleClass="check-box-ui, check-box-ui-success" contentDisplay="RIGHT" config="WORK_TIME_RULE_HIGH_PRIORITY">
                                 <graphic>
-                                    <TipNode text="模式，策略，卡组位以此为准"/>
+                                    <TipNode text="模式和策略以时间规则为准；启用时间规则的卡组位按当前时段选择"/>
                                 </graphic>
                             </ConfigCheckBox>
                             <Button styleClass="btn-ui, btn-ui-small, btn-ui-normal" onAction="#editWorkTime">
