@@ -205,14 +205,14 @@ foreach ($artifact in @($builtJar, $builtZip, $strategyTarget, $cardPluginTarget
 
 $markerPath = Join-Path $runtimeRoot 'hs-script.pid.json'
 if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
+    $activeRuntimeProcess = $null
     try {
         $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
-        $process = Get-Process -Id ([int]$marker.pid) -ErrorAction Stop
-        if ($process.ProcessName -in @('java', 'javaw')) {
-            Stop-Process -Id $process.Id -Force
-            Start-Sleep -Milliseconds 500
-        }
+        $activeRuntimeProcess = Get-Process -Id ([int]$marker.pid) -ErrorAction Stop
     } catch { }
+    if ($activeRuntimeProcess -and $activeRuntimeProcess.ProcessName -in @('java', 'javaw')) {
+        throw "Refusing to deploy while the existing script is running (pid=$($activeRuntimeProcess.Id)). Stop it manually before deploying."
+    }
     Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
 }
 
