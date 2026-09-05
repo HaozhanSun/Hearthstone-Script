@@ -53,6 +53,17 @@ import java.util.prefs.Preferences
 import javax.swing.AbstractAction
 import kotlin.system.exitProcess
 
+internal fun shouldAutoStart(
+    rawArgs: List<String>,
+    namedPause: String?,
+    systemAutoStart: Boolean,
+    configuredAutoStart: Boolean,
+): Boolean {
+    val explicitPause = rawArgs.firstOrNull { it.startsWith(ARG_PAUSE) }
+        ?.substringAfter('=', missingDelimiterValue = "")
+    return explicitPause == "false" || namedPause == "false" || systemAutoStart || configuredAutoStart
+}
+
 /**
  * javaFX启动器
  * @author 肖嘉威
@@ -482,7 +493,17 @@ class MainApplication : Application() {
         val namedPause = this.parameters.named["pause"]
         val systemAutoStart = System.getProperty("hs.script.autostart") == "true"
         val startOnOpen = ConfigUtil.getBoolean(ConfigEnum.START_ON_OPEN)
-        if ("false" == pause || "false" == namedPause || systemAutoStart || startOnOpen) {
+        val shouldStart = shouldAutoStart(
+            rawArgs = args,
+            namedPause = namedPause ?: pause,
+            systemAutoStart = systemAutoStart,
+            configuredAutoStart = startOnOpen,
+        )
+        log.info {
+            "AUTO_START_DECISION rawPause=$pause namedPause=$namedPause " +
+                "systemProperty=$systemAutoStart configStartOnOpen=$startOnOpen decision=$shouldStart"
+        }
+        if (shouldStart) {
             log.info { "接收到开始参数，开始脚本" }
             Thread.sleep(1000)
             PauseStatus.isPause = false
