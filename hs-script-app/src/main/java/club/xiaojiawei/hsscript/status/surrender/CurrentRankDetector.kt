@@ -36,24 +36,17 @@ object CurrentRankDetector {
 
     private const val MIN_RANK = 1
     private const val MAX_RANK = 10
-    // The inner red frame in the supplied 389x341 diagnostic reference was
-    // mapped against the recorded legacy frame (0,885,144,140). At the
-    // current 1920x1080 layout that maps to (23,941,57,47). This deliberately
-    // contains the numeral only, excluding the shield artwork and username.
-    private const val RANK_REGION_LEFT = 0.01198
-    private const val RANK_REGION_TOP = 0.87130
-    private const val RANK_REGION_WIDTH = 0.02969
-    private const val RANK_REGION_HEIGHT = 0.04352
-    // Tier/Legendary visual detection needs the complete badge frame, while
-    // numeric OCR remains confined to RANK_REGION above. This crop excludes
-    // the player name and other HUD numbers but retains the shield artwork.
+    // The OCR/visual contract is the complete lower-left badge only. At
+    // 1920x1080 this is approximately x=0,y=885,w=105,h=108; the width stops
+    // before the player name/class text to the right. Keep it normalized so
+    // window scaling does not move the crop into unrelated HUD content.
     private const val RANK_BADGE_VISUAL_LEFT = 0.0
     private const val RANK_BADGE_VISUAL_TOP = 0.82
-    // The active 1920x1080 screenshot places the badge inside roughly
-    // x=0..100,y=885..977. Keep a small safety margin without carrying the
-    // player name or the empty lower background into visual classification.
     private const val RANK_BADGE_VISUAL_WIDTH = 0.055
-    private const val RANK_BADGE_VISUAL_HEIGHT = 0.085
+    // Keep the lower edge just below the badge tip while excluding the empty
+    // board/background below it. At 1920x1080 this trims 22 px from the prior
+    // 130 px crop without moving the top edge or cutting the numeral row.
+    private const val RANK_BADGE_VISUAL_HEIGHT = 0.10
     private const val RANK_EXPANDED_LEFT = 0.01198
     private const val RANK_EXPANDED_TOP = 0.87130
     private const val RANK_EXPANDED_WIDTH = 0.02969
@@ -108,9 +101,12 @@ object CurrentRankDetector {
             .toList()
         if (numericRuns.size != 1) return null
         val token = numericRuns.single()
-        if (token == "10") return 10
-        if (token.length != 1) return null
-        return token.toIntOrNull()?.takeIf { it in MIN_RANK until MAX_RANK }
+        val numeric = token.toIntOrNull() ?: return null
+        return when {
+            numeric in MIN_RANK..MAX_RANK -> numeric
+            numeric > 50 -> numeric
+            else -> null
+        }
     }
 
     /** Parse an explicit localized/English league name when it is visible. */
@@ -153,7 +149,7 @@ object CurrentRankDetector {
         }
         val counts = parsed.groupingBy { it }.eachCount()
         val best = counts.entries
-            .filter { (rank, _) -> rank in MIN_RANK..MAX_RANK }
+            .filter { (rank, _) -> rank in MIN_RANK..MAX_RANK || rank > 50 }
             .maxWithOrNull(compareBy<Map.Entry<Int, Int>> { it.value }.thenBy { if (it.key == 10) 1 else 0 })
             ?: return null
         return RankCandidate(
@@ -223,15 +219,23 @@ object CurrentRankDetector {
         evidenceTrigger: String = "current-rank-paddlex-badge",
         evidencePhase: String = "pre-mulligan-rank-check",
     ): Detection? = runCatching {
-        val rankRegion = cropRankRegion(screen)
-        val rankRegionBounds = rankBadgeBoundsForTest(screen.width, screen.height)
+        val badgeRegion = cropRankRegion(screen)
+        val badgeRegionBounds = rankBadgeBoundsForTest(screen.width, screen.height)
+        val numericRegion = crop(
+            screen,
+            RANK_DIGIT_LEFT,
+            RANK_DIGIT_TOP,
+            RANK_DIGIT_WIDTH,
+            RANK_DIGIT_HEIGHT,
+        )
+        val numericRegionBounds = rankDigitBoundsForTest(screen.width, screen.height)
         val tessData = File(TESS_DATA_PATH)
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
         if (OcrRuntime.isLegacySelected() && !chiSim.isFile) {
             log.info {
                 "RANK_OCR_SKIPPED provider=LEGACY " +
-                    "RANK_OCR_ROI x=${rankRegionBounds.x} y=${rankRegionBounds.y} " +
-                    "width=${rankRegionBounds.width} height=${rankRegionBounds.height} " +
+                    "RANK_OCR_ROI x=${numericRegionBounds.x} y=${numericRegionBounds.y} " +
+                    "width=${numericRegionBounds.width} height=${numericRegionBounds.height} " +
                     "reason=missing-tessdata path=${chiSim.absolutePath}"
             }
             return null
@@ -249,13 +253,7 @@ object CurrentRankDetector {
             RANK_EXPANDED_WIDTH,
             RANK_EXPANDED_HEIGHT,
         )
-        val badgeVisualRegion = crop(
-            screen,
-            RANK_BADGE_VISUAL_LEFT,
-            RANK_BADGE_VISUAL_TOP,
-            RANK_BADGE_VISUAL_WIDTH,
-            RANK_BADGE_VISUAL_HEIGHT,
-        )
+        val badgeVisualRegion = badgeRegion
         val digitRegion = crop(
             screen,
             RANK_DIGIT_LEFT,
@@ -265,7 +263,7 @@ object CurrentRankDetector {
         )
         if (!OcrRuntime.isLegacySelected()) {
             val recognition = OcrRuntime.recognizeResult(
-                rankRegion,
+                badgeRegion,
                 evidenceTrigger,
                 legacyOcr = { "" },
                 allowEmptyProbeResult = true,
@@ -274,19 +272,19 @@ object CurrentRankDetector {
             val ocrTexts = rawOcrTexts.map(::normalizeOcrText)
             val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
             val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
-                looksLikeTwoDigitRank(rankRegion)
+                looksLikeTwoDigitRank(numericRegion)
             val rankCandidate = resolveRankCandidate(ocrTexts, visualTenHint, recognition.confidence)
             val rank = rankCandidate?.rank
             val confidence = rankCandidate?.confidence
-            // PaddleX numeric text stays on the narrow contract above, while
-            // the independent visual classifier consumes the complete badge
-            // crop so a non-numeric Legendary rating remains observable.
+            // PaddleX receives the badge-only crop. The visual classifier and
+            // OCR therefore observe the same complete badge, and an empty
+            // numeric result cannot hide a valid Legendary color signal.
             val tier = detectTierVisual(badgeVisualRegion)
             val unknownReason = unknownReason(rank, tier, ocrTexts)
             log.info {
                 "RANK_OCR provider=PADDLEX trigger=$evidenceTrigger phase=$evidencePhase " +
                     "passes=${ocrTexts.size} bounds=$bounds " +
-                    "roi=x${rankRegionBounds.x},y${rankRegionBounds.y},w${rankRegionBounds.width},h${rankRegionBounds.height} " +
+                    "roi=x${badgeRegionBounds.x},y${badgeRegionBounds.y},w${badgeRegionBounds.width},h${badgeRegionBounds.height} " +
                     "raw=${rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
                     "normalized=${ocrText.ifBlank { "<empty>" }} confidence=${formatConfidence(confidence)} " +
                     "candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
@@ -296,7 +294,7 @@ object CurrentRankDetector {
             if (saveEvidence) {
                 saveRankEvidence(
                     screen = screen,
-                    roiBounds = rankRegionBounds,
+                    roiBounds = badgeRegionBounds,
                     provider = "PADDLEX",
                     rawOcrTexts = rawOcrTexts,
                     normalizedOcrText = ocrText,
@@ -312,9 +310,9 @@ object CurrentRankDetector {
             return Detection(rank, tier, ocrText, confidence, bounds)
         }
         val ocrInputs = listOf(
-            // Rank OCR must only see the small numeral window.  Running OCR
-            // on the full badge was the source of 939/51/191/91 noise from
-            // the portrait and shield artwork.
+            // Legacy remains on its established tight numeral window; the
+            // badge-only crop above is still the authoritative visual/tier
+            // input for both providers.
             digitRegion to 6,
             digitRegion to 7,
             digitRegion to 8,
@@ -328,11 +326,11 @@ object CurrentRankDetector {
         val ocrTexts = rawOcrTexts.map(::normalizeOcrText)
         val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
         val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
-            looksLikeTwoDigitRank(rankRegion)
+            looksLikeTwoDigitRank(numericRegion)
         val rankCandidate = resolveRankCandidate(ocrTexts, visualTenHint)
         val rank = rankCandidate?.rank
         val confidence = rankCandidate?.confidence
-        val tierOcrTexts = listOf(rankRegion, expandedRegion).map { image ->
+        val tierOcrTexts = listOf(badgeRegion, expandedRegion).map { image ->
             ocrTier(image, tessData)
         }
         val tierFromOcr = tierOcrTexts
@@ -451,18 +449,25 @@ object CurrentRankDetector {
     private fun formatConfidence(confidence: Double?): String =
         confidence?.let { String.format(Locale.ROOT, "%.2f", it) } ?: "unavailable"
 
+    /** Full badge crop used by PaddleX and all visual tier/Legendary checks. */
     private fun cropRankRegion(image: BufferedImage): BufferedImage {
-        return crop(image, RANK_REGION_LEFT, RANK_REGION_TOP, RANK_REGION_WIDTH, RANK_REGION_HEIGHT)
+        return crop(
+            image,
+            RANK_BADGE_VISUAL_LEFT,
+            RANK_BADGE_VISUAL_TOP,
+            RANK_BADGE_VISUAL_WIDTH,
+            RANK_BADGE_VISUAL_HEIGHT,
+        )
     }
 
     internal fun rankBadgeBoundsForTest(imageWidth: Int, imageHeight: Int): Rectangle =
         normalizedBounds(
             imageWidth,
             imageHeight,
-            RANK_REGION_LEFT,
-            RANK_REGION_TOP,
-            RANK_REGION_WIDTH,
-            RANK_REGION_HEIGHT,
+            RANK_BADGE_VISUAL_LEFT,
+            RANK_BADGE_VISUAL_TOP,
+            RANK_BADGE_VISUAL_WIDTH,
+            RANK_BADGE_VISUAL_HEIGHT,
         )
 
     internal fun rankExpandedBoundsForTest(imageWidth: Int, imageHeight: Int): Rectangle =
@@ -476,14 +481,7 @@ object CurrentRankDetector {
         )
 
     internal fun rankBadgeVisualBoundsForTest(imageWidth: Int, imageHeight: Int): Rectangle =
-        normalizedBounds(
-            imageWidth,
-            imageHeight,
-            RANK_BADGE_VISUAL_LEFT,
-            RANK_BADGE_VISUAL_TOP,
-            RANK_BADGE_VISUAL_WIDTH,
-            RANK_BADGE_VISUAL_HEIGHT,
-        )
+        rankBadgeBoundsForTest(imageWidth, imageHeight)
 
     internal fun rankDigitBoundsForTest(imageWidth: Int, imageHeight: Int): Rectangle =
         normalizedBounds(

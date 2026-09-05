@@ -263,6 +263,8 @@ class SurrenderPolicyTest {
         assertEquals(9, CurrentRankDetector.parseRankText("当前等级：9"))
         assertEquals(8, CurrentRankDetector.parseRankText("\uFF18"))
         assertEquals(8, CurrentRankDetector.parseRankText("商8"))
+        assertEquals(233, CurrentRankDetector.parseRankText("233"))
+        assertEquals(257, CurrentRankDetector.parseRankText("257"))
     }
 
     @Test
@@ -273,8 +275,9 @@ class SurrenderPolicyTest {
         assertNull(CurrentRankDetector.parseRankText("等级：8，名字：laz8"))
         assertNull(CurrentRankDetector.parseRankText("等级：11"))
         assertNull(CurrentRankDetector.parseRankText("等级：0"))
-        assertNull(CurrentRankDetector.parseRankText("01404"))
+        assertEquals(1404, CurrentRankDetector.parseRankText("01404"))
         assertNull(CurrentRankDetector.parseRankText("8 9"))
+        assertNull(CurrentRankDetector.parseRankText("19"))
         assertNull(CurrentRankDetector.parseRankText(""))
     }
 
@@ -324,17 +327,9 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun rankResolverAcceptsVisualTenHintWhenBadgeArtworkCreatesOnlyNoise() {
-        // Captured from the real 1920x1080 rank-10 badge. The broad badge
-        // crop included the portrait and shield ornament, so OCR returned
-        // invalid multi-digit noise instead of the visible 10.
-        assertEquals(
-            10,
-            CurrentRankDetector.resolveRankCandidates(
-                listOf("939", "51", "191", "91", "", ""),
-                visualTenHint = true,
-            ),
-        )
+    fun rankResolverPreservesClearlyLargeLegendaryRatings() {
+        assertEquals(233, CurrentRankDetector.resolveRankCandidates(listOf("233")))
+        assertEquals(257, CurrentRankDetector.resolveRankCandidates(listOf("257")))
     }
 
     @Test
@@ -417,8 +412,8 @@ class SurrenderPolicyTest {
         val expanded = CurrentRankDetector.rankExpandedBoundsForTest(1920, 1080)
         val digit = CurrentRankDetector.rankDigitBoundsForTest(1920, 1080)
 
-        assertEquals(Rectangle(23, 941, 57, 47), badge)
-        assertTrue(badge.x + badge.width <= 80)
+        assertEquals(Rectangle(0, 885, 105, 108), badge)
+        assertTrue(badge.x + badge.width <= 105)
         assertTrue(expanded.x + expanded.width <= 100)
         assertTrue(digit.x + digit.width <= 70)
         assertTrue(digit.y >= 950)
@@ -459,7 +454,7 @@ class SurrenderPolicyTest {
 
             assertEquals(10, detection?.rank)
             assertEquals(listOf("current-rank-paddlex-badge"), calls)
-            assertEquals(listOf(57 to 47), roiSizes)
+            assertEquals(listOf(105 to 108), roiSizes)
         } finally {
             OcrRuntime.settingsProvider = originalSettingsProvider
             OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
@@ -588,9 +583,53 @@ class SurrenderPolicyTest {
         val image = ImageIO.read(file)
         val bounds = CurrentRankDetector.rankBadgeVisualBoundsForTest(image.width, image.height)
         assertEquals(105, bounds.width)
-        assertEquals(92, bounds.height)
+        assertEquals(108, bounds.height)
         val badge = image.getSubimage(bounds.x, bounds.y, bounds.width, bounds.height)
         assertEquals(CurrentRankDetector.RankTier.LEGEND, CurrentRankDetector.detectTierVisual(badge))
+    }
+
+    @Test
+    fun paddleXUsesBadgeOnlyCropAndPreservesLegendary233FromPreviousBattleScreenshot() {
+        val file = File(
+            "C:/Users/yzjsh/Documents/Codex/2026-08-15/for-all-these-delay-short-are-2/outputs/Hearthstone Script Beta/log/unknown-states/screen-watchdog/2026-09-04/unknown-state-20260904-131032-989-screen-watchdog-normal-surrender-retry-2f2b75b1-efa0-43a3-b113-9d1844c18d05.png",
+        )
+        if (!file.isFile) return
+        val originalSettingsProvider = OcrRuntime.settingsProvider
+        val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
+        val roiSizes = mutableListOf<Pair<Int, Int>>()
+        try {
+            OcrRuntime.settingsProvider = {
+                PaddleXOcrSettings(
+                    enabled = true,
+                    pythonExecutable = "python",
+                    modulePath = "offline-fixture",
+                    device = "cpu",
+                    modelCachePath = "",
+                    timeoutMs = 1000,
+                )
+            }
+            OcrRuntime.paddleXBridgeFactory = {
+                object : OcrTextBridge {
+                    override fun recognize(image: BufferedImage, desc: String): String {
+                        roiSizes += image.width to image.height
+                        return "233"
+                    }
+
+                    override fun healthCheck(): OcrHealth =
+                        OcrHealth(true, OcrProviderKind.PADDLEX, "offline-fixture")
+                }
+            }
+
+            val detection = CurrentRankDetector.detectCapturedImage(ImageIO.read(file), saveEvidence = false)
+            assertEquals(233, detection?.rank)
+            assertEquals(CurrentRankDetector.RankTier.LEGEND, detection?.tier)
+            assertTrue(SurrenderPolicy.isLegendaryDetection(detection))
+            assertNull(SurrenderPolicy.evaluateCurrentRank(233, detection!!.tier))
+            assertEquals(listOf(105 to 108), roiSizes)
+        } finally {
+            OcrRuntime.settingsProvider = originalSettingsProvider
+            OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
+        }
     }
 
     @Test
@@ -665,15 +704,15 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun rankTenDoesNotRequestSurrender() {
-        assertNull(SurrenderPolicy.evaluateCurrentRank(10))
+    fun rankTenRequestsSurrenderUnderTheCurrentRankPolicy() {
+        assertTrue(SurrenderPolicy.evaluateCurrentRank(10)?.shouldSurrender == true)
     }
 
     @Test
-    fun ranksFiveAndTenAreSafeRegardlessOfTier() {
+    fun ranksFiveAndTenRequestSurrenderRegardlessOfTier() {
         for (tier in CurrentRankDetector.RankTier.values()) {
-            assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 5, tier = tier))
-            assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 10, tier = tier))
+            assertTrue(SurrenderPolicy.evaluateCurrentRank(rank = 5, tier = tier)?.shouldSurrender == true)
+            assertTrue(SurrenderPolicy.evaluateCurrentRank(rank = 10, tier = tier)?.shouldSurrender == true)
         }
     }
 
@@ -771,13 +810,80 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun initialRankGraceBlocksMatchmakingFixtureUntilSevenSecondsAfterEligibility() {
+        val matchmakingFixture = File(
+            "C:/Users/yzjsh/Documents/Codex/2026-08-15/for-all-these-delay-short-are-2/outputs/" +
+                "Hearthstone Script Beta/log/unknown-states/screen-recovery-unresolved/2026-09-04/" +
+                "unknown-state-20260904-155134-287-screen-recovery-observation-99d034a9-e403-41fa-8b99-d2874c0ed5a1.png",
+        )
+        if (!matchmakingFixture.isFile) return
+        assertTrue(ImageIO.read(matchmakingFixture).width > 0)
+
+        val eligibleAt = 1_000L
+        val beforeGrace = SurrenderPolicy.rankInspectionGraceDecision(
+            eligibleAt,
+            eligibleAt + SurrenderPolicy.INITIAL_RANK_INSPECTION_GRACE_MS - 1,
+        )
+        assertFalse(beforeGrace.probeAllowed)
+        assertTrue(beforeGrace.remainingMs > 0)
+        var detectorCalls = 0
+        if (beforeGrace.probeAllowed) detectorCalls++
+        assertEquals(0, detectorCalls)
+
+        val afterGrace = SurrenderPolicy.rankInspectionGraceDecision(
+            eligibleAt,
+            eligibleAt + SurrenderPolicy.INITIAL_RANK_INSPECTION_GRACE_MS,
+        )
+        assertTrue(afterGrace.probeAllowed)
+        assertEquals(0, afterGrace.remainingMs)
+    }
+
+    @Test
+    fun offlineRankScenariosMapLegendaryToAllowAndOrdinaryNumbersToSurrender() {
+        data class Scenario(
+            val name: String,
+            val ocr: String,
+            val tier: CurrentRankDetector.RankTier,
+            val legendary: Boolean,
+            val surrender: Boolean,
+        )
+
+        val scenarios = listOf(
+            Scenario("legendary-233", "233", CurrentRankDetector.RankTier.LEGEND, true, false),
+            Scenario("legendary-257", "257", CurrentRankDetector.RankTier.LEGEND, true, false),
+            Scenario("platinum-2", "2", CurrentRankDetector.RankTier.PLATINUM, false, true),
+            Scenario("rank-5", "5", CurrentRankDetector.RankTier.SILVER, false, true),
+            Scenario("rank-10", "10", CurrentRankDetector.RankTier.GOLD, false, true),
+            Scenario("rank-7", "7", CurrentRankDetector.RankTier.SILVER, false, true),
+        )
+
+        scenarios.forEach { scenario ->
+            val rank = CurrentRankDetector.resolveRankCandidates(listOf(scenario.ocr))
+            val detection = CurrentRankDetector.Detection(
+                rank = rank,
+                tier = scenario.tier,
+                ocrText = scenario.ocr,
+                confidence = 0.99,
+                captureBounds = Rectangle(0, 885, 105, 130),
+            )
+            assertEquals(scenario.legendary, SurrenderPolicy.isLegendaryDetection(detection), scenario.name)
+            val action = if (scenario.legendary) {
+                null
+            } else {
+                SurrenderPolicy.evaluateCurrentRank(rank!!, scenario.tier)
+            }
+            assertEquals(scenario.surrender, action?.shouldSurrender == true, scenario.name)
+        }
+    }
+
+    @Test
     fun rankBelowTenRequestsSurrender() {
         val result = SurrenderPolicy.evaluateCurrentRank(9)
 
         assertTrue(result != null)
         assertTrue(result!!.shouldSurrender)
         assertEquals("current-rank-is-not-target", result.ruleId)
-        assertEquals("current-rank=9 target-ranks=5,10", result.reason)
+        assertEquals("current-rank=9 target-ranks=LEGENDARY", result.reason)
     }
 
     @Test
@@ -797,7 +903,7 @@ class SurrenderPolicyTest {
         for (tier in CurrentRankDetector.RankTier.values()) {
             val result = SurrenderPolicy.evaluateCurrentRank(rank = 7, tier = tier)
             assertTrue(result!!.shouldSurrender)
-            assertEquals("current-rank=7 target-ranks=5,10", result.reason)
+            assertEquals("current-rank=7 target-ranks=LEGENDARY", result.reason)
         }
     }
 

@@ -81,6 +81,11 @@ internal data class RankInspectionReadDecision(
     val reason: String,
 )
 
+internal data class RankInspectionGraceDecision(
+    val probeAllowed: Boolean,
+    val remainingMs: Long,
+)
+
 private data class SurrenderRule(
     val id: String,
     val evaluate: (SurrenderRuleContext) -> SurrenderRuleResult,
@@ -104,6 +109,7 @@ object SurrenderPolicy {
     private const val NAME_RESOLUTION_TIMEOUT_MS = 3_000L
     private const val NAME_RESOLUTION_POLL_MS = 100L
     private const val RANK_RETRY_INTERVAL_MS = 750L
+    internal const val INITIAL_RANK_INSPECTION_GRACE_MS = 7_000L
     private const val WIN_RATE_GUARD_THRESHOLD_PERCENT = 45.0
     private const val WIN_RATE_GUARD_MIN_GAMES = 5
     /** Protect the next game after seven persisted concessions. */
@@ -123,6 +129,7 @@ object SurrenderPolicy {
     private var rankCheckCompleted = false
     private var rankInspectionAttempts = 0
     private var lastRankInspectionAt = 0L
+    private var rankInspectionEligibleAt = 0L
     private var lastHeroEvidenceKey = ""
     private var rankDetectorInvocationCount = 0
     @Volatile
@@ -212,6 +219,7 @@ object SurrenderPolicy {
         rankCheckCompleted = false
         rankInspectionAttempts = 0
         lastRankInspectionAt = 0L
+        rankInspectionEligibleAt = 0L
         lastHeroEvidenceKey = ""
         rankDetectorInvocationCount = 0
         rankInspectionState = RankInspectionState.NOT_READY
@@ -501,9 +509,9 @@ object SurrenderPolicy {
     }
 
     /**
-     * The rank gate is the primary policy: rank 5 and rank 10 are the only
-     * safe targets, regardless of tier, so every other confirmed rank
-     * surrenders before mulligan. The old
+     * The rank gate is the primary policy: ordinary numeric ranks are not
+     * eligible to continue, so they surrender before mulligan. Clearly large
+     * ratings are handled as Legendary before this method. The old
      * 45% win-rate gate is a secondary insurance and is evaluated from every
      * completed result for the selected strategy, including our own
      * concessions. Otherwise a win-rate-triggered surrender would never enter
@@ -562,6 +570,19 @@ object SurrenderPolicy {
         if (rankCheckCompleted) return null
 
         val now = System.currentTimeMillis()
+        if (rankInspectionEligibleAt == 0L) {
+            rankInspectionEligibleAt = now
+        }
+        val grace = rankInspectionGraceDecision(rankInspectionEligibleAt, now)
+        if (!grace.probeAllowed) {
+            rankInspectionState = RankInspectionState.WAITING_FOR_RANK
+            log.info {
+                "RANK_POLICY_WAITING_FOR_INITIAL_GRACE trigger=game-entry-mulligan " +
+                    "eligibleAt=$rankInspectionEligibleAt delayMs=$INITIAL_RANK_INSPECTION_GRACE_MS " +
+                    "remainingMs=${grace.remainingMs} action=WAIT rankDetector=false"
+            }
+            return null
+        }
         if (now - lastRankInspectionAt < RANK_RETRY_INTERVAL_MS) return null
         lastRankInspectionAt = now
         rankInspectionAttempts++
@@ -674,18 +695,18 @@ object SurrenderPolicy {
         rank: Int,
         tier: CurrentRankDetector.RankTier = CurrentRankDetector.RankTier.UNKNOWN,
     ): SurrenderRuleResult? {
-        if (rank !in 1..10 || rank == 5 || rank == 10) return null
+        if (rank !in 1..10) return null
         return SurrenderRuleResult(
             ruleId = "current-rank-is-not-target",
             matched = false,
             shouldSurrender = true,
-            reason = "current-rank=$rank target-ranks=5,10",
+            reason = "current-rank=$rank target-ranks=LEGENDARY",
         )
     }
 
-    /** Legendary is a confirmed non-numeric terminal rank, not UNKNOWN. */
+    /** Legendary is a confirmed non-numeric or clearly large-rating result, not UNKNOWN. */
     internal fun isLegendaryDetection(detection: CurrentRankDetector.Detection?): Boolean =
-        detection?.rank == null && detection?.tier == CurrentRankDetector.RankTier.LEGEND
+        detection?.tier == CurrentRankDetector.RankTier.LEGEND || detection?.rank?.let { it > 50 } == true
 
     internal fun unresolvedRankDecision(attempts: Int): SurrenderRuleResult =
         SurrenderRuleResult(
@@ -737,6 +758,18 @@ object SurrenderPolicy {
             wait = false,
             pause = true,
             reason = if (detectionAvailable) "empty-or-unmapped" else "provider-failure-or-capture-failure",
+        )
+    }
+
+    internal fun rankInspectionGraceDecision(eligibleAt: Long, now: Long): RankInspectionGraceDecision {
+        val remaining = if (eligibleAt <= 0L) {
+            INITIAL_RANK_INSPECTION_GRACE_MS
+        } else {
+            (INITIAL_RANK_INSPECTION_GRACE_MS - (now - eligibleAt)).coerceAtLeast(0L)
+        }
+        return RankInspectionGraceDecision(
+            probeAllowed = remaining == 0L,
+            remainingMs = remaining,
         )
     }
 
