@@ -29,7 +29,26 @@ object WorkTimeStatus {
 
     fun readOnlyWorkTimeRuleSet(): ReadOnlyListProperty<WorkTimeRuleSet> = workTimeRuleSet.readOnlyProperty
 
-    fun nowWorkTimeRuleSet(): WorkTimeRuleSet? = workTimeRuleSet.find { it.id == workTimeSetting[LocalDate.now().dayOfWeek.value - 1] }
+    fun nowWorkTimeRuleSet(): WorkTimeRuleSet? = resolveWorkTimeRuleSet(
+        workTimeRuleSet.toList(),
+        workTimeSetting.toList(),
+        LocalDate.now().dayOfWeek.value - 1,
+    )
+
+    /**
+     * Resolve the configured preset by its persisted id.  Keeping this lookup
+     * explicit prevents callers from accidentally treating the first preset
+     * as the active one when the weekday mapping points at another preset.
+     */
+    fun resolveWorkTimeRuleSet(
+        ruleSets: List<WorkTimeRuleSet>,
+        setting: List<String>,
+        dayIndex: Int,
+    ): WorkTimeRuleSet? {
+        val selectedId = setting.getOrNull(dayIndex).orEmpty()
+        if (selectedId.isEmpty()) return null
+        return ruleSets.find { it.id == selectedId }
+    }
 
     fun addWorkTimeSettingListener(listener: (List<String>, String?) -> Unit) {
         workTimeSettingListeners.add(listener)
@@ -72,6 +91,32 @@ object WorkTimeStatus {
         }
         workTimeRuleSetListeners.toList().forEach { listener ->
             listener.invoke(workTimeRuleSet, changeId)
+        }
+        WorkTimeListener.checkWork()
+        WorkTimeListener.tryWork()
+    }
+
+    /**
+     * Persist a complete schedule in one state transition.  The UI must read
+     * the weekday ids before replacing the preset list; otherwise the
+     * replacement can fire ComboBox selection listeners and the subsequent
+     * mapping read may capture a stale/default preset.
+     */
+    fun storeWorkTimeSchedule(
+        workTimeRuleSetList: List<WorkTimeRuleSet>,
+        workTimeSettingList: List<String>,
+        changeId: String? = null,
+    ) {
+        ConfigExUtil.storeWorkTimeRuleSet(workTimeRuleSetList)
+        ConfigExUtil.storeWorkTimeSetting(workTimeSettingList)
+        workTimeRuleSet.setAll(workTimeRuleSetList)
+        workTimeSetting.setAll(workTimeSettingList)
+
+        workTimeRuleSetListeners.toList().forEach { listener ->
+            listener.invoke(workTimeRuleSet, changeId)
+        }
+        workTimeSettingListeners.toList().forEach { listener ->
+            listener.invoke(workTimeSetting, changeId)
         }
         WorkTimeListener.checkWork()
         WorkTimeListener.tryWork()

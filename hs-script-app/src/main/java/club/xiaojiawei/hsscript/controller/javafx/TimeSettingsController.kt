@@ -688,22 +688,24 @@ class TimeSettingsController :
                 }
         }
 
-    private fun saveSetRule() {
-        WorkTimeStatus.storeWorkTimeRuleSet(workTimeRuleSetTable.items)
-        updateDateComboBoxItems()
-    }
-
-    private fun saveApplyRule() {
+    private fun selectedWorkTimeSetting(): List<String> {
         val list = dateComboBoxList.toMutableList().apply { removeFirst() }
-        val workTimeSetting = list.map { it.value?.id ?: "" }
-        WorkTimeStatus.storeWorkTimeSetting(workTimeSetting)
+        return list.map { it.value?.id ?: "" }
     }
 
     @FXML
     protected fun save() {
         commitJitterSeconds()
-        saveSetRule()
-        saveApplyRule()
+        // Capture the weekday ids before replacing the shared preset model.
+        // Replacing that model fires selection-normalization listeners, so
+        // reading the ComboBoxes after storeWorkTimeRuleSet can capture a
+        // stale/default preset even though the save itself succeeds.
+        val workTimeSetting = selectedWorkTimeSetting()
+        WorkTimeStatus.storeWorkTimeSchedule(
+            workTimeRuleSetTable.items.toList(),
+            workTimeSetting,
+        )
+        updateDateComboBoxItems()
         notificationManager.showSuccess("保存成功", 2)
     }
 
