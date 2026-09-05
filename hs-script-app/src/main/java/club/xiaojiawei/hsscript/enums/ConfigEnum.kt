@@ -509,6 +509,14 @@ enum class ConfigEnum(
     KILLED_SURRENDER(group = STRATEGY_CONFIG_GROUP, defaultValueInitializer = { FALSE_STR }),
 
     /**
+     * 对方英雄非原皮投降
+     */
+    OPPONENT_HERO_NON_ORIGINAL_SURRENDER(
+        group = STRATEGY_CONFIG_GROUP,
+        defaultValueInitializer = { TRUE_STR },
+    ),
+
+    /**
      * Beta diagnostic safety switch: prevent every script-initiated surrender.
      */
     NEVER_SURRENDER(group = STRATEGY_CONFIG_GROUP, defaultValueInitializer = { FALSE_STR }),

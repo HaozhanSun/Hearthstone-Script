@@ -66,7 +66,15 @@ class NeverSurrenderPolicyTest {
         assertTrue(fxml.contains("Never Surrender（永不投降）"))
         assertTrue(fxml.contains("beta=\"true\""))
         assertTrue(fxml.contains("config=\"NEVER_SURRENDER\""))
+        assertTrue(fxml.contains("对方英雄非原皮投降"))
+        assertTrue(fxml.contains("config=\"OPPONENT_HERO_NON_ORIGINAL_SURRENDER\""))
+        val surrenderSectionStart = fxml.indexOf("text=\"投降\"")
+        val toggleLabel = fxml.indexOf("对方英雄非原皮投降")
+        val surrenderSectionEnd = fxml.indexOf("</TitledPane>", surrenderSectionStart)
+        assertTrue(surrenderSectionStart >= 0)
+        assertTrue(toggleLabel > surrenderSectionStart && toggleLabel < surrenderSectionEnd)
         assertTrue(configEnum.contains("NEVER_SURRENDER"))
+        assertTrue(configEnum.contains("OPPONENT_HERO_NON_ORIGINAL_SURRENDER"))
         assertTrue(gameUtil.contains("NeverSurrenderPolicy.blockSurrender"))
     }
 

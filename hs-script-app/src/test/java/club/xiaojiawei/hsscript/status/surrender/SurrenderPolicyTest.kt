@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.status.surrender
 
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
+import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.ocr.OcrHealth
 import club.xiaojiawei.hsscript.ocr.OcrProviderKind
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
@@ -10,6 +11,7 @@ import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
 import club.xiaojiawei.hsscript.status.DebugScreenshotRing
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
@@ -179,6 +181,64 @@ class SurrenderPolicyTest {
 
         assertFalse(result.matched)
         assertTrue(result.shouldSurrender)
+    }
+
+    @Test
+    fun opponentHeroSettingDefaultsToEnabledAndPersistsFalse() {
+        assertEquals("true", ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER.defaultValue)
+        val previous = ConfigUtil.getBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER)
+        try {
+            ConfigUtil.putBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER, false)
+            assertFalse(ConfigUtil.getBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER))
+            assertFalse(SurrenderPolicy.opponentHeroNonOriginalSurrenderEnabled())
+        } finally {
+            ConfigUtil.putBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER, previous)
+        }
+    }
+
+    @Test
+    fun opponentHeroSettingTrueKeepsExistingNonOriginalSurrenderPath() {
+        val result = SurrenderPolicy.applyOpponentHeroSurrenderSetting(
+            SurrenderPolicy.evaluateOpponentHeroName("死亡猎手雷克萨"),
+            enabled = true,
+        )
+
+        assertTrue(result.shouldSurrender)
+        assertEquals("opponent-hero-is-not-original-class-hero", result.reason)
+    }
+
+    @Test
+    fun opponentHeroSettingFalseBypassesOnlyThatRule() {
+        val result = SurrenderPolicy.applyOpponentHeroSurrenderSetting(
+            SurrenderPolicy.evaluateOpponentHeroName("死亡猎手雷克萨"),
+            enabled = false,
+        )
+
+        assertFalse(result.shouldSurrender)
+        assertEquals("opponent-hero-original-check-disabled", result.reason)
+        assertTrue(SurrenderPolicy.evaluateCurrentRank(7)?.shouldSurrender == true)
+    }
+
+    @Test
+    fun disabledOpponentHeroSettingLetsResolvedHeroReachRankGate() {
+        val previous = ConfigUtil.getBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER)
+        try {
+            ConfigUtil.putBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER, false)
+            val war = warWithRivalHero("星界雪怒")
+            SurrenderPolicy.resetForNewGame()
+
+            assertNull(SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war))
+            assertEquals(
+                OpponentHeroInspectionState.ORIGINAL_HERO_ALLOWED,
+                SurrenderPolicy.currentOpponentHeroInspectionState(),
+            )
+            // The normal rank gate is reached; its bounded initial grace keeps
+            // the detector from probing the screen immediately.
+            assertNull(SurrenderPolicy.evaluateCurrentRankBeforeMulligan())
+            assertEquals(0, SurrenderPolicy.rankDetectorInvocationCountForTest())
+        } finally {
+            ConfigUtil.putBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER, previous)
+        }
     }
 
     @Test

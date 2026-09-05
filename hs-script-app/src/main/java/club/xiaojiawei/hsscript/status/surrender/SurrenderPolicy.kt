@@ -15,6 +15,8 @@ import club.xiaojiawei.hsscript.statistics.RecordDaoEx
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
+import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.utils.ConfigUtil
 import java.time.LocalDateTime
 
 /**
@@ -461,7 +463,10 @@ object SurrenderPolicy {
         }
         lastPreMulliganHeroName = normalizedHeroName
 
-        val result = evaluateOpponentHero(rawHeroName, heroCardId)
+        val result = applyOpponentHeroSurrenderSetting(
+            evaluateOpponentHero(rawHeroName, heroCardId),
+            opponentHeroNonOriginalSurrenderEnabled(),
+        )
         opponentHeroInspectionState = if (result.shouldSurrender) {
             OpponentHeroInspectionState.SURRENDER_REQUESTED
         } else {
@@ -506,6 +511,28 @@ object SurrenderPolicy {
                 "timing=before-mulligan"
         }
         return result
+    }
+
+    /** Read the persisted setting at decision time so UI changes apply to the next check. */
+    internal fun opponentHeroNonOriginalSurrenderEnabled(): Boolean =
+        ConfigUtil.getBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER)
+
+    /**
+     * Disable only the non-original-opponent-hero rule. Hero detection still
+     * runs and the caller still advances through the normal rank/strategy
+     * gates, so this cannot bypass unrelated surrender rules.
+     */
+    internal fun applyOpponentHeroSurrenderSetting(
+        result: SurrenderRuleResult,
+        enabled: Boolean,
+    ): SurrenderRuleResult = if (enabled) {
+        result
+    } else {
+        result.copy(
+            matched = false,
+            shouldSurrender = false,
+            reason = "opponent-hero-original-check-disabled",
+        )
     }
 
     /**

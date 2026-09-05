@@ -70,6 +70,11 @@
                                          group="投降">
                                 <ConfigSwitch notificationManager="${notificationManager}" config="KILLED_SURRENDER"/>
                             </SettingHBox>
+                            <SettingHBox name="对方英雄非原皮投降" tip="对方英雄不是原始职业英雄时自动投降"
+                                         tabWindow="STRATEGY_SETTINGS" group="投降">
+                                <ConfigSwitch notificationManager="${notificationManager}"
+                                              config="OPPONENT_HERO_NON_ORIGINAL_SURRENDER"/>
+                            </SettingHBox>
                             <SettingHBox name="对局超时投降" tip="游戏对局超过指定时间(秒)将直接投降"
                                          tabWindow="STRATEGY_SETTINGS" group="投降">
                                 <ConfigNumberField notificationManager="${notificationManager}"
