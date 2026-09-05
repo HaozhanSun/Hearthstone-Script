@@ -755,6 +755,14 @@ object GameUtil {
                             }
                             when (observation.action) {
                                 ScreenWatchdogRecoveryAction.CONTINUE_ACTION -> Unit
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_NO_ACTION -> {
+                                    stopSurrenderTask()
+                                    log.info {
+                                        "SCREEN_WATCHDOG_CANCELLED reason=${observation.reason} " +
+                                            "provider=${observation.provider} screenshot=${observation.screenshotPath ?: "not-saved"}"
+                                    }
+                                    return@scheduleWithFixedDelay
+                                }
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_WIN,
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_LOSS,
                                 -> {

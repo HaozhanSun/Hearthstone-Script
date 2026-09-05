@@ -6,6 +6,7 @@ import club.xiaojiawei.hsscript.ocr.OcrHealth
 import club.xiaojiawei.hsscript.ocr.OcrProviderKind
 import club.xiaojiawei.hsscript.ocr.OcrProviderMode
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
+import club.xiaojiawei.hsscript.ocr.PaddleXOcrCancelledException
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -124,5 +125,19 @@ class ScreenWatchdogTest {
         assertEquals("PADDLEX", observation.provider)
         assertEquals(ScreenWatchdogKind.LOST, observation.kind)
         assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_LOSS, observation.action)
+    }
+
+    @Test
+    fun `cancelled OCR stops surrender without pausing`() {
+        val observation = ScreenWatchdog.inspectForSurrender(
+            state = "mode=GAMEPLAY|warPhase=GAME_OVER",
+            attempts = 4,
+            captureProvider = { BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB) },
+            ocrProvider = { throw PaddleXOcrCancelledException("terminal cleanup") },
+        )
+
+        assertEquals(ScreenWatchdogKind.UNKNOWN, observation.kind)
+        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_NO_ACTION, observation.action)
+        assertEquals("ocr-cancelled", observation.reason)
     }
 }

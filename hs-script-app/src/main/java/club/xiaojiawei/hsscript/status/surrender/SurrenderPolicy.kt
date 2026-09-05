@@ -799,9 +799,13 @@ object SurrenderPolicy {
     internal fun blockForUnresolvedRank(attempts: Int): SurrenderRuleResult {
         val result = unresolvedRankDecision(attempts)
         rankInspectionState = RankInspectionState.RESOLVED
+        // OCR uncertainty is not a script-fatal condition. The mulligan
+        // state machine owns the bounded retry/continue decision; pausing
+        // here strands the game in WAITING_FOR_RANK and makes a transient
+        // sidecar failure look like a user-visible crash.
         log.warn {
             "RANK_POLICY_BLOCKED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                "rule=${result.ruleId} reason=${result.reason} action=CONTINUE " +
+                "rule=${result.ruleId} reason=${result.reason} action=CONTINUE_MULLIGAN " +
                 "surrender=false pause=false ocrFailure=true"
         }
         return result

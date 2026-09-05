@@ -38,6 +38,19 @@ When a screenshot and OCR line are from the same run but not the same capture,
 the fixture says `correlated-replay` rather than presenting it as a pixel-perfect
 OCR transcript.
 
+`src/test/resources/offline-ocr/mulligan-e2e-fixture.json` is the stricter
+replay fixture for the rank/mulligan boundary. It points only at retained
+screenshots that are present on the capture host (mulligan, WIN, LOST, and
+UNKNOWN) and includes a simulated Power.log timeline. The
+`OfflinePaddleXOcrMulliganE2ETest` loads those images, runs the real JVM
+`OcrRuntime`/rank parser/ScreenWatchdog boundary with a fake sidecar, and
+asserts the resulting state, action, retry schedule, provider, and
+`pause=false`. Missing retained files fail the test with the exact path.
+
+Run it with the targeted reactor test command:
+
+`mvnw.cmd -pl hs-script-app -am -Dtest=OfflinePaddleXOcrMulliganE2ETest,OcrRuntimeTest,PaddleXOcrSidecarBridgeTest,ScreenWatchdogTest,SurrenderPolicyTest -Dsurefire.failIfNoSpecifiedTests=false test`
+
 ## Routing rules
 
 1. `OcrRuntime` remains the single JVM boundary. PaddleX is reached only through

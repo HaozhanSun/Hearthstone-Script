@@ -106,6 +106,18 @@ class PaddleXOcrSidecarBridgeTest {
         assertEquals(cachePath, seenEnvironment["PADDLE_PDX_CACHE_HOME"])
     }
 
+    @Test
+    fun cancellationIsDistinctFromSidecarFailure() {
+        val bridge = bridgeWithRunner {
+            throw PaddleXOcrCancelledException("future cancelled")
+        }
+
+        val error = assertFailsWith<PaddleXOcrCancelledException> {
+            bridge.recognize(TestImages.onePixel(), "cancelled")
+        }
+        assertTrue(error.message.orEmpty().contains("cancelled"))
+    }
+
     private fun bridgeWithRunner(result: () -> SidecarProcessResult): PaddleXOcrSidecarBridge =
         PaddleXOcrSidecarBridge(
             settings("fake-module"),

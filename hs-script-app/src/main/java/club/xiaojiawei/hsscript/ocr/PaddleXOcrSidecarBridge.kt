@@ -30,7 +30,10 @@ data class OcrHealth(
     val details: String = "",
 )
 
-class PaddleXOcrException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+open class PaddleXOcrException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+
+/** Cancellation is control flow from the owning task, not an OCR failure. */
+class PaddleXOcrCancelledException(message: String, cause: Throwable? = null) : PaddleXOcrException(message, cause)
 
 data class SidecarProcessResult(
     val exitCode: Int,
@@ -236,7 +239,16 @@ class PaddleXOcrSidecarBridge(
             val stderrThread = streamReaderThread(process.errorStream, stderr)
             stdoutThread.start()
             stderrThread.start()
-            val completed = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            val completed = try {
+                process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            } catch (error: InterruptedException) {
+                process.destroyForcibly()
+                runCatching { process.waitFor(1_000, TimeUnit.MILLISECONDS) }
+                stdoutThread.join(1_000)
+                stderrThread.join(1_000)
+                Thread.currentThread().interrupt()
+                throw PaddleXOcrCancelledException("PaddleX OCR sidecar process was cancelled", error)
+            }
             if (!completed) {
                 process.destroyForcibly()
                 stdoutThread.join(1_000)

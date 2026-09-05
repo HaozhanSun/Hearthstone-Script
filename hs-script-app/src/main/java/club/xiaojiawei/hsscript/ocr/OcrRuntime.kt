@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptbase.config.log
 import java.awt.image.BufferedImage
+import java.util.concurrent.CancellationException
 
 object OcrRuntime {
 
@@ -81,6 +82,14 @@ object OcrRuntime {
             requireRecognizedText(recognition.text, "PADDLEX", desc)
             recognition
         }.getOrElse { error ->
+            if (isCancellation(error)) {
+                lastProviderUsed = OcrProviderKind.PADDLEX
+                log.info {
+                    "PADDLEX_OCR_CANCELLED mode=$mode provider=PADDLEX " +
+                        "configKey=${ConfigEnum.OCR_PROVIDER_MODE.name} desc=${desc.ifBlank { "<none>" }}"
+                }
+                throw error
+            }
             if (mode.allowsLegacyFallback) {
                 lastProviderUsed = OcrProviderKind.LEGACY
                 log.warn(error) {
@@ -90,7 +99,14 @@ object OcrRuntime {
                         "device=${settings.device} modelCache=${settings.modelCachePath.ifBlank { "<paddlex-default>" }} " +
                         "timeoutMs=${settings.timeoutMs}"
                 }
-                return OcrRecognition(legacyOcrChecked(desc, legacyOcr), confidence = null).also { result ->
+                val fallbackText = legacyOcr()
+                val checkedFallback = if (allowEmptyProbeResult) {
+                    fallbackText
+                } else {
+                    requireRecognizedText(fallbackText, "LEGACY", desc)
+                    fallbackText
+                }
+                return OcrRecognition(checkedFallback, confidence = null).also { result ->
                     log.info {
                         "OCR_PROVIDER_USED mode=$mode provider=LEGACY reason=paddlex-fallback " +
                             "desc=${desc.ifBlank { "<none>" }} chars=${result.text.length}"
@@ -141,6 +157,21 @@ object OcrRuntime {
         val text = legacyOcr()
         requireRecognizedText(text, "LEGACY", desc)
         return text
+    }
+
+    private fun isCancellation(error: Throwable): Boolean {
+        if (Thread.currentThread().isInterrupted) return true
+        var current: Throwable? = error
+        while (current != null) {
+            if (current is PaddleXOcrCancelledException ||
+                current is CancellationException ||
+                current is InterruptedException
+            ) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
     }
 
     private fun requireRecognizedText(text: String, provider: String, desc: String) {
