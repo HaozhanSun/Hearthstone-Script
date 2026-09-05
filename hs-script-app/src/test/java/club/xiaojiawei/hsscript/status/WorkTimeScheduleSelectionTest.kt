@@ -51,4 +51,48 @@ class WorkTimeScheduleSelectionTest {
         assertNull(WorkTimeStatus.resolveWorkTimeRuleSet(ruleSets, emptyList(), 0))
         assertNull(WorkTimeStatus.resolveWorkTimeRuleSet(ruleSets, listOf("unknown"), 0))
     }
+
+    @Test
+    fun `saving selected preset applies it to a uniform collapsed schedule`() {
+        val currentSetting = List(7) { "preset-one" }
+
+        assertEquals(
+            List(7) { "preset-three" },
+            WorkTimeStatus.resolveSavedWorkTimeSetting(
+                currentSetting = currentSetting,
+                selectedRuleSetId = "preset-three",
+                applyRulePaneExpanded = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `saving selected preset preserves explicit weekday mappings`() {
+        val currentSetting = listOf(
+            "preset-one",
+            "preset-two",
+            "preset-one",
+            "preset-two",
+            "preset-one",
+            "preset-two",
+            "preset-one",
+        )
+
+        assertEquals(
+            currentSetting,
+            WorkTimeStatus.resolveSavedWorkTimeSetting(
+                currentSetting = currentSetting,
+                selectedRuleSetId = "preset-three",
+                applyRulePaneExpanded = false,
+            ),
+        )
+        assertEquals(
+            currentSetting,
+            WorkTimeStatus.resolveSavedWorkTimeSetting(
+                currentSetting = currentSetting,
+                selectedRuleSetId = "preset-three",
+                applyRulePaneExpanded = true,
+            ),
+        )
+    }
 }

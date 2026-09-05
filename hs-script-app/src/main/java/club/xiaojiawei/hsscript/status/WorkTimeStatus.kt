@@ -50,6 +50,32 @@ object WorkTimeStatus {
         return ruleSets.find { it.id == selectedId }
     }
 
+    /**
+     * Select the schedule mapping to persist when the user saves a preset.
+     *
+     * The preset table is the editor for a rule set, while the weekday
+     * mapping is the selector for the rule set that is actually active.  That
+     * distinction is easy to miss when the "apply rules" pane is collapsed.
+     * For a uniform schedule, saving the selected preset in that collapsed
+     * state is treated as the user's request to make it the active preset for
+     * the whole week.  Once the pane is expanded, or when different weekdays
+     * already have different assignments, the explicit mapping is preserved.
+     */
+    fun resolveSavedWorkTimeSetting(
+        currentSetting: List<String>,
+        selectedRuleSetId: String,
+        applyRulePaneExpanded: Boolean,
+    ): List<String> {
+        if (applyRulePaneExpanded || selectedRuleSetId.isEmpty()) return currentSetting
+        if (currentSetting.isEmpty()) return currentSetting
+
+        val assignedIds = currentSetting.filter { it.isNotEmpty() }.distinct()
+        if (assignedIds.size <= 1) {
+            return List(currentSetting.size) { selectedRuleSetId }
+        }
+        return currentSetting
+    }
+
     fun addWorkTimeSettingListener(listener: (List<String>, String?) -> Unit) {
         workTimeSettingListeners.add(listener)
     }
