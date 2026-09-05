@@ -94,4 +94,18 @@ class UiLogFormatterTest {
         assertTrue(UiLogFormatter.isHiddenFromUi("RANK_OCR_ROI provider=PADDLEX screenshot=rank.png"))
         assertFalse(UiLogFormatter.isHiddenFromUi("RANK_OCR_EVIDENCE provider=PADDLEX path=rank.png"))
     }
+
+    @Test
+    fun `rank policy waiting and skip diagnostics stay out of compact feed`() {
+        assertTrue(
+            UiLogFormatter.isHiddenFromUi(
+                "RANK_POLICY_WAITING_FOR_RANK reason=mulligan-input-not-confirmed action=WAIT"
+            )
+        )
+        assertTrue(
+            UiLogFormatter.isHiddenFromUi(
+                "RANK_POLICY_SKIP reason=opponent-hero-surrender-already-requested action=SKIP"
+            )
+        )
+    }
 }

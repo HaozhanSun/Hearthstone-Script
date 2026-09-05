@@ -578,7 +578,7 @@ object SurrenderPolicy {
             OpponentHeroInspectionState.NOT_RESOLVED,
             OpponentHeroInspectionState.WAITING_FOR_HERO,
             -> {
-                log.info {
+                log.debug {
                     "RANK_POLICY_WAITING_FOR_OPPONENT_HERO state=$opponentHeroInspectionState " +
                         "action=WAIT rankDetector=false"
                 }
@@ -595,7 +595,7 @@ object SurrenderPolicy {
         }
         if (!ReplaceCardPhaseStrategy.isRankInspectionReady()) {
             rankInspectionState = RankInspectionState.NOT_READY
-            log.info {
+            log.debug {
                 "RANK_POLICY_WAITING_FOR_RANK reason=mulligan-input-not-confirmed " +
                     "phase=${WAR.currentPhase.name} inWar=${WarEx.inWar} " +
                     "action=WAIT provider=NONE"
@@ -620,7 +620,7 @@ object SurrenderPolicy {
         val grace = rankInspectionGraceDecision(rankInspectionEligibleAt, now)
         if (!grace.probeAllowed) {
             rankInspectionState = RankInspectionState.WAITING_FOR_RANK
-            log.info {
+            log.debug {
                 "RANK_POLICY_WAITING_FOR_INITIAL_GRACE trigger=game-entry-mulligan " +
                     "eligibleAt=$rankInspectionEligibleAt delayMs=$INITIAL_RANK_INSPECTION_GRACE_MS " +
                     "remainingMs=${grace.remainingMs} action=WAIT rankDetector=false"
@@ -666,7 +666,7 @@ object SurrenderPolicy {
             )
             if (readDecision.wait) {
                 rankInspectionState = readDecision.state
-                log.warn {
+                log.debug {
                     "RANK_POLICY_WAITING_FOR_RANK stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
                         "attempt=$rankInspectionAttempts maxAttempts=$MAX_RANK_INSPECTION_ATTEMPTS " +
                         "providerResult=${readDecision.reason} " +

@@ -23,6 +23,11 @@ object UiLogFormatter {
         // The ROI line repeats the same evidence path already shown by
         // RANK_OCR_EVIDENCE. Keep it in the file log, not the compact UI.
         "RANK_OCR_ROI",
+        // Waiting is an internal retry/state signal, not a user-facing
+        // decision. It can be emitted once per Power.log batch while the
+        // mulligan boundary is not ready.
+        "RANK_POLICY_WAITING_",
+        "RANK_POLICY_SKIP",
     )
 
     fun isHiddenFromUi(message: String?): Boolean =
