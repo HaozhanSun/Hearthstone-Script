@@ -1,0 +1,22 @@
+input=C:\Users\yzjsh\AppData\Local\Temp\codex-clipboard-87b759ac-14fb-40d2-9bc4-9247d2c20ac2.png
+case=settlement-terminal phase=SETTLEMENT
+screen=1919x1079
+provider=PADDLEX providerCall=real-sidecar-on-current-rank-roi
+rawOCR=233Iaz
+normalizedOCR=233Iaz
+providerError=<none>
+rankROI=java.awt.Rectangle[x=0,y=884,width=143,height=140] crop=artifacts\legendary-diagnostic-20260904\settlement-terminal\current-rank-roi.png
+expandedROI=java.awt.Rectangle[x=0,y=841,width=230,height=215] crop=artifacts\legendary-diagnostic-20260904\settlement-terminal\expanded-rank-roi.png
+digitROI=java.awt.Rectangle[x=34,y=949,width=34,height=29] crop=artifacts\legendary-diagnostic-20260904\settlement-terminal\digit-roi.png
+legendaryVisualWarmPixels=4238/12996
+legendaryVisualWarmBounds=java.awt.Rectangle[x=5,y=0,width=99,height=91]
+legendaryVisualActiveColumns=71
+legendaryVisualDigitSegments=1
+legendaryVisualDigitSpan=77
+legendaryVisualConfirmed=true
+detectorRank=UNKNOWN
+detectorTier=LEGEND
+badgeVisible=true
+rankGate=ALLOW reason=legendary-badge-confirmed
+policyAction=NO_ACTION
+terminalPriority=authoritative-settlement-before-action

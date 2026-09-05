@@ -68,4 +68,50 @@ class ScreenStateRecoveryTest {
         assertTrue(ScreenStateRecovery.looksLikeLoadingVisual(0.499, 0.195, 0.01))
         assertFalse(ScreenStateRecovery.looksLikeLoadingVisual(0.069, 0.127, 0.54))
     }
+
+    @Test
+    fun `primary hub modes outrank the persistent collection navigation label`() {
+        val hub = "传统对战 酒馆战棋 竞技模式 其他模式 开包 我的收藏 商店"
+        val twoModesWithCollection = "传统对战 酒馆战棋 我的收藏 商店"
+        val collection = "我的套牌 卡牌制作 查找 39/40 卡牌"
+
+        assertTrue(ScreenStateRecovery.looksLikeHubText(hub))
+        assertEquals("HOME", ScreenStateRecovery.classifyForTest(hub))
+        assertTrue(ScreenStateRecovery.looksLikeHubText(twoModesWithCollection))
+        assertEquals("HOME", ScreenStateRecovery.classifyForTest(twoModesWithCollection))
+        assertFalse(ScreenStateRecovery.looksLikeCollectionText(hub))
+        assertTrue(ScreenStateRecovery.classificationEvidenceForTest(hub)
+            ?.contains("HOME/HUB：识别到传统对战、酒馆战棋、竞技模式、其他模式") == true)
+
+        assertTrue(ScreenStateRecovery.looksLikeCollectionText(collection))
+        assertEquals("COLLECTION", ScreenStateRecovery.classifyForTest(collection))
+        assertTrue(ScreenStateRecovery.classificationEvidenceForTest(collection)
+            ?.contains("收藏页：识别到我的套牌、卡牌制作") == true)
+    }
+
+    @Test
+    fun `persistent collection navigation label alone is not an opened collection page`() {
+        assertFalse(ScreenStateRecovery.looksLikeHubText("我的收藏"))
+        assertFalse(ScreenStateRecovery.looksLikeCollectionText("我的收藏"))
+        assertEquals(null, ScreenStateRecovery.classifyForTest("我的收藏"))
+    }
+
+    @Test
+    fun `restarts a confirmed stalled reconnect warning after the recovery threshold`() {
+        val warning = "本次连接较平常花费了更多时间。请检查你的网络连接。"
+        assertTrue(ScreenStateRecovery.looksLikeStalledReconnectLoadingText(warning))
+        assertEquals("LOADING", ScreenStateRecovery.classifyForTest(warning))
+        assertFalse(ScreenStateRecovery.looksLikeStalledReconnectLoadingText("正在加载，请稍候"))
+
+        val reconnectAt = 10_000L
+        assertFalse(ScreenStateRecovery.shouldRestartStalledReconnectForTest(reconnectAt, 129_999L))
+        assertTrue(ScreenStateRecovery.shouldRestartStalledReconnectForTest(reconnectAt, 130_000L))
+        assertFalse(ScreenStateRecovery.shouldRestartStalledReconnectForTest(0L, 999_999L))
+
+        // A script that attaches after the previous process clicked reconnect
+        // must arm the timer from its first explicit slow-reconnect warning.
+        assertEquals(10_000L, ScreenStateRecovery.stalledReconnectAnchorForTest(10_000L, 20_000L, 30_000L))
+        assertEquals(20_000L, ScreenStateRecovery.stalledReconnectAnchorForTest(0L, 20_000L, 30_000L))
+        assertEquals(30_000L, ScreenStateRecovery.stalledReconnectAnchorForTest(0L, 0L, 30_000L))
+    }
 }

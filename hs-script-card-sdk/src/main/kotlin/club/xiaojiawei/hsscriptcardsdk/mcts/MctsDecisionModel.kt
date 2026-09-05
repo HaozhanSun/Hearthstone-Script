@@ -37,6 +37,13 @@ interface MctsDecisionModel {
     fun isMandatoryAction(action: Action, war: War): Boolean = false
 
     /**
+     * Deck-specific hard legality after generic parser actions are generated.
+     * The default keeps the generic MCTS action set unchanged; implementations
+     * must return false only for a proven, currently illegal action.
+     */
+    fun isActionLegal(action: Action, war: War): Boolean = true
+
+    /**
      * Whether this candidate should be removed while another useful action
      * exists. Unlike [isMandatoryAction], this does not turn every other
      * candidate into a single forced chain.

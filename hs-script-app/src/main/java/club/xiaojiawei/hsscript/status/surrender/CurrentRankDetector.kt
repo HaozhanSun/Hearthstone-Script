@@ -3,9 +3,11 @@ package club.xiaojiawei.hsscript.status.surrender
 import club.xiaojiawei.hsscript.bean.TesseractEx
 import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
 import club.xiaojiawei.hsscriptbase.config.log
+import java.awt.Color
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
 import java.awt.RenderingHints
@@ -34,19 +36,24 @@ object CurrentRankDetector {
 
     private const val MIN_RANK = 1
     private const val MAX_RANK = 10
-    private const val RANK_REGION_LEFT = 0.0
-    // The rank badge is the small numeric shield at the extreme lower-left.
-    // Keep the crop away from the player name, timer, and other HUD numbers.
-    private const val RANK_REGION_TOP = 0.82
-    private const val RANK_REGION_WIDTH = 0.075
-    private const val RANK_REGION_HEIGHT = 0.13
-    private const val RANK_EXPANDED_LEFT = 0.0
-    private const val RANK_EXPANDED_TOP = 0.78
-    private const val RANK_EXPANDED_WIDTH = 0.12
-    private const val RANK_EXPANDED_HEIGHT = 0.20
-    // The full badge contains the portrait, shield ornament, rank numeral,
-    // and (at this resolution) the first pixels of the player name.  Feeding
-    // that whole image to Tesseract produces values such as 939/51/191.
+    // The OCR/visual contract is the complete lower-left badge only. At
+    // 1920x1080 this is approximately x=0,y=885,w=105,h=108; the width stops
+    // before the player name/class text to the right. Keep it normalized so
+    // window scaling does not move the crop into unrelated HUD content.
+    private const val RANK_BADGE_VISUAL_LEFT = 0.0
+    private const val RANK_BADGE_VISUAL_TOP = 0.82
+    private const val RANK_BADGE_VISUAL_WIDTH = 0.055
+    // Keep the lower edge just below the badge tip while excluding the empty
+    // board/background below it. At 1920x1080 this trims 22 px from the prior
+    // 130 px crop without moving the top edge or cutting the numeral row.
+    private const val RANK_BADGE_VISUAL_HEIGHT = 0.10
+    private const val RANK_EXPANDED_LEFT = 0.01198
+    private const val RANK_EXPANDED_TOP = 0.87130
+    private const val RANK_EXPANDED_WIDTH = 0.02969
+    private const val RANK_EXPANDED_HEIGHT = 0.04352
+    // The former broad crop contained the portrait, shield ornament, rank
+    // numeral, and first pixels of the player name. Feeding it to Tesseract
+    // produced values such as 939/51/191.
     // This inner window is centered on the white numeral row in the 1920x1080
     // Hearthstone HUD and deliberately excludes the portrait and name.
     private const val RANK_DIGIT_LEFT = 0.018
@@ -66,7 +73,13 @@ object CurrentRankDetector {
         val rank: Int?,
         val tier: RankTier,
         val ocrText: String,
+        val confidence: Double?,
         val captureBounds: Rectangle,
+    )
+
+    data class RankCandidate(
+        val rank: Int,
+        val confidence: Double?,
     )
 
     /** Parse only valid constructed ranks, preventing unrelated HUD numbers from becoming a decision. */
@@ -77,18 +90,23 @@ object CurrentRankDetector {
                 else -> char
             }
         }.joinToString("")
-        val numericRuns = Regex("\\d{1,2}")
+        // Numeric-only means one complete numeric token, not merely one digit
+        // somewhere in arbitrary OCR text. Latin letters are rejected because
+        // the rank ROI must never turn a username such as "laz8" into rank 8;
+        // Chinese/localized prefixes such as "商8" remain valid.
+        if (normalized.any { it in 'a'..'z' || it in 'A'..'Z' }) return null
+        val numericRuns = Regex("\\d+")
             .findAll(normalized)
             .map { it.value }
             .toList()
-        if (numericRuns.any { it == "10" }) return 10
-
-        // A single clean digit is required for ranks 1..9.  Taking the first
-        // valid substring from noisy OCR such as "01404" can turn unrelated
-        // HUD numbers into a false surrender decision.
-        val digitsOnly = normalized.filter(Char::isDigit)
-        if (digitsOnly.length != 1) return null
-        return digitsOnly.toIntOrNull()?.takeIf { it in MIN_RANK until MAX_RANK }
+        if (numericRuns.size != 1) return null
+        val token = numericRuns.single()
+        val numeric = token.toIntOrNull() ?: return null
+        return when {
+            numeric in MIN_RANK..MAX_RANK -> numeric
+            numeric > 50 -> numeric
+            else -> null
+        }
     }
 
     /** Parse an explicit localized/English league name when it is visible. */
@@ -106,15 +124,19 @@ object CurrentRankDetector {
     }
 
     /**
-     * Resolve several independent OCR passes conservatively.  Hearthstone's
-     * stylized two-digit "10" is sometimes read as just "1".  A lone
-     * one-digit result is therefore not strong enough to trigger surrender;
-     * rank 10 wins immediately when any pass sees it, while ranks 1..9 need
-     * two agreeing passes.
+     * Select the strongest numeric candidate.  PaddleX may return one text
+     * result while legacy OCR returns several passes; both paths use the same
+     * deterministic best guess instead of silently becoming "continue".
+     * PaddleX's native recognition score is used when supplied; legacy OCR
+     * has no native score, so repeated candidates only select the most common
+     * number and never become a fabricated confidence value.
      */
-    internal fun resolveRankCandidates(candidates: List<String>, visualTenHint: Boolean = false): Int? {
+    internal fun resolveRankCandidate(
+        candidates: List<String>,
+        visualTenHint: Boolean = false,
+        nativeConfidence: Double? = null,
+    ): RankCandidate? {
         val parsed = candidates.mapNotNull(::parseRankText)
-        if (parsed.contains(10)) return 10
         // On the real rank-10 badge, all OCR passes can be contaminated by
         // the shield artwork and return only invalid multi-digit noise (for
         // example 939|51|191|91).  If the independent visual check confirms
@@ -122,38 +144,28 @@ object CurrentRankDetector {
         // stronger evidence for rank 10 than accepting an arbitrary lower
         // rank.  Keep the numeric-evidence requirement so an empty/blank
         // screen cannot become rank 10 from the visual hint alone.
-        if (visualTenHint && parsed.isEmpty() && candidates.any { it.any(Char::isDigit) }) return 10
-        // A visual hint is only allowed to recover rank 10 when OCR produced
-        // no valid rank at all.  If OCR consistently sees a real lower rank
-        // (for example 7/8/9), promoting it to 10 is a dangerous false safe
-        // result: the surrender policy would then refuse a surrender.  The
-        // explicit "10" branch above remains authoritative.
+        if (visualTenHint && parsed.isEmpty() && candidates.any { it.any(Char::isDigit) }) {
+            return RankCandidate(rank = 10, confidence = nativeConfidence)
+        }
         val counts = parsed.groupingBy { it }.eachCount()
-        val candidatesBelowTen = counts.entries
-            .filter { (rank, count) -> rank in MIN_RANK until MAX_RANK && count >= 2 }
-        if (candidatesBelowTen.isEmpty()) return null
-
-        // A transition frame or an unrelated HUD number can produce two
-        // agreeing OCR passes for one digit while other passes produce a
-        // different digit (for example 2|4|4|3 on the visible rank-10
-        // badge).  That is not enough evidence to surrender.  Lower-rank
-        // policy is destructive, so require a single unambiguous consensus.
-        val best = candidatesBelowTen.maxByOrNull { it.value } ?: return null
-        val highestCount = best.value
-        if (candidatesBelowTen.count { it.value == highestCount } > 1) return null
-        if (parsed.any { it != best.key }) return null
-        // A stylized rank-10 badge is commonly read as "1" by every OCR
-        // pass when the zero is faint or cropped.  A visual-width hint can
-        // also be produced by badge artwork when the numeral is absent (as
-        // on the matchmaking/mulligan screen).  Neither case is sufficient
-        // to distinguish rank 1 from rank 10, so repeated one-only OCR must
-        // remain unresolved and must never cause an irreversible surrender.
-        if (best.key == 1) return null
-        return best.key
+        val best = counts.entries
+            .filter { (rank, _) -> rank in MIN_RANK..MAX_RANK || rank > 50 }
+            .maxWithOrNull(compareBy<Map.Entry<Int, Int>> { it.value }.thenBy { if (it.key == 10) 1 else 0 })
+            ?: return null
+        return RankCandidate(
+            rank = best.key,
+            confidence = nativeConfidence,
+        )
     }
 
+    internal fun resolveRankCandidates(candidates: List<String>, visualTenHint: Boolean = false): Int? =
+        resolveRankCandidate(candidates, visualTenHint)?.rank
+
     /** Capture and OCR the rank badge without touching the Hearthstone input path. */
-    fun detect(): Detection? = runCatching {
+    fun detect(
+        trigger: String = "current-rank-paddlex-badge",
+        phase: String = "pre-mulligan-rank-check",
+    ): Detection? = runCatching {
         if (GraphicsEnvironment.isHeadless()) return null
         val allScreens = GraphicsEnvironment
             .getLocalGraphicsEnvironment()
@@ -179,9 +191,19 @@ object CurrentRankDetector {
         if (bounds.width < 400 || bounds.height < 300) return null
 
         val screen = Robot().createScreenCapture(bounds)
-        return@runCatching detectCapturedImage(screen, bounds, saveEvidence = true)
+        return@runCatching detectCapturedImage(
+            screen,
+            bounds,
+            saveEvidence = true,
+            evidenceTrigger = trigger,
+            evidencePhase = phase,
+        )
     }.getOrElse { error ->
-        log.warn(error) { "RANK_OCR_FAILED" }
+        val provider = if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
+        log.warn(error) {
+            "RANK_OCR_FAILED provider=$provider trigger=$trigger phase=$phase " +
+                "unknownReason=${error.javaClass.simpleName}:${error.message ?: "no-message"}"
+        }
         null
     }
 
@@ -194,12 +216,28 @@ object CurrentRankDetector {
         screen: BufferedImage,
         bounds: Rectangle = Rectangle(0, 0, screen.width, screen.height),
         saveEvidence: Boolean = false,
+        evidenceTrigger: String = "current-rank-paddlex-badge",
+        evidencePhase: String = "pre-mulligan-rank-check",
     ): Detection? = runCatching {
-        val rankRegion = cropRankRegion(screen)
+        val badgeRegion = cropRankRegion(screen)
+        val badgeRegionBounds = rankBadgeBoundsForTest(screen.width, screen.height)
+        val numericRegion = crop(
+            screen,
+            RANK_DIGIT_LEFT,
+            RANK_DIGIT_TOP,
+            RANK_DIGIT_WIDTH,
+            RANK_DIGIT_HEIGHT,
+        )
+        val numericRegionBounds = rankDigitBoundsForTest(screen.width, screen.height)
         val tessData = File(TESS_DATA_PATH)
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
-        if (!chiSim.isFile) {
-            log.info { "RANK_OCR_SKIPPED reason=missing-tessdata path=${chiSim.absolutePath}" }
+        if (OcrRuntime.isLegacySelected() && !chiSim.isFile) {
+            log.info {
+                "RANK_OCR_SKIPPED provider=LEGACY " +
+                    "RANK_OCR_ROI x=${numericRegionBounds.x} y=${numericRegionBounds.y} " +
+                    "width=${numericRegionBounds.width} height=${numericRegionBounds.height} " +
+                    "reason=missing-tessdata path=${chiSim.absolutePath}"
+            }
             return null
         }
         // The badge contains Arabic numerals.  Tesseract's English model is
@@ -215,6 +253,7 @@ object CurrentRankDetector {
             RANK_EXPANDED_WIDTH,
             RANK_EXPANDED_HEIGHT,
         )
+        val badgeVisualRegion = badgeRegion
         val digitRegion = crop(
             screen,
             RANK_DIGIT_LEFT,
@@ -222,10 +261,58 @@ object CurrentRankDetector {
             RANK_DIGIT_WIDTH,
             RANK_DIGIT_HEIGHT,
         )
+        if (!OcrRuntime.isLegacySelected()) {
+            val recognition = OcrRuntime.recognizeResult(
+                badgeRegion,
+                evidenceTrigger,
+                legacyOcr = { "" },
+                allowEmptyProbeResult = true,
+            )
+            val rawOcrTexts = listOf(recognition.text)
+            val ocrTexts = rawOcrTexts.map(::normalizeOcrText)
+            val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
+            val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
+                looksLikeTwoDigitRank(numericRegion)
+            val rankCandidate = resolveRankCandidate(ocrTexts, visualTenHint, recognition.confidence)
+            val rank = rankCandidate?.rank
+            val confidence = rankCandidate?.confidence
+            // PaddleX receives the badge-only crop. The visual classifier and
+            // OCR therefore observe the same complete badge, and an empty
+            // numeric result cannot hide a valid Legendary color signal.
+            val tier = detectTierVisual(badgeVisualRegion)
+            val unknownReason = unknownReason(rank, tier, ocrTexts)
+            log.info {
+                "RANK_OCR provider=PADDLEX trigger=$evidenceTrigger phase=$evidencePhase " +
+                    "passes=${ocrTexts.size} bounds=$bounds " +
+                    "roi=x${badgeRegionBounds.x},y${badgeRegionBounds.y},w${badgeRegionBounds.width},h${badgeRegionBounds.height} " +
+                    "raw=${rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
+                    "normalized=${ocrText.ifBlank { "<empty>" }} confidence=${formatConfidence(confidence)} " +
+                    "candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
+                    "tierCandidates=<visual-only> visualTenHint=$visualTenHint " +
+                    "tier=${tier.name} rank=${rank ?: "UNKNOWN"} unknownReason=$unknownReason"
+            }
+            if (saveEvidence) {
+                saveRankEvidence(
+                    screen = screen,
+                    roiBounds = badgeRegionBounds,
+                    provider = "PADDLEX",
+                    rawOcrTexts = rawOcrTexts,
+                    normalizedOcrText = ocrText,
+                    numericRank = rank,
+                    rank = rank,
+                    confidence = confidence,
+                    tier = tier,
+                    unknownReason = unknownReason,
+                    trigger = evidenceTrigger,
+                    phase = evidencePhase,
+                )
+            }
+            return Detection(rank, tier, ocrText, confidence, bounds)
+        }
         val ocrInputs = listOf(
-            // Rank OCR must only see the small numeral window.  Running OCR
-            // on the full badge was the source of 939/51/191/91 noise from
-            // the portrait and shield artwork.
+            // Legacy remains on its established tight numeral window; the
+            // badge-only crop above is still the authoritative visual/tier
+            // input for both providers.
             digitRegion to 6,
             digitRegion to 7,
             digitRegion to 8,
@@ -233,14 +320,17 @@ object CurrentRankDetector {
             digitRegion to 11,
             digitRegion to 13,
         )
-        val ocrTexts = ocrInputs.map { (image, pageSegMode) ->
+        val rawOcrTexts = ocrInputs.map { (image, pageSegMode) ->
             ocrRank(image, tessData, pageSegMode, rankLanguage)
         }
+        val ocrTexts = rawOcrTexts.map(::normalizeOcrText)
         val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
         val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
-            looksLikeTwoDigitRank(rankRegion)
-        val rank = resolveRankCandidates(ocrTexts, visualTenHint)
-        val tierOcrTexts = listOf(rankRegion, expandedRegion).map { image ->
+            looksLikeTwoDigitRank(numericRegion)
+        val rankCandidate = resolveRankCandidate(ocrTexts, visualTenHint)
+        val rank = rankCandidate?.rank
+        val confidence = rankCandidate?.confidence
+        val tierOcrTexts = listOf(badgeRegion, expandedRegion).map { image ->
             ocrTier(image, tessData)
         }
         val tierFromOcr = tierOcrTexts
@@ -251,48 +341,166 @@ object CurrentRankDetector {
         val tier = if (tierFromOcr !== RankTier.UNKNOWN) {
             tierFromOcr
         } else {
-            detectTierVisual(rankRegion)
+            detectTierVisual(badgeVisualRegion)
         }
+        val digitRegionBounds = rankDigitBoundsForTest(screen.width, screen.height)
+        val unknownReason = unknownReason(rank, tier, ocrTexts)
         log.info {
-            "RANK_OCR bounds=$bounds region=${rankRegion.width}x${rankRegion.height} " +
-                "text=${ocrText.ifBlank { "<empty>" }} candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
+            "RANK_OCR provider=LEGACY trigger=$evidenceTrigger phase=$evidencePhase bounds=$bounds " +
+                "roi=x${digitRegionBounds.x},y${digitRegionBounds.y},w${digitRegionBounds.width},h${digitRegionBounds.height} " +
+                "raw=${rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
+                "normalized=${ocrText.ifBlank { "<empty>" }} confidence=${formatConfidence(confidence)} " +
+                "candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
                 "tierCandidates=${tierOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
-                "visualTenHint=$visualTenHint tier=${tier.name} rank=${rank ?: "UNKNOWN"}"
+                "visualTenHint=$visualTenHint tier=${tier.name} rank=${rank ?: "UNKNOWN"} unknownReason=$unknownReason"
         }
-        if (saveEvidence && (tier === RankTier.UNKNOWN || rank == null)) {
-            val evidence = UnknownStateScreenshot.save(
-                image = screen,
-                regions = listOf(
-                    UnknownStateScreenshot.UnknownRegion(
-                        Rectangle(
-                            0,
-                            (screen.height * RANK_REGION_TOP).toInt(),
-                            (screen.width * RANK_REGION_WIDTH).toInt(),
-                            (screen.height * RANK_REGION_HEIGHT).toInt(),
-                        ),
-                        "rank-badge-unresolved",
-                    ),
-                ),
-                category = "rank-detection",
-                trigger = "rank-ocr-unresolved",
-                state = "rank=${rank ?: "UNKNOWN"}|tier=${tier.name}",
-                phase = "pre-mulligan-rank-check",
-                ocrText = (ocrTexts + tierOcrTexts).joinToString("|") { it.ifBlank { "<empty>" } },
+        if (saveEvidence) {
+            saveRankEvidence(
+                screen = screen,
+                roiBounds = digitRegionBounds,
+                provider = "LEGACY",
+                rawOcrTexts = rawOcrTexts,
+                normalizedOcrText = ocrText,
+                numericRank = rank,
+                rank = rank,
+                confidence = confidence,
+                tier = tier,
+                unknownReason = unknownReason,
+                trigger = evidenceTrigger,
+                phase = evidencePhase,
             )
-            log.warn {
-                "RANK_OCR_EVIDENCE rank=${rank ?: "UNKNOWN"} tier=${tier.name} " +
-                    "path=${evidence?.file?.absolutePath ?: "not-saved"} " +
-                    "link=${evidence?.link ?: "none"}"
-            }
         }
-        Detection(rank, tier, ocrText, bounds)
+        Detection(rank, tier, ocrText, confidence, bounds)
     }.getOrElse { error ->
-        log.warn(error) { "RANK_OCR_FAILED" }
+        val provider = if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
+        log.warn(error) {
+            "RANK_OCR_FAILED provider=$provider trigger=$evidenceTrigger phase=$evidencePhase confidence=unavailable " +
+                "unknownReason=${error.javaClass.simpleName}:${error.message ?: "no-message"}"
+        }
         null
     }
 
+    private fun saveRankEvidence(
+        screen: BufferedImage,
+        roiBounds: Rectangle,
+        provider: String,
+        rawOcrTexts: List<String>,
+        normalizedOcrText: String,
+        numericRank: Int?,
+        rank: Int?,
+        confidence: Double?,
+        tier: RankTier,
+        unknownReason: String,
+        trigger: String,
+        phase: String,
+    ) {
+        val extractedRank = numericRank?.toString() ?: "UNKNOWN"
+        val resolvedRank = rank?.toString() ?: "UNKNOWN"
+        val finalDecision = if (rank == null) "UNKNOWN_FAIL_CLOSED" else "RANK_RESOLVED"
+        val raw = rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }
+        val normalized = normalizedOcrText.ifBlank { "<empty>" }
+        val runId = System.getProperty("hs.script.e2e.run-id", "normal")
+        val annotationLines = listOf(
+            "stage=$phase trigger=$trigger runId=$runId",
+            "provider=$provider",
+            "roi=x=${roiBounds.x} y=${roiBounds.y} w=${roiBounds.width} h=${roiBounds.height}",
+            "rawOCR=$raw",
+            "normalizedOCR=$normalized",
+            "numericRank=$extractedRank",
+            "resolvedRank=$resolvedRank",
+            "confidence=${formatConfidence(confidence)}",
+            "tier=${tier.name}",
+            "unknownReason=$unknownReason",
+            "finalDecision=$finalDecision",
+        )
+        val evidence = UnknownStateScreenshot.save(
+            image = screen,
+            regions = listOf(
+                UnknownStateScreenshot.UnknownRegion(
+                    rankBadgeBoundsForTest(screen.width, screen.height),
+                    "rank-badge-${finalDecision.lowercase(Locale.ROOT)}",
+                ),
+            ),
+            category = "rank-detection",
+            trigger = "$trigger-$finalDecision",
+            state = "rank=$resolvedRank|numericRank=$extractedRank|tier=${tier.name}",
+            phase = phase,
+            ocrText = raw,
+            annotationLines = annotationLines,
+            logWarning = rank == null,
+        )
+        val evidencePath = evidence?.file?.absolutePath ?: "not-saved"
+        val evidenceMessage = {
+            "RANK_OCR_EVIDENCE provider=$provider trigger=$trigger phase=$phase " +
+                "numericRank=$extractedRank rank=$resolvedRank tier=${tier.name} " +
+                "confidence=${formatConfidence(confidence)} unknownReason=$unknownReason finalDecision=$finalDecision " +
+                "path=$evidencePath link=${evidence?.link ?: "none"}"
+        }
+        if (rank == null) log.warn(evidenceMessage) else log.info(evidenceMessage)
+        val roiMessage = {
+            "RANK_OCR_ROI provider=$provider trigger=$trigger phase=$phase x=${roiBounds.x} y=${roiBounds.y} " +
+                "width=${roiBounds.width} height=${roiBounds.height} raw=$raw " +
+                "normalized=$normalized confidence=${formatConfidence(confidence)} unknownReason=$unknownReason " +
+                "screenshot=$evidencePath"
+        }
+        if (rank == null) log.warn(roiMessage) else log.info(roiMessage)
+    }
+
+    private fun formatConfidence(confidence: Double?): String =
+        confidence?.let { String.format(Locale.ROOT, "%.2f", it) } ?: "unavailable"
+
+    /** Full badge crop used by PaddleX and all visual tier/Legendary checks. */
     private fun cropRankRegion(image: BufferedImage): BufferedImage {
-        return crop(image, RANK_REGION_LEFT, RANK_REGION_TOP, RANK_REGION_WIDTH, RANK_REGION_HEIGHT)
+        return crop(
+            image,
+            RANK_BADGE_VISUAL_LEFT,
+            RANK_BADGE_VISUAL_TOP,
+            RANK_BADGE_VISUAL_WIDTH,
+            RANK_BADGE_VISUAL_HEIGHT,
+        )
+    }
+
+    internal fun rankBadgeBoundsForTest(imageWidth: Int, imageHeight: Int): Rectangle =
+        normalizedBounds(
+            imageWidth,
+            imageHeight,
+            RANK_BADGE_VISUAL_LEFT,
+            RANK_BADGE_VISUAL_TOP,
+            RANK_BADGE_VISUAL_WIDTH,
+            RANK_BADGE_VISUAL_HEIGHT,
+        )
+
+    internal fun rankExpandedBoundsForTest(imageWidth: Int, imageHeight: Int): Rectangle =
+        normalizedBounds(
+            imageWidth,
+            imageHeight,
+            RANK_EXPANDED_LEFT,
+            RANK_EXPANDED_TOP,
+            RANK_EXPANDED_WIDTH,
+            RANK_EXPANDED_HEIGHT,
+        )
+
+    internal fun rankBadgeVisualBoundsForTest(imageWidth: Int, imageHeight: Int): Rectangle =
+        rankBadgeBoundsForTest(imageWidth, imageHeight)
+
+    internal fun rankDigitBoundsForTest(imageWidth: Int, imageHeight: Int): Rectangle =
+        normalizedBounds(
+            imageWidth,
+            imageHeight,
+            RANK_DIGIT_LEFT,
+            RANK_DIGIT_TOP,
+            RANK_DIGIT_WIDTH,
+            RANK_DIGIT_HEIGHT,
+        )
+
+    private fun normalizeOcrText(text: String): String = text.replace(Regex("\\s+"), "")
+
+    private fun unknownReason(rank: Int?, tier: RankTier, ocrTexts: List<String>): String = when {
+        rank == null && tier === RankTier.UNKNOWN && ocrTexts.all(String::isBlank) -> "empty-text-and-tier"
+        rank == null && tier === RankTier.UNKNOWN -> "rank-and-tier-unresolved"
+        rank == null -> "rank-unresolved"
+        tier === RankTier.UNKNOWN -> "tier-unresolved"
+        else -> "none"
     }
 
     /**
@@ -333,6 +541,7 @@ object CurrentRankDetector {
      * sample the badge perimeter and ignore the portrait/number interior.
      */
     internal fun detectTierVisual(image: BufferedImage): RankTier {
+        if (detectLegendaryBadgeVisual(image)) return RankTier.LEGEND
         val right = (image.width * 0.72).toInt().coerceAtMost(image.width)
         val bottom = (image.height * 0.82).toInt().coerceAtMost(image.height)
         val insetX = (image.width * 0.18).toInt()
@@ -365,6 +574,156 @@ object CurrentRankDetector {
         return RankTier.UNKNOWN
     }
 
+    /**
+     * Detect the constructed-game Legendary badge when its rating is not a
+     * 1..10 rank.  The probe is deliberately geometric and badge-local:
+     * Legendary has a saturated red/orange field around a warm-metal center,
+     * while a red UI overlay has no metal evidence and a normal gold badge
+     * has no broad red outer field.  HSB keeps the test stable across modest
+     * brightness changes without accepting arbitrary red pixels.
+     */
+    internal data class LegendaryVisualMetrics(
+        val warmPixels: Int,
+        val scannedPixels: Int,
+        val warmBounds: Rectangle?,
+        val activeColumnCount: Int,
+        val digitSegments: Int,
+        val digitSpan: Int,
+        val confirmed: Boolean,
+    )
+
+    internal fun detectLegendaryBadgeVisual(image: BufferedImage): Boolean =
+        legendaryVisualMetrics(image).confirmed
+
+    internal fun legendaryVisualMetrics(image: BufferedImage): LegendaryVisualMetrics {
+        if (image.width < 40 || image.height < 40) {
+            return LegendaryVisualMetrics(0, 0, null, 0, 0, 0, false)
+        }
+        val scanRight = (image.width * 0.80).toInt().coerceAtMost(image.width)
+        val scanBottom = (image.height * 0.82).toInt().coerceAtMost(image.height)
+        var warm = 0
+        var minX = image.width
+        var minY = image.height
+        var maxX = -1
+        var maxY = -1
+        for (y in 0 until scanBottom) {
+            for (x in 0 until scanRight) {
+                val rgb = image.getRGB(x, y)
+                val red = rgb ushr 16 and 0xff
+                val green = rgb ushr 8 and 0xff
+                val blue = rgb and 0xff
+                val hsb = Color.RGBtoHSB(red, green, blue, null)
+                if (hsb[0] * 360f in 22f..68f && hsb[1] >= 0.28f && hsb[2] >= 0.25f) {
+                    warm++
+                    minX = minOf(minX, x)
+                    minY = minOf(minY, y)
+                    maxX = maxOf(maxX, x)
+                    maxY = maxOf(maxY, y)
+                }
+            }
+        }
+        val scannedPixels = scanRight * scanBottom
+        if (maxX < minX || maxY < minY) {
+            return LegendaryVisualMetrics(warm, scannedPixels, null, 0, 0, 0, false)
+        }
+        val warmBounds = Rectangle(minX, minY, maxX - minX + 1, maxY - minY + 1)
+        if (warmBounds.width < 55 || warmBounds.height < 45 ||
+            warm.toDouble() / scannedPixels < 0.12
+        ) {
+            return LegendaryVisualMetrics(warm, scannedPixels, warmBounds, 0, 0, 0, false)
+        }
+
+        // The badge frame is saturated gold, while the rating glyphs are
+        // pale/near-neutral. Count bright columns rather than requiring
+        // artificial gaps between adjacent glyphs after client scaling.
+        val digitLeft = warmBounds.x + (warmBounds.width * 0.08).toInt()
+        val digitTop = warmBounds.y + (warmBounds.height * 0.16).toInt()
+        val digitBottom = (warmBounds.y + warmBounds.height * 0.78).toInt().coerceAtMost(scanBottom)
+        val activeColumns = mutableListOf<Int>()
+        val digitRight = minOf(warmBounds.x + warmBounds.width, scanRight)
+        for (x in digitLeft until digitRight) {
+            var bright = 0
+            for (y in digitTop until digitBottom) {
+                val rgb = image.getRGB(x, y)
+                val red = rgb ushr 16 and 0xff
+                val green = rgb ushr 8 and 0xff
+                val blue = rgb and 0xff
+                val hsb = Color.RGBtoHSB(red, green, blue, null)
+                if (hsb[2] >= 0.70f && hsb[1] <= 0.55f && red + green + blue > 420) bright++
+            }
+            if (bright >= 3) activeColumns += x
+        }
+        val strongColorSignature = legacyColorSignature(image)
+        if (activeColumns.isEmpty()) {
+            return LegendaryVisualMetrics(warm, scannedPixels, warmBounds, 0, 0, 0, strongColorSignature)
+        }
+        val segments = mutableListOf<Int>()
+        var start = activeColumns.first()
+        var previous = start
+        for (column in activeColumns.drop(1)) {
+            if (column > previous + 3) {
+                segments += previous - start + 1
+                start = column
+            }
+            previous = column
+        }
+        segments += previous - start + 1
+        val digitSegments = segments.count { it in 10..35 }
+        val digitSpan = activeColumns.last() - activeColumns.first() + 1
+        val confirmedByGlyphs = activeColumns.size >= 50 && digitSpan >= 60
+        val confirmed = strongColorSignature || confirmedByGlyphs
+        return LegendaryVisualMetrics(
+            warmPixels = warm,
+            scannedPixels = scannedPixels,
+            warmBounds = warmBounds,
+            activeColumnCount = activeColumns.size,
+            digitSegments = digitSegments,
+            digitSpan = digitSpan,
+            confirmed = confirmed,
+        )
+    }
+
+    private fun legacyColorSignature(image: BufferedImage): Boolean {
+        val centerLeft = (image.width * 0.22).toInt()
+        val centerTop = (image.height * 0.18).toInt()
+        val centerRight = (image.width * 0.78).toInt().coerceAtMost(image.width)
+        val centerBottom = (image.height * 0.82).toInt().coerceAtMost(image.height)
+        var centerPixels = 0
+        var outerPixels = 0
+        var warmMetal = 0
+        var warmCenter = 0
+        var warmOuter = 0
+        var redOuter = 0
+        for (y in 0 until image.height) {
+            for (x in 0 until image.width) {
+                val center = x in centerLeft until centerRight && y in centerTop until centerBottom
+                val rgb = image.getRGB(x, y)
+                val hsb = Color.RGBtoHSB(rgb ushr 16 and 0xff, rgb ushr 8 and 0xff, rgb and 0xff, null)
+                val hue = hsb[0] * 360f
+                val warm = hue in 22f..68f && hsb[1] >= 0.28f && hsb[2] >= 0.25f
+                val saturatedRed = (hue <= 18f || hue >= 345f) && hsb[1] >= 0.38f && hsb[2] >= 0.20f
+                if (center) {
+                    centerPixels++
+                    if (warm) warmCenter++
+                } else {
+                    outerPixels++
+                    if (warm) warmOuter++
+                    if (saturatedRed) redOuter++
+                }
+                if (warm) warmMetal++
+            }
+        }
+        if (centerPixels == 0 || outerPixels == 0) return false
+        val warmRatio = warmMetal.toDouble() / (centerPixels + outerPixels)
+        val warmCenterRatio = warmCenter.toDouble() / centerPixels
+        val warmOuterRatio = warmOuter.toDouble() / outerPixels
+        val redOuterRatio = redOuter.toDouble() / outerPixels
+        return warmRatio >= 0.12 &&
+            warmCenterRatio >= 0.12 &&
+            redOuterRatio >= 0.22 &&
+            warmCenterRatio >= warmOuterRatio * 0.55
+    }
+
     private fun crop(
         image: BufferedImage,
         left: Double,
@@ -372,13 +731,29 @@ object CurrentRankDetector {
         widthRatio: Double,
         heightRatio: Double,
     ): BufferedImage {
-        val x = (image.width * left).toInt().coerceIn(0, image.width - 1)
-        val y = (image.height * top).toInt().coerceIn(0, image.height - 1)
-        val width = (image.width * widthRatio).toInt().coerceAtLeast(1)
-            .coerceAtMost(image.width - x)
-        val height = (image.height * heightRatio).toInt().coerceAtLeast(1)
-            .coerceAtMost(image.height - y)
-        return image.getSubimage(x, y, width, height)
+        val bounds = normalizedBounds(image.width, image.height, left, top, widthRatio, heightRatio)
+        return image.getSubimage(bounds.x, bounds.y, bounds.width, bounds.height)
+    }
+
+    private fun normalizedBounds(
+        imageWidth: Int,
+        imageHeight: Int,
+        left: Double,
+        top: Double,
+        widthRatio: Double,
+        heightRatio: Double,
+    ): Rectangle {
+        require(imageWidth > 0 && imageHeight > 0) { "image dimensions must be positive" }
+        val x = (imageWidth * left).toInt().coerceIn(0, imageWidth - 1)
+        val y = (imageHeight * top).toInt().coerceIn(0, imageHeight - 1)
+        val right = (imageWidth * (left + widthRatio)).toInt().coerceAtMost(imageWidth)
+        val bottom = (imageHeight * (top + heightRatio)).toInt().coerceAtMost(imageHeight)
+        return Rectangle(
+            x,
+            y,
+            (right - x).coerceAtLeast(1),
+            (bottom - y).coerceAtLeast(1),
+        )
     }
 
     private fun ocrRank(image: BufferedImage, tessData: File, pageSegMode: Int, language: String): String {
@@ -392,8 +767,11 @@ object CurrentRankDetector {
             setPageSegMode(pageSegMode)
             setVariable("tessedit_char_whitelist", whitelist)
             setVariable("user_defined_dpi", "300")
-        }.doOCR(input, "current-rank-psm$pageSegMode-$suffix")
-            .replace(Regex("\\s+"), "")
+        }.doOCR(
+            input,
+            "current-rank-psm$pageSegMode-$suffix",
+            allowEmptyProbeResult = true,
+        )
 
         if (pageSegMode == 10) {
             // The badge's outlined 1 and 0 touch visually after scaling. OCR
@@ -436,7 +814,11 @@ object CurrentRankDetector {
             setLanguage(CHI_SIM_DATA)
             setPageSegMode(11)
             setVariable("user_defined_dpi", "200")
-        }.doOCR(scaleForOcr(image), "current-tier")
+        }.doOCR(
+            scaleForOcr(image),
+            "current-tier",
+            allowEmptyProbeResult = true,
+        )
             .replace(Regex("\\s+"), "")
 
     /**

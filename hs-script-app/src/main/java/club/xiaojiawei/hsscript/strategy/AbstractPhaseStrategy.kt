@@ -117,22 +117,44 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
      * it can click anything.
      */
     private fun surrenderImmediatelyForResolvedOpponentHero(): Boolean {
-        val result = SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war) ?: return false
-        cancelAllTask()
-        log.warn {
-            "立即投降：对手基础英雄检查失败，跳过剩余换牌流程 " +
-                "rule=${result.ruleId} reason=${result.reason ?: "none"}"
+        if (GameUtil.isTerminalGameState()) {
+            log.info {
+                "SURRENDER_POLICY_SKIPPED reason=terminal-state-priority " +
+                    "phase=${war.currentPhase.name} step=${war.currentTurnStep?.name ?: "NONE"}"
+            }
+            return true
         }
-        GameUtil.surrender(skipEndTurn = true)
-        return true
+        val result = SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war) ?: return false
+        return dispatchSurrenderDecision(result, "opponent-hero")
     }
 
     private fun surrenderImmediatelyForCurrentRank(): Boolean {
+        if (GameUtil.isTerminalGameState()) return true
         val result = SurrenderPolicy.evaluateCurrentRankBeforeMulligan() ?: return false
+        return dispatchSurrenderDecision(result, "current-rank")
+    }
+
+    /**
+     * Keep policy intent separate from client input. A non-surrender result
+     * blocks only that surrender request; it must never pause the runtime or
+     * cancel the normal phase worker. The game continues through its ordinary
+     * phase handling.
+     */
+    protected fun dispatchSurrenderDecision(
+        result: club.xiaojiawei.hsscript.status.surrender.SurrenderRuleResult,
+        source: String,
+    ): Boolean {
+        if (result.blocksAutomaticSurrender || !result.shouldSurrender) {
+            log.warn {
+                "SURRENDER_ACTION_BLOCKED source=$source rule=${result.ruleId} " +
+                    "reason=${result.reason ?: "none"} pause=false dispatch=false continue=true"
+            }
+            return false
+        }
         cancelAllTask()
         log.warn {
-            "立即投降：当前排位不是 10 级，跳过剩余换牌流程 " +
-                "rule=${result.ruleId} reason=${result.reason ?: "none"}"
+            "SURRENDER_ACTION_REQUESTED source=$source rule=${result.ruleId} " +
+                "reason=${result.reason ?: "none"} dispatch=requested"
         }
         GameUtil.surrender(skipEndTurn = true)
         return true

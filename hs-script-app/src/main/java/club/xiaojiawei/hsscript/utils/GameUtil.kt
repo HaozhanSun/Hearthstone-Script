@@ -13,16 +13,23 @@ import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.RuntimeSafety
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
+import club.xiaojiawei.hsscript.status.ScreenWatchdog
+import club.xiaojiawei.hsscript.status.ScreenWatchdogRecoveryAction
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
+import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
+import club.xiaojiawei.hsscript.strategy.phase.GameOverPhaseStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil.CHOOSE_ONE_RECTS
 import club.xiaojiawei.hsscript.utils.SystemUtil.delay
 import club.xiaojiawei.hsscriptbase.bean.LRunnable
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
+import club.xiaojiawei.hsscriptbase.enums.StepEnum
+import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import club.xiaojiawei.hsscriptbase.util.isFalse
 import club.xiaojiawei.hsscriptbase.util.randomSelectOrNull
@@ -71,6 +78,21 @@ object GameUtil {
 
     internal fun isSurrenderStateConfirmed(mode: ModeEnum?, inWar: Boolean): Boolean =
         SurrenderPolicy.hasConfirmedGameState(mode, inWar)
+
+    /**
+     * Terminal state always wins over a late surrender request.  The phase
+     * and turn markers are authoritative in the event stream; the result IDs
+     * cover the short interval where PLAYSTATE has arrived but phase parsing
+     * has not caught up.  A live settlement task is also a terminal-page
+     * marker and must not be reused as a surrender opportunity.
+     */
+    internal fun isTerminalGameState(): Boolean =
+        WAR.currentPhase == WarPhaseEnum.GAME_OVER ||
+            WAR.currentTurnStep == StepEnum.FINAL_GAMEOVER ||
+            WAR.won.isNotBlank() ||
+            WAR.lost.isNotBlank() ||
+            WAR.conceded.isNotBlank() ||
+            gameEndTasks.isNotEmpty()
 
     /**
      * The first stale-result recovery click is deliberately deterministic so
@@ -606,6 +628,17 @@ object GameUtil {
             log.info { "Power.log恢复回放：跳过历史投降请求" }
             return
         }
+        if (isTerminalGameState()) {
+            log.info {
+                "SURRENDER_ACTION_BLOCKED reason=terminal-state-priority " +
+                    "phase=${WAR.currentPhase.name} step=${WAR.currentTurnStep?.name ?: "NONE"} " +
+                    "won=${WAR.won.isNotBlank()} lost=${WAR.lost.isNotBlank()} " +
+                    "conceded=${WAR.conceded.isNotBlank()} settlementTask=${gameEndTasks.isNotEmpty()} dispatch=false"
+            }
+            return
+        }
+        if (NeverSurrenderPolicy.blockSurrender("GameUtil.surrender")) return
+        if (!ActionDispatchGate.allow("surrender.request")) return
 //        SystemUtil.frontWindow(ScriptStaticData.getGameHWND());
 //        按ESC键弹出投降界面
 //        ScriptStaticData.ROBOT.keyPress(27);
@@ -644,13 +677,17 @@ object GameUtil {
         val surrenderRetryInterval = RandomUtil.getActionInterval(500).toLong()
         var surrenderAttempts = 0
         val maxSurrenderAttempts = 30
+        val surrenderStartedAt = System.currentTimeMillis()
         gameEndTasks.add(
             EXTRA_THREAD_POOL.scheduleWithFixedDelay(
                 {
+                    fun stopSurrenderTask() = cancelGameEndTask()
                     if (PauseStatus.isPause) {
-                        cancelGameEndTask()
+                        stopSurrenderTask()
+                    } else if (!ActionDispatchGate.allow("surrender.retry")) {
+                        stopSurrenderTask()
                     } else if (WarEx.warCount > warCount || (isGamePlay && Mode.currMode !== ModeEnum.GAMEPLAY)) {
-                        cancelGameEndTask()
+                        stopSurrenderTask()
                     } else if (!isSurrenderStateConfirmed(Mode.currMode, WarEx.inWar)) {
                         log.warn {
                             "投降任务终止：有效对局状态已丢失，停止坐标输入 " +
@@ -658,33 +695,110 @@ object GameUtil {
                                 "warCount=${WarEx.warCount} " +
                                 "reason=mode-not-gameplay-and-war-not-active"
                         }
-                        cancelGameEndTask()
+                        stopSurrenderTask()
                     } else if (++surrenderAttempts > maxSurrenderAttempts) {
                         // Never keep clicking a potentially stale coordinate
                         // forever.  If the game did not leave GAMEPLAY after
-                        // bounded retries, the screen/state contract is
-                        // broken; pausing is safer than repeatedly opening
-                        // the options menu on another screen.
+                        // bounded retries, stop only this surrender request;
+                        // the normal game worker must remain active.
                         log.error {
                             "投降重试熔断：未观察到对局结束或模式切换，停止盲点 " +
                                 "attempts=$surrenderAttempts mode=${Mode.currMode} " +
-                                "inWar=${WarEx.inWar} warCount=${WarEx.warCount}"
+                                "inWar=${WarEx.inWar} warCount=${WarEx.warCount} " +
+                                "action=STOP_SURRENDER_AND_CONTINUE pause=false dispatch=false"
                         }
-                        cancelGameEndTask()
-                        PauseStatus.isPause = true
+                        stopSurrenderTask()
                     } else {
+                        val watchdogTiming = ScreenWatchdog.shouldInspect(
+                            startedAt = surrenderStartedAt,
+                            attempts = surrenderAttempts,
+                        )
+                        if (watchdogTiming.shouldInspect) {
+                            val state = "mode=${Mode.currMode?.name ?: "NONE"}|inWar=${WarEx.inWar}|" +
+                                "warPhase=${WarEx.war.currentPhase.name}|warCount=${WarEx.warCount}"
+                            val observation = ScreenWatchdog.inspectForSurrender(
+                                state = state,
+                                attempts = surrenderAttempts,
+                            )
+                            log.warn {
+                                "RECOVERY_ACTION source=screen-watchdog action=${observation.action} " +
+                                    "kind=${observation.kind} provider=${observation.provider} " +
+                                    "screenshot=${observation.screenshotPath ?: "not-saved"}"
+                            }
+                            when (observation.action) {
+                                ScreenWatchdogRecoveryAction.CONTINUE_ACTION -> Unit
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_WIN,
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_LOSS,
+                                -> {
+                                    stopSurrenderTask()
+                                    GameOverPhaseStrategy.forceTerminalFromScreenWatchdog(
+                                        observation.kind,
+                                        observation.screenshotPath ?: observation.reason,
+                                    )
+                                    return@scheduleWithFixedDelay
+                                }
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CLEAR_RESULT -> {
+                                    stopSurrenderTask()
+                                    Mode.recover(ModeEnum.GAMEPLAY, "screen-watchdog-result-page", enterStrategy = false)
+                                    dismissStaleGameEndScreen()
+                                    return@scheduleWithFixedDelay
+                                }
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MATCHMAKING -> {
+                                    stopSurrenderTask()
+                                    Mode.recover(ModeEnum.TOURNAMENT, "screen-watchdog-matchmaking", enterStrategy = false)
+                                    return@scheduleWithFixedDelay
+                                }
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MAIN_MENU -> {
+                                    stopSurrenderTask()
+                                    Mode.recover(ModeEnum.HUB, "screen-watchdog-main-menu", enterStrategy = true)
+                                    return@scheduleWithFixedDelay
+                                }
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN -> {
+                                    stopSurrenderTask()
+                                    log.warn {
+                                        "SCREEN_WATCHDOG_BLOCKED reason=unknown-or-capture-failed " +
+                                            "kind=${observation.kind} attempts=$surrenderAttempts " +
+                                            "screenshot=${observation.screenshotPath ?: "not-saved"} " +
+                                            "action=STOP_SURRENDER_AND_CONTINUE pause=false dispatch=false"
+                                    }
+                                    return@scheduleWithFixedDelay
+                                }
+                            }
+                        } else if (watchdogTiming.reason.startsWith("cooldown")) {
+                            log.warn {
+                                "SCREEN_WATCHDOG_THROTTLED reason=${watchdogTiming.reason} " +
+                                    "attempts=$surrenderAttempts"
+                            }
+                            return@scheduleWithFixedDelay
+                        }
                         log.info {
                             "投降尝试 #$surrenderAttempts/$maxSurrenderAttempts " +
                                 "mode=${Mode.currMode} inWar=${WarEx.inWar}"
                         }
                         if (!skipEndTurn) {
+                            if (!ActionDispatchGate.allow("surrender.retry.before-end-turn")) {
+                                stopSurrenderTask()
+                                return@scheduleWithFixedDelay
+                            }
                             END_TURN_RECT.lClick()
                         }
                         SystemUtil.delayTiny()
+                        if (!ActionDispatchGate.allow("surrender.retry.before-menu")) {
+                            stopSurrenderTask()
+                            return@scheduleWithFixedDelay
+                        }
                         lClickSettings()
                         SystemUtil.delayShortMedium()
+                        if (!ActionDispatchGate.allow("surrender.retry.before-confirm")) {
+                            stopSurrenderTask()
+                            return@scheduleWithFixedDelay
+                        }
                         SURRENDER_RECT.lClick()
                         SystemUtil.delayTiny()
+                        if (!ActionDispatchGate.allow("surrender.retry.before-restart")) {
+                            stopSurrenderTask()
+                            return@scheduleWithFixedDelay
+                        }
                         RESTART_GAME_RECT.lClick()
                     }
                 },

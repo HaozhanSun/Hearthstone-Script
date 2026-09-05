@@ -18,5 +18,4 @@ object LogListenerConfig {
             .setNextLogListener(PowerLogListener)
             .setNextLogListener(ScreenLogListener)
     }
-
 }

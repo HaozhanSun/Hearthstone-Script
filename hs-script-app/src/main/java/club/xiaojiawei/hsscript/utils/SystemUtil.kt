@@ -270,30 +270,52 @@ object SystemUtil {
         mouseClickListener: Consumer<MouseEvent?>?,
         vararg menuItems: MenuItem?,
     ) {
+        addTrayWithLabel(PROGRAM_NAME, mouseClickListener, *menuItems)
+    }
+
+    /**
+     * Add the legacy AWT tray with an explicit channel label. Beta's E2E
+     * runtime avoids the native tray implementation, so this path must stay
+     * visible and must never fail silently.
+     */
+    fun addTrayWithLabel(
+        displayName: String,
+        mouseClickListener: Consumer<MouseEvent?>?,
+        vararg menuItems: MenuItem?,
+    ): Boolean {
         if (trayIcon != null) {
-            return
+            log.info { "TRAY_ALREADY_INITIALIZED label=$displayName" }
+            return true
         }
         if (!SystemTray.isSupported()) {
-            log.warn { "当前系统不支持系统托盘" }
-            return
+            log.error { "TRAY_UNAVAILABLE reason=system-tray-not-supported label=$displayName" }
+            return false
         }
 
-        val image = Toolkit.getDefaultToolkit().getImage(getProgramIconFile().toURI().toURL())
-        //        托盘右键弹出菜单
-        val popupMenu = PopupMenu()
-        for (menuItem in menuItems) {
-            popupMenu.add(menuItem)
-        }
-        //        托盘图标
-        trayIcon = TrayIcon(image, PROGRAM_NAME, popupMenu)
-        trayIcon?.let { tray ->
-            tray.setImageAutoSize(true)
-            tray.setToolTip(PROGRAM_NAME)
-            mouseClickListener?.let { listener ->
-                tray.addMouseListener(MouseClickListener(listener))
+        return runCatching {
+            val image = Toolkit.getDefaultToolkit().getImage(getProgramIconFile().toURI().toURL())
+            //        托盘右键弹出菜单
+            val popupMenu = PopupMenu()
+            for (menuItem in menuItems) {
+                popupMenu.add(menuItem)
             }
+            //        托盘图标
+            trayIcon = TrayIcon(image, displayName, popupMenu)
+            trayIcon?.let { tray ->
+                tray.setImageAutoSize(true)
+                tray.setToolTip(displayName)
+                mouseClickListener?.let { listener ->
+                    tray.addMouseListener(MouseClickListener(listener))
+                }
+            }
+            SystemTray.getSystemTray().add(trayIcon)
+            log.info { "TRAY_INITIALIZED label=$displayName menuItems=${menuItems.size}" }
+            true
+        }.getOrElse { error ->
+            trayIcon = null
+            log.error(error) { "TRAY_UNAVAILABLE reason=initialization-failed label=$displayName" }
+            false
         }
-        SystemTray.getSystemTray().add(trayIcon)
     }
 
     /**
@@ -301,7 +323,10 @@ object SystemUtil {
      */
     @Deprecated("")
     fun removeTray() {
-        SystemTray.getSystemTray().remove(trayIcon)
+        trayIcon?.let { icon ->
+            SystemTray.getSystemTray().remove(icon)
+            trayIcon = null
+        }
     }
 
     /**

@@ -26,7 +26,7 @@ $graphics.DrawImage($sourceBitmap, [System.Drawing.Rectangle]::new(0, 0, 256, 25
 
 $badge = [System.Drawing.Rectangle]::new(160, 8, 88, 88)
 $graphics.FillEllipse([System.Drawing.Brushes]::Black, $badge)
-$innerBadge = [System.Drawing.Rectangle]::new(164, 12, 80, 80)
+$innerBadge = [System.Drawing.RectangleF]::new(164, 12, 80, 80)
 $graphics.FillEllipse([System.Drawing.Brushes]::Crimson, $innerBadge)
 $font = [System.Drawing.Font]::new('Arial', 58, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
 $format = [System.Drawing.StringFormat]::new()

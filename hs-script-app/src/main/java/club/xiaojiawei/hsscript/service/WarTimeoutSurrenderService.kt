@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
+import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptbase.util.isTrue
 
@@ -28,7 +29,13 @@ object WarTimeoutSurrenderService : Service<Int>() {
                         Thread.sleep(1000)
                         if (WarEx.inWar && WorkTimeListener.working && WarEx.war.startTime != 0L) {
                             val timeoutSec = ConfigUtil.getInt(ConfigEnum.WAR_TIMEOUT_SURRENDER)
-                            if (System.currentTimeMillis() - WarEx.war.startTime > timeoutSec * 1000 && DeckStrategyManager.currentDeckStrategy?.needSurrender == false) {
+                            val strategy = DeckStrategyManager.currentDeckStrategy
+                            if (NeverSurrenderPolicy.enabled()) {
+                                if (strategy?.needSurrender == true) {
+                                    strategy.needSurrender = false
+                                    log.warn { "SURRENDER_BLOCKED reason=never-surrender source=WarTimeoutSurrenderService dispatch=false queue=false retry=false replan=false" }
+                                }
+                            } else if (System.currentTimeMillis() - WarEx.war.startTime > timeoutSec * 1000 && strategy?.needSurrender == false) {
                                 DeckStrategyManager.currentDeckStrategy?.needSurrender = true
                                 log.info { "触发游戏对局超时，超过${timeoutSec}秒，准备投降" }
                             }

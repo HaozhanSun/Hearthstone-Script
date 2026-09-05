@@ -53,6 +53,11 @@
                     <TitledPane fx:id="surrenderTitled" text="投降"
                                 styleClass="titled-pane-ui, titled-pane-ui-big, titled-pane-ui-pure, item-titled-pane">
                         <VBox styleClass="item-v-box">
+                            <SettingHBox name="Never Surrender（永不投降）" beta="true"
+                                         tip="Beta：勾选后禁止脚本主动投降；不会屏蔽真实的胜负和结算状态"
+                                         tabWindow="STRATEGY_SETTINGS" group="投降">
+                                <ConfigSwitch notificationManager="${notificationManager}" config="NEVER_SURRENDER"/>
+                            </SettingHBox>
                             <SettingHBox name="超回合投降" tip="指定我方回合数后自动投降" tabWindow="STRATEGY_SETTINGS"
                                          group="投降">
                                 <ConfigNumberField notificationManager="${notificationManager}"
@@ -64,6 +69,11 @@
                             <SettingHBox name="被斩杀投降" tip="要被斩了投降，只做粗略计算" tabWindow="STRATEGY_SETTINGS"
                                          group="投降">
                                 <ConfigSwitch notificationManager="${notificationManager}" config="KILLED_SURRENDER"/>
+                            </SettingHBox>
+                            <SettingHBox name="对方英雄非原皮投降" tip="对方英雄不是原始职业英雄时自动投降"
+                                         tabWindow="STRATEGY_SETTINGS" group="投降">
+                                <ConfigSwitch notificationManager="${notificationManager}"
+                                              config="OPPONENT_HERO_NON_ORIGINAL_SURRENDER"/>
                             </SettingHBox>
                             <SettingHBox name="对局超时投降" tip="游戏对局超过指定时间(秒)将直接投降"
                                          tabWindow="STRATEGY_SETTINGS" group="投降">

@@ -16,6 +16,13 @@ object UiLogFormatter {
      */
     private val hiddenUiPrefixes = setOf(
         "PERSISTENT_STREAK_GUARD_",
+        // These are machine-readable E2E safety diagnostics. Keep them in
+        // the file/console evidence, but do not flood the compact user feed.
+        "E2E_NATIVE_SKIP",
+        "E2E_SAFE_TERMINATE",
+        // The ROI line repeats the same evidence path already shown by
+        // RANK_OCR_EVIDENCE. Keep it in the file log, not the compact UI.
+        "RANK_OCR_ROI",
     )
 
     fun isHiddenFromUi(message: String?): Boolean =

@@ -22,5 +22,4 @@ object StarterConfig {
         logListener()
         exceptionListen()
     }
-
 }

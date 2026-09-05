@@ -13,6 +13,7 @@ import club.xiaojiawei.hsscript.consts.*
 import club.xiaojiawei.hsscript.dll.CSystemDll
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.WindowEnum
+import club.xiaojiawei.hsscript.ocr.OcrProviderMode
 import club.xiaojiawei.hsscript.interfaces.StageHook
 import club.xiaojiawei.hsscript.starter.AbstractStarter
 import club.xiaojiawei.hsscript.starter.InjectGameStarter
@@ -81,6 +82,18 @@ class DeveloperSettingsController : Initializable, StageHook {
     protected lateinit var fileLogLevelComboBox: ComboBox<String>
 
     @FXML
+    protected lateinit var ocrProviderToggle: ToggleGroup
+
+    @FXML
+    protected lateinit var legacyOcrRadio: RadioButton
+
+    @FXML
+    protected lateinit var autoOcrRadio: RadioButton
+
+    @FXML
+    protected lateinit var paddlexOcrRadio: RadioButton
+
+    @FXML
     protected lateinit var scrollPane: ScrollPane
 
     @FXML
@@ -109,9 +122,13 @@ class DeveloperSettingsController : Initializable, StageHook {
 
     private fun initValue() {
         fileLogLevelComboBox.value = ConfigExUtil.getFileLogLevel().levelStr.uppercase()
+        selectOcrProviderMode(OcrProviderMode.fromConfig())
     }
 
     private fun addListener() {
+        ocrProviderToggle.selectedToggleProperty().addListener { _, _, newToggle ->
+            newToggle?.let { storeOcrProviderMode(it) }
+        }
         fileLogLevelComboBox.valueProperty()
             .addListener { observable: ObservableValue<out String>?, oldValue: String?, newValue: String? ->
                 newValue?.let {
@@ -177,6 +194,28 @@ class DeveloperSettingsController : Initializable, StageHook {
                 }
             }
         }
+    }
+
+    private fun selectOcrProviderMode(mode: OcrProviderMode) {
+        when (mode) {
+            OcrProviderMode.LEGACY_ONLY -> ocrProviderToggle.selectToggle(legacyOcrRadio)
+            OcrProviderMode.AUTO -> ocrProviderToggle.selectToggle(autoOcrRadio)
+            OcrProviderMode.PADDLEX_ONLY -> ocrProviderToggle.selectToggle(paddlexOcrRadio)
+        }
+    }
+
+    private fun storeOcrProviderMode(toggle: Toggle) {
+        val mode = when (toggle) {
+            legacyOcrRadio -> OcrProviderMode.LEGACY_ONLY
+            autoOcrRadio -> OcrProviderMode.AUTO
+            paddlexOcrRadio -> OcrProviderMode.PADDLEX_ONLY
+            else -> return
+        }
+        ConfigUtil.putString(ConfigEnum.OCR_PROVIDER_MODE, mode.name)
+        // Keep the pre-existing boolean key truthful for older diagnostics.
+        ConfigUtil.putBoolean(ConfigEnum.USE_PADDLEX_OCR, mode.usesPaddleX)
+        log.info { "OCR_PROVIDER_MODE_CHANGED mode=$mode configKey=${ConfigEnum.OCR_PROVIDER_MODE.name}" }
+        notificationManager.showSuccess("设置成功", 1)
     }
 
     override fun initialize(url: URL?, resourceBundle: ResourceBundle?) {

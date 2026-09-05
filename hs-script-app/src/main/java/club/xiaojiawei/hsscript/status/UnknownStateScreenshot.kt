@@ -7,6 +7,7 @@ import java.awt.Color
 import java.awt.Font
 import java.awt.GraphicsEnvironment
 import java.awt.Graphics2D
+import java.awt.Point
 import java.awt.Rectangle
 import java.awt.RenderingHints
 import java.awt.Robot
@@ -40,6 +41,7 @@ object UnknownStateScreenshot {
     const val CATEGORY_ACTION_FAILURE = "action-failure"
     const val CATEGORY_TURN_END_STUCK = "turn-end-stuck"
     const val CATEGORY_POPUP_RECOVERY = "popup-recovery"
+    const val CATEGORY_SCREEN_WATCHDOG = "screen-watchdog"
 
     private val timestampFormatter = DateTimeFormatter.ofPattern(
         "yyyyMMdd-HHmmss-SSS",
@@ -152,6 +154,8 @@ object UnknownStateScreenshot {
         phase: String,
         ocrText: String = "",
         visual: String = "",
+        annotationLines: List<String> = emptyList(),
+        logWarning: Boolean = true,
         rootDirectory: File = defaultRootDirectory(),
         clock: Clock = Clock.systemDefaultZone(),
     ): SavedScreenshot? = runCatching {
@@ -176,7 +180,10 @@ object UnknownStateScreenshot {
             dateDirectory,
             "unknown-state-$stamp-$safeTrigger-${UUID.randomUUID()}.png",
         )
-        val annotated = annotate(image, regions)
+        val displayLines = annotationLines
+            .map(::sanitizeDisplayLine)
+            .filter(String::isNotBlank)
+        val annotated = annotate(image, regions, displayLines, now)
         if (!ImageIO.write(annotated, "png", file)) {
             log.warn {
                 "UNKNOWN_STATE_SCREENSHOT_FAILED trigger=$trigger reason=png-writer " +
@@ -190,7 +197,7 @@ object UnknownStateScreenshot {
         val regionSummary = regions.joinToString(";") {
             "${sanitize(it.label)}@${it.bounds.x},${it.bounds.y},${it.bounds.width},${it.bounds.height}"
         }.ifBlank { "full-screen-fallback" }
-        log.warn {
+        val message = {
             "UNKNOWN_STATE_SCREENSHOT trigger=$trigger state=${sanitize(state).take(160)} " +
                 "phase=${sanitize(phase).take(80)} date=$date " +
                 "ocr=${sanitize(ocrText).take(240).ifBlank { "<empty>" }} " +
@@ -198,6 +205,7 @@ object UnknownStateScreenshot {
                 "regions=$regionSummary path=${file.absolutePath} link=$link " +
                 "category=$safeCategory retained=${retained.size} max=$MAX_SCREENSHOTS_PER_DATE"
         }
+        if (logWarning) log.warn(message) else log.info(message)
         SavedScreenshot(file, link, safeCategory, dateDirectory, retained.size)
     }.getOrElse { error ->
         log.warn(error) {
@@ -229,7 +237,12 @@ object UnknownStateScreenshot {
         .trim('.', ' ')
         .take(80)
 
-    private fun annotate(image: BufferedImage, regions: List<UnknownRegion>): BufferedImage {
+    private fun annotate(
+        image: BufferedImage,
+        regions: List<UnknownRegion>,
+        diagnosticLines: List<String>,
+        now: ZonedDateTime,
+    ): BufferedImage {
         val annotated = BufferedImage(image.width, image.height, BufferedImage.TYPE_INT_ARGB)
         val copy = annotated.createGraphics()
         try {
@@ -243,6 +256,9 @@ object UnknownStateScreenshot {
                 listOf(UnknownRegion(Rectangle(0, 0, image.width, image.height), "unidentified-screen"))
             }
             validRegions.forEach { region -> drawRegion(copy, region) }
+            if (diagnosticLines.isNotEmpty()) {
+                drawDiagnosticPanel(copy, image, validRegions, listOf("time=$now") + diagnosticLines)
+            }
         } finally {
             copy.dispose()
         }
@@ -267,6 +283,72 @@ object UnknownStateScreenshot {
         graphics.color = Color(255, 235, 80)
         graphics.drawString(label, labelX + 8, labelY + metrics.ascent + 4)
     }
+
+    /**
+     * Put machine-readable rank diagnostics on the image itself. The panel
+     * tries all four corners and avoids detector regions whenever possible;
+     * this keeps the original pixels and red ROI annotation inspectable.
+     */
+    private fun drawDiagnosticPanel(
+        graphics: Graphics2D,
+        image: BufferedImage,
+        regions: List<UnknownRegion>,
+        lines: List<String>,
+    ) {
+        if (image.width < 32 || image.height < 32) return
+        graphics.font = Font(Font.MONOSPACED, Font.PLAIN, 16)
+        val metrics = graphics.fontMetrics
+        val margin = 12
+        val maxWidth = (image.width - margin * 2).coerceAtLeast(1)
+        val lineHeight = metrics.height + 3
+        val maxLines = ((image.height - margin * 2 - 16) / lineHeight).coerceAtLeast(1)
+        val visibleLines = lines.take(maxLines).map { line ->
+            fitDiagnosticLine(line, metrics, (maxWidth - 16).coerceAtLeast(1))
+        }
+        val panelWidth = visibleLines.maxOfOrNull(metrics::stringWidth)
+            ?.plus(16)
+            ?.coerceIn(1, maxWidth)
+            ?: return
+        val panelHeight = (visibleLines.size * lineHeight + 16)
+            .coerceAtMost((image.height - margin * 2).coerceAtLeast(1))
+        val panel = Rectangle(panelWidth, panelHeight)
+        val candidates = listOf(
+            Point(margin, margin),
+            Point(image.width - margin - panel.width, margin),
+            Point(margin, image.height - margin - panel.height),
+            Point(image.width - margin - panel.width, image.height - margin - panel.height),
+        )
+        val origin = candidates
+            .map { Point(it.x.coerceAtLeast(0), it.y.coerceAtLeast(0)) }
+            .firstOrNull { candidate ->
+                val placed = Rectangle(candidate.x, candidate.y, panel.width, panel.height)
+                regions.none { placed.intersects(it.bounds) }
+            }
+            ?: candidates.first()
+
+        graphics.color = Color(0, 0, 0, 225)
+        graphics.fillRect(origin.x, origin.y, panel.width, panel.height)
+        graphics.color = Color(110, 210, 255, 230)
+        graphics.drawRect(origin.x, origin.y, (panel.width - 1).coerceAtLeast(1), (panel.height - 1).coerceAtLeast(1))
+        graphics.color = Color.WHITE
+        visibleLines.forEachIndexed { index, line ->
+            graphics.drawString(line, origin.x + 8, origin.y + metrics.ascent + 8 + index * lineHeight)
+        }
+    }
+
+    private fun fitDiagnosticLine(line: String, metrics: java.awt.FontMetrics, maxWidth: Int): String {
+        if (metrics.stringWidth(line) <= maxWidth) return line
+        val suffix = "..."
+        var end = line.length
+        while (end > 0 && metrics.stringWidth(line.substring(0, end) + suffix) > maxWidth) end--
+        return line.substring(0, end) + suffix
+    }
+
+    private fun sanitizeDisplayLine(value: String): String = value
+        .replace('\r', ' ')
+        .replace('\n', ' ')
+        .trim()
+        .take(480)
 
     private fun sanitize(value: String): String = value
         .replace(Regex("\\s+"), "_")

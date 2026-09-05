@@ -1,0 +1,4 @@
+# id|outcome|expected_sequence|reason|verdict
+lost-axe-no-kill|LOST|DEFER_AXE|战斧无法击杀且没有可靠抽牌收益，保守延后后仍被视为对手压力导致的离线败局|pass
+lost-crowley-space-power|LOST|CROWLEY_FILTERED+DEFER_POWER|场位不足不能下克罗雷，英雄技能也不能抢在其他动作前，离线记录为资源/场面不足败局|pass
+won-axe-hozen|WON|AXE_MINION_KILL+HOZEN_OTHER_PIRATES_PLUS_ONE|战斧先击杀兑现抽牌，再由猢狲只强化当时其他 Pirate，离线记录为场面/斩杀优势胜局|pass

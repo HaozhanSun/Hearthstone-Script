@@ -71,6 +71,53 @@ const val DEFAULT_DECK_STRATEGY_ID = "e71234fa-1-radical-deck-97e9-1f4e126cd33b"
 private const val FALSE_STR = false.toString()
 private const val TRUE_STR = true.toString()
 
+private fun defaultWorkTimeRule(
+    startTime: String,
+    endTime: String,
+): WorkTimeRule =
+    WorkTimeRule(
+        WorkTime(startTime, endTime),
+        DEFAULT_OPERATIONS.toSet(),
+        DEFAULT_RUN_MODE_ENUM,
+        DEFAULT_DECK_STRATEGY_ID,
+        DEFAULT_DECK_POS.toSet(),
+        true,
+    )
+
+private fun defaultRandomAllDayWorkTimeRulesOne(): List<WorkTimeRule> =
+    listOf(
+        defaultWorkTimeRule("01:29", "02:03"),
+        defaultWorkTimeRule("03:18", "03:55"),
+        defaultWorkTimeRule("05:07", "05:31"),
+        defaultWorkTimeRule("06:46", "07:21"),
+        defaultWorkTimeRule("08:39", "09:07"),
+        defaultWorkTimeRule("10:16", "10:53"),
+        defaultWorkTimeRule("12:08", "12:41"),
+        defaultWorkTimeRule("14:02", "14:29"),
+        defaultWorkTimeRule("15:49", "16:27"),
+        defaultWorkTimeRule("17:42", "18:16"),
+        defaultWorkTimeRule("19:31", "20:09"),
+        defaultWorkTimeRule("21:28", "22:02"),
+        defaultWorkTimeRule("23:43", "00:17"),
+    )
+
+private fun defaultRandomAllDayWorkTimeRulesTwo(): List<WorkTimeRule> =
+    listOf(
+        defaultWorkTimeRule("01:22", "01:58"),
+        defaultWorkTimeRule("03:09", "03:33"),
+        defaultWorkTimeRule("04:49", "05:27"),
+        defaultWorkTimeRule("06:38", "07:13"),
+        defaultWorkTimeRule("08:32", "09:04"),
+        defaultWorkTimeRule("10:21", "10:59"),
+        defaultWorkTimeRule("12:18", "12:44"),
+        defaultWorkTimeRule("14:07", "14:39"),
+        defaultWorkTimeRule("15:54", "16:31"),
+        defaultWorkTimeRule("17:47", "18:19"),
+        defaultWorkTimeRule("19:38", "20:11"),
+        defaultWorkTimeRule("21:33", "22:09"),
+        defaultWorkTimeRule("23:26", "00:01"),
+    )
+
 enum class ConfigEnum(
     val group: ConfigGroup,
     private var defaultValueInitializer: (() -> String)? = null,
@@ -102,70 +149,12 @@ enum class ConfigEnum(
                 listOf(
                     WorkTimeRuleSet(
                         "预设1",
-                        listOf(
-                            WorkTimeRule(
-                                DEFAULT_WORK_TIME.clone(),
-                                DEFAULT_OPERATIONS.toSet(),
-                                DEFAULT_RUN_MODE_ENUM,
-                                DEFAULT_DECK_STRATEGY_ID,
-                                DEFAULT_DECK_POS.toSet(),
-                                true,
-                            ),
-                            WorkTimeRule(
-                                WorkTime("00:00", "06:30"),
-                                DEFAULT_OPERATIONS.toSet(),
-                                DEFAULT_RUN_MODE_ENUM,
-                                DEFAULT_DECK_STRATEGY_ID,
-                                DEFAULT_DECK_POS.toSet(),
-                                false,
-                            ),
-                            WorkTimeRule(
-                                WorkTime("12:30", "13:50"),
-                                DEFAULT_OPERATIONS.toSet(),
-                                DEFAULT_RUN_MODE_ENUM,
-                                DEFAULT_DECK_STRATEGY_ID,
-                                DEFAULT_DECK_POS.toSet(),
-                                false,
-                            ),
-                            WorkTimeRule(
-                                WorkTime("20:00", "23:59"),
-                                DEFAULT_OPERATIONS.toSet(),
-                                DEFAULT_RUN_MODE_ENUM,
-                                DEFAULT_DECK_STRATEGY_ID,
-                                DEFAULT_DECK_POS.toSet(),
-                                false,
-                            ),
-                        ),
+                        defaultRandomAllDayWorkTimeRulesOne(),
                         WORK_TIME_RULE_PRESETS_ONE,
                     ),
                     WorkTimeRuleSet(
                         "预设2",
-                        listOf(
-                            WorkTimeRule(
-                                DEFAULT_WORK_TIME.clone(),
-                                DEFAULT_OPERATIONS.toSet(),
-                                DEFAULT_RUN_MODE_ENUM,
-                                DEFAULT_DECK_STRATEGY_ID,
-                                DEFAULT_DECK_POS.toSet(),
-                                true,
-                            ),
-                            WorkTimeRule(
-                                WorkTime("00:00", "08:00"),
-                                DEFAULT_OPERATIONS.toSet(),
-                                DEFAULT_RUN_MODE_ENUM,
-                                DEFAULT_DECK_STRATEGY_ID,
-                                DEFAULT_DECK_POS.toSet(),
-                                false,
-                            ),
-                            WorkTimeRule(
-                                WorkTime("18:00", "23:59"),
-                                DEFAULT_OPERATIONS.toSet(),
-                                DEFAULT_RUN_MODE_ENUM,
-                                DEFAULT_DECK_STRATEGY_ID,
-                                DEFAULT_DECK_POS.toSet(),
-                                false,
-                            ),
-                        ),
+                        defaultRandomAllDayWorkTimeRulesTwo(),
                         WORK_TIME_RULE_PRESETS_TWO,
                     ),
                     WorkTimeRuleSet(
@@ -372,6 +361,9 @@ enum class ConfigEnum(
      */
     STARTUP_RUN_WINDOW_MINUTES(group = BEHAVIOR_CONFIG_GROUP, defaultValueInitializer = { "30" }),
 
+    /** Debug/test run preference; the live deadline is never persisted. */
+    DEBUG_RUN_MODE(group = DEV_CONFIG_GROUP, defaultValueInitializer = { FALSE_STR }),
+
     /**
      * 自动刷新游戏每日任务
      */
@@ -517,6 +509,19 @@ enum class ConfigEnum(
     KILLED_SURRENDER(group = STRATEGY_CONFIG_GROUP, defaultValueInitializer = { FALSE_STR }),
 
     /**
+     * 对方英雄非原皮投降
+     */
+    OPPONENT_HERO_NON_ORIGINAL_SURRENDER(
+        group = STRATEGY_CONFIG_GROUP,
+        defaultValueInitializer = { TRUE_STR },
+    ),
+
+    /**
+     * Beta diagnostic safety switch: prevent every script-initiated surrender.
+     */
+    NEVER_SURRENDER(group = STRATEGY_CONFIG_GROUP, defaultValueInitializer = { FALSE_STR }),
+
+    /**
      * 只打人机
      */
     ONLY_ROBOT(group = STRATEGY_CONFIG_GROUP, defaultValueInitializer = { FALSE_STR }, service = OnlyRobotService),
@@ -637,6 +642,115 @@ enum class ConfigEnum(
     SAVE_OCR_IMG(
         group = DEV_CONFIG_GROUP,
         defaultValueInitializer = { FALSE_STR },
+    ),
+
+    /**
+     * OCR provider mode: AUTO, PADDLEX_ONLY, LEGACY_ONLY
+     */
+    OCR_PROVIDER_MODE(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "AUTO" },
+    ),
+
+    /**
+     * 使用 PaddleX OCR；关闭后使用 legacy Tess4J/TesseractEx
+     */
+    USE_PADDLEX_OCR(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { TRUE_STR },
+    ),
+
+    /**
+     * PaddleX OCR Python 可执行文件；空值按独立 venv、环境变量、python 顺序解析
+     */
+    PADDLEX_OCR_PYTHON(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "" },
+    ),
+
+    /**
+     * PaddleX OCR sidecar 模块路径；空值使用随包 resources/paddlex-vision/src
+     */
+    PADDLEX_OCR_MODULE_PATH(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "" },
+    ),
+
+    /**
+     * PaddleX OCR 设备，例如 cpu 或 gpu:0
+     */
+    PADDLEX_OCR_DEVICE(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "cpu" },
+    ),
+
+    /**
+     * PaddleX/Paddle 模型缓存目录；空值使用用户目录下的 .cache/paddlex-ocr-models
+     */
+    PADDLEX_OCR_MODEL_CACHE(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "" },
+    ),
+
+    /**
+     * PaddleX OCR sidecar 超时（毫秒）
+     */
+    PADDLEX_OCR_TIMEOUT_MS(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "120000" },
+    ),
+
+    /**
+     * 启用 PaddleX 屏幕 watchdog；卡住或重复恢复动作时截图 OCR 校正状态机
+     */
+    SCREEN_WATCHDOG_ENABLED(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { TRUE_STR },
+    ),
+
+    /**
+     * 屏幕 watchdog 触发的卡住时长（毫秒）
+     */
+    SCREEN_WATCHDOG_STUCK_MS(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "30000" },
+    ),
+
+    /**
+     * 同一恢复动作超过该次数后触发屏幕 watchdog
+     */
+    SCREEN_WATCHDOG_MAX_RETRIES(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "3" },
+    ),
+
+    /**
+     * 屏幕 watchdog 截图冷却时间（毫秒）
+     */
+    SCREEN_WATCHDOG_COOLDOWN_MS(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "15000" },
+    ),
+
+    /**
+     * Screen recovery debug screenshot retention cap in bytes. Only the
+     * dedicated debug-screenshots directory is managed by this setting.
+     */
+    SCREEN_RECOVERY_SCREENSHOT_MAX_BYTES(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "268435456" },
+    ),
+
+    /** Maximum number of screen recovery debug screenshots to retain. */
+    SCREEN_RECOVERY_SCREENSHOT_MAX_FILES(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "60" },
+    ),
+
+    /** Minimum interval between recovery debug screenshot writes. */
+    SCREEN_RECOVERY_SCREENSHOT_COOLDOWN_MS(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { "1500" },
     ),
 
     /**

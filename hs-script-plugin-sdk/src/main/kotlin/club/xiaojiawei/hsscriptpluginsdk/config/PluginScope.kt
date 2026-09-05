@@ -16,5 +16,4 @@ object PluginScope {
      * 仅对相同id插件可见
      */
     val PROTECTED = arrayOf("")
-
 }

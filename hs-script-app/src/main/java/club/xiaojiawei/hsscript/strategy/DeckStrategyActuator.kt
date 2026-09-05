@@ -9,6 +9,7 @@ import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.MctsDeckProfileTelemetry
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
@@ -597,6 +598,10 @@ object DeckStrategyActuator {
     private fun checkSurrender(): Boolean {
         DeckStrategyManager.currentDeckStrategy?.let {
             if (it.needSurrender) {
+                if (NeverSurrenderPolicy.blockSurrender("DeckStrategyActuator.checkSurrender")) {
+                    it.needSurrender = false
+                    return true
+                }
                 go {
                     log.info { "策略请求投降" }
                     GameUtil.surrender()

@@ -13,6 +13,9 @@ import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.statistics.Record
 import club.xiaojiawei.hsscript.statistics.RecordDaoEx
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
+import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
+import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.utils.ConfigUtil
 import java.time.LocalDateTime
 
 /**
@@ -26,6 +29,20 @@ enum class SurrenderCheckStage {
     OPPONENT_HERO_RESOLVED,
     CURRENT_RANK_RESOLVED,
     TURN_START,
+}
+
+enum class RankInspectionState {
+    NOT_READY,
+    WAITING_FOR_RANK,
+    RESOLVED,
+    BLOCKED,
+}
+
+enum class OpponentHeroInspectionState {
+    NOT_RESOLVED,
+    WAITING_FOR_HERO,
+    ORIGINAL_HERO_ALLOWED,
+    SURRENDER_REQUESTED,
 }
 
 data class SurrenderRuleContext(
@@ -44,6 +61,8 @@ data class SurrenderRuleResult(
     val matched: Boolean,
     val shouldSurrender: Boolean,
     val reason: String? = null,
+    /** True when this particular surrender request must be blocked. */
+    val blocksAutomaticSurrender: Boolean = false,
 )
 
 data class PersistentStreakSnapshot(
@@ -54,6 +73,18 @@ data class PersistentStreakSnapshot(
 data class PersistentStreakGuard(
     val ruleId: String,
     val reason: String,
+)
+
+internal data class RankInspectionReadDecision(
+    val state: RankInspectionState,
+    val wait: Boolean,
+    val pause: Boolean,
+    val reason: String,
+)
+
+internal data class RankInspectionGraceDecision(
+    val probeAllowed: Boolean,
+    val remainingMs: Long,
 )
 
 private data class SurrenderRule(
@@ -79,13 +110,15 @@ object SurrenderPolicy {
     private const val NAME_RESOLUTION_TIMEOUT_MS = 3_000L
     private const val NAME_RESOLUTION_POLL_MS = 100L
     private const val RANK_RETRY_INTERVAL_MS = 750L
-    private const val MAX_RANK_INSPECTION_ATTEMPTS = 8
+    internal const val INITIAL_RANK_INSPECTION_GRACE_MS = 7_000L
     private const val WIN_RATE_GUARD_THRESHOLD_PERCENT = 45.0
     private const val WIN_RATE_GUARD_MIN_GAMES = 5
     /** Protect the next game after seven persisted concessions. */
     private const val MAX_CONSECUTIVE_SURRENDERS = 7
     /** Protect the next game after five persisted wins in a row. */
     private const val MAX_CONSECUTIVE_WINS = 5
+    /** A transient/early rank read must not pause the first eligible frame. */
+    private const val MAX_RANK_INSPECTION_ATTEMPTS = 3
 
     /**
      * Early opponent-hero checks run once per resolved identity.  Keeping the
@@ -97,7 +130,13 @@ object SurrenderPolicy {
     private var rankCheckCompleted = false
     private var rankInspectionAttempts = 0
     private var lastRankInspectionAt = 0L
+    private var rankInspectionEligibleAt = 0L
     private var lastHeroEvidenceKey = ""
+    private var rankDetectorInvocationCount = 0
+    @Volatile
+    private var rankInspectionState = RankInspectionState.NOT_READY
+    @Volatile
+    private var opponentHeroInspectionState = OpponentHeroInspectionState.NOT_RESOLVED
 
     /**
      * The ten original constructed-game hero portraits.  The value comes
@@ -181,7 +220,11 @@ object SurrenderPolicy {
         rankCheckCompleted = false
         rankInspectionAttempts = 0
         lastRankInspectionAt = 0L
+        rankInspectionEligibleAt = 0L
         lastHeroEvidenceKey = ""
+        rankDetectorInvocationCount = 0
+        rankInspectionState = RankInspectionState.NOT_READY
+        opponentHeroInspectionState = OpponentHeroInspectionState.NOT_RESOLVED
     }
 
     /**
@@ -223,26 +266,66 @@ object SurrenderPolicy {
             reason = "consecutive-surrenders=${snapshot.consecutiveSurrenders} threshold=$MAX_CONSECUTIVE_SURRENDERS",
         )
         snapshot.consecutiveWins >= MAX_CONSECUTIVE_WINS -> PersistentStreakGuard(
-            ruleId = "consecutive-wins-over-four",
+            ruleId = "consecutive-wins-over-five",
             reason = "consecutive-wins=${snapshot.consecutiveWins} threshold=$MAX_CONSECUTIVE_WINS",
         )
         else -> null
     }
 
+    /** Pure action semantics for the durable streak guard. */
+    internal fun persistentStreakDecision(snapshot: PersistentStreakSnapshot): SurrenderRuleResult? {
+        val guard = evaluatePersistentStreakGuard(snapshot) ?: return null
+        return if (snapshot.consecutiveSurrenders >= MAX_CONSECUTIVE_SURRENDERS) {
+            SurrenderRuleResult(
+                ruleId = guard.ruleId,
+                matched = true,
+                shouldSurrender = false,
+                reason = guard.reason,
+                blocksAutomaticSurrender = true,
+            )
+        } else {
+            SurrenderRuleResult(
+                ruleId = guard.ruleId,
+                matched = true,
+                shouldSurrender = true,
+                reason = guard.reason,
+            )
+        }
+    }
+
     /**
-     * Re-read durable history before any early surrender decision. A
-     * triggered guard never pauses automation and never mutates the history.
-     * Instead it skips this policy pass, which prevents another automatic
-     * surrender while allowing the normal game loop to continue and produce
-     * a real result that can reset a suspicious streak. The evidence includes
-     * the recent durable records so an OCR/result regression is diagnosable.
+     * Never Surrender intentionally bypasses the five-win protective
+     * surrender, but it must never bypass the seven-surrender fail-closed
+     * block. Keeping this decision pure makes that distinction testable
+     * without depending on persisted configuration.
      */
-    private fun enforcePersistentStreakGuard(): Boolean = runCatching {
-        val strategy = DeckStrategyManager.currentDeckStrategy ?: return false
-        val strategyId = strategy.id().takeIf { it.isNotBlank() } ?: return false
+    internal fun applyNeverSurrenderStreakPolicy(
+        result: SurrenderRuleResult,
+        neverSurrenderEnabled: Boolean,
+    ): SurrenderRuleResult? = if (
+        neverSurrenderEnabled && result.shouldSurrender && !result.blocksAutomaticSurrender
+    ) {
+        null
+    } else {
+        result
+    }
+
+    /**
+     * Re-read durable history before any early surrender decision. Seven
+     * persisted concessions block the next automatic surrender request, but
+     * never pause the runtime. The caller may still apply a higher-priority
+     * rule, such as the non-original-opponent-hero rule, and normal play must
+     * continue when no surrender is dispatched. Five persisted wins request
+     * surrender for the next game, according to the configured protection
+     * rule. The evidence includes recent durable records so a
+     * result/classification regression is diagnosable.
+     */
+    private fun enforcePersistentStreakGuard(): SurrenderRuleResult? = runCatching {
+        val strategy = DeckStrategyManager.currentDeckStrategy ?: return null
+        val strategyId = strategy.id().takeIf { it.isNotBlank() } ?: return null
         val records = RecordDaoEx.RECORD_DAO.query(Record(strategyId = strategyId))
         val snapshot = persistentStreakSnapshot(records)
-        val guard = evaluatePersistentStreakGuard(snapshot) ?: return false
+        val guard = evaluatePersistentStreakGuard(snapshot) ?: return null
         val evidence = records
             .filter { it.result != null }
             .sortedWith(compareBy<Record> { it.endTime ?: LocalDateTime.MIN }.thenBy { it.id ?: Int.MIN_VALUE })
@@ -250,17 +333,72 @@ object SurrenderPolicy {
             .joinToString(",") {
                 "id=${it.id ?: "?"}:result=${it.result}:surrendered=${it.surrendered}:end=${it.endTime ?: "?"}"
             }
-        log.warn {
-            "PERSISTENT_STREAK_GUARD_RECOVERY_CONTINUE strategy=$strategyId rule=${guard.ruleId} " +
-                "reason=${guard.reason} consecutiveSurrenders=${snapshot.consecutiveSurrenders} " +
-                "consecutiveWins=${snapshot.consecutiveWins} action=CONTINUE " +
-                "surrenderPolicyPass=SKIPPED evidence=$evidence source=statistics.db"
+        val decision = persistentStreakDecision(snapshot) ?: return null
+        if (decision.blocksAutomaticSurrender) {
+            log.warn {
+                "PERSISTENT_STREAK_GUARD_BLOCKED strategy=$strategyId rule=${guard.ruleId} " +
+                    "reason=${guard.reason} consecutiveSurrenders=${snapshot.consecutiveSurrenders} " +
+                    "consecutiveWins=${snapshot.consecutiveWins} action=BLOCK_SURRENDER " +
+                    "surrenderPolicyPass=BLOCKED dispatch=false pause=false evidence=$evidence source=statistics.db"
+            }
+            decision
+        } else {
+            log.warn {
+                "PERSISTENT_STREAK_GUARD_TRIGGERED strategy=$strategyId rule=${guard.ruleId} " +
+                    "reason=${guard.reason} consecutiveSurrenders=${snapshot.consecutiveSurrenders} " +
+                    "consecutiveWins=${snapshot.consecutiveWins} action=SURRENDER " +
+                    "surrenderPolicyPass=REQUESTED evidence=$evidence source=statistics.db"
+            }
+            decision
         }
-        true
     }.getOrElse { error ->
-        log.warn(error) { "PERSISTENT_STREAK_GUARD_UNAVAILABLE reason=statistics-read-failed" }
-        false
+        persistentStreakGuardUnavailable("statistics-read-failed", error)
     }
+
+    private fun persistentStreakGuardUnavailable(
+        reason: String,
+        error: Throwable? = null,
+    ): SurrenderRuleResult {
+        if (error == null) {
+            log.error {
+                "PERSISTENT_STREAK_GUARD_BLOCKED rule=persistent-streak-guard-unavailable " +
+                    "reason=$reason action=BLOCK_SURRENDER surrenderPolicyPass=BLOCKED " +
+                    "dispatch=false pause=false"
+            }
+        } else {
+            log.error(error) {
+                "PERSISTENT_STREAK_GUARD_BLOCKED rule=persistent-streak-guard-unavailable " +
+                    "reason=$reason action=BLOCK_SURRENDER surrenderPolicyPass=BLOCKED " +
+                    "dispatch=false pause=false"
+            }
+        }
+        return SurrenderRuleResult(
+            ruleId = "persistent-streak-guard-unavailable",
+            matched = true,
+            shouldSurrender = false,
+            reason = reason,
+            blocksAutomaticSurrender = true,
+        )
+    }
+
+    /**
+     * Never Surrender disables the five-win protective surrender, but it must
+     * not disable the independent seven-concession surrender block. Neither
+     * branch is allowed to pause the runtime.
+     */
+    private fun enforcePersistentStreakGuardForCurrentPolicy(): SurrenderRuleResult? =
+        enforcePersistentStreakGuard()?.let { result ->
+            val applied = applyNeverSurrenderStreakPolicy(result, NeverSurrenderPolicy.enabled())
+            if (applied == null) {
+                log.info {
+                    "SURRENDER_POLICY_BYPASS reason=never-surrender rule=${result.ruleId} " +
+                        "action=CONTINUE dispatch=false queue=false retry=false replan=false"
+                }
+                null
+            } else {
+                applied
+            }
+        }
 
     /**
      * Evaluate the rival hero as soon as the live model has a resolved hero
@@ -270,10 +408,20 @@ object SurrenderPolicy {
      */
     @Synchronized
     fun evaluateOpponentHeroBeforeMulligan(war: War): SurrenderRuleResult? {
+        enforcePersistentStreakGuardForCurrentPolicy()?.let { streakDecision ->
+            if (!streakDecision.blocksAutomaticSurrender) return streakDecision
+            log.info {
+                "PERSISTENT_STREAK_GUARD_DEFERRED stage=${SurrenderCheckStage.OPPONENT_HERO_RESOLVED.name} " +
+                    "rule=${streakDecision.ruleId} reason=opponent-hero-rule-has-priority action=CONTINUE"
+            }
+        }
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") {
             return null
         }
-        if (enforcePersistentStreakGuard()) return null
+        if (NeverSurrenderPolicy.enabled()) {
+            log.info { "SURRENDER_POLICY_BYPASS reason=never-surrender stage=${SurrenderCheckStage.OPPONENT_HERO_RESOLVED.name} action=CONTINUE" }
+            return null
+        }
         if (war.currentPhase !in setOf(
                 WarPhaseEnum.FILL_DECK,
                 WarPhaseEnum.DRAWN_INIT_CARD,
@@ -286,10 +434,20 @@ object SurrenderPolicy {
         // not inspect the default UNKNOWN_PLAYER placeholder.
         if (!war.me.isValid() || !war.rival.isValid()) return null
 
-        val rivalHero = war.rival.playArea.hero ?: return null
+        val rivalHero = war.rival.playArea.hero
+        if (rivalHero == null) {
+            opponentHeroInspectionState = OpponentHeroInspectionState.WAITING_FOR_HERO
+            log.info {
+                "SURRENDER_CHECK stage=${SurrenderCheckStage.OPPONENT_HERO_RESOLVED.name} " +
+                    "rule=rival-hero-is-original-class-hero heroResolved=false action=WAIT " +
+                    "reason=opponent-hero-entity-not-available"
+            }
+            return null
+        }
         val rawHeroName = rivalHero.entityName.trim()
         val heroCardId = rivalHero.cardId.trim()
         if (!isResolvedOpponentHeroName(rawHeroName)) {
+            opponentHeroInspectionState = OpponentHeroInspectionState.WAITING_FOR_HERO
             captureHeroEvidence(
                 stage = SurrenderCheckStage.OPPONENT_HERO_RESOLVED,
                 rawName = rawHeroName,
@@ -313,7 +471,15 @@ object SurrenderPolicy {
         }
         lastPreMulliganHeroName = normalizedHeroName
 
-        val result = evaluateOpponentHero(rawHeroName, heroCardId)
+        val result = applyOpponentHeroSurrenderSetting(
+            evaluateOpponentHero(rawHeroName, heroCardId),
+            opponentHeroNonOriginalSurrenderEnabled(),
+        )
+        opponentHeroInspectionState = if (result.shouldSurrender) {
+            OpponentHeroInspectionState.SURRENDER_REQUESTED
+        } else {
+            OpponentHeroInspectionState.ORIGINAL_HERO_ALLOWED
+        }
         val context = SurrenderRuleContext(
             stage = SurrenderCheckStage.OPPONENT_HERO_RESOLVED,
             rivalHeroNameRaw = rawHeroName,
@@ -355,9 +521,32 @@ object SurrenderPolicy {
         return result
     }
 
+    /** Read the persisted setting at decision time so UI changes apply to the next check. */
+    internal fun opponentHeroNonOriginalSurrenderEnabled(): Boolean =
+        ConfigUtil.getBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER)
+
     /**
-     * The rank gate is the primary policy: Silver 10 is the floor, so Silver
-     * 9..1 and every tier above Silver surrender before mulligan. The old
+     * Disable only the non-original-opponent-hero rule. Hero detection still
+     * runs and the caller still advances through the normal rank/strategy
+     * gates, so this cannot bypass unrelated surrender rules.
+     */
+    internal fun applyOpponentHeroSurrenderSetting(
+        result: SurrenderRuleResult,
+        enabled: Boolean,
+    ): SurrenderRuleResult = if (enabled) {
+        result
+    } else {
+        result.copy(
+            matched = false,
+            shouldSurrender = false,
+            reason = "opponent-hero-original-check-disabled",
+        )
+    }
+
+    /**
+     * The rank gate is the primary policy: ordinary numeric ranks are not
+     * eligible to continue, so they surrender before mulligan. Clearly large
+     * ratings are handled as Legendary before this method. The old
      * 45% win-rate gate is a secondary insurance and is evaluated from every
      * completed result for the selected strategy, including our own
      * concessions. Otherwise a win-rate-triggered surrender would never enter
@@ -366,7 +555,36 @@ object SurrenderPolicy {
      */
     @Synchronized
     fun evaluateCurrentRankBeforeMulligan(): SurrenderRuleResult? {
+        enforcePersistentStreakGuardForCurrentPolicy()?.let { streakDecision ->
+            if (!streakDecision.blocksAutomaticSurrender) return streakDecision
+            rankCheckCompleted = true
+            rankInspectionState = RankInspectionState.RESOLVED
+            log.info {
+                "RANK_POLICY_CONTINUE stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                    "reason=${streakDecision.reason} rankDetector=false surrender=false pause=false"
+            }
+            return null
+        }
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") return null
+        when (opponentHeroInspectionState) {
+            OpponentHeroInspectionState.ORIGINAL_HERO_ALLOWED -> Unit
+            OpponentHeroInspectionState.SURRENDER_REQUESTED -> {
+                log.info {
+                    "RANK_POLICY_SKIP reason=opponent-hero-surrender-already-requested " +
+                        "action=SKIP rankDetector=false"
+                }
+                return null
+            }
+            OpponentHeroInspectionState.NOT_RESOLVED,
+            OpponentHeroInspectionState.WAITING_FOR_HERO,
+            -> {
+                log.info {
+                    "RANK_POLICY_WAITING_FOR_OPPONENT_HERO state=$opponentHeroInspectionState " +
+                        "action=WAIT rankDetector=false"
+                }
+                return null
+            }
+        }
         // Historical Power.log replay reconstructs the in-memory model but
         // does not represent the pixels of the current game.  In particular,
         // rank OCR during replay can inspect a matchmaking/mulligan frame and
@@ -375,7 +593,15 @@ object SurrenderPolicy {
             log.debug { "RANK_POLICY_SKIP reason=historical-power-log-replay" }
             return null
         }
-        if (enforcePersistentStreakGuard()) return null
+        if (!ReplaceCardPhaseStrategy.isRankInspectionReady()) {
+            rankInspectionState = RankInspectionState.NOT_READY
+            log.info {
+                "RANK_POLICY_WAITING_FOR_RANK reason=mulligan-input-not-confirmed " +
+                    "phase=${WAR.currentPhase.name} inWar=${WarEx.inWar} " +
+                    "action=WAIT provider=NONE"
+            }
+            return null
+        }
         val phase = WAR.currentPhase
         if (!isRankInspectionEligible(WarEx.inWar, phase)) {
             if (phase == WarPhaseEnum.FILL_DECK || !WarEx.inWar) {
@@ -388,13 +614,66 @@ object SurrenderPolicy {
         if (rankCheckCompleted) return null
 
         val now = System.currentTimeMillis()
+        if (rankInspectionEligibleAt == 0L) {
+            rankInspectionEligibleAt = now
+        }
+        val grace = rankInspectionGraceDecision(rankInspectionEligibleAt, now)
+        if (!grace.probeAllowed) {
+            rankInspectionState = RankInspectionState.WAITING_FOR_RANK
+            log.info {
+                "RANK_POLICY_WAITING_FOR_INITIAL_GRACE trigger=game-entry-mulligan " +
+                    "eligibleAt=$rankInspectionEligibleAt delayMs=$INITIAL_RANK_INSPECTION_GRACE_MS " +
+                    "remainingMs=${grace.remainingMs} action=WAIT rankDetector=false"
+            }
+            return null
+        }
         if (now - lastRankInspectionAt < RANK_RETRY_INTERVAL_MS) return null
         lastRankInspectionAt = now
         rankInspectionAttempts++
 
-        val detection = CurrentRankDetector.detect()
+        rankDetectorInvocationCount++
+        val detection = CurrentRankDetector.detect(
+            trigger = "rank-policy-${phase.name}",
+            phase = phase.name,
+        )
+        if (isLegendaryDetection(detection)) {
+            rankCheckCompleted = true
+            rankInspectionState = RankInspectionState.RESOLVED
+            log.info {
+                "RANK_POLICY_CONTINUE stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                    "rank=LEGENDARY tier=${detection?.tier?.name ?: "UNKNOWN"} reason=legendary-badge-confirmed " +
+                    "surrender=false pause=false"
+            }
+            return null
+        }
         val rank = detection?.rank
         if (rank == null) {
+            if (detection != null) {
+                rankCheckCompleted = true
+                rankInspectionState = RankInspectionState.RESOLVED
+                val result = unresolvedRankSurrenderDecision(detection.tier)
+                log.warn {
+                    "SURRENDER_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                        "rule=${result.ruleId} reason=${result.reason} " +
+                        "detectionAvailable=true tier=${detection.tier.name} action=SURRENDER pause=false"
+                }
+                return result
+            }
+            val readDecision = classifyRankInspection(
+                rank = null,
+                detectionAvailable = false,
+                attempt = rankInspectionAttempts,
+            )
+            if (readDecision.wait) {
+                rankInspectionState = readDecision.state
+                log.warn {
+                    "RANK_POLICY_WAITING_FOR_RANK stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                        "attempt=$rankInspectionAttempts maxAttempts=$MAX_RANK_INSPECTION_ATTEMPTS " +
+                        "providerResult=${readDecision.reason} " +
+                        "action=WAIT pause=false surrender=false"
+                }
+                return null
+            }
             evaluateWinRateGuard()?.let { result ->
                 rankCheckCompleted = true
                 log.warn {
@@ -403,17 +682,27 @@ object SurrenderPolicy {
                 }
                 return result
             }
-            if (rankInspectionAttempts >= MAX_RANK_INSPECTION_ATTEMPTS) {
-                rankCheckCompleted = true
-                log.warn {
-                    "RANK_POLICY_CONTINUE reason=rank-ocr-unresolved " +
-                        "attempts=$rankInspectionAttempts"
-                }
-            }
-            return null
+            rankCheckCompleted = true
+            return blockForUnresolvedRank(rankInspectionAttempts)
         }
 
         rankCheckCompleted = true
+        rankInspectionState = RankInspectionState.RESOLVED
+        if (NeverSurrenderPolicy.enabled()) {
+            if (NeverSurrenderPolicy.rankIsIneligible(rank)) {
+                log.info {
+                    "RANK_POLICY_CONTINUE stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                        "rank=$rank tier=${detection.tier.name} reason=never-surrender-rank-ineligible " +
+                        "action=CONTINUE surrender=false pause=false dispatch=false"
+                }
+                return null
+            }
+            log.info {
+                "SURRENDER_POLICY_BYPASS stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                    "rank=$rank tier=${detection.tier.name} reason=never-surrender action=CONTINUE"
+            }
+            return null
+        }
         val result = evaluateCurrentRank(rank, detection.tier) ?: run {
             evaluateWinRateGuard()?.let { winRateResult ->
                 rankCheckCompleted = true
@@ -437,26 +726,98 @@ object SurrenderPolicy {
         return result
     }
 
+    @Suppress("UNUSED_PARAMETER")
     internal fun evaluateCurrentRank(
         rank: Int,
         tier: CurrentRankDetector.RankTier = CurrentRankDetector.RankTier.UNKNOWN,
     ): SurrenderRuleResult? {
-        if (tier.order > CurrentRankDetector.RankTier.SILVER.order) {
-            return SurrenderRuleResult(
-                ruleId = "current-tier-above-silver-10",
-                matched = false,
-                shouldSurrender = true,
-                reason = "current-tier=${tier.name.lowercase()}-rank=$rank",
-            )
-        }
-        if (tier === CurrentRankDetector.RankTier.BRONZE) return null
-        if (rank !in 1..10 || rank == 10) return null
+        if (rank !in 1..10) return null
         return SurrenderRuleResult(
-            ruleId = "current-rank-is-not-10",
+            ruleId = "current-rank-is-not-target",
             matched = false,
             shouldSurrender = true,
-            reason = "current-rank=$rank",
+            reason = "current-rank=$rank target-ranks=LEGENDARY",
         )
+    }
+
+    /** Legendary is a confirmed non-numeric or clearly large-rating result, not UNKNOWN. */
+    internal fun isLegendaryDetection(detection: CurrentRankDetector.Detection?): Boolean =
+        detection?.tier == CurrentRankDetector.RankTier.LEGEND || detection?.rank?.let { it > 50 } == true
+
+    internal fun unresolvedRankDecision(attempts: Int): SurrenderRuleResult =
+        SurrenderRuleResult(
+            ruleId = "rank-ocr-unresolved",
+            matched = false,
+            shouldSurrender = false,
+            reason = "rank-ocr-unresolved attempts=$attempts",
+            blocksAutomaticSurrender = true,
+        )
+
+    /**
+     * An active rank frame with no valid number and no Legendary badge remains
+     * an explicit surrender decision. Provider/capture failure (detection ==
+     * null) is a non-surrender continuation after the retry budget; it must
+     * not pause the runtime.
+     */
+    internal fun unresolvedRankSurrenderDecision(tier: CurrentRankDetector.RankTier): SurrenderRuleResult =
+        SurrenderRuleResult(
+            ruleId = "rank-ocr-unresolved-surrender",
+            matched = true,
+            shouldSurrender = true,
+            reason = "rank-unresolved-without-legendary tier=${tier.name} target-ranks=5,10",
+        )
+
+    internal fun classifyRankInspection(
+        rank: Int?,
+        detectionAvailable: Boolean,
+        attempt: Int,
+        maxAttempts: Int = MAX_RANK_INSPECTION_ATTEMPTS,
+    ): RankInspectionReadDecision {
+        if (rank != null) {
+            return RankInspectionReadDecision(
+                state = RankInspectionState.RESOLVED,
+                wait = false,
+                pause = false,
+                reason = "rank-resolved",
+            )
+        }
+        if (attempt < maxAttempts) {
+            return RankInspectionReadDecision(
+                state = RankInspectionState.WAITING_FOR_RANK,
+                wait = true,
+                pause = false,
+                reason = if (detectionAvailable) "empty-or-unmapped" else "provider-failure-or-capture-failure",
+            )
+        }
+        return RankInspectionReadDecision(
+            state = RankInspectionState.BLOCKED,
+            wait = false,
+            pause = false,
+            reason = if (detectionAvailable) "empty-or-unmapped" else "provider-failure-or-capture-failure",
+        )
+    }
+
+    internal fun rankInspectionGraceDecision(eligibleAt: Long, now: Long): RankInspectionGraceDecision {
+        val remaining = if (eligibleAt <= 0L) {
+            INITIAL_RANK_INSPECTION_GRACE_MS
+        } else {
+            (INITIAL_RANK_INSPECTION_GRACE_MS - (now - eligibleAt)).coerceAtLeast(0L)
+        }
+        return RankInspectionGraceDecision(
+            probeAllowed = remaining == 0L,
+            remainingMs = remaining,
+        )
+    }
+
+    internal fun blockForUnresolvedRank(attempts: Int): SurrenderRuleResult {
+        val result = unresolvedRankDecision(attempts)
+        rankInspectionState = RankInspectionState.RESOLVED
+        log.warn {
+            "RANK_POLICY_BLOCKED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                "rule=${result.ruleId} reason=${result.reason} action=CONTINUE " +
+                "surrender=false pause=false ocrFailure=true"
+        }
+        return result
     }
 
     data class WinRateSnapshot(
@@ -537,22 +898,26 @@ object SurrenderPolicy {
         null
     }
 
-    private val PRE_MULLIGAN_PHASES = setOf(
-        WarPhaseEnum.DRAWN_INIT_CARD,
-        WarPhaseEnum.REPLACE_CARD,
-    )
+    private val PRE_MULLIGAN_PHASES = setOf(WarPhaseEnum.REPLACE_CARD)
 
     /**
      * Rank OCR is destructive because a resolved rank below ten immediately
      * concedes.  A phase name alone is not proof that a real game exists:
      * during deck selection, matchmaking, and initial entity creation the
      * parser can still be left at FILL_DECK while Mode/WarEx have already
-     * switched to GAMEPLAY.  Only the initial-hand phases expose the stable
-     * rank HUD, and they must also have an active WarEx lifecycle flag, so
+     * switched to GAMEPLAY.  Only the interactive mulligan page exposes the
+     * stable rank HUD, and it must also have an active WarEx lifecycle flag, so
      * transition-screen HUD numbers cannot become a surrender decision.
      */
     internal fun isRankInspectionEligible(inWar: Boolean, phase: WarPhaseEnum): Boolean =
         inWar && phase in PRE_MULLIGAN_PHASES
+
+    internal fun currentRankInspectionState(): RankInspectionState = rankInspectionState
+
+    internal fun currentOpponentHeroInspectionState(): OpponentHeroInspectionState =
+        opponentHeroInspectionState
+
+    internal fun rankDetectorInvocationCountForTest(): Int = rankDetectorInvocationCount
 
     /**
      * Evaluate all turn-start rules and return the first surrender request.
@@ -562,12 +927,24 @@ object SurrenderPolicy {
      * identified.
      */
     fun evaluateTurnStart(war: War): SurrenderRuleResult? {
+        enforcePersistentStreakGuardForCurrentPolicy()?.let { streakDecision ->
+            if (!streakDecision.blocksAutomaticSurrender) return streakDecision
+            log.info {
+                "TURN_POLICY_CONTINUE reason=${streakDecision.reason} " +
+                    "rule=${streakDecision.ruleId} surrender=false pause=false"
+            }
+            return null
+        }
         // Test-only escape hatch for the real-input E2E harness. Normal runs
         // never set this property, so the production eligibility rules remain
         // unchanged; the harness must be able to reach card-play/attack turns
         // even when matchmaking supplies an ineligible or late OCR name.
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") {
             log.info { "E2E_TEST_ONLY surrender policy bypassed for card-play/attack verification" }
+            return null
+        }
+        if (NeverSurrenderPolicy.enabled()) {
+            log.info { "SURRENDER_POLICY_BYPASS reason=never-surrender stage=${SurrenderCheckStage.TURN_START.name} action=CONTINUE" }
             return null
         }
         val rivalHero = war.rival.playArea.hero

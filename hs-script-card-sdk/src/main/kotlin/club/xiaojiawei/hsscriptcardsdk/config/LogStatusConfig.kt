@@ -7,4 +7,3 @@ package club.xiaojiawei.hsscriptcardsdk.config
 const val ENABLE_AREA_LOG = true
 const val ENABLE_WAR_LOG = true
 const val ENABLE_PLAYER_LOG = true
-

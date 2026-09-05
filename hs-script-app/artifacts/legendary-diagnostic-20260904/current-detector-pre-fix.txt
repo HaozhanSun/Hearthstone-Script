@@ -1,0 +1,17 @@
+input=C:\Users\yzjsh\AppData\Local\Temp\codex-clipboard-87b759ac-14fb-40d2-9bc4-9247d2c20ac2.png
+screen=1919x1079
+provider=PADDLEX
+providerCall=real-sidecar-on-current-rank-roi
+rawOCR=233Iaz
+normalizedOCR=233Iaz
+providerError=<none>
+rankROI=java.awt.Rectangle[x=0,y=884,width=143,height=140] crop=artifacts\legendary-diagnostic-20260904\current-rank-roi-pre-fix.png
+expandedROI=java.awt.Rectangle[x=0,y=841,width=230,height=215] crop=artifacts\legendary-diagnostic-20260904\expanded-rank-roi-pre-fix.png
+digitROI=java.awt.Rectangle[x=34,y=949,width=34,height=29] crop=artifacts\legendary-diagnostic-20260904\digit-roi-pre-fix.png
+detectorRank=UNKNOWN
+detectorTier=NULL
+badgeVisible=NULL
+policyAction=PAUSE
+policyReason=rank-ocr-failed-or-no-detection
+failureRootCause=non-numeric rating 233 is rejected by rank parser; base visual classifier has no LEGEND result
+terminalContext=settlement/defeat frame; rank evidence must not dispatch action

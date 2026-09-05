@@ -43,3 +43,15 @@ The local `build-and-deploy.ps1` and `sync-shortcuts.ps1` scripts enforce the
 runtime and shortcut separation. The deployment manifest records the channel,
 runtime root, and shortcut name so stale beta artifacts cannot be selected by a
 stable launcher.
+
+## PaddleX runtime parity
+
+Both channels use the same PaddleX sidecar contract. During deployment,
+`build-and-deploy.ps1` fills only blank `PADDLEX_OCR_PYTHON`,
+`PADDLEX_OCR_MODULE_PATH`, and `PADDLEX_OCR_MODEL_CACHE` values in the channel
+`config/script.ini`; existing non-empty user values are preserved. Runtime
+resolution uses the same order when a key remains blank: configured value,
+environment variable, packaged module path or the per-user PaddleX venv/cache
+default. The application startup log records the resolved values and health
+check result, so a missing PaddleX installation is explicit rather than a
+silent legacy-provider substitution.

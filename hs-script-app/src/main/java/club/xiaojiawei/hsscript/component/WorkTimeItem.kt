@@ -40,9 +40,6 @@ class WorkTimeItem(val workTimeRule: WorkTimeRule, val changeId: String) : HBox(
         startTime.readOnlyTimeProperty().addListener { observable, oldValue, newValue ->
             newValue ?: return@addListener
             workTimeRule.workTime = WorkTime(WorkTime.pattern.format(newValue), workTimeRule.workTime.endTime)
-            if (newValue > endTime.localTime) {
-                endTime.localTime = newValue
-            }
             WorkTimeStatus.storeWorkTimeRuleSet(changeId = changeId)
 
         }
@@ -50,9 +47,6 @@ class WorkTimeItem(val workTimeRule: WorkTimeRule, val changeId: String) : HBox(
         endTime.readOnlyTimeProperty().addListener { observable, oldValue, newValue ->
             newValue ?: return@addListener
             workTimeRule.workTime = WorkTime(workTimeRule.workTime.startTime, WorkTime.pattern.format(newValue))
-            if (newValue < startTime.localTime) {
-                startTime.localTime = newValue
-            }
             WorkTimeStatus.storeWorkTimeRuleSet(changeId = changeId)
         }
 

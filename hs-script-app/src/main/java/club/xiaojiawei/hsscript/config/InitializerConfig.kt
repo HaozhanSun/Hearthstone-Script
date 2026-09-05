@@ -1,6 +1,12 @@
 package club.xiaojiawei.hsscript.config
 
-import club.xiaojiawei.hsscript.initializer.*
+import club.xiaojiawei.hsscript.initializer.AbstractInitializer
+import club.xiaojiawei.hsscript.initializer.BaseInitializer
+import club.xiaojiawei.hsscript.initializer.DriverInitializer
+import club.xiaojiawei.hsscript.initializer.GameLogInitializer
+import club.xiaojiawei.hsscript.initializer.GamePathInitializer
+import club.xiaojiawei.hsscript.initializer.PluginInitializer
+import club.xiaojiawei.hsscript.initializer.ServiceInitializer
 
 /**
  * Starter的责任链配置
@@ -19,5 +25,4 @@ object InitializerConfig {
             .setNextInitializer(DriverInitializer())
             .setNextInitializer(ServiceInitializer())
     }
-
 }

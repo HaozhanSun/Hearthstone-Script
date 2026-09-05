@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscript.bean.DownloaderParam
 import club.xiaojiawei.hsscript.bean.ResumeDownloader
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.utils.*
 import club.xiaojiawei.hsscriptbase.config.log
 import java.io.File
@@ -17,7 +18,7 @@ object AutoRefreshGameTaskService : Service<Boolean>() {
 
     override fun execStart(): Boolean {
         val tessDir = File(TESS_DATA_PATH)
-        if (!tessDir.exists() || tessDir.listFiles().isNullOrEmpty()) {
+        if (OcrRuntime.isLegacySelected() && (!tessDir.exists() || tessDir.listFiles().isNullOrEmpty())) {
             runUI {
                 WindowUtil.createAlert("自动刷新游戏任务需要下载tess数据集", "是否下载", {
                     File(TESS_DATA_PATH).mkdirs()

@@ -2,7 +2,14 @@ package club.xiaojiawei.hsscriptbase.config
 
 import club.xiaojiawei.hsscriptbase.bean.ReadableThread
 import club.xiaojiawei.hsscriptbase.bean.WritableThread
-import java.util.concurrent.*
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -58,7 +65,7 @@ val CALC_THREAD_POOL: ThreadPoolExecutor by lazy {
                 return ReadableThread(r, "CalcPool Thread-" + num.getAndIncrement())
             }
         },
-        ThreadPoolExecutor.AbortPolicy()
+        ThreadPoolExecutor.AbortPolicy(),
     )
 }
 
@@ -67,4 +74,4 @@ fun submitExtra(block: () -> Unit): Future<*> {
 }
 
 val VIRTUAL_THREAD_POOL: ExecutorService =
-    Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("VPool Thread-", 0).factory());
+    Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("VPool Thread-", 0).factory())

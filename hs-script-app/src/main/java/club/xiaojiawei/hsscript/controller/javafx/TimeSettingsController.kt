@@ -455,9 +455,6 @@ class TimeSettingsController :
                     readOnlyTimeProperty().addListener { _, _, newValue ->
                         newValue ?: return@addListener
                         item.workTime.startTime = WorkTime.pattern.format(newValue)
-                        if (newValue > endTime.localTime) {
-                            endTime.localTime = newValue
-                        }
                     }
                 },
                 Text("-"),
@@ -466,9 +463,6 @@ class TimeSettingsController :
                     readOnlyTimeProperty().addListener { _, _, newValue ->
                         newValue ?: return@addListener
                         item.workTime.endTime = WorkTime.pattern.format(newValue)
-                        if (newValue < startTime.localTime) {
-                            startTime.localTime = newValue
-                        }
                     }
                 },
             ).apply {

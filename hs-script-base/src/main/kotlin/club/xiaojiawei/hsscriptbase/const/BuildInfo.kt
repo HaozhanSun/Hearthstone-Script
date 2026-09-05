@@ -17,6 +17,10 @@ object BuildInfo {
 
     val ARTIFACT_ID: String
 
+    val RELEASE_CHANNEL: String
+
+    val RELEASE_CHANNEL_LABEL: String
+
     val SOFT_RUN_MODE: SoftRunMode
 
     init {
@@ -37,6 +41,8 @@ object BuildInfo {
         UPSTREAM_BASELINE_VERSION = properties.getProperty("upstreamBaselineVersion", "UNKNOWN")
         BUILD_TIMESTAMP_PACIFIC = properties.getProperty("buildTimestampPacific", "UNKNOWN")
         ARTIFACT_ID = properties.getProperty("artifactId", "UNKNOWN")
+        RELEASE_CHANNEL = properties.getProperty("channel", "UNKNOWN")
+        RELEASE_CHANNEL_LABEL = BuildChannel.label(RELEASE_CHANNEL)
         SOFT_RUN_MODE = if (Objects.requireNonNull(javaClass.getResource(""))
                 .protocol == "file"
         ) {

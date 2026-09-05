@@ -75,6 +75,14 @@ object CardDescriptionParser {
         "互换",
         "交换",
         "复制",
+        // Preserve non-targeted draw/discard semantics. Mixed text such as
+        // "抽两张随从牌，使其获得+2/+2" must remain NO_POINT instead of
+        // synthesizing a friendly-minion target from the buff wording.
+        "抽",
+        "牌库",
+        "手牌",
+        "弃",
+        "圣盾",
     )
 
     private val explicitTargets = listOf(

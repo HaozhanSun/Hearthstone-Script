@@ -38,6 +38,11 @@ $targetRoot = Join-Path $projectRoot 'hs-script-app\target'
 $strategyTarget = Join-Path $projectRoot 'hs-script-base-strategy-plugin\target\hs-script-base-strategy-plugin.jar'
 $cardPluginTarget = Join-Path $projectRoot 'hs-script-base-card-plugin\target\hs-script-base-card-plugin.jar'
 $cardSdkTarget = Join-Path $projectRoot 'hs-script-card-sdk\target\hs-script-card-sdk-1.3.0.jar'
+$debugRunnerSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\run-debug.ps1'
+$debugRunnerCmdSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\run-debug.cmd'
+$launcherVbsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-as-admin.vbs'
+$launcherPsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-newest-as-admin.ps1'
+$deploymentContractSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\deployment-contract.ps1'
 $manifestPath = Join-Path $runtimeRoot 'deployment-manifest.json'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
@@ -75,10 +80,73 @@ function Get-JarEntrySha256([string]$JarPath, [string]$EntryName) {
     } finally { $zip.Dispose() }
 }
 
+function Test-UsableCardDatabase([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    if ((Get-Item -LiteralPath $Path).Length -le 0) { return $false }
+    $python = Get-Command python.exe -ErrorAction SilentlyContinue
+    if ($null -eq $python) { return $false }
+    $probe = @'
+import sqlite3,sys
+connection=sqlite3.connect(sys.argv[1])
+row=connection.execute("select 1 from sqlite_master where type='table' and name='cards' limit 1").fetchone()
+connection.close()
+sys.exit(0 if row else 1)
+'@
+    & $python.Source -c $probe $Path *> $null
+    return $LASTEXITCODE -eq 0
+}
+
+function Assert-UsableCardDatabase([string]$Path, [string]$Context) {
+    if (-not (Test-UsableCardDatabase $Path)) {
+        throw "$Context does not contain a usable SQLite cards table: $Path"
+    }
+}
+
+function ConvertTo-IniPath([string]$Path) {
+    return $Path.Replace('\', '/').Replace(':', '\:')
+}
+
+function Sync-PaddleXOcrConfig([string]$Root) {
+    $configPath = Join-Path $Root 'config\script.ini'
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return }
+
+    $userHome = [Environment]::GetFolderPath('UserProfile')
+    $python = [Environment]::GetEnvironmentVariable('PADDLEX_OCR_PYTHON')
+    if ([string]::IsNullOrWhiteSpace($python) -and -not [string]::IsNullOrWhiteSpace($userHome)) {
+        $venvPython = Join-Path $userHome '.codex\paddlex-ocr-venv\Scripts\python.exe'
+        if (Test-Path -LiteralPath $venvPython -PathType Leaf) { $python = $venvPython }
+    }
+    $modulePath = Join-Path $Root 'resources\paddlex-vision\src'
+    $cachePath = if ([string]::IsNullOrWhiteSpace($userHome)) { '' } else { Join-Path $userHome '.cache\paddlex-ocr-models' }
+    $defaults = [ordered]@{
+        PADDLEX_OCR_PYTHON = $python
+        PADDLEX_OCR_MODULE_PATH = $modulePath
+        PADDLEX_OCR_MODEL_CACHE = $cachePath
+    }
+
+    $content = [System.IO.File]::ReadAllText($configPath)
+    $updated = $content
+    foreach ($entry in $defaults.GetEnumerator()) {
+        if ([string]::IsNullOrWhiteSpace($entry.Value)) { continue }
+        $pattern = "(?m)^([ \t]*$([regex]::Escape($entry.Key))[ \t]*=[ \t]*)[ \t]*$"
+        $value = ConvertTo-IniPath ([string]$entry.Value)
+        $updated = [regex]::Replace($updated, $pattern, { param($match) $match.Groups[1].Value + $value })
+    }
+    if ($updated -ne $content) {
+        [System.IO.File]::WriteAllText($configPath, $updated, $utf8NoBom)
+        Write-Output "PADDLEX_CONFIG_SYNC=$configPath"
+    } else {
+        Write-Output "PADDLEX_CONFIG_SYNC=unchanged:$configPath"
+    }
+}
+
 if (-not (Test-Path -LiteralPath $pomPath -PathType Leaf)) { throw "pom.xml missing: $pomPath" }
 if (-not (Test-Path -LiteralPath $mavenWrapper -PathType Leaf)) { throw "Maven wrapper missing: $mavenWrapper" }
 if (-not (Test-Path -LiteralPath $runtimeRoot -PathType Container)) { throw "Runtime root missing: $runtimeRoot" }
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'hs-script-app\assembly.xml') -PathType Leaf)) { throw 'Full reactor assembly descriptor is missing' }
+foreach ($runner in @($debugRunnerSource, $debugRunnerCmdSource)) {
+    if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw "Debug runner source missing: $runner" }
+}
 
 $pomText = [System.IO.File]::ReadAllText($pomPath)
 $currentVersion = Get-PomVersion $pomText
@@ -116,9 +184,9 @@ if (-not [string]::IsNullOrWhiteSpace($deployedVersion) -and $currentVersion -eq
     Write-Output "BUILD_TIMESTAMP_PACIFIC=$buildTimestampPacific"
 }
 
-$mavenBaseArgs = @('-f', $pomPath, '-pl', 'hs-script-app', '-am', '-Pjvm', '-Djava.version=24', '-Dproject.build.outputTimestamp=0')
+$mavenBaseArgs = @('-f', $pomPath, '-pl', 'hs-script-app', '-am', '-Pjvm', '-Djava.version=24', '-Dproject.build.outputTimestamp=0', "-Dbuild-channel=$Channel")
 if (-not $SkipTests) {
-    $testArgs = $mavenBaseArgs + @('-DforkCount=0', '-Dtest=CardTimingPolicyTest,MctsReplayTraceTest,MctsRoundScreenshotTest,SurrenderPolicyTest,GameUtilSurrenderGuardTest,ScreenStateRecoveryTest,UnknownStateScreenshotTest,TurnEndActionGuardTest,PirateDemonHunterMctsExperimentModelTest,StartupRunWindowTest,WorkTimeJitterTest,WorkTimeRuleSetTest,WorkTimeRuleTest,GlobalHotkeyListenerTest,UiLogFormatterTest', '-Dsurefire.failIfNoSpecifiedTests=false', 'test')
+    $testArgs = $mavenBaseArgs + @('-DforkCount=0', '-Dtest=CardTimingPolicyTest,MctsReplayTraceTest,MctsRoundScreenshotTest,SurrenderPolicyTest,GameUtilSurrenderGuardTest,ScreenStateRecoveryTest,UnknownStateScreenshotTest,TurnEndActionGuardTest,PirateDemonHunterMctsExperimentModelTest,DebugRunLeaseTest,DebugRunUiContractTest,ScheduleOverrideLogGateTest,StartupRunWindowTest,WorkTimeJitterTest,WorkTimeRuleSetTest,WorkTimeRuleTest,GlobalHotkeyListenerTest,UiLogFormatterTest', '-Dsurefire.failIfNoSpecifiedTests=false', 'test')
     Write-Output 'TARGETED_TESTS=enabled'
     & $mavenWrapper @testArgs
     if ($LASTEXITCODE -ne 0) { throw "Targeted regression tests failed with exit code $LASTEXITCODE" }
@@ -150,9 +218,33 @@ if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
 
 $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("hs-script-deploy-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $staging -Force | Out-Null
+# A newly-created channel runtime has no extracted plugin/lib directories yet.
+# Create both destinations before copying assembled artifacts so stable and
+# beta installs follow the same deploy contract on a clean runtime.
+$runtimeLib = Join-Path $runtimeRoot 'lib'
+$runtimePlugin = Join-Path $runtimeRoot 'plugin'
+New-Item -ItemType Directory -Path $runtimeLib, $runtimePlugin -Force | Out-Null
 try {
     [System.IO.Compression.ZipFile]::ExtractToDirectory($builtZip, $staging)
-    foreach ($item in @('resources', 'lib', 'hs_cards.db', 'logback.xml', 'create-aot.bat', 'debug-hs-script.bat', 'hs-script.bat', 'unlock.bat', 'card-update-util.exe', 'force-stop.exe', 'hs-script.exe', 'inject-util.exe', 'install-drive.exe', 'update.exe', (Split-Path -Leaf $builtJar))) {
+    $stagedCardDb = Join-Path $staging 'hs_cards.db'
+    if (-not (Test-Path -LiteralPath $stagedCardDb -PathType Leaf)) {
+        throw "Assembled deployment is missing hs_cards.db: $builtZip"
+    }
+    if ((Get-Item -LiteralPath $stagedCardDb).Length -le 0) {
+        throw "Assembled deployment contains an empty hs_cards.db: $builtZip"
+    }
+    Assert-UsableCardDatabase $stagedCardDb 'Assembled deployment'
+    $runtimeCardDb = Join-Path $runtimeRoot 'hs_cards.db'
+    if (Test-Path -LiteralPath $runtimeCardDb -PathType Leaf) {
+        $backupName = "hs_cards.db.backup-$((Get-Date).ToString('yyyyMMdd-HHmmssfff'))-$([guid]::NewGuid().ToString('N')).bak"
+        $backupPath = Join-Path $runtimeRoot $backupName
+        Copy-Item -LiteralPath $runtimeCardDb -Destination $backupPath -Force
+        Write-Output "CARD_DB_BACKUP=$backupPath"
+    }
+    Copy-Item -LiteralPath $stagedCardDb -Destination $runtimeCardDb -Force
+    Assert-UsableCardDatabase $runtimeCardDb 'Deployed runtime'
+    Write-Output "CARD_DB_VERIFIED=$runtimeCardDb"
+    foreach ($item in @('resources', 'lib', 'logback.xml', 'create-aot.bat', 'debug-hs-script.bat', 'hs-script.bat', 'unlock.bat', 'card-update-util.exe', 'force-stop.exe', 'hs-script.exe', 'inject-util.exe', 'install-drive.exe', 'update.exe', (Split-Path -Leaf $builtJar))) {
         $source = Join-Path $staging $item
         if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $runtimeRoot -Recurse -Force }
     }
@@ -162,17 +254,27 @@ try {
             Copy-Item -LiteralPath $pluginJar.FullName -Destination (Join-Path $runtimeRoot "plugin\$($pluginJar.Name)") -Force
         }
     }
-    $runtimeLib = Join-Path $runtimeRoot 'lib'
-    $runtimePlugin = Join-Path $runtimeRoot 'plugin'
     Copy-Item -LiteralPath $strategyTarget -Destination (Join-Path $runtimeLib 'hs-script-base-strategy-plugin-1.1.6.jar') -Force
     Copy-Item -LiteralPath $cardPluginTarget -Destination (Join-Path $runtimeLib 'hs-script-base-card-plugin-1.1.4.jar') -Force
     Copy-Item -LiteralPath $strategyTarget -Destination (Join-Path $runtimePlugin 'hs-script-base-strategy-plugin.jar') -Force
     Copy-Item -LiteralPath $cardPluginTarget -Destination (Join-Path $runtimePlugin 'hs-script-base-card-plugin.jar') -Force
     Copy-Item -LiteralPath $cardSdkTarget -Destination (Join-Path $runtimeLib 'hs-script-card-sdk-1.3.0.jar') -Force
     Copy-Item -LiteralPath $builtZip -Destination (Join-Path $runtimeRoot (Split-Path -Leaf $builtZip)) -Force
+    # The E2E runner is a release-side script rather than an assembly entry.
+    # Copy it explicitly so a new runner property cannot be stranded in the
+    # source tree while the runtime keeps an older script.
+    Copy-Item -LiteralPath $debugRunnerSource -Destination (Join-Path $runtimeRoot 'run-debug.ps1') -Force
+    Copy-Item -LiteralPath $debugRunnerCmdSource -Destination (Join-Path $runtimeRoot 'run-debug.cmd') -Force
+    Copy-Item -LiteralPath $launcherVbsSource -Destination (Join-Path $runtimeRoot 'launch-as-admin.vbs') -Force
+    Copy-Item -LiteralPath $launcherPsSource -Destination (Join-Path $runtimeRoot 'launch-newest-as-admin.ps1') -Force
+    Copy-Item -LiteralPath $deploymentContractSource -Destination (Join-Path $runtimeRoot 'deployment-contract.ps1') -Force
 } finally {
     if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
 }
+
+Assert-UsableCardDatabase $runtimeCardDb 'Post-deployment runtime'
+
+Sync-PaddleXOcrConfig $runtimeRoot
 
 $deployedJar = Join-Path $runtimeRoot (Split-Path -Leaf $builtJar)
 $iconPath = Join-Path $runtimeRoot $iconFileName

@@ -47,15 +47,24 @@
             </includes>
             <outputDirectory>resources/img/</outputDirectory>
         </fileSet>
-<!--        <fileSet>-->
-<!--            <directory>${project.basedir}/src/main/resources/resources/tessdata</directory>-->
-<!--            <includes>-->
-<!--                <include>*.*</include>-->
-<!--            </includes>-->
-<!--            <outputDirectory>resources/tessdata/</outputDirectory>-->
-<!--        </fileSet>-->
         <fileSet>
-            <directory>${project.basedir}</directory>
+            <directory>${project.parent.basedir}/experiments/paddlex-vision/src</directory>
+            <includes>
+                <include>**/*.py</include>
+            </includes>
+            <outputDirectory>resources/paddlex-vision/src/</outputDirectory>
+        </fileSet>
+        <fileSet>
+            <directory>${project.basedir}/src/main/resources/resources/tessdata</directory>
+            <includes>
+                <include>*.traineddata</include>
+            </includes>
+            <outputDirectory>resources/tessdata/</outputDirectory>
+        </fileSet>
+        <fileSet>
+            <!-- The assembly lives in hs-script-app, while the canonical
+                 card database is tracked at the multi-module repository root. -->
+            <directory>${project.parent.basedir}</directory>
             <includes>
                 <include>*.db</include>
             </includes>

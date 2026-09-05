@@ -104,7 +104,22 @@ object Mode {
         stopTask()
         if (value === currMode) {
             AbstractModeStrategy.cancelAllTask()
-            log.info { "屏幕恢复确认：当前已经是【${value.comment}】 reason=$reason" }
+            if (enterStrategy) {
+                log.warn {
+                    "屏幕恢复：当前已经是【${value.comment}】，重新进入策略 " +
+                        "reason=$reason"
+                }
+                // A visual recovery can prove that the client is on the hub
+                // while the mode state is already HUB. In that case merely
+                // cancelling tasks leaves the state machine idle; re-enter
+                // the strategy through the same mode lifecycle hook used by
+                // normal transitions.
+                go {
+                    if (currMode === value) value.modeStrategy?.entering()
+                }
+            } else {
+                log.info { "屏幕恢复确认：当前已经是【${value.comment}】 reason=$reason" }
+            }
             return
         }
         modeQueue.add(ModeStruct(currModeValue, value, enterStrategy))

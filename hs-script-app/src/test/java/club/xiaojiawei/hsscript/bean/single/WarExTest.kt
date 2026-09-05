@@ -35,4 +35,12 @@ class WarExTest {
 
         assertTrue(WarEx.isWin)
     }
+
+    @Test
+    fun `unresolved empty IDs cannot be classified as our win`() {
+        assertFalse(WarEx.isOurWin("", ""))
+        assertFalse(WarEx.isOurWin("", "laz#12793"))
+        assertFalse(WarEx.isOurWin("Glide#31734", ""))
+        assertTrue(WarEx.isOurWin("laz#12793", "laz#12793"))
+    }
 }

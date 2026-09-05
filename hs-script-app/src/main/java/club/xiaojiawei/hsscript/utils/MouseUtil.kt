@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.MouseControlModeEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.Mode
+import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscriptbase.config.log
@@ -90,8 +91,31 @@ object MouseUtil {
      * the result in the trace so focus failures are distinguishable from bad
      * coordinates.
      */
-    private fun focusE2EWindow(hwnd: HWND): Boolean = runCatching {
+    private fun focusE2EWindow(
+        hwnd: HWND,
+        allowE2EWindowRefresh: Boolean = true,
+    ): Boolean = runCatching {
         if (!User32.INSTANCE.IsWindow(hwnd)) {
+            // E2E deliberately keeps the discovered HWND stable to avoid a
+            // native poll on every action.  That is safe while the client is
+            // alive, but a manual or recovery restart replaces the Unity
+            // window and leaves the old handle unusable.  Refresh only at the
+            // point an input is already being rejected, then retry this one
+            // focus request against the newly discovered live window.
+            if (allowE2EWindowRefresh && e2eInputEnabled()) {
+                val refreshed = GameUtil.findGameHWND()
+                if (refreshed != null &&
+                    Pointer.nativeValue(refreshed.pointer) != Pointer.nativeValue(hwnd.pointer) &&
+                    User32.INSTANCE.IsWindow(refreshed)
+                ) {
+                    ScriptStatus.gameHWND = refreshed
+                    log.info {
+                        "E2E_INPUT_WINDOW_REFRESH old=$hwnd refreshed=$refreshed " +
+                            "reason=invalid-window-before-input"
+                    }
+                    return@runCatching focusE2EWindow(refreshed, allowE2EWindowRefresh = false)
+                }
+            }
             log.warn { "E2E_INPUT_ROBOT_FOREGROUND_UNAVAILABLE hwnd=$hwnd reason=invalid-window" }
             return@runCatching false
         }
@@ -138,7 +162,15 @@ object MouseUtil {
             }
         }
     }.getOrElse { error ->
-        log.warn(error) { "E2E_INPUT_ROBOT_FOREGROUND_FAILED hwnd=$hwnd" }
+        if (error is InterruptedException) {
+            // A phase transition can cancel the focus delay while the click
+            // target is already stale. Preserve cancellation without adding
+            // an exception stack trace to an otherwise healthy E2E run.
+            Thread.currentThread().interrupt()
+            log.info { "E2E_INPUT_ROBOT_FOREGROUND_INTERRUPTED hwnd=$hwnd" }
+        } else {
+            log.warn(error) { "E2E_INPUT_ROBOT_FOREGROUND_FAILED hwnd=$hwnd" }
+        }
         false
     }
 
@@ -157,6 +189,7 @@ object MouseUtil {
      * observable for stale result pages.
      */
     internal fun pressEnterForRecovery(): Boolean {
+        if (!ActionDispatchGate.allow("recovery.enter")) return false
         if (!e2eInputEnabled()) {
             SystemUtil.sendKey(java.awt.event.KeyEvent.VK_ENTER)
             return true
@@ -184,6 +217,7 @@ object MouseUtil {
         }
         try {
             synchronized(e2eRobotLock) {
+                if (!ActionDispatchGate.allow("recovery.enter.locked")) return false
                 if (!focusE2EWindow(hwnd)) {
                     log.warn { "E2E_RECOVERY_KEY_SKIPPED key=ENTER hwnd=$hwnd reason=foreground-unconfirmed" }
                     return false
@@ -228,6 +262,7 @@ object MouseUtil {
      * and require the game to be the verified foreground window first.
      */
     internal fun leftButtonClickForRecovery(pos: Point): Boolean {
+        if (!ActionDispatchGate.allow("recovery.left")) return false
         val hwnd = ScriptStatus.gameHWND
         if (!e2eInputEnabled() || hwnd == null) {
             leftButtonClick(pos, hwnd)
@@ -252,6 +287,7 @@ object MouseUtil {
         }
         try {
             synchronized(e2eRobotLock) {
+                if (!ActionDispatchGate.allow("recovery.left.locked")) return false
                 val focused = focusE2EWindow(hwnd)
                 if (!focused) {
                     log.warn {
@@ -292,6 +328,7 @@ object MouseUtil {
     ): Boolean {
         val task: Future<Boolean> = e2eRobotExecutor.submit<Boolean> {
             synchronized(e2eRobotLock) {
+                if (!ActionDispatchGate.allow("mouse.robot")) return@submit false
                 log.info { "E2E_INPUT_ROBOT_BEGIN client=(${pos.x},${pos.y}) hwnd=$hwnd" }
                 val foregroundFocused = focusE2EWindow(hwnd)
                 if (Thread.currentThread().isInterrupted) {
@@ -331,6 +368,7 @@ object MouseUtil {
                     log.info { "E2E_INPUT_ROBOT_CANCELLED_BEFORE_PRESS client=(${pos.x},${pos.y}) hwnd=$hwnd" }
                     return@submit false
                 }
+                if (!ActionDispatchGate.allow("mouse.robot.before-press")) return@submit false
                 e2eRobot.apply {
                     mousePress(buttonMask)
                     log.info { "E2E_INPUT_ROBOT_PRESSED" }
@@ -397,10 +435,12 @@ object MouseUtil {
     ): Boolean {
         val task: Future<Boolean> = e2eRobotExecutor.submit<Boolean> {
             synchronized(e2eRobotLock) {
+                if (!ActionDispatchGate.allow("mulligan.robot")) return@submit false
                 log.info { "MULLIGAN_ROBOT_BEGIN target=(${pos.x},${pos.y}) hwnd=$hwnd" }
                 val focused = focusE2EWindow(hwnd)
                 if (!focused) log.warn { "MULLIGAN_ROBOT_FOREGROUND_UNCONFIRMED hwnd=$hwnd" }
                 if (Thread.currentThread().isInterrupted) return@submit false
+                if (!ActionDispatchGate.allow("mulligan.robot.before-send")) return@submit false
 
                 e2eRobot.mouseMove(pos.x, pos.y)
                 e2eRobot.waitForIdle()
@@ -453,6 +493,7 @@ object MouseUtil {
      * harness requests it, so the selection can be verified visually.
      */
     fun leftButtonClickMulligan(pos: Point, hwnd: HWND?): Boolean {
+        if (!ActionDispatchGate.allow("mulligan.left")) return false
         if (!e2eInputEnabled() || hwnd == null ||
             System.getProperty("hs.script.e2e.mulligan-robot") != "true"
         ) {
@@ -701,6 +742,7 @@ object MouseUtil {
         hwnd: HWND?,
         mouseMode: Int = effectiveMouseMode(),
     ) {
+        if (!ActionDispatchGate.allow("mouse.left")) return
         val environmentValid = validateEnv(hwnd)
         if (e2eInputEnabled()) {
                 log.info {
@@ -746,10 +788,12 @@ object MouseUtil {
                 return
             }
             try {
+                if (!ActionDispatchGate.allow("mouse.left.locked")) return
                 if (!WorkTimeListener.working && !ScriptStatus.testMode) return
 
                 if (e2eNativeClickEnabled() && hwnd != null) {
                     try {
+                        if (!ActionDispatchGate.allow("mouse.left.before-sendinput")) return
                         val foregroundFocused = focusE2EWindow(hwnd)
                         log.info {
                             "E2E_INPUT_SENDINPUT_FOREGROUND hwnd=$hwnd confirmed=$foregroundFocused"
@@ -757,6 +801,7 @@ object MouseUtil {
                         if (prevPoint != pos) {
                             moveNativeAlongCurve(prevPoint, pos, hwnd, mouseMode)
                         }
+                        if (!ActionDispatchGate.allow("mouse.left.before-sendinput-click")) return
                         val sent = sendE2eWindowsClick(pos)
                         log.info {
                             "E2E_INPUT_SENDINPUT_SENT pos=(${pos.x},${pos.y}) hwnd=$hwnd " +
@@ -799,6 +844,7 @@ object MouseUtil {
                 if (prevPoint != pos) {
                     moveNativeAlongCurve(prevPoint, pos, hwnd, mouseMode)
                 }
+                if (!ActionDispatchGate.allow("mouse.left.before-native")) return
                 CSystemDll.INSTANCE.leftClick(pos.x.toLong(), pos.y.toLong(), hwnd, mouseMode)
                 if (e2eInputEnabled()) {
                     log.info { "E2E_INPUT_NATIVE_SENT pos=(${pos.x},${pos.y}) hwnd=$hwnd mode=$mouseMode" }
@@ -819,11 +865,13 @@ object MouseUtil {
         hwnd: HWND?,
         mouseMode: Int = effectiveMouseMode(),
     ) {
+        if (!ActionDispatchGate.allow("mouse.right")) return
         if (!validateEnv(hwnd) || Mode.currMode !== ModeEnum.GAMEPLAY) return
 
         if (validatePoint(pos)) {
             DRIVER_LOCK.lock()
             try {
+                if (!ActionDispatchGate.allow("mouse.right.locked")) return
                 if ((!WorkTimeListener.working || Mode.currMode !== ModeEnum.GAMEPLAY) && !ScriptStatus.testMode) return
 
                 if (e2eInputEnabled() && hwnd != null && clickWithE2ERobot(pos, hwnd, InputEvent.BUTTON3_DOWN_MASK)) {
@@ -835,6 +883,7 @@ object MouseUtil {
                 if (prevPoint != pos) {
                     moveNativeAlongCurve(prevPoint, pos, hwnd, mouseMode)
                 }
+                if (!ActionDispatchGate.allow("mouse.right.before-native")) return
                 CSystemDll.INSTANCE.rightClick(pos.x.toLong(), pos.y.toLong(), hwnd, mouseMode)
                 savePos(pos)
             } finally {
@@ -867,10 +916,12 @@ object MouseUtil {
         hwnd: HWND?,
         mouseMode: Int = effectiveMouseMode(),
     ) {
+        if (!ActionDispatchGate.allow("mouse.move")) return
         if (!validateEnv(hwnd)) return
 
         DRIVER_LOCK.lock()
         try {
+            if (!ActionDispatchGate.allow("mouse.move.locked")) return
             if (!WorkTimeListener.working && !ScriptStatus.testMode) return
 
             if (validatePoint(startPos)) {

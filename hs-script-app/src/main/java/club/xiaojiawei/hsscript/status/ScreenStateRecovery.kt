@@ -4,7 +4,9 @@ import club.xiaojiawei.hsscript.bean.TesseractEx
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
+import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.strategy.mode.LoginModeStrategy
 import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil
@@ -41,7 +43,16 @@ object ScreenStateRecovery {
     private const val RESULT_CONTINUE_GRAY_LIGHT_MIN = 0.025
     private const val RESULT_BANNER_LOW_SATURATION_MIN = 0.30
     private const val RECONNECT_RETRY_INTERVAL_MS = 60_000L
+    /**
+     * The client displays a distinct slow-connection warning only after a
+     * reconnect attempt. A fresh script can attach after that click, so its
+     * first observation of the same exact warning also starts this timer.
+     * Give it two minutes before using the established client restart path.
+     */
+    private const val STALLED_RECONNECT_LOADING_RESTART_MS = 120_000L
     private val reconnectAttemptAt = AtomicLong(0L)
+    private val reconnectAcceptedAt = AtomicLong(0L)
+    private val slowReconnectWarningObservedAt = AtomicLong(0L)
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
@@ -136,6 +147,7 @@ object ScreenStateRecovery {
         val detection = detect(ocrText, capture.visual)
         log.info {
             "SCREEN_RECOVERY_OBSERVATION " +
+                "provider=${OcrRuntime.lastProviderUsed().name} " +
                 "ocr=${ocrText.ifBlank { "<empty>" }.take(MAX_OCR_TEXT_LENGTH)} " +
                 "detected=${detection?.kind?.code ?: "UNKNOWN"} " +
                 "confidence=${detection?.confidence ?: 0} " +
@@ -237,7 +249,7 @@ object ScreenStateRecovery {
     private fun runOCR(image: BufferedImage): String {
         val tessData = File(TESS_DATA_PATH)
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
-        if (!chiSim.isFile) {
+        if (OcrRuntime.isLegacySelected() && !chiSim.isFile) {
             log.info { "SCREEN_RECOVERY_OCR_SKIPPED reason=missing-tessdata path=${chiSim.absolutePath}" }
             return ""
         }
@@ -377,8 +389,23 @@ object ScreenStateRecovery {
         if (looksLikeMatchmakingText(text)) {
             return Detection(ScreenKind.MATCHMAKING, ModeEnum.TOURNAMENT, 95, "matchmaking-text")
         }
-        if (text.contains("我的收藏") || text.contains("收藏管理")) {
-            return Detection(ScreenKind.COLLECTION, ModeEnum.COLLECTIONMANAGER, 95, "collection-text")
+        val hubLabels = hubNavigationLabels(text)
+        if (hubLabels.size >= 2) {
+            return Detection(
+                ScreenKind.HOME,
+                ModeEnum.HUB,
+                95,
+                "HOME/HUB：识别到${hubLabels.joinToString("、")}",
+            )
+        }
+        val collectionLabels = collectionPageLabels(text)
+        if (collectionLabels.isNotEmpty()) {
+            return Detection(
+                ScreenKind.COLLECTION,
+                ModeEnum.COLLECTIONMANAGER,
+                95,
+                "收藏页：识别到${collectionLabels.joinToString("、")}",
+            )
         }
         // Reward pages advertise unopened packs too.  A bare "卡牌包" is
         // therefore not evidence that the pack-opening scene is visible.
@@ -392,6 +419,9 @@ object ScreenStateRecovery {
         }
         if (looksLikeReconnectText(text)) {
             return Detection(ScreenKind.RECONNECT, ModeEnum.LOGIN, 96, "reconnect-disconnected-text")
+        }
+        if (looksLikeStalledReconnectLoadingText(text)) {
+            return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 95, "reconnect-slow-loading-text")
         }
         if (looksLikeLoadingText(text)) {
             return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 88, "loading-text")
@@ -424,6 +454,28 @@ object ScreenStateRecovery {
         if (visual.warmRatio > 0.0 || visual.blueRatio > 0.0) return null
         return null
     }
+
+    /**
+     * The hub exposes several primary mode buttons at once. The persistent
+     * bottom navigation label "我的收藏" is intentionally excluded: it is
+     * present on the hub and must not override the primary mode cluster.
+     */
+    private fun hubNavigationLabels(ocrText: String): List<String> {
+        val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+        return listOf("传统对战", "酒馆战棋", "竞技模式", "其他模式")
+            .filter(text::contains)
+    }
+
+    /** Collection-page labels are specific to the opened collection view. */
+    private fun collectionPageLabels(ocrText: String): List<String> {
+        val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+        return listOf("收藏管理", "我的套牌", "卡牌制作")
+            .filter(text::contains)
+    }
+
+    internal fun looksLikeHubText(ocrText: String): Boolean = hubNavigationLabels(ocrText).size >= 2
+
+    internal fun looksLikeCollectionText(ocrText: String): Boolean = collectionPageLabels(ocrText).isNotEmpty()
 
     internal fun looksLikeMatchmakingText(ocrText: String): Boolean {
         val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
@@ -464,6 +516,51 @@ object ScreenStateRecovery {
             text.contains("请稍候")
     }
 
+    /**
+     * Keep the post-reconnect warning separate from ordinary loading so
+     * matchmaking and normal scene transitions never trigger a restart.
+     */
+    internal fun looksLikeStalledReconnectLoadingText(ocrText: String): Boolean {
+        val text = ocrText.replace(Regex("\\s+"), "")
+        return text.contains("本次连接较平常花费了更多时间") &&
+            text.contains("检查你的网络连接")
+    }
+
+    internal fun shouldRestartStalledReconnectForTest(reconnectStartedAt: Long, now: Long): Boolean =
+        shouldRestartStalledReconnect(reconnectStartedAt, now)
+
+    internal fun stalledReconnectAnchorForTest(
+        acceptedReconnectAt: Long,
+        observedWarningAt: Long,
+        now: Long,
+    ): Long = stalledReconnectAnchor(acceptedReconnectAt, observedWarningAt, now)
+
+    private fun shouldRestartStalledReconnect(reconnectStartedAt: Long, now: Long): Boolean =
+        reconnectStartedAt > 0L && now >= reconnectStartedAt &&
+            now - reconnectStartedAt >= STALLED_RECONNECT_LOADING_RESTART_MS
+
+    private fun stalledReconnectAnchor(
+        acceptedReconnectAt: Long,
+        observedWarningAt: Long,
+        now: Long,
+    ): Long = acceptedReconnectAt.takeIf { it > 0L } ?: observedWarningAt.takeIf { it > 0L } ?: now
+
+    private fun firstSlowReconnectWarningAt(now: Long): Long {
+        while (true) {
+            val previous = slowReconnectWarningObservedAt.get()
+            if (previous > 0L) return previous
+            if (slowReconnectWarningObservedAt.compareAndSet(0L, now)) return now
+        }
+    }
+
+    private fun consumeStalledReconnectAnchor(acceptedReconnectAt: Long, startedAt: Long): Boolean {
+        return if (acceptedReconnectAt > 0L) {
+            reconnectAcceptedAt.compareAndSet(acceptedReconnectAt, 0L)
+        } else {
+            slowReconnectWarningObservedAt.compareAndSet(startedAt, 0L)
+        }
+    }
+
     internal fun looksLikeLoadingVisual(
         centralDarkRatio: Double,
         warmRatio: Double,
@@ -482,6 +579,18 @@ object ScreenStateRecovery {
             resultBannerLowSaturationRatio = 0.0,
         ),
     )?.kind?.code
+
+    internal fun classificationEvidenceForTest(ocrText: String): String? = detect(
+        ocrText,
+        VisualSignature(
+            sampleHash = 0L,
+            warmRatio = 0.0,
+            blueRatio = 0.0,
+            loadingCentralDarkRatio = 0.0,
+            resultContinueGrayLightRatio = 0.0,
+            resultBannerLowSaturationRatio = 0.0,
+        ),
+    )?.evidence
 
     /**
      * Result pages have a stable action label even when the outcome title is
@@ -565,6 +674,9 @@ object ScreenStateRecovery {
             log.warn { "SCREEN_RECOVERY_SKIPPED reason=war-started detected=${detection.kind.code}" }
             return false
         }
+        if (detection.kind != ScreenKind.LOADING) {
+            slowReconnectWarningObservedAt.set(0L)
+        }
 
         when (detection.kind) {
             ScreenKind.DECK_SELECTION -> {
@@ -619,6 +731,9 @@ object ScreenStateRecovery {
                                 "SCREEN_RECOVERY_RECONNECT_DISPATCHED input=recovery-sendinput " +
                                     "accepted=$accepted"
                             }
+                            if (accepted) {
+                                reconnectAcceptedAt.set(System.currentTimeMillis())
+                            }
                         } else {
                             log.info { "SCREEN_RECOVERY_RECONNECT_SKIPPED reason=state-changed" }
                         }
@@ -647,7 +762,35 @@ object ScreenStateRecovery {
 
             ScreenKind.LOADING -> {
                 Mode.recover(ModeEnum.STARTUP, "visible-loading-screen", enterStrategy = false)
-                log.info { "SCREEN_RECOVERY_APPLIED screen=LOADING action=WAIT_FOR_CLIENT" }
+                val now = System.currentTimeMillis()
+                val acceptedReconnectAt = reconnectAcceptedAt.get()
+                val observedWarningAt = if (acceptedReconnectAt <= 0L &&
+                    detection.evidence == "reconnect-slow-loading-text"
+                ) {
+                    firstSlowReconnectWarningAt(now)
+                } else 0L
+                val reconnectStartedAt = stalledReconnectAnchor(
+                    acceptedReconnectAt,
+                    observedWarningAt,
+                    now,
+                )
+                if (detection.evidence == "reconnect-slow-loading-text" &&
+                    shouldRestartStalledReconnect(reconnectStartedAt, now) &&
+                    consumeStalledReconnectAnchor(acceptedReconnectAt, reconnectStartedAt)
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_APPLIED screen=LOADING action=RESTART_CLIENT " +
+                            "reason=stalled-reconnect-loading elapsedMs=${now - reconnectStartedAt} " +
+                            "thresholdMs=$STALLED_RECONNECT_LOADING_RESTART_MS"
+                    }
+                    // Reuse the fatal-error recovery primitive. It pauses
+                    // input, launches a fresh client, then lets the starter
+                    // rediscover that window. Generic loading never reaches
+                    // this path.
+                    Core.restart()
+                } else {
+                    log.info { "SCREEN_RECOVERY_APPLIED screen=LOADING action=WAIT_FOR_CLIENT" }
+                }
             }
 
             else -> {

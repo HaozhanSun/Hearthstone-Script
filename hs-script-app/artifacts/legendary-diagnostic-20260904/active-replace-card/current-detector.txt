@@ -1,0 +1,22 @@
+input=C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script Beta\log\unknown-states\screen-watchdog\2026-09-04\unknown-state-20260904-131032-989-screen-watchdog-normal-surrender-retry-2f2b75b1-efa0-43a3-b113-9d1844c18d05.png
+case=active-replace-card phase=REPLACE_CARD
+screen=1920x1080
+provider=PADDLEX providerCall=real-sidecar-on-current-rank-roi
+rawOCR=233Iaz恶魔
+normalizedOCR=233Iaz恶魔
+providerError=<none>
+rankROI=java.awt.Rectangle[x=0,y=885,width=144,height=140] crop=artifacts\legendary-diagnostic-20260904\active-replace-card\current-rank-roi.png
+expandedROI=java.awt.Rectangle[x=0,y=842,width=230,height=216] crop=artifacts\legendary-diagnostic-20260904\active-replace-card\expanded-rank-roi.png
+digitROI=java.awt.Rectangle[x=34,y=950,width=34,height=29] crop=artifacts\legendary-diagnostic-20260904\active-replace-card\digit-roi.png
+legendaryVisualWarmPixels=4415/13110
+legendaryVisualWarmBounds=java.awt.Rectangle[x=5,y=0,width=99,height=114]
+legendaryVisualActiveColumns=71
+legendaryVisualDigitSegments=1
+legendaryVisualDigitSpan=77
+legendaryVisualConfirmed=true
+detectorRank=UNKNOWN
+detectorTier=LEGEND
+badgeVisible=true
+rankGate=ALLOW reason=legendary-badge-confirmed
+policyAction=ALLOW
+terminalPriority=not-terminal

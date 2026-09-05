@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.bean
 
 import club.xiaojiawei.hsscript.consts.ROOT_PATH
 import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.FileUtil
 import net.sourceforge.tess4j.Tesseract
@@ -22,7 +23,11 @@ class TesseractEx : Tesseract() {
 
     private val ocrDir = "ocr_res"
 
-    fun doOCR(p0: BufferedImage?, desc: String = ""): String {
+    fun doOCR(
+        p0: BufferedImage?,
+        desc: String = "",
+        allowEmptyProbeResult: Boolean = false,
+    ): String {
         if (ConfigUtil.getBoolean(ConfigEnum.SAVE_OCR_IMG)) {
             val ocrPath = Path(ROOT_PATH, ocrDir)
             if (!ocrPath.exists()) {
@@ -39,6 +44,13 @@ class TesseractEx : Tesseract() {
                 ImageIO.write(it, "png", ocrPath)
             }
         }
-        return super.doOCR(p0)
+        return OcrRuntime.recognize(
+            p0,
+            desc,
+            legacyOcr = { doLegacyOCR(p0) },
+            allowEmptyProbeResult = allowEmptyProbeResult,
+        )
     }
+
+    private fun doLegacyOCR(image: BufferedImage?): String = super.doOCR(image)
 }
