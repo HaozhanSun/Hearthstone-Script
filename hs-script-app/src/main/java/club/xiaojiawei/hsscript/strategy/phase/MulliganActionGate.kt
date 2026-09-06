@@ -6,6 +6,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class MulliganActionGate {
     private val reserved = AtomicBoolean(false)
 
+    /** Reserve the normal mulligan action without consulting rank/OCR state. */
+    fun tryReserve(): Boolean = reserved.compareAndSet(false, true)
+
     fun tryReserve(isEligible: () -> Boolean): Boolean =
         isEligible() && reserved.compareAndSet(false, true)
 

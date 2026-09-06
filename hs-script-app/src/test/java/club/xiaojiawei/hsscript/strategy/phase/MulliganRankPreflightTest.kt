@@ -25,6 +25,18 @@ class MulliganRankPreflightTest {
     }
 
     @Test
+    fun `normal mulligan reservation is not gated by rank waiting`() {
+        val gate = MulliganActionGate()
+
+        assertTrue(gate.tryReserve())
+        assertFalse(gate.tryReserve(), "duplicate INPUT must remain suppressed")
+        assertFalse(
+            gate.tryReserve { false },
+            "the legacy predicate overload cannot reopen a reservation",
+        )
+    }
+
+    @Test
     fun `retries after seven second grace without another Power log line`() {
         val scheduler = ManualScheduler()
         val attempts = mutableListOf<Long>()

@@ -1539,7 +1539,6 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         assertTrue(node.actions.any { it is AttackAction && it.targetEntityId == rivalMinion.entityId })
     }
-    }
 
     private fun testWar(): War {
         val war = War()

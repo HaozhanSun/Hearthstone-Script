@@ -71,19 +71,6 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         card.entityId.isNotBlank() && !card.isUncertain &&
             opaqueKnownCards.any { isCard(card, it) }
 
-    override fun isActionLegal(action: Action, war: War): Boolean =
-        PirateLethalAttackPolicy.isLethalFaceAction(action, war) ||
-            PirateHeroAttackTargetPolicy.isLegal(action, war)
-
-    override fun isLethalAction(action: Action, war: War): Boolean =
-        PirateLethalAttackPolicy.isLethalFaceAction(action, war)
-
-    override fun isDeferredAction(action: Action, war: War): Boolean {
-        val creator = action.creator
-        return action is PlayAction &&
-            creator?.let { isCard(it, PARACHUTE_BRIGAND) } == true &&
-            creator?.let { hasOtherPlayableAction(war, it) } == true
-    }
     /** Keep Patches available only as a last-resort action; mulligan removes it. */
     override fun actionPrior(action: Action, war: War): Double {
         val card = action.creator ?: return 0.0
@@ -165,13 +152,6 @@ object PirateWarriorMctsModel : MctsDecisionModel {
      * requirement. This is intentionally separate from actionPrior.
      */
     override fun isActionLegal(action: Action, war: War): Boolean {
-        if (!PirateHeroAttackTargetPolicy.isLegal(action, war)) return false
-
-        val creator = action.creator
-        if (creator != null && action is PlayAction && isCard(creator, CAPTAIN_CROWLEY)) {
-            return freeSlots(war) >= 3
-        }
-
         if (isFrontlineAxeHeroAttack(action, war)) {
             return when (frontlineAxeTarget(action, war)) {
                 FrontlineAxeTarget.MINION -> true
@@ -179,8 +159,21 @@ object PirateWarriorMctsModel : MctsDecisionModel {
                 FrontlineAxeTarget.UNKNOWN -> false
             }
         }
+
+        if (!PirateLethalAttackPolicy.isLethalFaceAction(action, war) &&
+            !PirateHeroAttackTargetPolicy.isLegal(action, war)
+        ) return false
+
+        val creator = action.creator
+        if (creator != null && action is PlayAction && isCard(creator, CAPTAIN_CROWLEY)) {
+            return freeSlots(war) >= 3
+        }
+
         return true
     }
+
+    override fun isLethalAction(action: Action, war: War): Boolean =
+        PirateLethalAttackPolicy.isLethalFaceAction(action, war)
 
     /** Keep Warrior's armor power behind all useful Pirate Warrior work. */
     override fun isDeferredAction(action: Action, war: War): Boolean {

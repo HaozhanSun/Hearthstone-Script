@@ -152,7 +152,10 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         // This is the first authoritative event that proves the local
         // mulligan UI exists. Rank OCR is not allowed before this boundary.
         mulliganInputConfirmed.set(true)
-        val scheduled = changeCardScheduled.tryReserve(::isMulliganActionStillAllowed)
+        // The normal mulligan action is independent from rank/OCR. Reserve it
+        // immediately; the delayed executor still rechecks live phase/pause
+        // state before clicking, and an explicit surrender can cancel it.
+        val scheduled = changeCardScheduled.tryReserve()
         log.info {
             "收到换牌输入：${tagChangeEntity.entity}，自动换牌线程调度结果：$scheduled"
         }
