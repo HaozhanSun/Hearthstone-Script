@@ -3,6 +3,7 @@ package club.xiaojiawei.hsscript.bean.single
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -10,11 +11,13 @@ class WarExTest {
 
     @BeforeTest
     fun setUp() {
+        WarEx.resetStatistics()
         WarEx.reset(print = false)
     }
 
     @AfterTest
     fun tearDown() {
+        WarEx.resetStatistics()
         WarEx.reset(print = false)
     }
 
@@ -25,6 +28,8 @@ class WarExTest {
         WarEx.endWar(resultOverride = false)
 
         assertFalse(WarEx.isWin)
+        assertEquals(0, WarEx.winCount)
+        assertEquals(0, WarEx.winStreak)
     }
 
     @Test
@@ -34,6 +39,9 @@ class WarExTest {
         WarEx.endWar(resultOverride = true)
 
         assertTrue(WarEx.isWin)
+        assertEquals(1, WarEx.winCount)
+        assertEquals(1, WarEx.winStreak)
+        assertEquals(1, WarEx.warCount)
     }
 
     @Test
