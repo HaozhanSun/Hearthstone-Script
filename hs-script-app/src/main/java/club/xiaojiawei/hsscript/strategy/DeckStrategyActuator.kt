@@ -44,7 +44,7 @@ import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 object DeckStrategyActuator {
 
     private val war = WAR
-    private const val MAX_MCTS_TURN_END_REPLANS = 2
+    private const val MAX_MCTS_TURN_END_REPLANS = MctsTurnEndReplanPolicy.MAX_REPLANS
 
     fun reset() {
         DeckStrategyManager.currentDeckStrategy?.reset()
@@ -448,6 +448,7 @@ object DeckStrategyActuator {
                         "requiresReplan" to inspection.requiresReplan,
                         "buttonColor" to inspection.buttonColor.name,
                         "mctsActionableCreatorIds" to liveActionableCreatorIds,
+                        "cycle" to strategy.currentExperimentalTurnCycle(),
                         "fullRescan" to true,
                         "remainingMana" to war.me.usableResource,
                         "hand" to war.me.handArea.cards.map { "${it.cardId}:${it.entityName}(cost=${it.cost})" },
@@ -466,7 +467,11 @@ object DeckStrategyActuator {
                 continue
             }
 
-            if (replans >= MAX_MCTS_TURN_END_REPLANS) {
+            val replanDecision = MctsTurnEndReplanPolicy.decide(
+                completedReplans = replans,
+                liveActionable = inspection.requiresReplan,
+            )
+            if (!replanDecision.shouldReplan) {
                 val evidence = UnknownStateScreenshot.capture(
                     category = UnknownStateScreenshot.CATEGORY_TURN_END_STUCK,
                     trigger = "mcts-turn-end-replan-exhausted",
@@ -476,18 +481,53 @@ object DeckStrategyActuator {
                 )
                 log.error {
                     "MCTS_TURN_END_REPLAN_EXHAUSTED turn=${war.me.turn} replans=$replans " +
-                        "remainingActions=true; no legacy fallback action was dispatched " +
+                        "maxReplans=$MAX_MCTS_TURN_END_REPLANS planningPasses=${replanDecision.planningPass} " +
+                        "remainingActions=${inspection.requiresReplan} reason=${replanDecision.reason}; " +
+                        "freshLiveRescan=${replanDecision.freshLiveRescanRequired} " +
+                        "reusedPreviousPlan=${replanDecision.reusePreviousPlan}; " +
+                        "no legacy fallback action was dispatched " +
                         "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                         "screenshotLink=${evidence?.link ?: "none"}"
                 }
                 return
             }
 
-            replans++
+            replans = replanDecision.attempt
             log.warn {
-                "MCTS_TURN_END_REPLAN turn=${war.me.turn} attempt=$replans/$MAX_MCTS_TURN_END_REPLANS " +
-                    "reason=live-state-still-actionable-after-strategy-return"
+                "MCTS_TURN_END_REPLAN turn=${war.me.turn} attempt=${replanDecision.attempt}/$MAX_MCTS_TURN_END_REPLANS " +
+                    "planningPass=${replanDecision.planningPass} reason=${replanDecision.reason} " +
+                    "freshLiveRescan=${replanDecision.freshLiveRescanRequired} " +
+                    "reusedPreviousPlan=${replanDecision.reusePreviousPlan}"
             }
+            MctsReplayTrace.record(
+                war,
+                "turn_end_replan_requested",
+                "fresh live scan found actionable work; request a new MCTS planning pass",
+                mapOf(
+                    "strategy" to strategy.name(),
+                    "attempt" to replanDecision.attempt,
+                    "maxReplans" to MAX_MCTS_TURN_END_REPLANS,
+                    "planningPass" to replanDecision.planningPass,
+                    "freshLiveRescan" to replanDecision.freshLiveRescanRequired,
+                    "reusedPreviousPlan" to replanDecision.reusePreviousPlan,
+                    "liveActionableCreatorIds" to liveActionableCreatorIds,
+                    "reason" to replanDecision.reason,
+                    "completedCycle" to strategy.currentExperimentalTurnCycle(),
+                    "nextCycle" to strategy.currentExperimentalTurnCycle() + 1,
+                ),
+            )
+            MctsReplayTrace.record(
+                war,
+                "turn_cycle_boundary",
+                "full live rescan found newly actionable work; the next strategy pass starts a fresh ordered cycle",
+                mapOf(
+                    "strategy" to strategy.name(),
+                    "completedCycle" to strategy.currentExperimentalTurnCycle(),
+                    "nextCycle" to strategy.currentExperimentalTurnCycle() + 1,
+                    "liveActionableCreatorIds" to liveActionableCreatorIds,
+                    "fullRescan" to true,
+                ),
+            )
             SystemUtil.delayShortMedium()
             strategy.executeOutCard()
         }
