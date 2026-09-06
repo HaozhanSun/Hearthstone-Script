@@ -1,8 +1,12 @@
 package club.xiaojiawei.hsscriptcardsdk.mcts
 
 import club.xiaojiawei.hsscriptcardsdk.bean.Action
+import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
+import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
+import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
+import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 
 /**
  * Coarse phases for the live/receding-horizon action order. Card-specific

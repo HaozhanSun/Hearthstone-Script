@@ -31,8 +31,6 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     const val HOZEN_ROUGHHOUSER = "VAC_938"
     const val RAGEWING = "YOD_032"
 
-    override fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? =
-        defaultMctsActionOrderPhase(action)
     const val HOOKFIST = "CORE_NX2_028"
     const val ANCHOR = "DRG_025"
     const val FRONTLINE_AXE = "BAR_844"
