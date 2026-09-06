@@ -229,6 +229,7 @@ class PirateWarriorOfflineReplayTest {
 
     private fun warriorPowerLast(): Evaluation {
         val war = testWar(turn = 2, mana = 2)
+        war.addCard(testCard(PirateAttackOrderPolicy.ADRENALINE_FIEND, 2), war.me.playArea)
         val power = testHeroPower()
         val minion = testCard("PLAYABLE_PIRATE", 1)
         war.addCard(power, war.me.playArea)

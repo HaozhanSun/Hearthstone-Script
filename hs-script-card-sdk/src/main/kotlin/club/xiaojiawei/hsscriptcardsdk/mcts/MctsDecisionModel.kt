@@ -15,14 +15,16 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
  */
 enum class MctsActionOrderPhase(val monotonicRank: Int) {
     /** Explicit Pirate DH exception after a hero attack. */
-    POST_HERO_ATTACK_LOCATION(5),
+    POST_HERO_ATTACK_LOCATION(7),
     /** Explicit Pirate DH exception between two Cliffside activations. */
-    CLIFFSIDE_HERO_ATTACK(4),
+    CLIFFSIDE_HERO_ATTACK(6),
     MINION_PLAY(0),
     SPELL_PLAY(1),
-    MINION_ATTACK(2),
-    HERO_POWER(3),
-    HERO_ATTACK(4),
+    /** Hero power/attack may precede minion attacks when the deck allows it. */
+    EARLY_HERO_ACTION(2),
+    MINION_ATTACK(3),
+    HERO_POWER(4),
+    HERO_ATTACK(5),
 }
 
 /** Shared classifier for decks that explicitly opt into this action order. */

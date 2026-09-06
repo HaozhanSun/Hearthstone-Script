@@ -292,6 +292,7 @@ class PirateWarriorMctsGoldenScenarioTest {
     @Test
     fun `warrior hero power is last resort while minions or attacks remain`() {
         val withMinion = testWar(turn = 2, mana = 2)
+        withMinion.addCard(testCard(PirateAttackOrderPolicy.ADRENALINE_FIEND, 2), withMinion.me.playArea)
         val power = testHeroPower()
         val minion = testCard("PLAYABLE_PIRATE", 1)
         withMinion.addCard(power, withMinion.me.playArea)
@@ -304,6 +305,7 @@ class PirateWarriorMctsGoldenScenarioTest {
             PirateWarriorMctsModel.actionPrior(minionAction, withMinion))
 
         val withAttack = testWar(turn = 2, mana = 2)
+        withAttack.addCard(testCard(PirateAttackOrderPolicy.ADRENALINE_FIEND, 2), withAttack.me.playArea)
         val attackPower = testHeroPower()
         val attacker = testCard("READY_PIRATE", 1)
         withAttack.addCard(testHero("MY_HERO", health = 4), withAttack.me.playArea)

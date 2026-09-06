@@ -188,7 +188,7 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     /** Keep Warrior's armor power behind all useful Pirate Warrior work. */
     override fun isDeferredAction(action: Action, war: War): Boolean {
         if (isHeroPowerAction(action)) {
-            return hasOtherUsefulNonHeroPowerAction(war)
+            return PirateAttackOrderPolicy.hasAdrenalineFiend(war) && hasOtherUsefulNonHeroPowerAction(war)
         }
 
         if (isFrontlineAxeHeroAttack(action, war) &&
@@ -224,9 +224,17 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             action is AttackAction && action.creator?.cardType === CardTypeEnum.MINION ->
                 MctsActionOrderPhase.MINION_ATTACK
             action is PowerAction && action.creator?.cardType === CardTypeEnum.HERO_POWER ->
-                MctsActionOrderPhase.HERO_POWER
+                if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
+                    MctsActionOrderPhase.HERO_POWER
+                } else {
+                    MctsActionOrderPhase.EARLY_HERO_ACTION
+                }
             action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO ->
-                MctsActionOrderPhase.HERO_ATTACK
+                if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
+                    MctsActionOrderPhase.HERO_ATTACK
+                } else {
+                    MctsActionOrderPhase.EARLY_HERO_ACTION
+                }
             else -> null
         }
 

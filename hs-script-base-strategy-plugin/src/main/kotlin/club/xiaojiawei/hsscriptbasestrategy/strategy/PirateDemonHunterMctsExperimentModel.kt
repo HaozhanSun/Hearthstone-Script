@@ -273,9 +273,17 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             action is AttackAction && action.creator?.cardType === CardTypeEnum.MINION ->
                 MctsActionOrderPhase.MINION_ATTACK
             action is PowerAction && action.creator?.cardType === CardTypeEnum.HERO_POWER ->
-                MctsActionOrderPhase.HERO_POWER
+                if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
+                    MctsActionOrderPhase.HERO_POWER
+                } else {
+                    MctsActionOrderPhase.EARLY_HERO_ACTION
+                }
             action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO ->
-                MctsActionOrderPhase.HERO_ATTACK
+                if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
+                    MctsActionOrderPhase.HERO_ATTACK
+                } else {
+                    MctsActionOrderPhase.EARLY_HERO_ACTION
+                }
             else -> null
         }
     }
@@ -375,7 +383,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         // still available. It becomes legal again on the next re-plan after
         // the useful hand/board actions have been exhausted.
         if (isHeroPowerAction(action)) {
-            return hasOtherNonHeroPowerAction(war)
+            return PirateAttackOrderPolicy.hasAdrenalineFiend(war) && hasOtherNonHeroPowerAction(war)
         }
 
         // Preserve the requested attack order for the Fiend line: clear all

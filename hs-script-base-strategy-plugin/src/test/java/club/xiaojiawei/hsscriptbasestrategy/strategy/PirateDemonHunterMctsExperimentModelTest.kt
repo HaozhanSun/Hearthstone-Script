@@ -517,6 +517,7 @@ class PirateDemonHunterMctsExperimentModelTest {
     @Test
     fun `hero power is deferred until non-hero-power actions are exhausted`() {
         val war = testWar().apply { me.resources = 2 }
+        war.addCard(testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND), war.me.playArea)
         val heroPower = testCard("HERO_POWER_TEST").apply {
             cardType = CardTypeEnum.HERO_POWER
             cardRace = CardRaceEnum.UNKNOWN
@@ -554,6 +555,7 @@ class PirateDemonHunterMctsExperimentModelTest {
     @Test
     fun `hero power stays deferred when coin bridges to a non-power card`() {
         val war = testWar().apply { me.resources = 1 }
+        war.addCard(testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND), war.me.playArea)
         val heroPower = testCard("HERO_POWER_BRIDGE").apply {
             cardType = CardTypeEnum.HERO_POWER
             cardRace = CardRaceEnum.UNKNOWN
@@ -582,6 +584,7 @@ class PirateDemonHunterMctsExperimentModelTest {
     @Test
     fun `mcts root and replans enforce minion play then minion attack then hero power`() {
         val war = testWar().apply { me.resources = 10 }
+        war.addCard(testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND), war.me.playArea)
         val handMinion = testCard("HAND_MINION_FOR_ORDER")
         val handSpell = testCard(PirateDemonHunterMctsExperimentModel.SIGIL_OF_SKYDIVING).apply {
             cardType = CardTypeEnum.SPELL
@@ -643,13 +646,20 @@ class PirateDemonHunterMctsExperimentModelTest {
             it is AttackAction && it.creator?.cardType === CardTypeEnum.MINION
         })
 
-        val afterMinionAttack = afterSpellPlay.buildNextNode(afterSpellPlay.actions.single())
-        assertTrue(afterMinionAttack.actions.isNotEmpty())
-        assertTrue(afterMinionAttack.actions.all {
+        var afterMinionAttacks = afterSpellPlay
+        repeat(afterSpellPlay.actions.size) {
+            assertTrue(afterMinionAttacks.actions.isNotEmpty())
+            assertTrue(afterMinionAttacks.actions.all {
+                it is AttackAction && it.creator?.cardType === CardTypeEnum.MINION
+            })
+            afterMinionAttacks = afterMinionAttacks.buildNextNode(afterMinionAttacks.actions.first())
+        }
+        assertTrue(afterMinionAttacks.actions.isNotEmpty())
+        assertTrue(afterMinionAttacks.actions.all {
             it is PowerAction && it.creator?.cardType === CardTypeEnum.HERO_POWER
         })
 
-        val afterHeroPower = afterMinionAttack.buildNextNode(afterMinionAttack.actions.single())
+        val afterHeroPower = afterMinionAttacks.buildNextNode(afterMinionAttacks.actions.single())
         assertTrue(afterHeroPower.actions.isNotEmpty())
         assertTrue(afterHeroPower.actions.all {
             it is AttackAction && it.creator?.cardType === CardTypeEnum.HERO
@@ -1366,6 +1376,55 @@ class PirateDemonHunterMctsExperimentModelTest {
                 isEndTurn = false,
                 endTurnLegal = true,
             ),
+        )
+    }
+
+    @Test
+    fun `without adrenaline fiend hero actions may precede minion attacks`() {
+        val war = testWar()
+        val hero = testCard("EARLY_HERO").apply { cardType = CardTypeEnum.HERO }
+        val power = testCard("EARLY_POWER").apply { cardType = CardTypeEnum.HERO_POWER }
+        val minion = testCard("EARLY_MINION")
+        war.addCard(hero, war.me.playArea)
+        war.addCard(power, war.me.playArea)
+        war.addCard(minion, war.me.playArea)
+
+        assertEquals(
+            MctsActionOrderPhase.EARLY_HERO_ACTION,
+            PirateDemonHunterMctsExperimentModel.actionOrderPhase(AttackAction({}, {}, hero), war),
+        )
+        assertEquals(
+            MctsActionOrderPhase.EARLY_HERO_ACTION,
+            PirateDemonHunterMctsExperimentModel.actionOrderPhase(PowerAction({}, {}, power), war),
+        )
+        assertEquals(
+            MctsActionOrderPhase.MINION_ATTACK,
+            PirateDemonHunterMctsExperimentModel.actionOrderPhase(AttackAction({}, {}, minion), war),
+        )
+        assertFalse(
+            PirateDemonHunterMctsExperimentModel.isDeferredAction(PowerAction({}, {}, power), war),
+        )
+    }
+
+    @Test
+    fun `adrenaline fiend keeps hero actions after minion attacks`() {
+        val war = testWar()
+        val hero = testCard("FIEND_HERO").apply { cardType = CardTypeEnum.HERO }
+        val power = testCard("FIEND_POWER").apply { cardType = CardTypeEnum.HERO_POWER }
+        val minion = testCard("FIEND_MINION")
+        val fiend = testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND)
+        war.addCard(hero, war.me.playArea)
+        war.addCard(power, war.me.playArea)
+        war.addCard(minion, war.me.playArea)
+        war.addCard(fiend, war.me.playArea)
+
+        assertEquals(
+            MctsActionOrderPhase.HERO_POWER,
+            PirateDemonHunterMctsExperimentModel.actionOrderPhase(PowerAction({}, {}, power), war),
+        )
+        assertEquals(
+            MctsActionOrderPhase.HERO_ATTACK,
+            PirateDemonHunterMctsExperimentModel.actionOrderPhase(AttackAction({}, {}, hero), war),
         )
     }
 

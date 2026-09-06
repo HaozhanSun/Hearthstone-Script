@@ -361,7 +361,10 @@ class MonteCarloTreeNode(
         // rank an attack above a minion play, but it must not be able to cross
         // the explicit minion/location -> spell -> minion attack -> hero power
         // -> hero attack
-        // phases. Mandatory Cannon/Quest/location rules then choose within
+        // phases. When the Pirate Fiend is absent, EARLY_HERO_ACTION is an
+        // intentional exception that lets the model clear a threat before
+        // risking friendly minions. Mandatory Cannon/Quest/location rules
+        // then choose within
         // the currently allowed phase and cannot violate that order.
         val orderedActions = arg.decisionModel?.let { model ->
             val phaseOrder = listOf(
@@ -369,6 +372,7 @@ class MonteCarloTreeNode(
                 MctsActionOrderPhase.CLIFFSIDE_HERO_ATTACK,
                 MctsActionOrderPhase.MINION_PLAY,
                 MctsActionOrderPhase.SPELL_PLAY,
+                MctsActionOrderPhase.EARLY_HERO_ACTION,
                 MctsActionOrderPhase.MINION_ATTACK,
                 MctsActionOrderPhase.HERO_POWER,
                 MctsActionOrderPhase.HERO_ATTACK,
