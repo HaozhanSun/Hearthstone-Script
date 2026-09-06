@@ -183,6 +183,48 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `hero attack exposes ordinary minion targets on a wide enemy board`() {
+        val war = testWar()
+        val hero = testCard("WIDE_BOARD_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 1
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("WIDE_BOARD_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            health = 20
+        }
+        val enemyMinions = (1..4).map { index ->
+            testCard("WIDE_BOARD_MINION_$index").apply {
+                cardType = CardTypeEnum.MINION
+                atc = if (index == 4) 6 else 1
+                health = if (index == 1) 1 else 4
+            }
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        enemyMinions.forEach { war.addCard(it, war.rival.playArea) }
+
+        val generated = hero.action.generateAttackActions(war, war.me)
+
+        assertEquals(5, generated.size)
+        assertTrue(generated.any { it.targetEntityId == enemyMinions.first().entityId })
+        assertTrue(
+            generated.any {
+                it.targetEntityId == enemyMinions.first().entityId &&
+                    PirateDemonHunterMctsExperimentModel.isActionLegal(it, war)
+            },
+        )
+        assertTrue(
+            generated.none {
+                it.targetIsHero && PirateDemonHunterMctsExperimentModel.isActionLegal(it, war)
+            },
+        )
+    }
+
+    @Test
     fun `hero may attack face when no enemy minion is killable`() {
         val war = testWar()
         val hero = testCard("FACE_HERO").apply {

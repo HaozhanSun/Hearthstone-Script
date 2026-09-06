@@ -212,7 +212,15 @@ abstract class CardAction(
             val rivalTauntCards = CardUtil.getTauntCards(war.rival.playArea.cards, true)
             val rivalPlayCards = if (rivalTauntCards.isEmpty()) war.rival.playArea.cards else rivalTauntCards
             val size = rivalPlayCards.size
-            val littleCard = size < 3 || war.rival.playArea.hero?.canBeAttacked() == false
+            // Hero targeting policy can deliberately choose the highest-threat
+            // killable minion even on a wide board.  The old size-based
+            // reduction hid ordinary minion targets whenever three or more
+            // enemy cards were present, leaving the policy with only a face
+            // action that it was required to reject.  Keep the optimization
+            // for minions, but always expose every legal minion target for a
+            // hero so deck policies and the executor see the same action set.
+            val littleCard = card.cardType === CardTypeEnum.HERO ||
+                size < 3 || war.rival.playArea.hero?.canBeAttacked() == false
             for (rivalPlayCard in rivalPlayCards) {
                 if ((littleCard || rivalPlayCard.isTaunt || rivalPlayCard.isAura || rivalPlayCard.isWindFury || rivalPlayCard.isAdjacentBuff || rivalPlayCard.isLifesteal || rivalPlayCard.isTriggerVisual) && rivalPlayCard.canBeAttacked()) {
                     result.add(
