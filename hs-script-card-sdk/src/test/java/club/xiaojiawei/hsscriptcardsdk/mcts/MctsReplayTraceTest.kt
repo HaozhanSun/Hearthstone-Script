@@ -131,6 +131,43 @@ class MctsReplayTraceTest {
     }
 
     @Test
+    fun `replay makes location play and immediate power consecutive`() {
+        val root = Files.createTempDirectory("mcts-replay-immediate-location-").toFile()
+        try {
+            val war = war("immediate-location-game", 104L)
+            val play = MctsReplayTrace.record(
+                war,
+                "action_dispatched",
+                "location play dispatched",
+                mapOf("action" to "PLAY_LOCATION", "creatorId" to "location-1"),
+                root,
+            )!!.toFile()
+            MctsReplayTrace.record(
+                war,
+                "action_confirmed",
+                "location play confirmed; immediate power fence armed",
+                mapOf("action" to "PLAY_LOCATION", "nextAction" to "POWER_LOCATION"),
+                root,
+            )
+            val power = MctsReplayTrace.record(
+                war,
+                "action_dispatched",
+                "immediate location power dispatched",
+                mapOf("action" to "POWER_LOCATION", "creatorId" to "location-1"),
+                root,
+            )!!.toFile()
+
+            val text = play.readText()
+            assertTrue(text.indexOf("PLAY_LOCATION") < text.indexOf("POWER_LOCATION"))
+            assertTrue(text.contains("nextAction"))
+            assertTrue(play.readText().contains("PLAY_LOCATION"))
+            assertTrue(power.readText().contains("POWER_LOCATION"))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `retains only the newest fifty game directories`() {
         val root = Files.createTempDirectory("mcts-replay-retention-").toFile()
         try {

@@ -1027,6 +1027,11 @@ class PirateDemonHunterMctsExperimentModelTest {
         war.addCard(cliffside, war.me.handArea)
         war.addCard(testCard("PIRATE_TEMPLATE"), war.me.deckArea)
 
+        assertTrue(
+            PirateDemonHunterMctsExperimentModel.shouldImmediatelyPowerLocation(cliffside, war),
+            "the live executor must arm the immediate power fence after this location is played",
+        )
+
         val root = MonteCarloTreeNode(war, InitAction, testMctsArg())
         val play = root.actions.firstOrNull { it.creator?.entityId == cliffside.entityId }
         assertTrue(play != null, "a playable cliffside location should be present in the root action list")

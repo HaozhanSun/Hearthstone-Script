@@ -23,6 +23,33 @@ import club.xiaojiawei.hsscriptcardsdk.mcts.MctsTurnPhaseFence
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 
+internal class ImmediateLocationFenceState {
+    var pendingCreatorId: String? = null
+        private set
+
+    fun observeConfirmedPlay(
+        action: Action,
+        decisionModel: MctsDecisionModel?,
+        war: War,
+    ): String? {
+        if (action !is PlayAction) return null
+        val creatorId = action.creator
+            ?.takeIf { decisionModel?.shouldImmediatelyPowerLocation(it, war) == true }
+            ?.entityId
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+        pendingCreatorId = creatorId
+        return creatorId
+    }
+
+    fun observeConfirmedPower(action: Action): String? {
+        if (action !is PowerAction || action.creator?.entityId != pendingCreatorId) return null
+        val creatorId = pendingCreatorId
+        pendingCreatorId = null
+        return creatorId
+    }
+}
+
 /**
  * 蒙特卡洛树搜索算法
  * @author 肖嘉威
@@ -463,6 +490,8 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
         val search = MonteCarloTreeSearch()
         var actionCount = 0
         var emptySearchRescans = 0
+        var immediateLocationRetries = 0
+        val immediateLocationFence = ImmediateLocationFenceState()
         val blockedCreatorIds = suppressedExperimentalCreatorIds().toMutableSet()
         while (war.isMyTurn && System.currentTimeMillis() < turnDeadline && actionCount < 16) {
             val searchStart = System.currentTimeMillis()
@@ -470,10 +499,25 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 turnDeadline,
                 searchStart + template.experimentalActionBudgetMillis,
             )
-            val decisionModel = template.decisionModel?.let { model ->
+            val phaseDecisionModel = template.decisionModel?.let { model ->
                 if (blockedCreatorIds.isEmpty() && !weaponPlayedThisTurn && !phaseFence.isActive()) model
                 else TemporarilyBlockedActionModel(model, blockedCreatorIds, weaponPlayedThisTurn, phaseFence)
             }
+            val freeSlotsForImmediateLocation =
+                (war.me.playArea.maxSize - war.me.playArea.cards.size).coerceAtLeast(0)
+            val immediateLocationFenceId = immediateLocationFence.pendingCreatorId?.takeIf { creatorId ->
+                freeSlotsForImmediateLocation >= 2 &&
+                    war.me.playArea.cards.any { card ->
+                        card.entityId == creatorId &&
+                            card.cardType === CardTypeEnum.LOCATION &&
+                            card.isAlive()
+                    }
+            }
+            val decisionModel = immediateLocationFenceId?.let { creatorId ->
+                phaseDecisionModel?.let { model ->
+                    ImmediateLocationActionModel(model, creatorId)
+                }
+            } ?: phaseDecisionModel
             val arg = MCTSArg(
                 actionDeadline,
                 1,
@@ -505,6 +549,10 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                     "search-empty-or-end-turn-rescan",
                     blockWeaponPlays = weaponPlayedThisTurn,
                 )
+                val freeSlots = (war.me.playArea.maxSize - war.me.playArea.cards.size).coerceAtLeast(0)
+                val shouldRetryForImmediateLocation = immediateLocationFence.pendingCreatorId != null &&
+                    immediateLocationFence.pendingCreatorId !in liveCreators &&
+                    freeSlots >= 2
                 val shouldRetryForPerception = liveCreators.isEmpty() &&
                     template.decisionModel?.shouldRetryAfterEmptySearch(war) == true
                 val fallback = if (liveCreators.isNotEmpty()) {
@@ -527,6 +575,33 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                             "action" to describeAction(fallback),
                         ),
                     )
+                } else if (shouldRetryForImmediateLocation && immediateLocationRetries < maxPerceptionRescans) {
+                    immediateLocationRetries++
+                    val retryScreenshot = MctsReplayTrace.captureActionSnapshot(
+                        war,
+                        "location-refresh-pending",
+                        actionCount + 1,
+                        MctsActionOrderPhase.MINION_PLAY.name,
+                        "immediate location power pending",
+                        "location-play-confirmed-wait",
+                    )
+                    MctsReplayTrace.record(
+                        war,
+                        "controller_branch",
+                        "immediate-location-power-pending-retry",
+                        mapOf(
+                            "strategy" to name(),
+                            "step" to actionCount + 1,
+                            "attempt" to immediateLocationRetries,
+                            "maxAttempts" to maxPerceptionRescans,
+                            "pendingCreatorId" to immediateLocationFence.pendingCreatorId,
+                            "liveActionableCreatorIds" to liveCreators,
+                            "boardSlotsFree" to freeSlots,
+                            "screenshot" to retryScreenshot,
+                        ),
+                    )
+                    Thread.sleep(perceptionRescanDelayMillis)
+                    continue
                 } else if (shouldRetryForPerception && emptySearchRescans < maxPerceptionRescans) {
                     emptySearchRescans++
                     val retryScreenshot = MctsReplayTrace.captureActionSnapshot(
@@ -624,6 +699,32 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 }
             } else {
                 emptySearchRescans = 0
+            }
+            val pendingLocationId = immediateLocationFence.pendingCreatorId
+            if (
+                pendingLocationId != null &&
+                freeSlotsForImmediateLocation >= 2 &&
+                action != null &&
+                action !== TurnOverAction &&
+                action.creator?.entityId != pendingLocationId
+            ) {
+                MctsReplayTrace.record(
+                    war,
+                    "controller_branch",
+                    "immediate-location-action-rejected",
+                    mapOf(
+                        "strategy" to name(),
+                        "step" to actionCount + 1,
+                        "pendingCreatorId" to pendingLocationId,
+                        "action" to describeAction(action),
+                    ),
+                )
+                if (immediateLocationRetries < maxPerceptionRescans) {
+                    immediateLocationRetries++
+                    Thread.sleep(perceptionRescanDelayMillis)
+                    continue
+                }
+                break
             }
             if (action == null) {
                 MctsReplayTrace.record(
@@ -849,6 +950,34 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 )
                 break
             }
+            val armedLocationId = immediateLocationFence.observeConfirmedPlay(action, template.decisionModel, war)
+            val confirmedLocationId = immediateLocationFence.observeConfirmedPower(action)
+            if (armedLocationId != null) {
+                immediateLocationRetries = 0
+                MctsReplayTrace.record(
+                    war,
+                    "controller_branch",
+                    "immediate-location-power-armed",
+                    mapOf(
+                        "strategy" to name(),
+                        "step" to actionCount,
+                        "creatorId" to armedLocationId,
+                        "nextAction" to "POWER_LOCATION",
+                    ),
+                )
+            } else if (confirmedLocationId != null) {
+                MctsReplayTrace.record(
+                    war,
+                    "controller_branch",
+                    "immediate-location-power-confirmed",
+                    mapOf(
+                        "strategy" to name(),
+                        "step" to actionCount,
+                        "creatorId" to confirmedLocationId,
+                    ),
+                )
+                immediateLocationRetries = 0
+            }
             val confirmedScreenshot = MctsReplayTrace.captureActionSnapshot(
                 war,
                 "after-confirmed",
@@ -973,6 +1102,33 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             else -> action.javaClass.simpleName
         }
         return "$kind($card)"
+    }
+
+    /**
+     * A confirmed location play can require a specific follow-up click before
+     * any other MCTS action is allowed.  This is intentionally an executor
+     * fence: the generic tree still chooses the location power action, while
+     * the fence prevents a stale root from slipping to hero power/attack or
+     * EndTurn during the short parser transition after the play.
+     */
+    internal class ImmediateLocationActionModel(
+        private val delegate: MctsDecisionModel,
+        private val creatorId: String,
+    ) : MctsDecisionModel by delegate {
+        private fun isTarget(action: Action): Boolean =
+            action is PowerAction && action.creator?.entityId == creatorId
+
+        override fun isMandatoryAction(action: Action, war: War): Boolean =
+            isTarget(action)
+
+        override fun isActionLegal(action: Action, war: War): Boolean =
+            isTarget(action) && delegate.isActionLegal(action, war)
+
+        override fun isDeferredAction(action: Action, war: War): Boolean =
+            !isTarget(action)
+
+        override fun actionPrior(action: Action, war: War): Double =
+            if (isTarget(action)) Double.MAX_VALUE else delegate.actionPrior(action, war)
     }
 
     /**

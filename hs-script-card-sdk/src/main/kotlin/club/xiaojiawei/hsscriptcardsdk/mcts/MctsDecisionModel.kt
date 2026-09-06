@@ -64,6 +64,13 @@ interface MctsDecisionModel {
     fun canCreateOpaquePowerAction(card: Card, war: War): Boolean = false
 
     /**
+     * Whether a location played from hand must be powered immediately after
+     * the live board confirms the play.  The generic MCTS harness does not
+     * assume that every location has an immediate activation chain.
+     */
+    fun shouldImmediatelyPowerLocation(card: Card, war: War): Boolean = false
+
+    /**
      * Whether an empty/EndTurn search result should be retried briefly because
      * the live parser is expected to publish a just-completed action's state.
      *

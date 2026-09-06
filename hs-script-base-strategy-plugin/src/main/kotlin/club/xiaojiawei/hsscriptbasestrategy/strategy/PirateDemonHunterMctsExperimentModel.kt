@@ -182,6 +182,10 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             // required.
             freeSlots(war) >= cliffsideActivationSlots(war)
 
+    override fun shouldImmediatelyPowerLocation(card: Card, war: War): Boolean =
+        isCard(card, DANGEROUS_CLIFFSIDE) &&
+            card.cardType === CardTypeEnum.LOCATION
+
     /**
      * After the first Cliffside activation, Hearthstone can publish the hero's
      * exhausted state before it clears the location cooldown in Power.log. An
