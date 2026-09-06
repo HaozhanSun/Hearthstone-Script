@@ -71,6 +71,19 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         card.entityId.isNotBlank() && !card.isUncertain &&
             opaqueKnownCards.any { isCard(card, it) }
 
+    override fun isActionLegal(action: Action, war: War): Boolean =
+        PirateLethalAttackPolicy.isLethalFaceAction(action, war) ||
+            PirateHeroAttackTargetPolicy.isLegal(action, war)
+
+    override fun isLethalAction(action: Action, war: War): Boolean =
+        PirateLethalAttackPolicy.isLethalFaceAction(action, war)
+
+    override fun isDeferredAction(action: Action, war: War): Boolean {
+        val creator = action.creator
+        return action is PlayAction &&
+            creator?.let { isCard(it, PARACHUTE_BRIGAND) } == true &&
+            creator?.let { hasOtherPlayableAction(war, it) } == true
+    }
     /** Keep Patches available only as a last-resort action; mulligan removes it. */
     override fun actionPrior(action: Action, war: War): Double {
         val card = action.creator ?: return 0.0

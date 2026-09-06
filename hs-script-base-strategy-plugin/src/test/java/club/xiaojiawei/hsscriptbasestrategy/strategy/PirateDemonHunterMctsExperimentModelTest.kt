@@ -1441,6 +1441,106 @@ class PirateDemonHunterMctsExperimentModelTest {
         assertTrue(node.actions.none { it.creator?.cardId == brigand.cardId })
     }
 
+    @Test
+    fun `root lethal gate exposes face attacks before nonlethal minion trades`() {
+        val war = testWar()
+        val rivalHero = testCard("LETHAL_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 4
+            atc = 0
+        }
+        val rivalMinion = testCard("LETHAL_RIVAL_MINION").apply { health = 6; atc = 0 }
+        val first = testCard("LETHAL_ATTACKER_ONE").apply { cost = 0; atc = 2; isExhausted = false }
+        val second = testCard("LETHAL_ATTACKER_TWO").apply { cost = 0; atc = 2; isExhausted = false }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(rivalMinion, war.rival.playArea)
+        war.addCard(first, war.me.playArea)
+        war.addCard(second, war.me.playArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it is AttackAction && it.targetIsHero })
+        assertTrue(node.actions.none { it is AttackAction && !it.targetIsHero })
+    }
+
+    @Test
+    fun `taunt prevents the lethal gate from claiming face damage`() {
+        val war = testWar()
+        val rivalHero = testCard("TAUNT_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 4
+            atc = 0
+        }
+        val taunt = testCard("LETHAL_TAUNT").apply { health = 8; atc = 0; isTaunt = true }
+        val attacker = testCard("TAUNT_ATTACKER").apply { cost = 0; atc = 4; isExhausted = false }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(taunt, war.rival.playArea)
+        war.addCard(attacker, war.me.playArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it is AttackAction && it.targetEntityId == taunt.entityId })
+        assertTrue(node.actions.none { it is AttackAction && it.targetIsHero })
+    }
+
+    @Test
+    fun `weapon attack contributes to team lethal face route`() {
+        val war = testWar()
+        val rivalHero = testCard("WEAPON_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 4
+            atc = 0
+        }
+        val rivalMinion = testCard("WEAPON_RIVAL_MINION").apply { health = 6; atc = 0 }
+        val attacker = testCard("WEAPON_ATTACKER").apply { cost = 0; atc = 2; isExhausted = false }
+        val hero = testCard("WEAPON_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+            atc = 0
+            isExhausted = false
+        }
+        val weapon = testCard("WEAPON_FOR_LETHAL").apply {
+            cardType = CardTypeEnum.WEAPON
+            atc = 2
+            health = 2
+        }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(rivalMinion, war.rival.playArea)
+        war.addCard(attacker, war.me.playArea)
+        war.addCard(hero, war.me.playArea)
+        war.addCard(weapon, war.me.playArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it is AttackAction && it.creator?.entityId == hero.entityId && it.targetIsHero })
+        assertTrue(node.actions.none { it is AttackAction && !it.targetIsHero })
+    }
+
+    @Test
+    fun `nonlethal total damage keeps normal minion target fallback`() {
+        val war = testWar()
+        val rivalHero = testCard("NONLETHAL_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 8
+            atc = 0
+        }
+        val rivalMinion = testCard("NONLETHAL_RIVAL_MINION").apply { health = 6; atc = 0 }
+        val attacker = testCard("NONLETHAL_ATTACKER").apply { cost = 0; atc = 2; isExhausted = false }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(rivalMinion, war.rival.playArea)
+        war.addCard(attacker, war.me.playArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it is AttackAction && it.targetEntityId == rivalMinion.entityId })
+    }
+    }
+
     private fun testWar(): War {
         val war = War()
         val me = Player(playerId = "me", war = war)

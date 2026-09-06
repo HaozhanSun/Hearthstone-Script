@@ -319,6 +319,43 @@ class MonteCarloTreeNode(
                 )
             }
         }
+        // A legal face-lethal route is a root-level hard gate. It must run
+        // before the ordinary phase fence; otherwise MINION_PLAY or a
+        // non-lethal trade can win the root before the attack actions are
+        // considered. Re-planning creates a fresh root after each attack, so
+        // the calculation naturally falls back to the normal phase order once
+        // the remaining legal damage is no longer lethal.
+        if (parent == null && decisionModel != null) {
+            val lethalActions = result.filter { decisionModel.isLethalAction(it, war) }
+            if (lethalActions.isNotEmpty()) {
+                addScan(
+                    mapOf(
+                        "kind" to "TREE_FILTER",
+                        "outcome" to "LETHAL_FACE_ATTACK_ONLY",
+                        "reason" to "legal-current-damage-reaches-rival-hero-life",
+                        "beforeCount" to result.size,
+                        "afterCount" to lethalActions.size,
+                        "actions" to lethalActions.map(::actionDescription),
+                    ),
+                )
+                rootScan?.let { scan ->
+                    MctsReplayTrace.record(
+                        war,
+                        "action_scan",
+                        "root action scan completed with lethal face-attack restriction",
+                        mapOf(
+                            "strategy" to arg.debugName,
+                            "phase" to "root",
+                            "preFilterActionCount" to result.size,
+                            "lethalActionCount" to lethalActions.size,
+                            "finalActionCount" to lethalActions.size,
+                            "decisions" to scan,
+                        ),
+                    )
+                }
+                return lethalActions.toMutableList()
+            }
+        }
         // Apply the released deck action order before card-specific mandatory
         // rules. This is the important root/re-plan boundary: actionPrior can
         // rank an attack above a minion play, but it must not be able to cross

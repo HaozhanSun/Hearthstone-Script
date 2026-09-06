@@ -176,6 +176,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             freeSlots(war) >= cliffsideActivationSlots(war)
 
     override fun isActionLegal(action: Action, war: War): Boolean {
+        if (PirateLethalAttackPolicy.isLethalFaceAction(action, war)) return true
         if (!PirateHeroAttackTargetPolicy.isLegal(action, war)) return false
         if (action === TurnOverAction) {
             // EndTurn is never legal while the parser still exposes a
@@ -199,6 +200,9 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         }
         return true
     }
+
+    override fun isLethalAction(action: Action, war: War): Boolean =
+        PirateLethalAttackPolicy.isLethalFaceAction(action, war)
 
     override fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? {
         val cliffsideAction = action.creator?.let { isCard(it, DANGEROUS_CLIFFSIDE) } == true

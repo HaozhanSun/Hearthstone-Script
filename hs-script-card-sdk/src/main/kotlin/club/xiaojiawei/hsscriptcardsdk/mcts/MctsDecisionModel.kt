@@ -92,6 +92,13 @@ interface MctsDecisionModel {
      */
     fun isDeferredAction(action: Action, war: War): Boolean = false
 
+    /**
+     * Hard first-pass lethal gate. When the root contains one or more actions
+     * that are part of a currently legal face-lethal route, the tree exposes
+     * that route before applying the ordinary phase fence or soft priors.
+     */
+    fun isLethalAction(action: Action, war: War): Boolean = false
+
     /** Non-binding action prior used by the experimental expander/rollout. */
     fun actionPrior(action: Action, war: War): Double = 0.0
 
