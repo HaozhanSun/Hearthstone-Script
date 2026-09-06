@@ -982,6 +982,37 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `stale cliffside cooldown after hero attack requests a bounded perception retry`() {
+        val war = testWar()
+        val cliffside = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {
+            cardType = CardTypeEnum.LOCATION
+            cardRace = CardRaceEnum.UNKNOWN
+            isLocationActionCooldown = true
+        }
+        val hero = testCard("HERO_TEST").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 1
+            health = 30
+            isExhausted = true
+        }
+        war.addCard(cliffside, war.me.playArea)
+        war.addCard(hero, war.me.playArea)
+
+        assertTrue(
+            PirateDemonHunterMctsExperimentModel.shouldRetryAfterEmptySearch(war),
+            "a stale location cooldown after the hero attack is a perception wait, not EndTurn",
+        )
+
+        cliffside.isLocationActionCooldown = false
+        assertFalse(PirateDemonHunterMctsExperimentModel.shouldRetryAfterEmptySearch(war))
+
+        cliffside.isLocationActionCooldown = true
+        repeat(5) { war.addCard(testCard("FULL_$it"), war.me.playArea) }
+        assertFalse(PirateDemonHunterMctsExperimentModel.shouldRetryAfterEmptySearch(war))
+    }
+
+    @Test
     fun `playing cliffside immediately exposes its activation and summons two pirates`() {
         val war = testWar()
         val cliffside = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {

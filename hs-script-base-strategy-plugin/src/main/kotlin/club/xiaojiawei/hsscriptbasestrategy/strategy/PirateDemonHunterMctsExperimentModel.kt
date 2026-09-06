@@ -182,6 +182,24 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             // required.
             freeSlots(war) >= cliffsideActivationSlots(war)
 
+    /**
+     * After the first Cliffside activation, Hearthstone can publish the hero's
+     * exhausted state before it clears the location cooldown in Power.log. An
+     * empty MCTS root during that narrow window is therefore a perception
+     * transition, not permission to end the turn. Let the live controller do
+     * its bounded rescan; the generic SDK deliberately knows nothing about
+     * VAC_929 or location semantics.
+     */
+    override fun shouldRetryAfterEmptySearch(war: War): Boolean {
+        val hero = war.me.playArea.hero ?: return false
+        return hero.isExhausted &&
+            !hero.canAttack() &&
+            freeSlots(war) >= 2 &&
+            war.me.playArea.cards.any {
+                isCard(it, DANGEROUS_CLIFFSIDE) && it.isAlive() && it.isLocationActionCooldown
+            }
+    }
+
     override fun isActionLegal(action: Action, war: War): Boolean {
         if (PirateLethalAttackPolicy.isLethalFaceAction(action, war)) return true
         if (!PirateHeroAttackTargetPolicy.isLegal(action, war)) return false

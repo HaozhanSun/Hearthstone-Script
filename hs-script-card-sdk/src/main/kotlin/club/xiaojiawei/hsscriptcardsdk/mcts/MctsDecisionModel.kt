@@ -64,6 +64,17 @@ interface MctsDecisionModel {
     fun canCreateOpaquePowerAction(card: Card, war: War): Boolean = false
 
     /**
+     * Whether an empty/EndTurn search result should be retried briefly because
+     * the live parser is expected to publish a just-completed action's state.
+     *
+     * This is a perception-latency hook, not a way to keep searching forever:
+     * the caller applies its normal bounded retry count.  A deck model may use
+     * it for transitions such as a hero attack that unlocks a location after
+     * the cooldown flag has caught up in Power.log.
+     */
+    fun shouldRetryAfterEmptySearch(war: War): Boolean = false
+
+    /**
      * Classify an action for the live/receding-horizon phase fence. The
      * default is deliberately opt-in: only a deck model that understands the
      * semantics of its cards should install a hard action-order fence.

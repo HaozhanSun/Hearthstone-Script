@@ -197,6 +197,24 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             val opaquePower = model?.canCreateOpaquePowerAction(card, war) == true
             if (opaquePower) result += card.entityId
             if (opaquePower) decision(mapOf("kind" to "BOARD_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "ACTIONABLE", "reason" to "opaque-power-fallback"))
+            if (card.cardType === CardTypeEnum.LOCATION && card.entityId !in result) {
+                decision(
+                    mapOf(
+                        "kind" to "LOCATION",
+                        "cardId" to card.cardId,
+                        "entityId" to card.entityId,
+                        "outcome" to "FILTERED",
+                        "reason" to when {
+                            !card.isAlive() -> "not-alive"
+                            card.isLocationActionCooldown -> "location-cooldown"
+                            !card.canPower() -> "not-powerable"
+                            else -> "power-action-filtered"
+                        },
+                        "cooldown" to card.isLocationActionCooldown,
+                        "canPower" to card.canPower(),
+                    ),
+                )
+            }
         }
         me.playArea.hero?.let { hero ->
             if (hero.entityId in suppressed) {
@@ -269,12 +287,21 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 "clickableLocations" to me.playArea.cards
                     .filter { it.cardType === CardTypeEnum.LOCATION }
                     .map {
+                        val actionable = it.entityId in result
                         mapOf(
                             "cardId" to it.cardId,
                             "entityId" to it.entityId,
                             "cooldown" to it.isLocationActionCooldown,
                             "canPower" to it.canPower(),
-                            "actionable" to (it.entityId in result),
+                            "actionable" to actionable,
+                            "freeSlots" to (me.playArea.maxSize - me.playArea.cards.size).coerceAtLeast(0),
+                            "reason" to when {
+                                !it.isAlive() -> "not-alive"
+                                actionable -> "parsed-or-opaque-power-action"
+                                it.isLocationActionCooldown -> "location-cooldown"
+                                !it.canPower() -> "not-powerable"
+                                else -> "power-action-filtered"
+                            },
                         )
                     },
                 "decisions" to decisions,
@@ -473,6 +500,8 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                     "search-empty-or-end-turn-rescan",
                     blockWeaponPlays = weaponPlayedThisTurn,
                 )
+                val shouldRetryForPerception = liveCreators.isEmpty() &&
+                    template.decisionModel?.shouldRetryAfterEmptySearch(war) == true
                 val fallback = if (liveCreators.isNotEmpty()) {
                     liveFallbackAction(war, arg, blockedCreatorIds)
                 } else {
@@ -493,6 +522,24 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                             "action" to describeAction(fallback),
                         ),
                     )
+                } else if (shouldRetryForPerception && emptySearchRescans < maxEmptySearchRescans) {
+                    emptySearchRescans++
+                    MctsReplayTrace.record(
+                        war,
+                        "controller_branch",
+                        "search-result-empty-location-refresh-pending-retry",
+                        mapOf(
+                            "strategy" to name(),
+                            "step" to actionCount + 1,
+                            "attempt" to emptySearchRescans,
+                            "maxAttempts" to maxEmptySearchRescans,
+                            "liveActionableCreatorIds" to liveCreators,
+                            "boardSlotsFree" to (war.me.playArea.maxSize - war.me.playArea.cards.size).coerceAtLeast(0),
+                            "locationRefreshPending" to true,
+                        ),
+                    )
+                    Thread.sleep(120L)
+                    continue
                 } else if (liveCreators.isNotEmpty() && emptySearchRescans < maxEmptySearchRescans) {
                     emptySearchRescans++
                     MctsReplayTrace.record(
