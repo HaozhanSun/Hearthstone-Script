@@ -16,6 +16,8 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeNode
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsTurnPhaseFence
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -1089,6 +1091,56 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         assertTrue(node.actions.any { it.creator?.cardId == PirateDemonHunterMctsExperimentModel.RAGEWING })
         assertTrue(node.actions.none { it.javaClass.simpleName == "TurnOverAction" })
+    }
+
+    @Test
+    fun `deferred cost minion cannot reopen after hero attack in the same turn`() {
+        val war = testWar().apply { me.resources = 0 }
+        val ragewing = testCard(PirateDemonHunterMctsExperimentModel.RAGEWING).apply {
+            cost = 0
+            entityName = "狂暴邪翼蝠"
+        }
+        val phase = PirateDemonHunterMctsExperimentModel.actionOrderPhase(
+            PlayAction({}, {}, ragewing),
+            war,
+        )
+        val fence = MctsTurnPhaseFence().apply {
+            observe(MctsActionOrderPhase.HERO_ATTACK)
+        }
+
+        assertEquals(MctsActionOrderPhase.MINION_PLAY, phase)
+        assertTrue(
+            !fence.allows(
+                phase,
+                isEndTurn = false,
+                endTurnLegal = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `weapon cannot reopen after hero attack in the same turn`() {
+        val war = testWar().apply { me.resources = 0 }
+        val weapon = testCard("REV_509").apply {
+            cardType = CardTypeEnum.WEAPON
+            cost = 0
+        }
+        val phase = PirateDemonHunterMctsExperimentModel.actionOrderPhase(
+            PlayAction({}, {}, weapon),
+            war,
+        )
+        val fence = MctsTurnPhaseFence().apply {
+            observe(MctsActionOrderPhase.HERO_ATTACK)
+        }
+
+        assertEquals(MctsActionOrderPhase.MINION_PLAY, phase)
+        assertTrue(
+            !fence.allows(
+                phase,
+                isEndTurn = false,
+                endTurnLegal = true,
+            ),
+        )
     }
 
     @Test

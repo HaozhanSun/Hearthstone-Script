@@ -27,6 +27,56 @@ object MctsReplayTrace {
     private val lock = Any()
     private val nextSequence = ConcurrentHashMap<String, Long>()
     private var fallbackGameKey = "session-${System.currentTimeMillis()}"
+    @Volatile
+    private var visualSnapshotter: ((War, String, Int, String?, String, String) -> String?)? = null
+    @Volatile
+    private var visualBridgeLookupAttempted = false
+
+    /**
+     * Optional app-layer bridge for visual evidence. The card SDK cannot
+     * depend on the desktop app, so the app registers its Robot-backed
+     * implementation at the strategy boundary. Offline SDK tests simply use
+     * the no-op default.
+     */
+    fun installVisualSnapshotter(
+        snapshotter: (War, String, Int, String?, String, String) -> String?,
+    ) {
+        visualSnapshotter = snapshotter
+    }
+
+    fun captureActionSnapshot(
+        war: War,
+        stage: String,
+        step: Int,
+        phase: String?,
+        action: String,
+        confirmation: String,
+    ): String? = runCatching {
+        ensureAppVisualBridge()
+        visualSnapshotter?.invoke(war, stage, step, phase, action, confirmation)
+    }.onFailure { error ->
+        log.warn(error) { "MCTS动作截图桥接失败 stage=$stage step=$step" }
+    }.getOrNull()
+
+    /**
+     * Resolve the optional desktop implementation lazily. The card SDK must
+     * remain usable in headless/offline tests and cannot depend on hs-script-
+     * app, while the app classloader contains this object at runtime.
+     */
+    private fun ensureAppVisualBridge() {
+        if (visualSnapshotter != null || visualBridgeLookupAttempted) return
+        synchronized(this) {
+            if (visualSnapshotter != null || visualBridgeLookupAttempted) return
+            visualBridgeLookupAttempted = true
+            runCatching {
+                val type = Class.forName("club.xiaojiawei.hsscript.utils.MctsRoundScreenshot")
+                val instance = type.getField("INSTANCE").get(null)
+                type.getMethod("ensureActionCaptureInstalled").invoke(instance)
+            }.onFailure { error ->
+                log.debug { "MCTS动作截图桥接不可用：${error.javaClass.simpleName}" }
+            }
+        }
+    }
 
     fun record(
         war: War,

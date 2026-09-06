@@ -13,16 +13,16 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
  * priorities still choose among actions in the same phase; this fence keeps a
  * later phase from winning the current live root.
  */
-enum class MctsActionOrderPhase {
+enum class MctsActionOrderPhase(val monotonicRank: Int) {
     /** Explicit Pirate DH exception after a hero attack. */
-    POST_HERO_ATTACK_LOCATION,
+    POST_HERO_ATTACK_LOCATION(5),
     /** Explicit Pirate DH exception between two Cliffside activations. */
-    CLIFFSIDE_HERO_ATTACK,
-    MINION_PLAY,
-    SPELL_PLAY,
-    MINION_ATTACK,
-    HERO_POWER,
-    HERO_ATTACK,
+    CLIFFSIDE_HERO_ATTACK(4),
+    MINION_PLAY(0),
+    SPELL_PLAY(1),
+    MINION_ATTACK(2),
+    HERO_POWER(3),
+    HERO_ATTACK(4),
 }
 
 /** Shared classifier for decks that explicitly opt into this action order. */

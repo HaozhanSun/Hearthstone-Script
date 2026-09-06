@@ -15,6 +15,7 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeNode
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsTurnPhaseFence
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -248,6 +249,24 @@ class PirateWarriorMctsModelTest {
         assertEquals(
             MctsActionOrderPhase.HERO_ATTACK,
             PirateWarriorMctsModel.actionOrderPhase(AttackAction({}, {}, hero), war),
+        )
+
+        val weapon = testCard("REV_509", cost = 0).apply {
+            cardType = CardTypeEnum.WEAPON
+        }
+        assertEquals(
+            MctsActionOrderPhase.MINION_PLAY,
+            PirateWarriorMctsModel.actionOrderPhase(PlayAction({}, {}, weapon), war),
+        )
+        val fence = MctsTurnPhaseFence().apply {
+            observe(MctsActionOrderPhase.HERO_ATTACK)
+        }
+        assertTrue(
+            !fence.allows(
+                PirateWarriorMctsModel.actionOrderPhase(PlayAction({}, {}, weapon), war),
+                isEndTurn = false,
+                endTurnLegal = true,
+            ),
         )
     }
 

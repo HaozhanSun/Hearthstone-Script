@@ -187,7 +187,8 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         when {
             action is PlayAction &&
                 (action.creator?.cardType === CardTypeEnum.MINION ||
-                    action.creator?.cardType === CardTypeEnum.LOCATION) ->
+                    action.creator?.cardType === CardTypeEnum.LOCATION ||
+                    action.creator?.cardType === CardTypeEnum.WEAPON) ->
                 MctsActionOrderPhase.MINION_PLAY
             action is PlayAction && action.creator?.cardType === CardTypeEnum.SPELL ->
                 MctsActionOrderPhase.SPELL_PLAY

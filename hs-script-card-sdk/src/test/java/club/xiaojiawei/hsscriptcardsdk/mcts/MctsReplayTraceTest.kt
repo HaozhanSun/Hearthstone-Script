@@ -33,6 +33,33 @@ class MctsReplayTraceTest {
     }
 
     @Test
+    fun `replay marks a fresh cycle after full live rescan`() {
+        val root = Files.createTempDirectory("mcts-replay-cycle-").toFile()
+        try {
+            val war = war("cycle-game", 102L)
+            val file = MctsReplayTrace.record(
+                war,
+                "turn_cycle_boundary",
+                "full live rescan found newly actionable work",
+                mapOf(
+                    "completedCycle" to 1,
+                    "nextCycle" to 2,
+                    "fullRescan" to true,
+                    "liveActionableCreatorIds" to listOf("YOD_032-entity"),
+                ),
+                root,
+            )
+            val text = file!!.toFile().readText()
+            assertTrue(text.contains("turn_cycle_boundary"))
+            assertTrue(text.contains("\"completedCycle\":1"))
+            assertTrue(text.contains("\"nextCycle\":2"))
+            assertTrue(text.contains("YOD_032-entity"))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `retains only the newest fifty game directories`() {
         val root = Files.createTempDirectory("mcts-replay-retention-").toFile()
         try {

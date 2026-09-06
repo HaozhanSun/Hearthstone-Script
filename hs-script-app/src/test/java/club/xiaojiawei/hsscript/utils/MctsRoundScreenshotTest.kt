@@ -57,4 +57,38 @@ class MctsRoundScreenshotTest {
             root.deleteRecursively()
         }
     }
+
+    @Test
+    fun `action screenshot filename correlates turn step phase and confirmation`() {
+        val root = Files.createTempDirectory("mcts-action-screenshots-").toFile()
+        try {
+            val war = War(false).apply {
+                startTime = 778L
+                me = Player(playerId = "me", gameId = "action-screenshot-game", war = this)
+                rival = Player(playerId = "rival", gameId = "rival", war = this)
+                me.turn = 7
+            }
+            val image = BufferedImage(24, 18, BufferedImage.TYPE_INT_RGB)
+            val file = MctsRoundScreenshot.saveAction(
+                image,
+                war,
+                stage = "before",
+                step = 3,
+                phase = "MINION_ATTACK",
+                action = "打出(YOD_032:狂暴邪翼蝠)",
+                confirmation = "selected",
+                rootDirectory = root,
+                clock = Clock.fixed(
+                    Instant.parse("2026-08-26T23:00:00Z"),
+                    ZoneId.of("UTC"),
+                ),
+            )
+
+            assertNotNull(file)
+            assertTrue(file!!.name.contains("turn-0007-step-03-before-MINION_ATTACK-selected"))
+            assertTrue(file!!.parentFile.name == "action-screenshots")
+        } finally {
+            root.deleteRecursively()
+        }
+    }
 }

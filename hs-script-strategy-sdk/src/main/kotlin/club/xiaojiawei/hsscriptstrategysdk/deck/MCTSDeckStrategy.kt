@@ -17,6 +17,8 @@ import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsReplayTrace
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsTurnPhaseFence
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 
@@ -37,6 +39,8 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
     private var activeDecisionModel: MctsDecisionModel? = null
 
     private var experimentalTurnNumber: Int? = null
+    @Volatile
+    private var experimentalTurnCycle = 0
     private val suppressedExperimentalCreatorIds = mutableSetOf<String>()
 
     /** A confirmed/attempted weapon play is a once-per-turn resource decision. */
@@ -54,6 +58,8 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
      */
     fun hasLastExperimentalTurnProducedAction(): Boolean =
         lastExperimentalTurnProducedAction
+
+    fun currentExperimentalTurnCycle(): Int = experimentalTurnCycle
 
     /**
      * Creators whose last live dispatch produced no observable confirmation
@@ -409,9 +415,13 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 experimentalTurnNumber = war.me.turn
                 suppressedExperimentalCreatorIds.clear()
                 experimentalTurnPlayedWeapon = false
+                experimentalTurnCycle = 0
             }
+            experimentalTurnCycle++
         }
+        var cycle = experimentalTurnCycle
         var weaponPlayedThisTurn = experimentalTurnPlayedWeapon
+        val phaseFence = MctsTurnPhaseFence(cycle)
         val turnDeadline = System.currentTimeMillis() + template.experimentalTurnBudgetMillis
         val search = MonteCarloTreeSearch()
         var actionCount = 0
@@ -424,8 +434,8 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 searchStart + template.experimentalActionBudgetMillis,
             )
             val decisionModel = template.decisionModel?.let { model ->
-                if (blockedCreatorIds.isEmpty() && !weaponPlayedThisTurn) model
-                else TemporarilyBlockedActionModel(model, blockedCreatorIds, weaponPlayedThisTurn)
+                if (blockedCreatorIds.isEmpty() && !weaponPlayedThisTurn && !phaseFence.isActive()) model
+                else TemporarilyBlockedActionModel(model, blockedCreatorIds, weaponPlayedThisTurn, phaseFence)
             }
             val arg = MCTSArg(
                 actionDeadline,
@@ -496,24 +506,55 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                     Thread.sleep(120L)
                     continue
                 } else if (liveCreators.isNotEmpty()) {
-                    // Do not reinterpret a live actionability result as a
-                    // legitimate EndTurn merely because the fresh root could
-                    // not materialize the action after bounded retries.  The
-                    // caller's turn-end guard must receive the live evidence
-                    // and decide whether another re-plan is safe; this
-                    // controller returns without dispatching EndTurn.
+                    val nextCycle = phaseFence.startNewCycle()
+                    cycle = nextCycle
+                    synchronized(this) {
+                        experimentalTurnCycle = nextCycle
+                    }
+                    val cycleAction = liveFallbackAction(war, arg, blockedCreatorIds)
+                    val cycleActionPhase = cycleAction?.let { template.decisionModel?.actionOrderPhase(it, war) }
                     MctsReplayTrace.record(
                         war,
-                        "controller_branch",
-                        "search-result-live-action-unresolved-after-bounded-retries",
+                        "turn_cycle_boundary",
+                        "full live rescan found newly payable earlier-phase work; start a fresh ordered cycle",
                         mapOf(
                             "strategy" to name(),
-                            "step" to actionCount + 1,
-                            "maxAttempts" to maxEmptySearchRescans,
+                            "completedCycle" to nextCycle - 1,
+                            "nextCycle" to nextCycle,
                             "liveActionableCreatorIds" to liveCreators,
+                            "fullRescan" to true,
+                            "firstAction" to cycleAction?.let(::describeAction),
+                            "firstActionPhase" to cycleActionPhase?.name,
                         ),
                     )
-                    break
+                    // A new cycle may begin only with an earlier phase. If
+                    // the rescan still exposes only a hero-power/hero-attack
+                    // or unclassified stale signal, fail closed and let the
+                    // existing turn-end guard perform its own inspection.
+                    if (
+                        cycleAction != null &&
+                        cycleActionPhase != null &&
+                        cycleActionPhase.monotonicRank < MctsActionOrderPhase.HERO_ATTACK.monotonicRank
+                    ) {
+                        emptySearchRescans = 0
+                        action = cycleAction
+                    } else {
+                        MctsReplayTrace.record(
+                            war,
+                            "controller_branch",
+                            "search-result-live-action-unresolved-after-bounded-retries",
+                            mapOf(
+                                "strategy" to name(),
+                                "cycle" to cycle,
+                                "step" to actionCount + 1,
+                                "maxAttempts" to maxEmptySearchRescans,
+                                "liveActionableCreatorIds" to liveCreators,
+                                "cycleAction" to cycleAction?.let(::describeAction),
+                                "cycleActionPhase" to cycleActionPhase?.name,
+                            ),
+                        )
+                        break
+                    }
                 }
             } else {
                 emptySearchRescans = 0
@@ -581,14 +622,27 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             }
 
             val before = stateFingerprint(war)
+            val actionPhase = template.decisionModel?.actionOrderPhase(action, war)
+            val beforeScreenshot = MctsReplayTrace.captureActionSnapshot(
+                war,
+                "before",
+                actionCount + 1,
+                actionPhase?.name,
+                describeAction(action),
+                "selected",
+            )
             MctsReplayTrace.record(
                 war,
                 "action_dispatched",
                 "experimental MCTS selected and dispatched one receding-horizon action",
                 mapOf(
                     "strategy" to name(),
+                    "cycle" to cycle,
                     "step" to actionCount + 1,
                     "action" to describeAction(action),
+                    "actionPhase" to actionPhase?.name,
+                    "phaseFenceBefore" to phaseFence.snapshot(),
+                    "screenshotBefore" to beforeScreenshot,
                     "path" to path.map { describeAction(it.applyAction) },
                     "stateBefore" to before,
                 ),
@@ -617,18 +671,31 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             }
             try {
                 action.exec.accept(war)
+                phaseFence.observe(actionPhase)
                 if (action is PlayAction && action.creator?.cardType === CardTypeEnum.WEAPON) {
                     weaponPlayedThisTurn = true
                     experimentalTurnPlayedWeapon = true
                 }
+                val afterDispatchScreenshot = MctsReplayTrace.captureActionSnapshot(
+                    war,
+                    "after-dispatch",
+                    actionCount + 1,
+                    actionPhase?.name,
+                    describeAction(action),
+                    "dispatched",
+                )
                 MctsReplayTrace.record(
                     war,
                     "action_dispatch_returned",
                     "experimental action callback returned",
                     mapOf(
                         "strategy" to name(),
+                        "cycle" to cycle,
                         "step" to actionCount + 1,
                         "action" to describeAction(action),
+                        "actionPhase" to actionPhase?.name,
+                        "phaseFenceAfter" to phaseFence.snapshot(),
+                        "screenshotAfterDispatch" to afterDispatchScreenshot,
                         "stateChangedImmediately" to (stateFingerprint(war) != before),
                     ),
                 )
@@ -656,6 +723,14 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
 
             if (!awaitStateChange(war, before, turnDeadline)) {
                 lastExperimentalTurnHadUnconfirmedDispatch = true
+                val unconfirmedScreenshot = MctsReplayTrace.captureActionSnapshot(
+                    war,
+                    "after-unconfirmed",
+                    actionCount,
+                    actionPhase?.name,
+                    describeAction(action),
+                    "unconfirmed",
+                )
                 MctsReplayTrace.record(
                     war,
                     "action_unconfirmed",
@@ -664,6 +739,9 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                         "strategy" to name(),
                         "step" to actionCount,
                         "action" to describeAction(action),
+                        "actionPhase" to actionPhase?.name,
+                        "cycle" to cycle,
+                        "screenshotAfterUnconfirmed" to unconfirmedScreenshot,
                         "stateBefore" to before,
                     ),
                 )
@@ -705,14 +783,26 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 )
                 break
             }
+            val confirmedScreenshot = MctsReplayTrace.captureActionSnapshot(
+                war,
+                "after-confirmed",
+                actionCount,
+                actionPhase?.name,
+                describeAction(action),
+                "confirmed",
+            )
             MctsReplayTrace.record(
                 war,
                 "action_confirmed",
                 "Power.log/state fingerprint confirmed the dispatched action",
                 mapOf(
                     "strategy" to name(),
+                    "cycle" to cycle,
                     "step" to actionCount,
                     "action" to describeAction(action),
+                    "actionPhase" to actionPhase?.name,
+                    "phaseFence" to phaseFence.snapshot(),
+                    "screenshotAfterConfirmed" to confirmedScreenshot,
                     "stateChanged" to (stateFingerprint(war) != before),
                 ),
             )
@@ -723,6 +813,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             "MCTS finished its bounded action loop; app-side guard decides whether ending the turn is safe",
             mapOf(
                 "strategy" to name(),
+                "cycle" to cycle,
                 "actions" to actionCount,
                 "remainingMana" to war.me.usableResource,
                 "remainingHand" to war.me.handArea.cards.map { describeActionCard(it) },
@@ -737,7 +828,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 actionCount >= 16 -> "action-count-cap-reached"
                 else -> "controller-loop-exited-without-terminal-condition"
             },
-            mapOf("strategy" to name(), "actions" to actionCount, "remainingMana" to war.me.usableResource),
+            mapOf("strategy" to name(), "cycle" to cycle, "actions" to actionCount, "remainingMana" to war.me.usableResource),
         )
         log.info { "MCTS_EXPERIMENT_TURN_DONE strategy=${name()} actions=$actionCount" }
     }
@@ -827,6 +918,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
         private val delegate: MctsDecisionModel,
         private val blockedCreatorIds: Set<String>,
         private val blockWeaponPlays: Boolean = false,
+        private val phaseFence: MctsTurnPhaseFence? = null,
     ) : MctsDecisionModel by delegate {
         private fun isBlocked(action: Action): Boolean =
             action.creator?.entityId?.let(blockedCreatorIds::contains) == true ||
@@ -861,7 +953,12 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
 
         override fun isActionLegal(action: Action, war: War): Boolean =
             !isBlocked(action) && withBlockedCreatorsMasked(war) {
-                delegate.isActionLegal(action, war)
+                delegate.isActionLegal(action, war) &&
+                    (phaseFence?.allows(
+                        delegate.actionOrderPhase(action, war),
+                        action === TurnOverAction,
+                        delegate.isActionLegal(action, war),
+                    ) ?: true)
             }
 
         override fun isDeferredAction(action: Action, war: War): Boolean =
