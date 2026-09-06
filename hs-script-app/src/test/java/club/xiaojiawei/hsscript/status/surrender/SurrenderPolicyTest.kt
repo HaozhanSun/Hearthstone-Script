@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.ocr.OcrHealth
 import club.xiaojiawei.hsscript.ocr.OcrProviderKind
+import club.xiaojiawei.hsscript.ocr.OcrRecognition
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.ocr.OcrTextBridge
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
@@ -485,6 +486,7 @@ class SurrenderPolicyTest {
         val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
         val calls = mutableListOf<String>()
         val roiSizes = mutableListOf<Pair<Int, Int>>()
+        val roiLabels = mutableListOf<String?>()
         try {
             OcrRuntime.settingsProvider = {
                 PaddleXOcrSettings(
@@ -504,6 +506,17 @@ class SurrenderPolicyTest {
                         return "10"
                     }
 
+                    override fun recognizeWithConfidence(
+                        image: BufferedImage,
+                        desc: String,
+                        roi: String?,
+                    ): OcrRecognition {
+                        calls += desc
+                        roiSizes += image.width to image.height
+                        roiLabels += roi
+                        return OcrRecognition("10", confidence = 0.99)
+                    }
+
                     override fun healthCheck(): OcrHealth =
                         OcrHealth(true, OcrProviderKind.PADDLEX, "ok")
                 }
@@ -515,6 +528,7 @@ class SurrenderPolicyTest {
             assertEquals(10, detection?.rank)
             assertEquals(listOf("current-rank-paddlex-badge"), calls)
             assertEquals(listOf(105 to 108), roiSizes)
+            assertEquals(listOf("rank-badge"), roiLabels)
         } finally {
             OcrRuntime.settingsProvider = originalSettingsProvider
             OcrRuntime.paddleXBridgeFactory = originalBridgeFactory

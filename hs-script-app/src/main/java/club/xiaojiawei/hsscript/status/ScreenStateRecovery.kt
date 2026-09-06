@@ -74,6 +74,8 @@ object ScreenStateRecovery {
         val bounds: Rectangle,
         val file: File?,
         val visual: VisualSignature,
+        val gameRectKnown: Boolean,
+        val gameWindowKnown: Boolean,
     )
 
     private data class VisualSignature(
@@ -139,7 +141,7 @@ object ScreenStateRecovery {
                 "visual=${capture.visual}"
         }
 
-        val ocrText = runOCR(capture.image)
+        val ocrText = runOCR(capture)
         if (!stateStillCurrent()) {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-during-inspection state=$stateFingerprint" }
             return false
@@ -216,12 +218,12 @@ object ScreenStateRecovery {
         if (allScreens.width <= 0 || allScreens.height <= 0) return null
 
         // GAME_RECT is the most useful crop when the game is windowed. If it
-        // is not initialized yet, use the whole desktop so startup recovery
-        // still has a chance to inspect an already-open client.
+        // is not initialized yet, capture the desktop only for cheap visual
+        // checks and durable evidence; PaddleX receives bounded ROIs below.
         val gameRect = ScriptStatus.GAME_RECT
-        val candidate = if (gameRect.right - gameRect.left >= 400 &&
+        val gameRectKnown = gameRect.right - gameRect.left >= 400 &&
             gameRect.bottom - gameRect.top >= 300
-        ) {
+        val candidate = if (gameRectKnown) {
             Rectangle(
                 gameRect.left,
                 gameRect.top,
@@ -240,32 +242,94 @@ object ScreenStateRecovery {
         }
         val saved = DebugScreenshotRing.save(image, "screen-recovery", "stale-screen")
         val file = saved?.file
-        Capture(image, bounds, file, visualSignature(image))
+        Capture(
+            image,
+            bounds,
+            file,
+            visualSignature(image),
+            gameRectKnown,
+            ScriptStatus.gameHWND != null,
+        )
     }.getOrElse { error ->
         log.warn(error) { "SCREEN_RECOVERY_FAILED reason=capture-exception" }
         null
     }
 
-    private fun runOCR(image: BufferedImage): String {
+    private fun runOCR(capture: Capture): String {
         val tessData = File(TESS_DATA_PATH)
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
-        if (OcrRuntime.isLegacySelected() && !chiSim.isFile) {
-            log.info { "SCREEN_RECOVERY_OCR_SKIPPED reason=missing-tessdata path=${chiSim.absolutePath}" }
+        val plan = ScreenStateRoiSelector.plan(
+            gameRectKnown = capture.gameRectKnown,
+            gameWindowKnown = capture.gameWindowKnown,
+            looksLikeHearthstone = looksLikeHearthstoneVisual(capture.visual),
+            paddleXSelected = !OcrRuntime.isLegacySelected(),
+            legacyFallbackAllowed = OcrRuntime.currentMode().allowsLegacyFallback,
+        )
+        if (plan.strategy == ScreenStateRoiSelector.Strategy.LEGACY_SELECTED ||
+            plan.strategy == ScreenStateRoiSelector.Strategy.LEGACY_FALLBACK
+        ) {
+            if (!chiSim.isFile) {
+                log.info {
+                    "SCREEN_RECOVERY_OCR_SKIPPED provider=LEGACY " +
+                        "reason=missing-tessdata strategy=${plan.strategy} path=${chiSim.absolutePath}"
+                }
+                return ""
+            }
+            if (plan.strategy == ScreenStateRoiSelector.Strategy.LEGACY_FALLBACK) {
+                log.warn {
+                    "SCREEN_RECOVERY_OCR_FALLBACK provider=LEGACY reason=no-game-rect-visual-gate " +
+                        "gameWindowKnown=false visual=${capture.visual} action=LEGACY_OCR"
+                }
+            }
+        }
+        if (plan.strategy == ScreenStateRoiSelector.Strategy.SKIP_UNSAFE) {
+            log.info {
+                "SCREEN_RECOVERY_OCR_SKIPPED provider=PADDLEX reason=no-game-rect-visual-gate " +
+                    "mode=${OcrRuntime.currentMode()} gameWindowKnown=false visual=${capture.visual} " +
+                    "fallback=false"
+            }
             return ""
         }
         return runCatching {
-            val ocrImage = resizeForOcr(image)
-            TesseractEx().apply {
-                setDatapath(tessData.absolutePath)
-                setLanguage(CHI_SIM_DATA)
-                setPageSegMode(11)
-                setVariable("user_defined_dpi", "160")
-            }.doOCR(ocrImage, "screen-recovery")
-                .replace(Regex("\\s+"), "")
+            if (plan.strategy == ScreenStateRoiSelector.Strategy.LEGACY_SELECTED ||
+                plan.strategy == ScreenStateRoiSelector.Strategy.LEGACY_FALLBACK
+            ) {
+                val ocrImage = resizeForOcr(capture.image)
+                return@runCatching TesseractEx().apply {
+                    setDatapath(tessData.absolutePath)
+                    setLanguage(CHI_SIM_DATA)
+                    setPageSegMode(11)
+                    setVariable("user_defined_dpi", "160")
+                }.doOCR(ocrImage, "screen-recovery").replace(Regex("\\s+"), "")
+            }
+
+            val rois = if (capture.gameRectKnown) {
+                listOf(ScreenStateRoiSelector.Roi("screen-state-game", Rectangle(0, 0, capture.image.width, capture.image.height)))
+            } else {
+                ScreenStateRoiSelector.select(capture.image.width, capture.image.height)
+            }
+            rois.joinToString(separator = "") { roi ->
+                val image = crop(capture.image, roi.bounds)
+                OcrRuntime.recognize(
+                    image,
+                    "screen-recovery-${roi.name}",
+                    allowEmptyProbeResult = true,
+                    roi = roi.name,
+                    legacyOcr = { "" },
+                ).replace(Regex("\\s+"), "")
+            }
         }.getOrElse { error ->
             log.warn(error) { "SCREEN_RECOVERY_OCR_FAILED" }
             ""
         }
+    }
+
+    private fun looksLikeHearthstoneVisual(visual: VisualSignature): Boolean =
+        visual.warmRatio >= 0.005 || visual.blueRatio >= 0.005
+
+    private fun crop(image: BufferedImage, bounds: Rectangle): BufferedImage {
+        val safe = bounds.intersection(Rectangle(0, 0, image.width, image.height))
+        return image.getSubimage(safe.x, safe.y, safe.width.coerceAtLeast(1), safe.height.coerceAtLeast(1))
     }
 
     private fun resizeForOcr(image: BufferedImage): BufferedImage {
@@ -632,7 +696,7 @@ object ScreenStateRecovery {
      */
     internal fun isResultVisibleForRecovery(): Boolean? = runCatching {
         val capture = captureScreen() ?: return@runCatching null
-        val detection = detect(runOCR(capture.image), capture.visual)
+        val detection = detect(runOCR(capture), capture.visual)
         when {
             detection == null || detection.confidence < 85 -> null
             detection.kind == ScreenKind.RESULT -> true

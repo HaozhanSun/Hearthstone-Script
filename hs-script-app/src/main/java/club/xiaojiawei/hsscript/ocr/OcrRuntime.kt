@@ -9,8 +9,21 @@ import java.util.concurrent.CancellationException
 object OcrRuntime {
 
     internal var settingsProvider: () -> PaddleXOcrSettings = PaddleXOcrSettings::fromConfig
-    internal var paddleXBridgeFactory: (PaddleXOcrSettings) -> OcrTextBridge = { PaddleXOcrSidecarBridge(it) }
+    private val defaultPaddleXBridgeFactory: (PaddleXOcrSettings) -> OcrTextBridge = {
+        PersistentPaddleXOcrSidecarBridge(it)
+    }
+    internal var paddleXBridgeFactory: (PaddleXOcrSettings) -> OcrTextBridge = defaultPaddleXBridgeFactory
     internal var providerModeProvider: () -> OcrProviderMode = OcrProviderMode::fromConfig
+
+    private val bridgeLock = Any()
+    private var sharedPaddleXBridge: OcrTextBridge? = null
+    private var sharedPaddleXSettings: PaddleXOcrSettings? = null
+
+    init {
+        Runtime.getRuntime().addShutdownHook(
+            Thread({ shutdownPaddleX() }, "paddlex-ocr-shutdown"),
+        )
+    }
 
     @Volatile
     private var lastProviderUsed: OcrProviderKind = OcrProviderKind.LEGACY
@@ -27,20 +40,35 @@ object OcrRuntime {
     fun recognize(
         image: BufferedImage?,
         desc: String = "",
+        roi: String? = null,
         legacyOcr: () -> String,
-    ): String = recognize(image, desc, allowEmptyProbeResult = false, legacyOcr = legacyOcr)
+    ): String = recognize(
+        image = image,
+        desc = desc,
+        allowEmptyProbeResult = false,
+        roi = roi,
+        legacyOcr = legacyOcr,
+    )
 
     fun recognize(
         image: BufferedImage?,
         desc: String = "",
         allowEmptyProbeResult: Boolean = false,
+        roi: String? = null,
         legacyOcr: () -> String,
-    ): String = recognizeResult(image, desc, allowEmptyProbeResult, legacyOcr).text
+    ): String = recognizeResult(
+        image = image,
+        desc = desc,
+        allowEmptyProbeResult = allowEmptyProbeResult,
+        roi = roi,
+        legacyOcr = legacyOcr,
+    ).text
 
     fun recognizeResult(
         image: BufferedImage?,
         desc: String = "",
         allowEmptyProbeResult: Boolean = false,
+        roi: String? = null,
         legacyOcr: () -> String,
     ): OcrRecognition {
         if (image == null) {
@@ -70,7 +98,7 @@ object OcrRuntime {
         }
         val settings = settingsProvider()
         return runCatching {
-            val recognition = paddleXBridgeFactory(settings).recognizeWithConfidence(image, desc)
+            val recognition = paddleXBridge(settings).recognizeWithConfidence(image, desc, roi)
             lastProviderUsed = OcrProviderKind.PADDLEX
             if (allowEmptyProbeResult && recognition.text.isBlank()) {
                 log.debug {
@@ -143,7 +171,7 @@ object OcrRuntime {
         }
         if (provider == OcrProviderKind.LEGACY) return
 
-        val health = paddleXBridgeFactory(settings).healthCheck()
+        val health = paddleXBridge(settings).healthCheck()
         val message = "OCR_PROVIDER_HEALTH provider=${health.provider} ok=${health.ok} " +
             "message=${health.message} details=${health.details}"
         if (health.ok) {
@@ -157,6 +185,29 @@ object OcrRuntime {
         val text = legacyOcr()
         requireRecognizedText(text, "LEGACY", desc)
         return text
+    }
+
+    /** Close the process once during orderly application shutdown or tests. */
+    internal fun shutdownPaddleX() {
+        synchronized(bridgeLock) {
+            (sharedPaddleXBridge as? AutoCloseable)?.let { runCatching { it.close() } }
+            sharedPaddleXBridge = null
+            sharedPaddleXSettings = null
+        }
+    }
+
+    private fun paddleXBridge(settings: PaddleXOcrSettings): OcrTextBridge {
+        // Test fakes and explicitly injected providers remain per-call. The
+        // production factory is the only one that owns the app-lifetime bridge.
+        if (paddleXBridgeFactory !== defaultPaddleXBridgeFactory) return paddleXBridgeFactory(settings)
+        synchronized(bridgeLock) {
+            if (sharedPaddleXSettings != settings) {
+                (sharedPaddleXBridge as? AutoCloseable)?.let { runCatching { it.close() } }
+                sharedPaddleXBridge = paddleXBridgeFactory(settings)
+                sharedPaddleXSettings = settings
+            }
+            return requireNotNull(sharedPaddleXBridge)
+        }
     }
 
     private fun isCancellation(error: Throwable): Boolean {

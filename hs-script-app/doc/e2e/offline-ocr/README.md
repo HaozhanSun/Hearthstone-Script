@@ -49,7 +49,7 @@ asserts the resulting state, action, retry schedule, provider, and
 
 Run it with the targeted reactor test command:
 
-`mvnw.cmd -pl hs-script-app -am -Dtest=MulliganRankPreflightTest,OfflinePaddleXOcrMulliganE2ETest,OcrRuntimeTest,PaddleXOcrSidecarBridgeTest,ScreenWatchdogTest,SurrenderPolicyTest -Dsurefire.failIfNoSpecifiedTests=false test`
+`mvnw.cmd -pl hs-script-app -am -Dtest=MulliganRankPreflightTest,OfflinePaddleXOcrMulliganE2ETest,OcrRuntimeTest,PaddleXOcrSidecarBridgeTest,PersistentPaddleXOcrSidecarBridgeTest,ScreenStateRoiSelectorTest,ScreenWatchdogTest,SurrenderPolicyTest -Dsurefire.failIfNoSpecifiedTests=false test`
 
 `MulliganRankPreflightTest` covers the live scheduling contract around that
 fixture: the first read starts after a 7-second grace period, retries are
@@ -66,8 +66,9 @@ click. Its timing values can be overridden with
 ## Routing rules
 
 1. `OcrRuntime` remains the single JVM boundary. PaddleX is reached only through
-   `PaddleXOcrSidecarBridge`; the JVM does not import PaddleX or its Python
-   dependencies.
+   the persistent `PersistentPaddleXOcrSidecarBridge`; the JVM does not import
+   PaddleX or its Python dependencies. One shared coordinator serializes all
+   PaddleX requests and records queue/latency/ROI telemetry.
 2. `AUTO` tries PaddleX first and may record an explicit `PADDLEX_FALLBACK_TO_LEGACY`
    event for a real contract/sidecar failure. `PADDLEX_ONLY` never falls back and
    must fail closed. `LEGACY_ONLY` does not construct the sidecar.
@@ -79,5 +80,16 @@ click. Its timing values can be overridden with
 5. These tests use a fake bridge. Real PaddleX runtime health, model availability,
    screenshots, Power.log markers, and process stability remain separate E2E
    evidence requirements.
+
+`PersistentPaddleXOcrSidecarBridgeTest` uses fake sessions to verify one
+session/pipeline reuse, single-flight behavior, cancellation while queued, and
+fresh-session recovery after a failed request. `ScreenStateRoiSelectorTest`
+verifies that a missing `GAME_RECT` produces bounded menu ROIs rather than a
+whole-desktop PaddleX request, and that `AUTO` uses an explicit legacy
+fallback while `PADDLEX_ONLY` skips unsafe OCR. The rank detection regression
+also asserts the PaddleX request is labeled `rank-badge` and receives only the
+57x47 badge ROI, never a screen-state crop. The Python `test_cli.py` server
+test verifies one provider initialization across health, OCR, and
+request-local error lines.
 
 The fixture is a replay index, not a replacement for the E2E ledger.

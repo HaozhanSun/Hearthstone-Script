@@ -15,6 +15,8 @@ interface OcrTextBridge {
     fun recognize(image: BufferedImage, desc: String = ""): String
     fun recognizeWithConfidence(image: BufferedImage, desc: String = ""): OcrRecognition =
         OcrRecognition(recognize(image, desc), confidence = null)
+    fun recognizeWithConfidence(image: BufferedImage, desc: String = "", roi: String?): OcrRecognition =
+        recognizeWithConfidence(image, desc)
     fun healthCheck(): OcrHealth
 }
 
