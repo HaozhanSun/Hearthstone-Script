@@ -529,6 +529,14 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                     )
                 } else if (shouldRetryForPerception && emptySearchRescans < maxPerceptionRescans) {
                     emptySearchRescans++
+                    val retryScreenshot = MctsReplayTrace.captureActionSnapshot(
+                        war,
+                        "location-refresh-pending",
+                        actionCount + 1,
+                        MctsActionOrderPhase.POST_HERO_ATTACK_LOCATION.name,
+                        "VAC_929 location refresh pending",
+                        "stale-cooldown",
+                    )
                     MctsReplayTrace.record(
                         war,
                         "controller_branch",
@@ -541,6 +549,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                             "liveActionableCreatorIds" to liveCreators,
                             "boardSlotsFree" to (war.me.playArea.maxSize - war.me.playArea.cards.size).coerceAtLeast(0),
                             "locationRefreshPending" to true,
+                            "screenshot" to retryScreenshot,
                         ),
                     )
                     Thread.sleep(perceptionRescanDelayMillis)
