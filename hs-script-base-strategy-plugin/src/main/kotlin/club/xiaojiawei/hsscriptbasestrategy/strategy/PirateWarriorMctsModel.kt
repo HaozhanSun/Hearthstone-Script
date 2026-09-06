@@ -9,7 +9,9 @@ import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.bean.WarScoreCalculatorBuilder
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
+import club.xiaojiawei.hsscriptcardsdk.mcts.defaultMctsActionOrderPhase
 import kotlin.math.max
 
 /**
@@ -28,6 +30,9 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     const val SOUTHSEA_CAPTAIN = "NEW1_027"
     const val HOZEN_ROUGHHOUSER = "VAC_938"
     const val RAGEWING = "YOD_032"
+
+    override fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? =
+        defaultMctsActionOrderPhase(action)
     const val HOOKFIST = "CORE_NX2_028"
     const val ANCHOR = "DRG_025"
     const val FRONTLINE_AXE = "BAR_844"

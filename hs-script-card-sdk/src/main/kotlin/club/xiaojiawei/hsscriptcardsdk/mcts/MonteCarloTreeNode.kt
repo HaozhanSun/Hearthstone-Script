@@ -319,8 +319,42 @@ class MonteCarloTreeNode(
                 )
             }
         }
+        // Apply the released deck action order before card-specific mandatory
+        // rules. This is the important root/re-plan boundary: actionPrior can
+        // rank an attack above a minion play, but it must not be able to cross
+        // the explicit minion -> minion attack -> hero power -> hero attack
+        // phases. Mandatory Cannon/Quest/location rules then choose within
+        // the currently allowed phase and cannot violate that order.
+        val orderedActions = arg.decisionModel?.let { model ->
+            val phaseOrder = listOf(
+                MctsActionOrderPhase.POST_HERO_ATTACK_LOCATION,
+                MctsActionOrderPhase.CLIFFSIDE_HERO_ATTACK,
+                MctsActionOrderPhase.MINION_PLAY,
+                MctsActionOrderPhase.MINION_ATTACK,
+                MctsActionOrderPhase.HERO_POWER,
+                MctsActionOrderPhase.HERO_ATTACK,
+            )
+            val selectedPhase = phaseOrder.firstOrNull { phase ->
+                result.any { model.actionOrderPhase(it, war) == phase }
+            }
+            if (selectedPhase == null) {
+                result
+            } else {
+                val filtered = result.filter { model.actionOrderPhase(it, war) == selectedPhase }
+                addScan(
+                    mapOf(
+                        "kind" to "ACTION_ORDER",
+                        "outcome" to "PHASE_RESTRICTED",
+                        "phase" to selectedPhase.name,
+                        "beforeCount" to result.size,
+                        "afterCount" to filtered.size,
+                    ),
+                )
+                filtered
+            }
+        } ?: result
         val mandatoryActions: List<Action> = arg.decisionModel
-            ?.let { model -> result.filter { model.isMandatoryAction(it, war) } }
+            ?.let { model -> orderedActions.filter { model.isMandatoryAction(it, war) } }
             ?: emptyList()
         if (mandatoryActions.isNotEmpty()) {
             addScan(mapOf("kind" to "TREE_FILTER", "outcome" to "MANDATORY_ONLY", "reason" to "decision-model-mandatory-actions", "actions" to mandatoryActions.map(::actionDescription)))
@@ -329,18 +363,18 @@ class MonteCarloTreeNode(
                     war,
                     "action_scan",
                     "root action scan completed with mandatory-action restriction",
-                    mapOf("strategy" to arg.debugName, "phase" to "root", "preFilterActionCount" to result.size, "mandatoryActionCount" to mandatoryActions.size, "finalActionCount" to mandatoryActions.size, "decisions" to scan),
+                    mapOf("strategy" to arg.debugName, "phase" to "root", "preFilterActionCount" to orderedActions.size, "mandatoryActionCount" to mandatoryActions.size, "finalActionCount" to mandatoryActions.size, "decisions" to scan),
                 )
             }
             return mandatoryActions.toMutableList()
         }
 
-        val deferredDecisions = result.map { action ->
+        val deferredDecisions = orderedActions.map { action ->
             action to (arg.decisionModel?.isDeferredAction(action, war) == true)
         }
         val deferredActions = if (arg.decisionModel != null) {
             deferredDecisions.filterNot { it.second }.map { it.first }
-        } else result
+        } else orderedActions
         deferredDecisions.filter { it.second }.forEach { (action, _) ->
             addScan(mapOf("kind" to "ACTION_FILTER", "outcome" to "FILTERED", "reason" to "decision-model-deferred-action", "action" to actionDescription(action)))
         }
@@ -352,7 +386,7 @@ class MonteCarloTreeNode(
             // currently generated action is deferred, retain only deferred
             // timing actions that passed the same payment/board checks above.
             // An unaffordable timing card must not be resurrected here.
-            (result + deferredTimingActions).distinct()
+            (orderedActions + deferredTimingActions).distinct()
         }
         if (deferredTimingActions.isNotEmpty() && nonEndTurnActions.isEmpty()) {
             addScan(
@@ -373,13 +407,13 @@ class MonteCarloTreeNode(
         } else {
             filteredActions.toMutableList()
         }
-        addScan(mapOf("kind" to "TREE_FILTER", "outcome" to "FINAL", "reason" to if (arg.experimentalSearch && filteredActions.any { it !== TurnOverAction }) "experimental-end-turn-removed" else "end-turn-retained", "preFilterActionCount" to result.size, "deferredActionCount" to deferredActions.size, "finalActionCount" to finalActions.size, "finalActions" to finalActions.map(::actionDescription)))
+        addScan(mapOf("kind" to "TREE_FILTER", "outcome" to "FINAL", "reason" to if (arg.experimentalSearch && filteredActions.any { it !== TurnOverAction }) "experimental-end-turn-removed" else "end-turn-retained", "preFilterActionCount" to orderedActions.size, "deferredActionCount" to deferredActions.size, "finalActionCount" to finalActions.size, "finalActions" to finalActions.map(::actionDescription)))
         rootScan?.let { scan ->
             MctsReplayTrace.record(
                 war,
                 "action_scan",
                 "root action scan completed with per-branch telemetry",
-                mapOf("strategy" to arg.debugName, "phase" to "root", "preFilterActionCount" to result.size, "mandatoryActionCount" to mandatoryActions.size, "deferredActionCount" to deferredActions.size, "finalActionCount" to finalActions.size, "decisions" to scan),
+                mapOf("strategy" to arg.debugName, "phase" to "root", "preFilterActionCount" to orderedActions.size, "mandatoryActionCount" to mandatoryActions.size, "deferredActionCount" to deferredActions.size, "finalActionCount" to finalActions.size, "decisions" to scan),
             )
         }
         return finalActions

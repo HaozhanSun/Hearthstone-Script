@@ -16,7 +16,9 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTriggerSimulator
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
+import club.xiaojiawei.hsscriptcardsdk.mcts.defaultMctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.util.CardUtil
 import kotlin.math.max
 
@@ -125,6 +127,14 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             (id.startsWith("CORE_") && card.cardId.startsWith("${id.removePrefix("CORE_")}t"))
 
     override fun shouldDefer(card: Card, war: War): Boolean {
+        // Unlike a soft prior, this is a hard replacement guard.  Equipping
+        // another weapon destroys the currently equipped weapon, so do not
+        // expose that hand card to the root at all while its attack is still
+        // available.  Once the attack is consumed (or becomes impossible),
+        // the normal MCTS action set can consider the replacement again.
+        if (card.cardType === CardTypeEnum.WEAPON && shouldProtectExistingWeaponAttack(war)) {
+            return true
+        }
         // A Cliffside play needs one slot for the location and two more for
         // its immediate pirate summons.  Keep it in the MCTS search, but do
         // not let a low-space play create a misleading candidate that cannot
@@ -155,11 +165,65 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         isCard(card, DANGEROUS_CLIFFSIDE) &&
             card.cardType === CardTypeEnum.LOCATION &&
             card.entityId.isNotBlank() &&
-            card.canPower()
+            card.canPower() &&
+            // The action's value is the immediate summon of two Pirates. Do
+            // not expose an opaque click that cannot legally realize that
+            // effect; the live executor must be able to use the same action
+            // set as the simulator.
+            freeSlots(war) >= 2
+
+    override fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? {
+        val cliffsideAction = action.creator?.let { isCard(it, DANGEROUS_CLIFFSIDE) } == true
+        val cliffside = war.me.playArea.cards.firstOrNull {
+            isCard(it, DANGEROUS_CLIFFSIDE) && it.isAlive()
+        }
+        if (
+            action is AttackAction &&
+                action.creator?.cardType === CardTypeEnum.HERO &&
+                cliffside?.isLocationActionCooldown == true &&
+                action.creator?.canAttack() == true &&
+                freeSlots(war) >= 2
+        ) {
+            // Cliffside summons two ready Pirates. Preserve the established
+            // chain by taking the hero attack before those tokens, then the
+            // next re-plan will see POST_HERO_ATTACK_LOCATION.
+            return MctsActionOrderPhase.CLIFFSIDE_HERO_ATTACK
+        }
+        if (cliffsideAction) {
+            // Keep the established location chain intact: a Cliffside that is
+            // ready immediately after the hero attack outranks every normal
+            // phase, while the initial play/activation remains an early board
+            // development action instead of losing to a hero attack.
+            if (isPostHeroAttackCliffsideReady(war)) {
+                return MctsActionOrderPhase.POST_HERO_ATTACK_LOCATION
+            }
+            return MctsActionOrderPhase.MINION_PLAY
+        }
+        return defaultMctsActionOrderPhase(action)
+    }
 
     override fun isMandatoryAction(action: Action, war: War): Boolean {
         val cliffside = war.me.playArea.cards.firstOrNull { isCard(it, DANGEROUS_CLIFFSIDE) && it.isAlive() }
         val heroCanAttack = war.me.playArea.hero?.canAttack() == true
+
+        // With Adrenaline Fiend on board, every ready minion attack is a
+        // resource-generating action.  Expose that whole attack set before
+        // allowing hand plays, hero power, or the hero attack to compete.
+        if (hasAdrenalineFiend(war) && hasAttackableMinionAction(war)) {
+            return action is AttackAction && action.creator?.cardType === CardTypeEnum.MINION
+        }
+
+        // A hero attack consumes the trigger window for the location chain.
+        // Once the attack has happened, the parser marks the hero exhausted
+        // while an available Cliffside with two open slots is still usable.
+        // Force that PowerAction on the next root so the summon is not lost to
+        // a fresh hero-power/EndTurn choice.  This uses the normal generated
+        // or opaque PowerAction; it never performs a bypass click.
+        if (isPostHeroAttackCliffsideReady(war)) {
+            return action is PowerAction && action.creator?.let { card ->
+                isCard(card, DANGEROUS_CLIFFSIDE) && card.cardType === CardTypeEnum.LOCATION
+            } == true
+        }
 
         val cannonReady = !war.me.playArea.cards.any { isCard(it, SHIPS_CANNON) && it.isAlive() } &&
             war.me.handArea.cards.any { isCannonPlayableNow(it, war) }
@@ -218,6 +282,24 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             return hasOtherNonHeroPowerAction(war)
         }
 
+        // Preserve the requested attack order for the Fiend line: clear all
+        // attackable friendly minions first, spend the hero power if it is
+        // available, and only then attack with the hero.
+        if (hasAdrenalineFiend(war) && action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO) {
+            return hasAttackableMinionAction(war) || hasUsableHeroPowerAction(war)
+        }
+
+        // Equipping a weapon replaces the currently equipped weapon.  If the
+        // current weapon still has durability and the hero can make a real
+        // attack, hiding the replacement is a semantic legality guard rather
+        // than a score preference: otherwise a receding-horizon re-plan can
+        // discard the remaining attack opportunity before using it.  The
+        // replacement becomes visible again after the attack consumes the
+        // weapon or when the live state says that no hero attack is legal.
+        if (action is PlayAction && action.creator?.cardType === CardTypeEnum.WEAPON) {
+            return shouldProtectExistingWeaponAttack(war)
+        }
+
         // Blindeye Judge is a last-resort draw card. Remove it from the
         // current node while any useful hand play, board attack, location
         // activation, or hero power remains. This is deliberately separate
@@ -234,6 +316,9 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         val attackablePirates = me.playArea.cards.count { isPirate(it) && it.canAttack() }
         val friendlyMinions = me.playArea.cards.count { it.cardType === CardTypeEnum.MINION }
         val futurePirates = futurePirateSummons(war)
+        if (action is PlayAction && card.cardType === CardTypeEnum.WEAPON) {
+            return if (shouldProtectExistingWeaponAttack(war)) -48.0 else 4.0
+        }
         if (isHeroPowerAction(action)) {
             // This also protects rollout/expansion ordering if a caller uses
             // the model without the deferred-action filter.
@@ -560,14 +645,44 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 )
         }
         val boardAction = me.playArea.cards.any { hasGeneratedBoardAction(it, war) }
-        val heroAttack = canUseHeroAttack(war)
         // Treat Coin as a planning bridge when it unlocks a non-power card.
         // At the current mana total that card is not yet a legal hand action,
         // but using the hero power first would still consume the resource that
         // the bridge needs.  This keeps the power at the end of the useful
         // sequence without hard-coding a card or a fixed play order.
         val coinBridge = hasCoinUnlockingNonHeroPowerCard(war)
-        return handAction || boardAction || heroAttack || coinBridge
+        // Hero attack intentionally does not count here: after all hand and
+        // minion actions are exhausted, the hero power must remain available
+        // as the penultimate action and the hero attack is last.
+        return handAction || boardAction || coinBridge
+    }
+
+    private fun hasAdrenalineFiend(war: War): Boolean =
+        war.me.playArea.cards.any { isCard(it, ADRENALINE_FIEND) && it.isAlive() }
+
+    private fun hasAttackableMinionAction(war: War): Boolean =
+        war.me.playArea.cards
+            .filter { it.cardType === CardTypeEnum.MINION && it.isAlive() && it.canAttack() }
+            .any { card ->
+                runCatching { card.action.generateAttackActions(war, war.me).isNotEmpty() }
+                    .getOrDefault(false)
+            }
+
+    private fun hasUsableHeroPowerAction(war: War): Boolean {
+        val power = war.me.playArea.power ?: return false
+        if (war.me.usableResource < power.cost || !power.canPower()) return false
+        return runCatching { power.action.generatePowerActions(war, war.me).isNotEmpty() }
+            .getOrDefault(false)
+    }
+
+    private fun isPostHeroAttackCliffsideReady(war: War): Boolean {
+        val hero = war.me.playArea.hero ?: return false
+        return hero.isExhausted &&
+            !hero.canAttack() &&
+            freeSlots(war) >= 2 &&
+            war.me.playArea.cards.any {
+                isCard(it, DANGEROUS_CLIFFSIDE) && it.isAlive() && it.canPower()
+            }
     }
 
     private fun hasCoinUnlockingNonHeroPowerCard(war: War): Boolean {
@@ -606,6 +721,18 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         return runCatching {
             hero.action.generateAttackActions(war, me).isNotEmpty()
         }.getOrDefault(false)
+    }
+
+    /**
+     * Whether equipping a hand weapon right now would throw away a currently
+     * usable attack from the equipped weapon.  Keep this in the deck model so
+     * other MCTS decks retain their normal replacement semantics.
+     */
+    private fun shouldProtectExistingWeaponAttack(war: War): Boolean {
+        val me = war.me
+        val currentWeapon = me.playArea.weapon ?: return false
+        if (currentWeapon.durability <= 0 || currentWeapon.isDead()) return false
+        return canUseHeroAttack(war)
     }
 
     private fun isHeroPowerAction(action: Action): Boolean =

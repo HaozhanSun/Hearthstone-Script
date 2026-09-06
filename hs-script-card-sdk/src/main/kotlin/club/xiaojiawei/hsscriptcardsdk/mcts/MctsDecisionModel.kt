@@ -1,8 +1,41 @@
 package club.xiaojiawei.hsscriptcardsdk.mcts
 
 import club.xiaojiawei.hsscriptcardsdk.bean.Action
+import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
+import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
+import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
+import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
+
+/**
+ * Coarse phases for the live/receding-horizon action order. Card-specific
+ * priorities still choose among actions in the same phase; this fence keeps a
+ * later phase from winning the current live root.
+ */
+enum class MctsActionOrderPhase {
+    /** Explicit Pirate DH exception after a hero attack. */
+    POST_HERO_ATTACK_LOCATION,
+    /** Explicit Pirate DH exception between two Cliffside activations. */
+    CLIFFSIDE_HERO_ATTACK,
+    MINION_PLAY,
+    MINION_ATTACK,
+    HERO_POWER,
+    HERO_ATTACK,
+}
+
+/** Shared classifier for decks that explicitly opt into this action order. */
+fun defaultMctsActionOrderPhase(action: Action): MctsActionOrderPhase? = when {
+    action is PlayAction && action.creator?.cardType === CardTypeEnum.MINION ->
+        MctsActionOrderPhase.MINION_PLAY
+    action is AttackAction && action.creator?.cardType === CardTypeEnum.MINION ->
+        MctsActionOrderPhase.MINION_ATTACK
+    action is PowerAction && action.creator?.cardType === CardTypeEnum.HERO_POWER ->
+        MctsActionOrderPhase.HERO_POWER
+    action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO ->
+        MctsActionOrderPhase.HERO_ATTACK
+    else -> null
+}
 
 /**
  * Optional, deck-specific hooks for MCTS.
@@ -29,6 +62,13 @@ interface MctsDecisionModel {
      * database entry identifies the card but has no bespoke parser plugin.
      */
     fun canCreateOpaquePowerAction(card: Card, war: War): Boolean = false
+
+    /**
+     * Classify an action for the live/receding-horizon phase fence. Returning
+     * null leaves an action outside this generic order so card-specific rules
+     * can still handle it when no ordered phase is available.
+     */
+    fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? = null
 
     /**
      * A hard sequencing hook for actions whose timing is part of the card's
