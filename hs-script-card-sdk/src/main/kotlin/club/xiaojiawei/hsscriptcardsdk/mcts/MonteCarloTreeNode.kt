@@ -180,7 +180,7 @@ class MonteCarloTreeNode(
                     }
                     continue
                 }
-                if (card.isCoinCard && !hasCoinPayoff(war)) {
+                if (card.isCoinCard && !CoinActionPolicy.hasImmediatePayoff(war)) {
                     scanCard(card, "FILTERED", "coin-has-no-immediate-payoff")
                     if (parent == null && arg.debugName.isNotBlank()) {
                         log.info {
@@ -456,35 +456,6 @@ class MonteCarloTreeNode(
             )
         }
         return finalActions
-    }
-
-    /**
-     * Coin is useful here only as a one-mana conversion that immediately
-     * unlocks another legal action. This prevents MCTS from selecting
-     * Coin -> hero power when it is not also unlocking a non-power card. The
-     * deck model can still explicitly force Coin for a meaningful sequence
-     * through its mandatory-action hook.
-     */
-    private fun hasCoinPayoff(war: War): Boolean {
-        val me = war.me
-        val currentMana = me.usableResource
-        val coinMana = currentMana + 1
-        val boardFull = me.playArea.isFull
-        val handPayoff = me.handArea.cards.any { card ->
-            !card.isUncertain &&
-                !card.isCoinCard &&
-                !CardTimingPolicy.shouldDefer(card, war) &&
-                card.cost > currentMana &&
-                card.cost <= coinMana &&
-                (!boardFull || card.cardType === CardTypeEnum.HERO || card.cardType === CardTypeEnum.SPELL || card.cardType === CardTypeEnum.WEAPON)
-        }
-        // Coin is a resource-conversion bridge for a non-power card only.
-        // Spending it solely to unlock the one action that the player could
-        // otherwise take later is not a payoff: the live executor must not
-        // turn Coin -> hero power into a default sequence.  A deck model may
-        // still force Coin for a genuinely important card (for example the
-        // cannon opening) through its mandatory-action hook.
-        return handPayoff
     }
 
     /**

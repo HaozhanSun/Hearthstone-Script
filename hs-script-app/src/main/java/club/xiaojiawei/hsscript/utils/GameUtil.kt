@@ -645,7 +645,7 @@ object GameUtil {
     /**
      * 游戏里投降
      */
-    fun surrender(skipEndTurn: Boolean = false): Boolean {
+    fun surrender(skipEndTurn: Boolean = false, reason: String? = null): Boolean {
         if (PowerLogListener.replayingExistingLog) {
             log.info { "Power.log恢复回放：跳过历史投降请求" }
             return false
@@ -687,15 +687,13 @@ object GameUtil {
         // surrender can reach GAME_OVER before PLAYSTATE=CONCEDED is parsed
         // or before war.me has been assigned its game id.
         WarEx.surrenderRequested = true
+        WarEx.surrenderReason = reason?.takeIf { it.isNotBlank() }
         if (System.getProperty("hs.script.e2e") == "true") {
-            E2ETrace.markSurrenderRequested()
+            E2ETrace.markSurrenderRequested(reason)
         }
         log.info {
-            if (skipEndTurn) {
-                "触发投降（非我方回合流程，跳过回合结束点击）"
-            } else {
-                "触发投降"
-            }
+            "SURRENDER_EXECUTOR_REQUESTED reason=${reason?.takeIf { it.isNotBlank() } ?: "unspecified"} " +
+                "skipEndTurn=$skipEndTurn"
         }
         val warCount = WarEx.warCount
         if (!skipEndTurn) {

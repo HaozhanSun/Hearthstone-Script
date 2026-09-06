@@ -515,9 +515,10 @@ object SurrenderPolicy {
 
         earlySurrenderTriggered = true
         log.warn {
-            "SURRENDER_POLICY_TRIGGERED stage=${context.stage.name} " +
+                "SURRENDER_POLICY_TRIGGERED stage=${context.stage.name} " +
                 "rule=${result.ruleId} rivalHero=${context.rivalHeroName} " +
                 "rivalPlayer=${context.rivalPlayerName.ifBlank { "<blank>" }} " +
+                "reason=${result.reason ?: "policy-requested-surrender"} " +
                 "timing=before-mulligan"
         }
         return result
@@ -996,7 +997,8 @@ object SurrenderPolicy {
                 log.warn {
                     "SURRENDER_POLICY_TRIGGERED stage=${context.stage.name} " +
                         "rule=${result.ruleId} rivalHero=${context.rivalHeroName.ifBlank { "<blank>" }} " +
-                        "rivalPlayer=${context.rivalPlayerName.ifBlank { "<blank>" }}"
+                        "rivalPlayer=${context.rivalPlayerName.ifBlank { "<blank>" }} " +
+                        "reason=${result.reason ?: "policy-requested-surrender"}"
                 }
                 return result
             }

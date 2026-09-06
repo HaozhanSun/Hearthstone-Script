@@ -124,6 +124,41 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `affordable zilliax is the mandatory first play on a low risk enemy board`() {
+        val war = testWar().apply { me.resources = 4 }
+        val zilliax = testCard("TOY_330t7").apply {
+            cardType = CardTypeEnum.MINION
+            cost = 4
+            atc = 5
+            health = 7
+        }
+        val other = testCard("OTHER_PLAY").apply { cost = 1 }
+        war.addCard(zilliax, war.me.handArea)
+        war.addCard(other, war.me.handArea)
+
+        assertTrue(PirateDemonHunterMctsExperimentModel.shouldPrioritizeEarlyZilliax(war))
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.isNotEmpty())
+        assertTrue(node.actions.all { it.creator?.entityId == zilliax.entityId })
+    }
+
+    @Test
+    fun `zilliax low risk signal uses enemy count or visible attack total`() {
+        val war = testWar()
+        val first = testCard("RIVAL_ONE").apply { atc = 8 }
+        val second = testCard("RIVAL_TWO").apply { atc = 1 }
+        war.addCard(first, war.rival.playArea)
+        assertTrue(PirateDemonHunterMctsExperimentModel.shouldPrioritizeEarlyZilliax(war))
+
+        war.addCard(second, war.rival.playArea)
+        assertFalse(PirateDemonHunterMctsExperimentModel.shouldPrioritizeEarlyZilliax(war))
+
+        first.atc = 1
+        assertTrue(PirateDemonHunterMctsExperimentModel.shouldPrioritizeEarlyZilliax(war))
+    }
+
+    @Test
     fun `sigil stays visible and receives a strong setup prior beside another playable card`() {
         val war = testWar()
         val sigil = testCard(PirateDemonHunterMctsExperimentModel.SIGIL_OF_SKYDIVING).apply {

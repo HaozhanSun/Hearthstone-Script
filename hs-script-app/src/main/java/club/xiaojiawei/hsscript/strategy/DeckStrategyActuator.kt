@@ -485,9 +485,30 @@ object DeckStrategyActuator {
                         "remainingActions=${inspection.requiresReplan} reason=${replanDecision.reason}; " +
                         "freshLiveRescan=${replanDecision.freshLiveRescanRequired} " +
                         "reusedPreviousPlan=${replanDecision.reusePreviousPlan}; " +
-                        "no legacy fallback action was dispatched " +
+                        "fallback=end-turn-click " +
                         "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                         "screenshotLink=${evidence?.link ?: "none"}"
+                }
+                if (replanDecision.allowEndTurnWhenExhausted) {
+                    MctsReplayTrace.record(
+                        war,
+                        "turn_end_fallback_selected",
+                        "MCTS replan budget exhausted; click EndTurn instead of remaining idle",
+                        mapOf(
+                            "strategy" to strategy.name(),
+                            "safeToEnd" to inspection.safeToEnd,
+                            "requiresReplan" to inspection.requiresReplan,
+                            "replans" to replans,
+                            "maxReplans" to MAX_MCTS_TURN_END_REPLANS,
+                            "planningPass" to replanDecision.planningPass,
+                            "reason" to replanDecision.reason,
+                            "fallback" to "end-turn-click",
+                            "fullRescan" to true,
+                            "remainingMana" to war.me.usableResource,
+                        ),
+                    )
+                    MctsRoundScreenshot.capture(war, war.me.turn)
+                    clickEndTurnUntilTransition()
                 }
                 return
             }

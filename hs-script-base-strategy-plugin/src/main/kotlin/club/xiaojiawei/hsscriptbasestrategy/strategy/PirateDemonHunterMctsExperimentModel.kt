@@ -142,6 +142,13 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         if (isCard(card, DANGEROUS_CLIFFSIDE) && card.area is HandArea && freeSlots(war) < 3) {
             return true
         }
+        // Zilliax takes 3 damage at end of turn in exchange for doubling its
+        // attack next turn.  When the visible opposing board is low risk, it
+        // is intentionally an early board-development play rather than a
+        // generic end-of-turn card.  The mandatory-action hook below makes it
+        // the first action when it is affordable; this bypass only prevents
+        // the shared timing policy from hiding it first.
+        if (isZilliax(card) && shouldPrioritizeEarlyZilliax(war)) return false
         if (CardTimingPolicy.shouldDefer(card, war)) return true
 
         // The Sigil is a delayed board-development card, but its next-turn
@@ -253,6 +260,16 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
 
     override fun isMandatoryAction(action: Action, war: War): Boolean {
         val cliffside = war.me.playArea.cards.firstOrNull { isCard(it, DANGEROUS_CLIFFSIDE) && it.isAlive() }
+
+        val earlyZilliax = war.me.handArea.cards.firstOrNull {
+            isZilliax(it) &&
+                !it.isUncertain &&
+                it.cost <= war.me.usableResource &&
+                shouldPrioritizeEarlyZilliax(war)
+        }
+        if (earlyZilliax != null) {
+            return action is PlayAction && action.creator?.entityId == earlyZilliax.entityId
+        }
 
         // With Adrenaline Fiend on board, every ready minion attack is a
         // resource-generating action.  Expose that whole attack set before
@@ -439,7 +456,8 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 else -> 24.0 + attackablePirates * 2.0
             }
             isZilliax(card) ->
-                if (friendlyMinions == 0) -6.0 else 6.0 + attackablePirates
+                if (shouldPrioritizeEarlyZilliax(war)) 40.0
+                else if (friendlyMinions == 0) -6.0 else 6.0 + attackablePirates
             isCard(card, RAGEWING) -> if (card.cost <= 1) 12.0 else 1.0
             else -> if (action is AttackAction && isPirate(card)) {
                 // A Pirate attack is also a hero-attack resource while a
@@ -969,6 +987,20 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
 
     private fun isZilliax(card: Card): Boolean =
         CardTimingPolicy.isZilliaxDeluxe3000(card)
+
+    /**
+     * Use only signals the parser already has: live enemy-minion count and
+     * visible attack values. A board with zero/one enemy minion is accepted
+     * as low risk even if that one minion is large; otherwise two or fewer
+     * total visible attack points is the conservative low-risk threshold.
+     */
+    fun shouldPrioritizeEarlyZilliax(war: War): Boolean {
+        val enemyMinions = war.rival.playArea.cards.filter {
+            it.cardType === CardTypeEnum.MINION && it.isAlive()
+        }
+        val visibleEnemyAttack = enemyMinions.sumOf { it.atc.coerceAtLeast(0) }
+        return enemyMinions.size <= 1 || visibleEnemyAttack <= 2
+    }
 }
 
 /** Generic score plus Pirate DH-specific engine, timing and dead-card penalties. */

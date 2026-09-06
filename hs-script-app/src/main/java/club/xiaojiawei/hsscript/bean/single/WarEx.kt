@@ -68,6 +68,10 @@ object WarEx {
     @Volatile
     var surrenderRequested = false
 
+    /** Policy/executor reason for the local surrender request in this game. */
+    @Volatile
+    var surrenderReason: String? = null
+
     /**
      * 已挂胜场
      */
@@ -143,6 +147,7 @@ object WarEx {
         inWar = false
         aEXP = 0L
         surrenderRequested = false
+        surrenderReason = null
         print.isTrue {
             log.info { "已重置游戏状态" }
         }

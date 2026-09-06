@@ -15,6 +15,7 @@ import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
+import club.xiaojiawei.hsscriptcardsdk.mcts.CoinActionPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsReplayTrace
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
@@ -108,6 +109,10 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             }
             if (card.cost > me.usableResource) {
                 decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "cost" to card.cost, "mana" to me.usableResource, "outcome" to "FILTERED", "reason" to "insufficient-mana"))
+                return@forEach
+            }
+            if (card.isCoinCard && !CoinActionPolicy.hasImmediatePayoff(war)) {
+                decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "coin-has-no-immediate-payoff"))
                 return@forEach
             }
             if (me.playArea.isFull &&

@@ -33,6 +33,9 @@ object E2ETrace {
     var surrenderRequested: Boolean = false
 
     @Volatile
+    var surrenderReason: String? = null
+
+    @Volatile
     var resultRecorded: Boolean = false
 
     @Volatile
@@ -83,8 +86,9 @@ object E2ETrace {
         persist()
     }
 
-    fun markSurrenderRequested() {
+    fun markSurrenderRequested(reason: String? = null) {
         surrenderRequested = true
+        surrenderReason = reason?.takeIf { it.isNotBlank() }
     }
 
     fun resetForNewGame() {
@@ -92,6 +96,7 @@ object E2ETrace {
         ourTurnSeen = false
         outCardStarted = false
         surrenderRequested = false
+        surrenderReason = null
         resultRecorded = false
         winRecorded = false
         runCatching { stateFile?.delete() }

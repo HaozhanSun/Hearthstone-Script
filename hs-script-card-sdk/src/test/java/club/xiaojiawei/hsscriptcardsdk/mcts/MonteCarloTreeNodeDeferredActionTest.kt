@@ -149,6 +149,29 @@ class MonteCarloTreeNodeDeferredActionTest {
         assertTrue(node.actions.any { it.creator?.entityId == hero.entityId })
     }
 
+    @Test
+    fun `coin is not an actionable payoff when no non-coin card is unlocked`() {
+        val war = testWar()
+        war.me.resources = 1
+        val coin = card("COIN").apply { isCoinCard = true }
+        war.addCard(coin, war.me.handArea)
+
+        assertFalse(CoinActionPolicy.hasImmediatePayoff(war))
+    }
+
+    @Test
+    fun `coin is actionable only when it unlocks an otherwise unaffordable card`() {
+        val war = testWar()
+        war.me.resources = 1
+        war.addCard(card("COIN").apply { isCoinCard = true }, war.me.handArea)
+        war.addCard(card("TWO_COST").apply {
+            cardType = CardTypeEnum.SPELL
+            cost = 2
+        }, war.me.handArea)
+
+        assertTrue(CoinActionPolicy.hasImmediatePayoff(war))
+    }
+
     private fun card(cardId: String): Card = Card(TestCardAction()).apply {
         entityId = "$cardId-entity"
         this.cardId = cardId
@@ -158,5 +181,18 @@ class MonteCarloTreeNodeDeferredActionTest {
         atc = 1
         health = 1
         action.belongCard = this
+    }
+
+    private fun testWar(): War {
+        val war = War()
+        val me = Player(playerId = "me", war = war)
+        val rival = Player(playerId = "rival", war = war)
+        war.me = me
+        war.rival = rival
+        war.player1 = me
+        war.player2 = rival
+        war.currentPlayer = me
+        war.isMyTurn = true
+        return war
     }
 }

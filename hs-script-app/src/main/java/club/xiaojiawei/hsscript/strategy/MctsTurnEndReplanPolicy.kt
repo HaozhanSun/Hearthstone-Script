@@ -5,9 +5,9 @@ package club.xiaojiawei.hsscript.strategy
  *
  * The initial strategy invocation is planning pass zero and is not counted as
  * a re-plan. A re-plan always starts from a new live scan and a new strategy
- * invocation; the previous action/path is never reused. Exhaustion is
- * fail-closed while live actions remain: the caller must hold rather than
- * synthesize EndTurn.
+ * invocation; the previous action/path is never reused. If the re-plan budget
+ * is exhausted, the caller must record the diagnostic state and finish the turn
+ * instead of holding the game indefinitely.
  */
 internal object MctsTurnEndReplanPolicy {
     const val INITIAL_PLANNING_PASS = 0
@@ -48,7 +48,7 @@ internal object MctsTurnEndReplanPolicy {
             planningPass = totalPlanningPasses(completedReplans),
             freshLiveRescanRequired = true,
             reusePreviousPlan = false,
-            allowEndTurnWhenExhausted = !liveActionable,
+            allowEndTurnWhenExhausted = true,
             reason = if (liveActionable) {
                 "live-state-actionable-after-replan-budget-exhausted"
             } else {

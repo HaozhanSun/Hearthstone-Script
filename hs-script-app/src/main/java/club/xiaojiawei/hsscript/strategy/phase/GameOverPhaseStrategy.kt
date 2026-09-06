@@ -341,7 +341,8 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
             // missing authoritative-ID correlation explicit.
             club.xiaojiawei.hsscriptbase.config.log.warn {
                 "TERMINAL_RESULT_FALLBACK outcome=LOST source=local-surrender-request " +
-                    "reason=player-id-unresolved powerLogOutcome=UNKNOWN " +
+                    "reason=${WarEx.surrenderReason ?: "player-id-unresolved"} " +
+                    "powerLogOutcome=UNKNOWN " +
                     "ourId=${war.me.gameId.ifBlank { "<blank>" }}"
             }
             false

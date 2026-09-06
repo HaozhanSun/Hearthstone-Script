@@ -165,9 +165,8 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
         log.warn {
             "SURRENDER_ACTION_REQUESTED source=$source rule=${result.ruleId} " +
                 "reason=${result.reason ?: "none"} dispatch=requested"
-                "reason=${result.reason ?: "none"} dispatch=requested"
         }
-        val dispatched = GameUtil.surrender(skipEndTurn = true)
+        val dispatched = GameUtil.surrender(skipEndTurn = true, reason = result.reason)
         if (!dispatched) {
             log.warn {
                 "SURRENDER_ACTION_BLOCKED source=$source rule=${result.ruleId} " +

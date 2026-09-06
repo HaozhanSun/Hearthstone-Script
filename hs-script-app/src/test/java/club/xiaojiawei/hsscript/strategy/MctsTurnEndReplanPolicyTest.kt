@@ -29,7 +29,7 @@ class MctsTurnEndReplanPolicyTest {
     }
 
     @Test
-    fun `fourth replan is rejected and holds when live action remains`() {
+    fun `fourth replan is rejected and falls back to end turn when live action remains`() {
         val exhausted = MctsTurnEndReplanPolicy.decide(completedReplans = 3, liveActionable = true)
 
         assertFalse(exhausted.shouldReplan)
@@ -37,7 +37,7 @@ class MctsTurnEndReplanPolicyTest {
         assertEquals(4, exhausted.attempt)
         assertTrue(exhausted.freshLiveRescanRequired)
         assertFalse(exhausted.reusePreviousPlan)
-        assertFalse(exhausted.allowEndTurnWhenExhausted)
+        assertTrue(exhausted.allowEndTurnWhenExhausted)
         assertEquals("live-state-actionable-after-replan-budget-exhausted", exhausted.reason)
     }
 
