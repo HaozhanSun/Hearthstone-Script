@@ -1,12 +1,8 @@
 package club.xiaojiawei.hsscriptcardsdk.mcts
 
 import club.xiaojiawei.hsscriptcardsdk.bean.Action
-import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
-import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
-import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
-import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 
 /**
  * Coarse phases for the live/receding-horizon action order. Card-specific
@@ -19,6 +15,7 @@ enum class MctsActionOrderPhase {
     /** Explicit Pirate DH exception between two Cliffside activations. */
     CLIFFSIDE_HERO_ATTACK,
     MINION_PLAY,
+    SPELL_PLAY,
     MINION_ATTACK,
     HERO_POWER,
     HERO_ATTACK,
@@ -36,7 +33,6 @@ fun defaultMctsActionOrderPhase(action: Action): MctsActionOrderPhase? = when {
         MctsActionOrderPhase.HERO_ATTACK
     else -> null
 }
-
 /**
  * Optional, deck-specific hooks for MCTS.
  *
@@ -64,9 +60,9 @@ interface MctsDecisionModel {
     fun canCreateOpaquePowerAction(card: Card, war: War): Boolean = false
 
     /**
-     * Classify an action for the live/receding-horizon phase fence. Returning
-     * null leaves an action outside this generic order so card-specific rules
-     * can still handle it when no ordered phase is available.
+     * Classify an action for the live/receding-horizon phase fence. The
+     * default is deliberately opt-in: only a deck model that understands the
+     * semantics of its cards should install a hard action-order fence.
      */
     fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? = null
 

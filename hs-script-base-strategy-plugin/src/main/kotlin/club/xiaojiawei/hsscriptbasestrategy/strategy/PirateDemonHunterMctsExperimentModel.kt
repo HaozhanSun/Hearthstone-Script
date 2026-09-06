@@ -18,7 +18,6 @@ import club.xiaojiawei.hsscriptcardsdk.mcts.CardTriggerSimulator
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
-import club.xiaojiawei.hsscriptcardsdk.mcts.defaultMctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.util.CardUtil
 import kotlin.math.max
 
@@ -199,7 +198,23 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             }
             return MctsActionOrderPhase.MINION_PLAY
         }
-        return defaultMctsActionOrderPhase(action)
+        return when {
+            action is PlayAction &&
+                (action.creator?.cardType === CardTypeEnum.MINION ||
+                    action.creator?.cardType === CardTypeEnum.LOCATION) ->
+                MctsActionOrderPhase.MINION_PLAY
+            action is PlayAction && action.creator?.cardType === CardTypeEnum.SPELL ->
+                MctsActionOrderPhase.SPELL_PLAY
+            action is PowerAction && action.creator?.cardType === CardTypeEnum.LOCATION ->
+                MctsActionOrderPhase.MINION_PLAY
+            action is AttackAction && action.creator?.cardType === CardTypeEnum.MINION ->
+                MctsActionOrderPhase.MINION_ATTACK
+            action is PowerAction && action.creator?.cardType === CardTypeEnum.HERO_POWER ->
+                MctsActionOrderPhase.HERO_POWER
+            action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO ->
+                MctsActionOrderPhase.HERO_ATTACK
+            else -> null
+        }
     }
 
     override fun isMandatoryAction(action: Action, war: War): Boolean {
@@ -731,6 +746,10 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
     private fun shouldProtectExistingWeaponAttack(war: War): Boolean {
         val me = war.me
         val currentWeapon = me.playArea.weapon ?: return false
+        // A weapon entity can remain in the parser state for one update after
+        // it was played or spent. Protect the replacement while a real attack
+        // is still available; once the hero is exhausted or the weapon is
+        // spent, the next re-plan may legally replace it.
         if (currentWeapon.durability <= 0 || currentWeapon.isDead()) return false
         return canUseHeroAttack(war)
     }

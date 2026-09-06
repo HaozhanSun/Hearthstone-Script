@@ -185,6 +185,25 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     /** Do not hide Patches when it is literally the only legal action. */
     override fun shouldDefer(card: Card, war: War): Boolean = false
 
+    override fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? =
+        when {
+            action is PlayAction &&
+                (action.creator?.cardType === CardTypeEnum.MINION ||
+                    action.creator?.cardType === CardTypeEnum.LOCATION) ->
+                MctsActionOrderPhase.MINION_PLAY
+            action is PlayAction && action.creator?.cardType === CardTypeEnum.SPELL ->
+                MctsActionOrderPhase.SPELL_PLAY
+            action is PowerAction && action.creator?.cardType === CardTypeEnum.LOCATION ->
+                MctsActionOrderPhase.MINION_PLAY
+            action is AttackAction && action.creator?.cardType === CardTypeEnum.MINION ->
+                MctsActionOrderPhase.MINION_ATTACK
+            action is PowerAction && action.creator?.cardType === CardTypeEnum.HERO_POWER ->
+                MctsActionOrderPhase.HERO_POWER
+            action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO ->
+                MctsActionOrderPhase.HERO_ATTACK
+            else -> null
+        }
+
     /**
      * Materialize only the deterministic combat buffs for a cloned attack
      * state.  The temporary field makes the matching cleanup explicit, so
@@ -325,6 +344,68 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             if (free == 0 && otherPirates < 4) -3.0 else 0.0
     }
 
+    /**
+     * Global-plan objective for Pirate Warrior. The ordinary terminal score
+     * values board quality, but by itself it can prefer a short path that
+     * leaves usable mana behind. Charge the root plan for mana that is
+     * actually reachable by legal card/power actions, while keeping this a
+     * soft opportunity cost so a genuinely empty or blocked state is allowed
+     * to end the turn.
+     */
+    override fun turnPlanAdjustment(root: War, terminal: War, path: List<Action>): Double {
+        val rootMana = root.me.usableResource.coerceAtLeast(0)
+        if (rootMana == 0) return 0.0
+
+        val reachableSpend = maxSpendableMana(root)
+        if (reachableSpend == 0) return 0.0
+
+        val actualSpend = (rootMana - terminal.me.usableResource)
+            .coerceIn(0, rootMana)
+        val missedSpend = (reachableSpend - actualSpend).coerceAtLeast(0)
+        return -missedSpend * 4.0
+    }
+
+    /** Upper bound on mana that the current Warrior root can legally spend. */
+    fun maxSpendableMana(war: War): Int {
+        val mana = war.me.usableResource.coerceAtLeast(0)
+        if (mana == 0) return 0
+
+        val freeSlots = freeSlots(war)
+        val options = mutableListOf<SpendOption>()
+        war.me.handArea.cards.forEach { card ->
+            if (isPlayableHandCard(card, war, mana, freeSlots)) {
+                options += SpendOption(card.cost, if (usesBoardSlot(card)) 1 else 0)
+            }
+        }
+
+        war.me.playArea.power?.let { power ->
+            if (
+                power.cost in 1..mana &&
+                    !power.isExhausted &&
+                    power.canPower() &&
+                    runCatching { power.action.generatePowerActions(war, war.me) }
+                        .getOrDefault(emptyList())
+                        .isNotEmpty()
+            ) {
+                options += SpendOption(power.cost, 0)
+            }
+        }
+
+        if (options.isEmpty()) return 0
+        val reachable = Array(mana + 1) { BooleanArray(freeSlots + 1) }
+        reachable[0][0] = true
+        options.forEach { option ->
+            for (spentMana in mana downTo option.cost) {
+                for (usedSlots in freeSlots downTo option.slot) {
+                    if (reachable[spentMana - option.cost][usedSlots - option.slot]) {
+                        reachable[spentMana][usedSlots] = true
+                    }
+                }
+            }
+        }
+        return (mana downTo 0).firstOrNull { spent -> reachable[spent].any { it } } ?: 0
+    }
+
     fun discoverScore(card: Card): Double {
         val pirate = isPirate(card) || card.cardId in setOf(
             PATCHES_THE_PIRATE,
@@ -428,6 +509,19 @@ object PirateWarriorMctsModel : MctsDecisionModel {
 
     private fun freeSlots(war: War): Int =
         (war.me.playArea.maxSize - war.me.playArea.cards.size).coerceAtLeast(0)
+
+    private fun usesBoardSlot(card: Card): Boolean =
+        card.cardType === CardTypeEnum.MINION || card.cardType === CardTypeEnum.LOCATION
+
+    private fun isPlayableHandCard(card: Card, war: War, mana: Int, freeSlots: Int): Boolean {
+        if (card.isUncertain || card.cost !in 1..mana) return false
+        if (usesBoardSlot(card) && freeSlots == 0) return false
+        val actions = runCatching { card.action.generatePlayActions(war, war.me) }
+            .getOrDefault(emptyList())
+        return actions.isNotEmpty() || canCreateOpaqueAction(card, war)
+    }
+
+    private data class SpendOption(val cost: Int, val slot: Int)
 
     private fun otherPirates(war: War, card: Card): Int =
         war.me.playArea.cards.count { isPirate(it) && it.entityId != card.entityId && it.isAlive() }

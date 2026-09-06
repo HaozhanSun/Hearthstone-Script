@@ -322,7 +322,8 @@ class MonteCarloTreeNode(
         // Apply the released deck action order before card-specific mandatory
         // rules. This is the important root/re-plan boundary: actionPrior can
         // rank an attack above a minion play, but it must not be able to cross
-        // the explicit minion -> minion attack -> hero power -> hero attack
+        // the explicit minion/location -> spell -> minion attack -> hero power
+        // -> hero attack
         // phases. Mandatory Cannon/Quest/location rules then choose within
         // the currently allowed phase and cannot violate that order.
         val orderedActions = arg.decisionModel?.let { model ->
@@ -330,6 +331,7 @@ class MonteCarloTreeNode(
                 MctsActionOrderPhase.POST_HERO_ATTACK_LOCATION,
                 MctsActionOrderPhase.CLIFFSIDE_HERO_ATTACK,
                 MctsActionOrderPhase.MINION_PLAY,
+                MctsActionOrderPhase.SPELL_PLAY,
                 MctsActionOrderPhase.MINION_ATTACK,
                 MctsActionOrderPhase.HERO_POWER,
                 MctsActionOrderPhase.HERO_ATTACK,

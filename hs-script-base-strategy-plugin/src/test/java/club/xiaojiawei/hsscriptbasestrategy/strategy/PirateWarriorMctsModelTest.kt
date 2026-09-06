@@ -14,6 +14,7 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeNode
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -195,6 +196,58 @@ class PirateWarriorMctsModelTest {
         assertEquals(
             0.0,
             PirateWarriorMctsModel.turnPlanAdjustment(root, terminal, emptyList()),
+        )
+    }
+
+    @Test
+    fun `pirate warrior action fence keeps spells between board development and attacks`() {
+        val war = testWar(turn = 3, mana = 4)
+        val minion = testCard("PHASE_MINION", cost = 1)
+        val spell = testCard("PHASE_SPELL", cost = 1).apply {
+            cardType = CardTypeEnum.SPELL
+            cardRace = CardRaceEnum.UNKNOWN
+        }
+        val readyMinion = testCard("PHASE_READY_MINION", cost = 1).apply {
+            isExhausted = false
+        }
+        val hero = testCard("PHASE_HERO", cost = 0).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 1
+            health = 30
+            isExhausted = false
+        }
+        val power = testCard("PHASE_POWER", cost = 1).apply {
+            cardType = CardTypeEnum.HERO_POWER
+            cardRace = CardRaceEnum.UNKNOWN
+            isLaunchpad = true
+            isExhausted = false
+        }
+        war.addCard(minion, war.me.handArea)
+        war.addCard(spell, war.me.handArea)
+        war.addCard(readyMinion, war.me.playArea)
+        war.addCard(hero, war.me.playArea)
+        war.addCard(power, war.me.playArea)
+
+        assertEquals(
+            MctsActionOrderPhase.MINION_PLAY,
+            PirateWarriorMctsModel.actionOrderPhase(PlayAction({}, {}, minion), war),
+        )
+        assertEquals(
+            MctsActionOrderPhase.SPELL_PLAY,
+            PirateWarriorMctsModel.actionOrderPhase(PlayAction({}, {}, spell), war),
+        )
+        assertEquals(
+            MctsActionOrderPhase.MINION_ATTACK,
+            PirateWarriorMctsModel.actionOrderPhase(AttackAction({}, {}, readyMinion), war),
+        )
+        assertEquals(
+            MctsActionOrderPhase.HERO_POWER,
+            PirateWarriorMctsModel.actionOrderPhase(PowerAction({}, {}, power), war),
+        )
+        assertEquals(
+            MctsActionOrderPhase.HERO_ATTACK,
+            PirateWarriorMctsModel.actionOrderPhase(AttackAction({}, {}, hero), war),
         )
     }
 

@@ -61,7 +61,11 @@ class HsPirateWarriorMctsDeckStrategy : MCTSDeckStrategy() {
                 experimentalSearch = true,
                 experimentalTurnBudgetMillis = 20_000L,
                 experimentalActionBudgetMillis = 1_800L,
-                rootSelectionPolicy = MctsRootSelectionPolicy.VISITS_THEN_VALUE,
+                // Use the same complete-turn objective as Pirate DH. The
+                // executor still dispatches one action and re-plans from the
+                // confirmed live WAR, while the root choice is based on the
+                // best discovered resource-efficient turn plan.
+                rootSelectionPolicy = MctsRootSelectionPolicy.GLOBAL_TURN_PLAN,
             ),
         )
     }
