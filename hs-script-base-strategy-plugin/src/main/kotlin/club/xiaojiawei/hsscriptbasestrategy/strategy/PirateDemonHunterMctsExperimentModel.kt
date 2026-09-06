@@ -9,6 +9,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.ScoreCalculator
+import club.xiaojiawei.hsscriptcardsdk.bean.TurnOverAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.bean.WarScoreCalculatorBuilder
 import club.xiaojiawei.hsscriptcardsdk.bean.area.HandArea
@@ -126,12 +127,12 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             (id.startsWith("CORE_") && card.cardId.startsWith("${id.removePrefix("CORE_")}t"))
 
     override fun shouldDefer(card: Card, war: War): Boolean {
-        // Unlike a soft prior, this is a hard replacement guard.  Equipping
+        // Unlike a soft prior, this is a hard replacement guard. Equipping
         // another weapon destroys the currently equipped weapon, so do not
-        // expose that hand card to the root at all while its attack is still
-        // available.  Once the attack is consumed (or becomes impossible),
-        // the normal MCTS action set can consider the replacement again.
-        if (card.cardType === CardTypeEnum.WEAPON && shouldProtectExistingWeaponAttack(war)) {
+        // expose a replacement while any weapon is still present. The live
+        // parser and the per-turn executor ledger must both observe the
+        // weapon disappearing before another weapon can be considered.
+        if (card.cardType === CardTypeEnum.WEAPON && war.me.playArea.weapon != null) {
             return true
         }
         // A Cliffside play needs one slot for the location and two more for
@@ -168,8 +169,35 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             // The action's value is the immediate summon of two Pirates. Do
             // not expose an opaque click that cannot legally realize that
             // effect; the live executor must be able to use the same action
-            // set as the simulator.
-            freeSlots(war) >= 2
+            // set as the simulator. The initial activation needs room for
+            // the location's two summons; after the hero-attack bridge the
+            // location is already on board and only the two summon slots are
+            // required.
+            freeSlots(war) >= cliffsideActivationSlots(war)
+
+    override fun isActionLegal(action: Action, war: War): Boolean {
+        if (action === TurnOverAction) {
+            // EndTurn is never legal while the parser still exposes a
+            // hero/weapon attack signal. This deliberately uses the state
+            // signal even if one parser pass has not generated target
+            // actions yet; the live controller will rescan instead of ending
+            // the turn on stale data.
+            return !hasHeroAttackSignal(war)
+        }
+        val creator = action.creator ?: return true
+        if (action is PlayAction && creator.cardType === CardTypeEnum.WEAPON) {
+            // Replacing a weapon destroys the remaining attack opportunity.
+            // The live executor adds a turn-local legality wrapper as well,
+            // so a confirmed first weapon play cannot be repeated while the
+            // hand parser is one update behind.
+            return war.me.playArea.weapon == null
+        }
+        if (action is PowerAction && isCard(creator, DANGEROUS_CLIFFSIDE)) {
+            return creator.cardType === CardTypeEnum.LOCATION &&
+                freeSlots(war) >= cliffsideActivationSlots(war)
+        }
+        return true
+    }
 
     override fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? {
         val cliffsideAction = action.creator?.let { isCard(it, DANGEROUS_CLIFFSIDE) } == true
@@ -180,7 +208,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             action is AttackAction &&
                 action.creator?.cardType === CardTypeEnum.HERO &&
                 cliffside?.isLocationActionCooldown == true &&
-                action.creator?.canAttack() == true &&
+                hasHeroAttackSignal(war) &&
                 freeSlots(war) >= 2
         ) {
             // Cliffside summons two ready Pirates. Preserve the established
@@ -219,7 +247,6 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
 
     override fun isMandatoryAction(action: Action, war: War): Boolean {
         val cliffside = war.me.playArea.cards.firstOrNull { isCard(it, DANGEROUS_CLIFFSIDE) && it.isAlive() }
-        val heroCanAttack = war.me.playArea.hero?.canAttack() == true
 
         // With Adrenaline Fiend on board, every ready minion attack is a
         // resource-generating action.  Expose that whole attack set before
@@ -262,7 +289,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         // cooldown. While it is cooling down, the only action we want the
         // MCTS branch to expose is the Demon Hunter hero attack. The attack
         // unlocks the location again; the next re-plan then sees PowerAction.
-        if (cliffside?.isLocationActionCooldown == true && heroCanAttack && freeSlots(war) >= 2) {
+        if (cliffside?.isLocationActionCooldown == true && hasHeroAttackSignal(war) && freeSlots(war) >= 2) {
             return action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO
         }
 
@@ -271,7 +298,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 isCard(card, DANGEROUS_CLIFFSIDE) &&
                     card.cardType === CardTypeEnum.LOCATION &&
                     card.canPower() &&
-                    freeSlots(war) >= 2
+                    freeSlots(war) >= cliffsideActivationSlots(war)
             } == true
     }
 
@@ -304,15 +331,13 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             return hasAttackableMinionAction(war) || hasUsableHeroPowerAction(war)
         }
 
-        // Equipping a weapon replaces the currently equipped weapon.  If the
-        // current weapon still has durability and the hero can make a real
-        // attack, hiding the replacement is a semantic legality guard rather
-        // than a score preference: otherwise a receding-horizon re-plan can
-        // discard the remaining attack opportunity before using it.  The
-        // replacement becomes visible again after the attack consumes the
-        // weapon or when the live state says that no hero attack is legal.
+        // Equipping a weapon replaces the currently equipped weapon. Hiding
+        // every replacement while one is present is a semantic legality
+        // guard, not a score preference: a receding-horizon re-plan must not
+        // discard a remaining attack opportunity or replay a stale hand
+        // weapon after the first weapon was dispatched.
         if (action is PlayAction && action.creator?.cardType === CardTypeEnum.WEAPON) {
-            return shouldProtectExistingWeaponAttack(war)
+            return war.me.playArea.weapon != null
         }
 
         // Blindeye Judge is a last-resort draw card. Remove it from the
@@ -332,7 +357,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         val friendlyMinions = me.playArea.cards.count { it.cardType === CardTypeEnum.MINION }
         val futurePirates = futurePirateSummons(war)
         if (action is PlayAction && card.cardType === CardTypeEnum.WEAPON) {
-            return if (shouldProtectExistingWeaponAttack(war)) -48.0 else 4.0
+            return if (war.me.playArea.weapon != null) -48.0 else 4.0
         }
         if (isHeroPowerAction(action)) {
             // This also protects rollout/expansion ordering if a caller uses
@@ -352,10 +377,9 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 when {
                     !otherPirateOnBoard -> -22.0
                     currentWeapon == null -> 14.0 + attackablePirates
-                    // Replacing a healthy weapon is usually a destructive
-                    // random roll.  Allow the MCTS to consider replacement
-                    // once the current weapon is nearly spent, but do not
-                    // silently force it over a good weapon.
+                    // A weapon already on board is filtered as illegal above;
+                    // keep this prior defensive for callers that inspect the
+                    // score model without going through action generation.
                     currentWeapon.durability <= 1 -> 8.0 + attackablePirates
                     else -> -10.0
                 }
@@ -700,6 +724,22 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             }
     }
 
+    private fun cliffsideActivationSlots(war: War): Int =
+        if (isPostHeroAttackCliffsideReady(war)) 2 else 3
+
+    /**
+     * Keep EndTurn out of the root while the live parser still says that the
+     * hero has an attack signal. A weapon-backed attack can arrive one parser
+     * update before hero.atc is merged, so the weapon and ignore-atc checks are
+     * intentionally part of this predicate.
+     */
+    private fun hasHeroAttackSignal(war: War): Boolean {
+        val hero = war.me.playArea.hero ?: return false
+        val weaponBacked = (war.me.playArea.weapon?.atc ?: 0) > 0 &&
+            hero.canAttack(ignoreAtc = true)
+        return hero.canAttack() || weaponBacked
+    }
+
     private fun hasCoinUnlockingNonHeroPowerCard(war: War): Boolean {
         val me = war.me
         val coinAvailable = me.handArea.cards.any { it.isCoinCard && !it.isUncertain }
@@ -736,22 +776,6 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         return runCatching {
             hero.action.generateAttackActions(war, me).isNotEmpty()
         }.getOrDefault(false)
-    }
-
-    /**
-     * Whether equipping a hand weapon right now would throw away a currently
-     * usable attack from the equipped weapon.  Keep this in the deck model so
-     * other MCTS decks retain their normal replacement semantics.
-     */
-    private fun shouldProtectExistingWeaponAttack(war: War): Boolean {
-        val me = war.me
-        val currentWeapon = me.playArea.weapon ?: return false
-        // A weapon entity can remain in the parser state for one update after
-        // it was played or spent. Protect the replacement while a real attack
-        // is still available; once the hero is exhausted or the weapon is
-        // spent, the next re-plan may legally replace it.
-        if (currentWeapon.durability <= 0 || currentWeapon.isDead()) return false
-        return canUseHeroAttack(war)
     }
 
     private fun isHeroPowerAction(action: Action): Boolean =

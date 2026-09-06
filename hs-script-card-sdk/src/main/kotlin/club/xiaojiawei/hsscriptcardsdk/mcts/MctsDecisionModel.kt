@@ -71,6 +71,15 @@ interface MctsDecisionModel {
     fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? = null
 
     /**
+     * Hard legality after the generic parser has produced an action.
+     *
+     * This is intentionally separate from [isDeferredAction].  A deferred
+     * action may become a valid last-resort choice, while an action rejected
+     * here must never be resurrected when every other candidate is filtered.
+     */
+    fun isActionLegal(action: Action, war: War): Boolean = true
+
+    /**
      * A hard sequencing hook for actions whose timing is part of the card's
      * meaning. Returning true restricts the current node to these actions.
      */

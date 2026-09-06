@@ -9,6 +9,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
+import club.xiaojiawei.hsscriptcardsdk.bean.TurnOverAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
@@ -145,7 +146,7 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
-    fun `replacement weapon is released after equipped weapon attack is no longer available`() {
+    fun `replacement weapon stays blocked while any equipped weapon is still parsed`() {
         val war = testWar().apply { me.resources = 3 }
         val hero = testCard("EXHAUSTED_HERO").apply {
             cardType = CardTypeEnum.HERO
@@ -173,9 +174,9 @@ class PirateDemonHunterMctsExperimentModelTest {
         war.addCard(equipped, war.me.playArea)
         war.addCard(replacement, war.me.handArea)
 
-        assertFalse(PirateDemonHunterMctsExperimentModel.shouldDefer(replacement, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.shouldDefer(replacement, war))
         val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
-        assertTrue(node.actions.any { it.creator?.entityId == replacement.entityId })
+        assertTrue(node.actions.none { it.creator?.entityId == replacement.entityId })
     }
 
     @Test
@@ -390,6 +391,11 @@ class PirateDemonHunterMctsExperimentModelTest {
     fun `mcts root and replans enforce minion play then minion attack then hero power`() {
         val war = testWar().apply { me.resources = 10 }
         val handMinion = testCard("HAND_MINION_FOR_ORDER")
+        val handSpell = testCard(PirateDemonHunterMctsExperimentModel.SIGIL_OF_SKYDIVING).apply {
+            cardType = CardTypeEnum.SPELL
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 1
+        }
         val readyMinion = testCard("READY_MINION_FOR_ORDER").apply { isExhausted = false }
         val hero = testCard("HERO_FOR_ORDER_WITH_PLAY").apply {
             cardType = CardTypeEnum.HERO
@@ -412,6 +418,7 @@ class PirateDemonHunterMctsExperimentModelTest {
             isExhausted = false
         }
         war.addCard(handMinion, war.me.handArea)
+        war.addCard(handSpell, war.me.handArea)
         war.addCard(readyMinion, war.me.playArea)
         war.addCard(hero, war.me.playArea)
         war.addCard(rivalHero, war.rival.playArea)
@@ -435,13 +442,25 @@ class PirateDemonHunterMctsExperimentModelTest {
         val afterMinionPlay = root.buildNextNode(root.actions.single())
         assertTrue(afterMinionPlay.actions.isNotEmpty())
         assertTrue(afterMinionPlay.actions.all {
+            it is PlayAction && it.creator?.entityId == handSpell.entityId
+        })
+
+        val afterSpellPlay = afterMinionPlay.buildNextNode(afterMinionPlay.actions.single())
+        assertTrue(afterSpellPlay.actions.isNotEmpty())
+        assertTrue(afterSpellPlay.actions.all {
             it is AttackAction && it.creator?.cardType === CardTypeEnum.MINION
         })
 
-        val afterMinionAttack = afterMinionPlay.buildNextNode(afterMinionPlay.actions.single())
+        val afterMinionAttack = afterSpellPlay.buildNextNode(afterSpellPlay.actions.single())
         assertTrue(afterMinionAttack.actions.isNotEmpty())
         assertTrue(afterMinionAttack.actions.all {
             it is PowerAction && it.creator?.cardType === CardTypeEnum.HERO_POWER
+        })
+
+        val afterHeroPower = afterMinionAttack.buildNextNode(afterMinionAttack.actions.single())
+        assertTrue(afterHeroPower.actions.isNotEmpty())
+        assertTrue(afterHeroPower.actions.all {
+            it is AttackAction && it.creator?.cardType === CardTypeEnum.HERO
         })
     }
 
@@ -619,6 +638,107 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
         assertTrue(node.actions.none { it.creator?.entityId == cliffside.entityId })
+    }
+
+    @Test
+    fun `initial cliffside activation requires three free slots`() {
+        val tooFewSlots = testWar().apply { me.resources = 0 }
+        val cliffside = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {
+            cardType = CardTypeEnum.LOCATION
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 3
+            isExhausted = false
+            isLocationActionCooldown = false
+        }
+        tooFewSlots.addCard(cliffside, tooFewSlots.me.playArea)
+        repeat(4) { tooFewSlots.addCard(testCard("INITIAL_CLIFFSIDE_FILL_$it"), tooFewSlots.me.playArea) }
+
+        assertEquals(2, tooFewSlots.me.playArea.maxSize - tooFewSlots.me.playArea.cards.size)
+        assertFalse(PirateDemonHunterMctsExperimentModel.canCreateOpaquePowerAction(cliffside, tooFewSlots))
+        assertTrue(
+            MonteCarloTreeNode(tooFewSlots, InitAction, testMctsArg(experimentalSearch = true))
+                .actions.none { it.creator?.entityId == cliffside.entityId },
+        )
+
+        val enoughSlots = testWar().apply { me.resources = 0 }
+        val playable = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {
+            cardType = CardTypeEnum.LOCATION
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 3
+            isExhausted = false
+            isLocationActionCooldown = false
+        }
+        enoughSlots.addCard(playable, enoughSlots.me.playArea)
+        repeat(3) { enoughSlots.addCard(testCard("INITIAL_CLIFFSIDE_FILL_OK_$it"), enoughSlots.me.playArea) }
+
+        assertEquals(3, enoughSlots.me.playArea.maxSize - enoughSlots.me.playArea.cards.size)
+        assertTrue(PirateDemonHunterMctsExperimentModel.canCreateOpaquePowerAction(playable, enoughSlots))
+        assertTrue(
+            MonteCarloTreeNode(enoughSlots, InitAction, testMctsArg(experimentalSearch = true))
+                .actions.any { it.creator?.entityId == playable.entityId },
+        )
+    }
+
+    @Test
+    fun `weapon-backed hero attack prevents end turn on a stale hero attack stat`() {
+        val war = testWar().apply { me.resources = 0 }
+        val hero = testCard("STALE_HERO_ATTACK_STAT").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+            isExhausted = false
+        }
+        val weapon = testCard("EQUIPPED_WEAPON_FOR_STALE_ATTACK").apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 3
+            durability = 1
+            health = 0
+        }
+        val rivalHero = testCard("RIVAL_HERO_FOR_STALE_ATTACK").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(weapon, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertTrue(node.actions.any { it is AttackAction && it.creator?.entityId == hero.entityId })
+        assertTrue(node.actions.none { it === TurnOverAction })
+    }
+
+    @Test
+    fun `simulated weapon play blocks a second weapon in the same turn`() {
+        val war = testWar().apply { me.resources = 6 }
+        val firstWeapon = testCard("FIRST_SIMULATED_WEAPON").apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 2
+            atc = 3
+            durability = 2
+            health = 0
+        }
+        val secondWeapon = testCard("SECOND_SIMULATED_WEAPON").apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 2
+            atc = 4
+            durability = 2
+            health = 0
+        }
+        war.addCard(firstWeapon, war.me.handArea)
+        war.addCard(secondWeapon, war.me.handArea)
+
+        val root = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        val firstPlay = root.actions.first { it.creator?.entityId == firstWeapon.entityId }
+        val afterFirstPlay = root.buildNextNode(firstPlay)
+
+        assertTrue(afterFirstPlay.state.war.me.playArea.weapon != null)
+        assertTrue(afterFirstPlay.actions.none { it.creator?.cardType === CardTypeEnum.WEAPON })
     }
 
     @Test

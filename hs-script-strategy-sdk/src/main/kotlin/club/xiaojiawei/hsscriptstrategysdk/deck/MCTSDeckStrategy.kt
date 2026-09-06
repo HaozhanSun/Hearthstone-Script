@@ -39,6 +39,10 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
     private var experimentalTurnNumber: Int? = null
     private val suppressedExperimentalCreatorIds = mutableSetOf<String>()
 
+    /** A confirmed/attempted weapon play is a once-per-turn resource decision. */
+    @Volatile
+    private var experimentalTurnPlayedWeapon = false
+
     fun hasUnconfirmedExperimentalDispatch(): Boolean =
         lastExperimentalTurnHadUnconfirmedDispatch
 
@@ -66,16 +70,28 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
      * end-turn check from treating a partially parsed card with a fitting
      * printed cost as actionable when MCTS has no action to dispatch.
      */
-    fun actionableCreatorIds(war: War, purpose: String = "mcts-live-scan"): Set<String> {
+    fun actionableCreatorIds(
+        war: War,
+        purpose: String = "mcts-live-scan",
+        blockWeaponPlays: Boolean = false,
+    ): Set<String> {
         val me = war.me
         val model = activeDecisionModel
         val suppressed = suppressedExperimentalCreatorIds()
+        val weaponAlreadyPlayedThisTurn = blockWeaponPlays ||
+            (experimentalTurnNumber == me.turn && experimentalTurnPlayedWeapon)
         val result = linkedSetOf<String>()
         val decisions = mutableListOf<Map<String, Any?>>()
         fun decision(details: Map<String, Any?>) {
             decisions += details
         }
+        fun isLiveActionLegal(action: Action): Boolean =
+            model?.isActionLegal(action, war) != false
         me.handArea.cards.forEach { card ->
+            if (weaponAlreadyPlayedThisTurn && card.cardType === CardTypeEnum.WEAPON) {
+                decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "weapon-already-played-this-turn"))
+                return@forEach
+            }
             if (card.entityId in suppressed) {
                 decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "suppressed-after-unconfirmed-dispatch"))
                 return@forEach
@@ -109,8 +125,12 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 emptyList()
             }
             if (parsedResult.isFailure) return@forEach
-            val parsed = parsedActions.any { model?.isDeferredAction(it, war) != true }
-            val deferredParsed = parsedActions.count { model?.isDeferredAction(it, war) == true }
+            val parsed = parsedActions.any {
+                isLiveActionLegal(it) && model?.isDeferredAction(it, war) != true
+            }
+            val deferredParsed = parsedActions.count {
+                !isLiveActionLegal(it) || model?.isDeferredAction(it, war) == true
+            }
             val opaque = parsedActions.isEmpty() && model?.canCreateOpaqueAction(card, war) == true
             // Match MonteCarloTreeNode exactly: an opaque action is only a
             // fallback when the parser produced no action at all.  A parsed
@@ -146,18 +166,22 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             if (card.canAttack()) {
                 val attackResult = runCatching { card.action.generateAttackActions(war, me) }
                 val attackActions = attackResult.getOrElse { emptyList() }
-                if (attackActions.any { model?.isDeferredAction(it, war) != true }) {
+                if (attackActions.any {
+                        isLiveActionLegal(it) && model?.isDeferredAction(it, war) != true
+                    }) {
                     result += card.entityId
                 }
-                decision(mapOf("kind" to "BOARD_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "rawAttackActions" to attackActions.size, "outcome" to if (attackActions.any { model?.isDeferredAction(it, war) != true }) "ACTIONABLE" else "FILTERED", "reason" to if (attackResult.isFailure) "attack-action-generation-error:${attackResult.exceptionOrNull()!!::class.java.simpleName}" else "attack-actions"))
+                decision(mapOf("kind" to "BOARD_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "rawAttackActions" to attackActions.size, "outcome" to if (attackActions.any { isLiveActionLegal(it) && model?.isDeferredAction(it, war) != true }) "ACTIONABLE" else "FILTERED", "reason" to if (attackResult.isFailure) "attack-action-generation-error:${attackResult.exceptionOrNull()!!::class.java.simpleName}" else "attack-actions"))
             }
             if (card.canPower()) {
                 val powerResult = runCatching { card.action.generatePowerActions(war, me) }
                 val powerActions = powerResult.getOrElse { emptyList() }
-                if (powerActions.any { model?.isDeferredAction(it, war) != true }) {
+                if (powerActions.any {
+                        isLiveActionLegal(it) && model?.isDeferredAction(it, war) != true
+                    }) {
                     result += card.entityId
                 }
-                decision(mapOf("kind" to "BOARD_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "rawPowerActions" to powerActions.size, "outcome" to if (powerActions.any { model?.isDeferredAction(it, war) != true }) "ACTIONABLE" else "FILTERED", "reason" to if (powerResult.isFailure) "power-action-generation-error:${powerResult.exceptionOrNull()!!::class.java.simpleName}" else "power-actions"))
+                decision(mapOf("kind" to "BOARD_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "rawPowerActions" to powerActions.size, "outcome" to if (powerActions.any { isLiveActionLegal(it) && model?.isDeferredAction(it, war) != true }) "ACTIONABLE" else "FILTERED", "reason" to if (powerResult.isFailure) "power-action-generation-error:${powerResult.exceptionOrNull()!!::class.java.simpleName}" else "power-actions"))
             }
             val opaquePower = model?.canCreateOpaquePowerAction(card, war) == true
             if (opaquePower) result += card.entityId
@@ -176,7 +200,15 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 runCatching { hero.action.generateAttackActions(war, me) }
             } else null
             val attackActions = attackResult?.getOrElse { emptyList() }.orEmpty()
-            if (attackActions.isNotEmpty()) result += hero.entityId
+            val generatedHeroAttack = attackActions.any { isLiveActionLegal(it) }
+            // A weapon-backed attack can be visible in the parsed state one
+            // poll before the target action generator catches up. Keep the
+            // hero creator actionable in that narrow case so the end-turn
+            // guard blocks a premature click and the next live replan can
+            // recover the attack action. This is deliberately not applied to
+            // an ordinary hero attack with no generated target action.
+            val staleWeaponBackedSignal = weaponBackedAttack && attackActions.isEmpty()
+            if (generatedHeroAttack || staleWeaponBackedSignal) result += hero.entityId
             decision(
                 mapOf(
                     "kind" to "HERO",
@@ -184,6 +216,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                     "outcome" to if (hero.entityId in result) "ACTIONABLE" else "FILTERED",
                     "reason" to when {
                         attackResult?.isFailure == true -> "attack-action-generation-error:${attackResult.exceptionOrNull()!!::class.java.simpleName}"
+                        hero.entityId in result && staleWeaponBackedSignal -> "weapon-backed-no-generated-attack-actions"
                         hero.entityId in result && weaponBackedAttack && !hero.canAttack() -> "weapon-backed-attack-actions"
                         hero.entityId in result -> "attack-actions"
                         weaponBackedAttack -> "weapon-backed-no-generated-attack-actions"
@@ -203,7 +236,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             }
             if (power.canPower() && runCatching {
                     power.action.generatePowerActions(war, me)
-                        .any { model?.isDeferredAction(it, war) != true }
+                        .any { isLiveActionLegal(it) && model?.isDeferredAction(it, war) != true }
                 }.getOrDefault(false)
             ) result += power.entityId
             val opaquePower = model?.canCreateOpaquePowerAction(power, war) == true
@@ -375,8 +408,10 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             if (experimentalTurnNumber != war.me.turn) {
                 experimentalTurnNumber = war.me.turn
                 suppressedExperimentalCreatorIds.clear()
+                experimentalTurnPlayedWeapon = false
             }
         }
+        var weaponPlayedThisTurn = experimentalTurnPlayedWeapon
         val turnDeadline = System.currentTimeMillis() + template.experimentalTurnBudgetMillis
         val search = MonteCarloTreeSearch()
         var actionCount = 0
@@ -389,8 +424,8 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 searchStart + template.experimentalActionBudgetMillis,
             )
             val decisionModel = template.decisionModel?.let { model ->
-                if (blockedCreatorIds.isEmpty()) model
-                else TemporarilyBlockedActionModel(model, blockedCreatorIds)
+                if (blockedCreatorIds.isEmpty() && !weaponPlayedThisTurn) model
+                else TemporarilyBlockedActionModel(model, blockedCreatorIds, weaponPlayedThisTurn)
             }
             val arg = MCTSArg(
                 actionDeadline,
@@ -418,7 +453,11 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 // MCTS root-action recovery path, not a legacy hard-coded
                 // play order, and it prevents the app guard from spending its
                 // re-plan budget on an already stale EndTurn result.
-                val liveCreators = actionableCreatorIds(war, "search-empty-or-end-turn-rescan")
+                val liveCreators = actionableCreatorIds(
+                    war,
+                    "search-empty-or-end-turn-rescan",
+                    blockWeaponPlays = weaponPlayedThisTurn,
+                )
                 val fallback = if (liveCreators.isNotEmpty()) {
                     liveFallbackAction(war, arg, blockedCreatorIds)
                 } else {
@@ -578,6 +617,10 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             }
             try {
                 action.exec.accept(war)
+                if (action is PlayAction && action.creator?.cardType === CardTypeEnum.WEAPON) {
+                    weaponPlayedThisTurn = true
+                    experimentalTurnPlayedWeapon = true
+                }
                 MctsReplayTrace.record(
                     war,
                     "action_dispatch_returned",
@@ -783,9 +826,11 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
     private class TemporarilyBlockedActionModel(
         private val delegate: MctsDecisionModel,
         private val blockedCreatorIds: Set<String>,
+        private val blockWeaponPlays: Boolean = false,
     ) : MctsDecisionModel by delegate {
         private fun isBlocked(action: Action): Boolean =
-            action.creator?.entityId?.let(blockedCreatorIds::contains) == true
+            action.creator?.entityId?.let(blockedCreatorIds::contains) == true ||
+                (blockWeaponPlays && action is PlayAction && action.creator?.cardType === CardTypeEnum.WEAPON)
 
         /**
          * A deck model may inspect the complete simulated War while deciding
@@ -812,6 +857,11 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
         override fun isMandatoryAction(action: Action, war: War): Boolean =
             !isBlocked(action) && withBlockedCreatorsMasked(war) {
                 delegate.isMandatoryAction(action, war)
+            }
+
+        override fun isActionLegal(action: Action, war: War): Boolean =
+            !isBlocked(action) && withBlockedCreatorsMasked(war) {
+                delegate.isActionLegal(action, war)
             }
 
         override fun isDeferredAction(action: Action, war: War): Boolean =
