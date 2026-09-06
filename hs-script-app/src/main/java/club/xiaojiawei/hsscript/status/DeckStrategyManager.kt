@@ -24,6 +24,38 @@ import java.util.stream.Stream
  */
 object DeckStrategyManager {
 
+    private val refreshCoordinator = StrategyRefreshCoordinator { message ->
+        log.info { message }
+    }
+
+    /** A manual/IPC/UI request is queued and never swaps a live turn. */
+    fun requestStrategyRefresh(reason: String = "manual"): Long =
+        refreshCoordinator.request(reason)
+
+    /** Called by the turn-phase boundary before a new OutCardThread starts. */
+    fun applyPendingStrategyRefreshAtTurnBoundary(): StrategyRefreshCoordinator.Outcome<DeckStrategy> {
+        val previous = currentDeckStrategyProperty.get()
+        val outcome = refreshCoordinator.applyAtTurnBoundary(previous) {
+            refreshStrategiesAndResolve(previous)
+        }
+        if (outcome.status == StrategyRefreshCoordinator.Status.APPLIED &&
+            outcome.replacement !== previous
+        ) {
+            currentDeckStrategyProperty.set(outcome.replacement)
+        }
+        if (outcome.status == StrategyRefreshCoordinator.Status.FAILED) {
+            log.warn {
+                "STRATEGY_REFRESH_ROLLBACK requestId=${outcome.requestId} " +
+                    "strategy=${previous?.id() ?: "none"}"
+            }
+        }
+        return outcome
+    }
+
+    fun markStrategyTurnStarted() = refreshCoordinator.markTurnStarted()
+
+    fun markStrategyTurnEnded() = refreshCoordinator.markTurnEnded()
+
     /**
      * 当前卡组策略
      */
@@ -65,6 +97,8 @@ object DeckStrategyManager {
         log.info { "当前对局使用已选策略；投降规则由对手英雄与当前排位决定" }
     }
 
+    private var refreshInProgress = false
+
     init {
         currentDeckStrategyProperty.addListener { _: ObservableValue<out DeckStrategy?>?, _: DeckStrategy?, newStrategy: DeckStrategy? ->
             if (newStrategy == null) {
@@ -82,7 +116,7 @@ object DeckStrategyManager {
         }
 
         loadDeckProperty().addListener { _: ObservableValue<out Boolean>?, _: Boolean?, t1: Boolean ->
-            if (t1) {
+            if (t1 && !refreshInProgress) {
                 reload()
             }
         }
@@ -125,8 +159,53 @@ object DeckStrategyManager {
 
     private fun reload() {
         log.info { "刷新策略库" }
-        deckStrategies.clear()
-        deckStrategies.addAll(load())
+        val loaded = load()
+        val previous = deckStrategies.toList()
+        try {
+            deckStrategies.clear()
+            deckStrategies.addAll(loaded)
+        } catch (error: Throwable) {
+            deckStrategies.clear()
+            deckStrategies.addAll(previous)
+            throw error
+        }
+    }
+
+    private fun refreshStrategiesAndResolve(previous: DeckStrategy?): DeckStrategy? {
+        val previousCatalog = deckStrategies.toList()
+        val previousSelected = currentDeckStrategyProperty.get()
+        refreshInProgress = true
+        try {
+            PluginManager.loadAllPlugins()
+            val loaded = load()
+            try {
+                deckStrategies.clear()
+                deckStrategies.addAll(loaded)
+            } catch (error: Throwable) {
+                deckStrategies.clear()
+                deckStrategies.addAll(previousCatalog)
+                throw error
+            }
+            val previousId = previous?.id()
+            val replacement = previousId?.let { id -> deckStrategies.find { it.id() == id } }
+            if (previous != null && replacement == null) {
+                log.warn {
+                    "STRATEGY_REFRESH_ACTIVE_RETAINED strategy=${previous.id()} " +
+                        "reason=matching-id-not-found"
+                }
+                return previous
+            }
+            return replacement
+        } catch (error: Throwable) {
+            // PluginManager itself publishes catalogs transactionally. Restore
+            // the visible strategy list as well if catalog construction fails.
+            deckStrategies.clear()
+            deckStrategies.addAll(previousCatalog)
+            currentDeckStrategyProperty.set(previousSelected)
+            throw error
+        } finally {
+            refreshInProgress = false
+        }
     }
 
 }

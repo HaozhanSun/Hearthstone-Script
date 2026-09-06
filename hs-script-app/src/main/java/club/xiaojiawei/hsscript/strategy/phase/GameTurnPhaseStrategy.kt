@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscript.enums.TagEnum
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.PlayerBehaviorStatus
 import club.xiaojiawei.hsscript.status.E2ETrace
+import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator
@@ -50,6 +51,11 @@ object GameTurnPhaseStrategy : AbstractPhaseStrategy() {
                         GameUtil.surrender()
                         return false
                     }
+                    // A requested strategy refresh is applied only at this
+                    // boundary. The running turn keeps its captured strategy
+                    // instance and cannot be interrupted by plugin loading.
+                    DeckStrategyManager.applyPendingStrategyRefreshAtTurnBoundary()
+                    DeckStrategyManager.markStrategyTurnStarted()
                     if (ConfigUtil.getBoolean(ConfigEnum.ONLY_ROBOT)) {
                         PlayerBehaviorStatus.checkRivalRobot()
                     }
@@ -85,6 +91,7 @@ object GameTurnPhaseStrategy : AbstractPhaseStrategy() {
                     }
                 }
             } else if (tagChangeEntity.value == StepEnum.MAIN_END.name) {
+                DeckStrategyManager.markStrategyTurnEnded()
                 war.isMyTurn = false
                 cancelAllTask()
             }
