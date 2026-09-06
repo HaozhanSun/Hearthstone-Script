@@ -81,6 +81,8 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         val freeSlots = freeSlots(war)
 
         return when {
+            isCard(card, PirateHeroAttackTargetPolicy.NU_LING_NAGA) ->
+                PirateHeroAttackTargetPolicy.nuLingNagaPlayPrior(action, war)
             isCard(card, SHIPS_CANNON) -> 100.0
             isCard(card, QUESTLINE) && isFirstTurn(war) -> 95.0
             isCard(card, TREASURE_DISTRIBUTOR) -> 90.0 + otherPirates * 2.0

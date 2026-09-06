@@ -120,6 +120,37 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `nu ling naga is downranked until a friendly minion can attack`() {
+        val war = testWar()
+        val rivalHero = testCard("NAGA_PLAY_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            health = 20
+        }
+        val naga = testCard(PirateHeroAttackTargetPolicy.NU_LING_NAGA).apply {
+            cardType = CardTypeEnum.MINION
+            cost = 3
+        }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(naga, war.me.handArea)
+
+        val nagaAction = PlayAction({}, {}, naga)
+        val noAttackerPrior = PirateDemonHunterMctsExperimentModel.actionPrior(nagaAction, war)
+
+        val attacker = testCard("NAGA_PLAY_ATTACKER").apply {
+            cardType = CardTypeEnum.MINION
+            cardRace = CardRaceEnum.PIRATE
+            atc = 2
+            health = 2
+            isExhausted = false
+        }
+        war.addCard(attacker, war.me.playArea)
+        val attackerAvailablePrior = PirateDemonHunterMctsExperimentModel.actionPrior(nagaAction, war)
+
+        assertTrue(noAttackerPrior < attackerAvailablePrior)
+        assertTrue(noAttackerPrior < 0.0)
+    }
+
+    @Test
     fun `hero attack chooses the highest threat among killable minions`() {
         val war = testWar()
         val hero = testCard("THREAT_HERO").apply {

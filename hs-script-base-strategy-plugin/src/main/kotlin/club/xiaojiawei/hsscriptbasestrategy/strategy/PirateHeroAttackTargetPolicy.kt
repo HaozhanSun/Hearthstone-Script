@@ -3,6 +3,7 @@ package club.xiaojiawei.hsscriptbasestrategy.strategy
 import club.xiaojiawei.hsscriptcardsdk.bean.Action
 import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
+import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.util.CardUtil
@@ -33,6 +34,16 @@ object PirateHeroAttackTargetPolicy {
 
     fun isNuLingNaga(card: Card): Boolean =
         card.cardId == NU_LING_NAGA || card.cardId == "CORE_$NU_LING_NAGA"
+
+    /**
+     * Down-rank the death-trigger Naga while none of our minions can attack.
+     * The card is still left legal as a fallback; this is a planning signal,
+     * not a hard card filter.
+     */
+    fun nuLingNagaPlayPrior(action: Action, war: War): Double {
+        if (action !is PlayAction || action.creator?.let(::isNuLingNaga) != true) return 0.0
+        return if (hasAttackableFriendlyMinion(war)) 0.0 else -35.0
+    }
 
     /**
      * Softly prefer other friendly minions to trade into enemy minions while
@@ -108,6 +119,16 @@ object PirateHeroAttackTargetPolicy {
     private fun hasAttackableEnemyMinion(war: War): Boolean =
         war.rival.playArea.cards.any {
             it.cardType === CardTypeEnum.MINION && it.isAlive() && it.canBeAttacked()
+        }
+
+    private fun hasAttackableFriendlyMinion(war: War): Boolean =
+        war.me.playArea.cards.any { minion ->
+            minion.cardType === CardTypeEnum.MINION &&
+                minion.isAlive() &&
+                minion.canAttack() &&
+                runCatching {
+                    minion.action.generateAttackActions(war, war.me).isNotEmpty()
+                }.getOrDefault(false)
         }
 
     private fun targetPlan(war: War, heroAttack: Int): TargetPlan? {

@@ -434,6 +434,8 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             return if (hasOtherNonHeroPowerAction(war)) -40.0 else -1.0
         }
         return when {
+            isCard(card, PirateHeroAttackTargetPolicy.NU_LING_NAGA) ->
+                PirateHeroAttackTargetPolicy.nuLingNagaPlayPrior(action, war)
             isCard(card, SHIPS_CANNON) -> if (me.playArea.cards.any { isCard(it, SHIPS_CANNON) }) 0.0 else 12.0
             isCard(card, TREASURE_DISTRIBUTOR) -> 10.0 + futurePirates * 1.5
             isCard(card, SOUTHSEA_CAPTAIN) ->
