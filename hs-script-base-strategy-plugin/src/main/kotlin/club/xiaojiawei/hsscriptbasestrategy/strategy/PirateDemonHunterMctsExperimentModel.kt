@@ -342,6 +342,13 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             return war.me.playArea.weapon != null
         }
 
+        // Parachute Brigand is a lowest-priority board play. Keep it out of
+        // the current root while another useful action exists, but retain it
+        // as a last-resort action when it is the only useful play.
+        if (action is PlayAction && action.creator?.let { isCard(it, PARACHUTE_BRIGAND) } == true) {
+            return hasOtherPlayableAction(war, action.creator)
+        }
+
         // Blindeye Judge is a last-resort draw card. Remove it from the
         // current node while any useful hand play, board attack, location
         // activation, or hero power remains. This is deliberately separate
@@ -652,6 +659,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         val handAction = me.handArea.cards.any { card ->
             card.entityId != excluded?.entityId &&
                 !isCard(card, BLINDEYE_JUDGE) &&
+                !isCard(card, PARACHUTE_BRIGAND) &&
                 !card.isUncertain &&
                 card.cost <= me.usableResource &&
                 (card.cardType !== CardTypeEnum.MINION || !me.playArea.isFull) &&

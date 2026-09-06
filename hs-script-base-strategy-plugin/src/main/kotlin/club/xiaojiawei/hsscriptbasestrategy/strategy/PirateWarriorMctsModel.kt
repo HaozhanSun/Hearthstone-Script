@@ -26,6 +26,7 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     const val TREASURE_DISTRIBUTOR = "TOY_518"
     const val QUESTLINE = "SW_028"
     const val PATCHES_THE_PIRATE = "CFM_637"
+    const val PARACHUTE_BRIGAND = "DRG_056"
     const val SHIPS_CANNON = "GVG_075"
     const val SOUTHSEA_CAPTAIN = "NEW1_027"
     const val HOZEN_ROUGHHOUSER = "VAC_938"
@@ -178,6 +179,14 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             frontlineAxeTarget(action, war) == FrontlineAxeTarget.MINION
         ) {
             return hasOtherUsefulNonAxeAction(war)
+        }
+
+        // Parachute Brigand is intentionally the last card we play. It is
+        // still retained by MonteCarloTreeNode when it is the only useful
+        // action, so the free-effect minion cannot strand the turn.
+        val creator = action.creator
+        if (action is PlayAction && creator?.let { isCard(it, PARACHUTE_BRIGAND) } == true) {
+            return hasOtherPlayableAction(war, creator)
         }
         return false
     }
@@ -534,6 +543,39 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             it !== ignored && it.cardType === CardTypeEnum.WEAPON &&
                 !it.isUncertain && it.cost + ignored.cost <= war.me.usableResource
         }
+
+    /** True when a real action other than the excluded card is available. */
+    private fun hasOtherPlayableAction(war: War, excluded: Card): Boolean {
+        val me = war.me
+        val handAction = me.handArea.cards.any { card ->
+            card.entityId != excluded.entityId &&
+                !isCard(card, PARACHUTE_BRIGAND) &&
+                !card.isUncertain &&
+                card.cost <= me.usableResource &&
+                (card.cardType !== CardTypeEnum.MINION || !me.playArea.isFull) &&
+                (
+                    runCatching { card.action.generatePlayActions(war, me) }
+                        .getOrDefault(emptyList())
+                        .isNotEmpty() || canCreateOpaqueAction(card, war)
+                )
+        }
+        val boardAction = me.playArea.cards.any { card ->
+            (card.canAttack() && runCatching { card.action.generateAttackActions(war, me) }
+                .getOrDefault(emptyList()).isNotEmpty()) ||
+                (card.canPower() && runCatching { card.action.generatePowerActions(war, me) }
+                    .getOrDefault(emptyList()).isNotEmpty())
+        }
+        val heroAction = me.playArea.hero?.let { hero ->
+            hero.canAttack() && runCatching { hero.action.generateAttackActions(war, me) }
+                .getOrDefault(emptyList()).isNotEmpty()
+        } == true
+        val heroPowerAction = me.playArea.power?.let { power ->
+            me.usableResource >= power.cost && power.canPower() && runCatching {
+                power.action.generatePowerActions(war, me)
+            }.getOrDefault(emptyList()).isNotEmpty()
+        } == true
+        return handAction || boardAction || heroAction || heroPowerAction
+    }
 
     private fun hasOtherPlayableMinion(war: War, ignored: Card): Boolean =
         war.me.handArea.cards.any {

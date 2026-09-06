@@ -331,6 +331,31 @@ class PirateWarriorMctsModelTest {
         )
     }
 
+    @Test
+    fun `parachute brigand is deferred behind another playable card even when free`() {
+        val war = testWar(turn = 2, mana = 1)
+        val brigand = testCard(PirateWarriorMctsModel.PARACHUTE_BRIGAND, cost = 0)
+        val ordinary = testCard("ORDINARY_AFTER_BRIGAND", cost = 1)
+        war.addCard(brigand, war.me.handArea)
+        war.addCard(ordinary, war.me.handArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg())
+
+        assertTrue(node.actions.any { it.creator?.cardId == ordinary.cardId })
+        assertTrue(node.actions.none { it.creator?.cardId == brigand.cardId })
+    }
+
+    @Test
+    fun `parachute brigand remains available as the only free playable action`() {
+        val war = testWar(turn = 2, mana = 0)
+        val brigand = testCard(PirateWarriorMctsModel.PARACHUTE_BRIGAND, cost = 0)
+        war.addCard(brigand, war.me.handArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg())
+
+        assertTrue(node.actions.any { it.creator?.cardId == brigand.cardId })
+    }
+
     private fun testWar(turn: Int, mana: Int): War {
         val war = War()
         val me = Player(playerId = "me", war = war)

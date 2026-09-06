@@ -1401,6 +1401,46 @@ class PirateDemonHunterMctsExperimentModelTest {
         assertEquals(cannon.cardId, path.first().applyAction.creator?.cardId)
     }
 
+    @Test
+    fun `parachute brigand is deferred behind another playable card even when free`() {
+        val war = testWar().apply { me.resources = 1 }
+        val brigand = testCard(PirateDemonHunterMctsExperimentModel.PARACHUTE_BRIGAND).apply { cost = 0 }
+        val ordinary = testCard("ORDINARY_AFTER_BRIGAND").apply { cost = 1 }
+        war.addCard(brigand, war.me.handArea)
+        war.addCard(ordinary, war.me.handArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it.creator?.cardId == ordinary.cardId })
+        assertTrue(node.actions.none { it.creator?.cardId == brigand.cardId })
+    }
+
+    @Test
+    fun `parachute brigand remains available as the only free playable action`() {
+        val war = testWar().apply { me.resources = 0 }
+        val brigand = testCard(PirateDemonHunterMctsExperimentModel.PARACHUTE_BRIGAND).apply { cost = 0 }
+        war.addCard(brigand, war.me.handArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it.creator?.cardId == brigand.cardId })
+        assertTrue(node.actions.none { it.javaClass.simpleName == "TurnOverAction" })
+    }
+
+    @Test
+    fun `parachute brigand is not resurrected when the board is full`() {
+        val war = testWar()
+        repeat(war.me.playArea.maxSize) { index ->
+            war.addCard(testCard("BOARD_$index"), war.me.playArea)
+        }
+        val brigand = testCard(PirateDemonHunterMctsExperimentModel.PARACHUTE_BRIGAND).apply { cost = 0 }
+        war.addCard(brigand, war.me.handArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.none { it.creator?.cardId == brigand.cardId })
+    }
+
     private fun testWar(): War {
         val war = War()
         val me = Player(playerId = "me", war = war)
