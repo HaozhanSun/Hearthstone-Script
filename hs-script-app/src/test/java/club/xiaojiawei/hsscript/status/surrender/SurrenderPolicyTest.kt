@@ -319,6 +319,21 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun disabledOpponentHeroSettingAlsoAppliesToTurnStartEvaluation() {
+        val previous = ConfigUtil.getBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER)
+        try {
+            ConfigUtil.putBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER, false)
+            SurrenderPolicy.resetForNewGame()
+
+            val result = SurrenderPolicy.evaluateTurnStart(warWithRivalHero("星界雪怒"))
+
+            assertNull(result)
+        } finally {
+            ConfigUtil.putBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER, previous)
+        }
+    }
+
+    @Test
     fun rankOcrParserAcceptsPlainAndLocalizedRankText() {
         assertEquals(10, CurrentRankDetector.parseRankText("白银10"))
         assertEquals(9, CurrentRankDetector.parseRankText("当前等级：9"))

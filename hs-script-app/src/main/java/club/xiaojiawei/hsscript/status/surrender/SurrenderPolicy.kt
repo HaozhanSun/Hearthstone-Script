@@ -972,7 +972,13 @@ object SurrenderPolicy {
         )
 
         for (rule in turnStartRules) {
-            val result = rule.evaluate(context)
+            // Keep this live-turn path consistent with the pre-mulligan path.
+            // The settings toggle is read at decision time so changing it in
+            // the UI applies without restarting the policy object.
+            val result = applyOpponentHeroSurrenderSetting(
+                rule.evaluate(context),
+                opponentHeroNonOriginalSurrenderEnabled(),
+            )
             log.info {
                 "SURRENDER_CHECK stage=${context.stage.name} rule=${result.ruleId} " +
                     "rivalHeroRaw=${context.rivalHeroNameRaw.ifBlank { "<blank>" }} " +
