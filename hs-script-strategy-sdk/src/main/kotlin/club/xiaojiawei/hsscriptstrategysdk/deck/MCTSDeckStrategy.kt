@@ -30,6 +30,11 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
  */
 abstract class MCTSDeckStrategy : DeckStrategy() {
     private val maxEmptySearchRescans = 3
+    // Power.log can lag the hero-attack confirmation by roughly 700ms in a
+    // real Cliffside turn. Keep this retry budget separate from ordinary MCTS
+    // replans so a parser transition cannot be mistaken for EndTurn.
+    private val maxPerceptionRescans = 8
+    private val perceptionRescanDelayMillis = 120L
     @Volatile
     private var lastExperimentalTurnHadUnconfirmedDispatch = false
 
@@ -522,7 +527,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                             "action" to describeAction(fallback),
                         ),
                     )
-                } else if (shouldRetryForPerception && emptySearchRescans < maxEmptySearchRescans) {
+                } else if (shouldRetryForPerception && emptySearchRescans < maxPerceptionRescans) {
                     emptySearchRescans++
                     MctsReplayTrace.record(
                         war,
@@ -532,13 +537,13 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                             "strategy" to name(),
                             "step" to actionCount + 1,
                             "attempt" to emptySearchRescans,
-                            "maxAttempts" to maxEmptySearchRescans,
+                            "maxAttempts" to maxPerceptionRescans,
                             "liveActionableCreatorIds" to liveCreators,
                             "boardSlotsFree" to (war.me.playArea.maxSize - war.me.playArea.cards.size).coerceAtLeast(0),
                             "locationRefreshPending" to true,
                         ),
                     )
-                    Thread.sleep(120L)
+                    Thread.sleep(perceptionRescanDelayMillis)
                     continue
                 } else if (liveCreators.isNotEmpty() && emptySearchRescans < maxEmptySearchRescans) {
                     emptySearchRescans++

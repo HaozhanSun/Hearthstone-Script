@@ -7,6 +7,7 @@ import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
+import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.data.CARD_DATA_TRIE
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
@@ -73,9 +74,11 @@ object TurnEndActionGuard {
         val playableHandCards: Int,
         val attackableHero: Boolean,
         val playableHeroPower: Boolean = false,
+        val playableBoardPowers: Int = 0,
     ) {
         val blocksEndTurn: Boolean
-            get() = attackableMinions > 0 || playableHandCards > 0 || attackableHero || playableHeroPower
+            get() = attackableMinions > 0 || playableHandCards > 0 || attackableHero ||
+                playableHeroPower || playableBoardPowers > 0
     }
 
     /** Snapshot used by MCTS without dispatching legacy fallback actions. */
@@ -142,6 +145,7 @@ object TurnEndActionGuard {
                     "playableHandCards" to observation.playableHandCards,
                     "attackableHero" to observation.attackableHero,
                     "playableHeroPower" to observation.playableHeroPower,
+                    "playableBoardPowers" to observation.playableBoardPowers,
                     "blocksEndTurn" to observation.blocksEndTurn,
                 ),
                 "ignoredCreatorIds" to ignoredCreatorIds,
@@ -160,6 +164,7 @@ object TurnEndActionGuard {
             "MCTS_TURN_END_OBSERVE turn=${WAR.me.turn} actions=${observation.blocksEndTurn} " +
                 "minions=${observation.attackableMinions} hand=${observation.playableHandCards} " +
                 "hero=${observation.attackableHero} heroPower=${observation.playableHeroPower} " +
+                "boardPowers=${observation.playableBoardPowers} " +
                 "buttonColor=$buttonColor clearYellowRetries=$clearYellowRetries " +
                 "ignoredCreators=${ignoredCreatorIds.size} " +
                 "mctsActionableCreators=${mctsActionableCreatorIds?.size ?: -1} safe=$safe"
@@ -191,6 +196,14 @@ object TurnEndActionGuard {
         canPower: Boolean,
     ): Boolean = canPower && powerCost <= usableMana
 
+    /** A live board PowerAction, most notably a clickable location. */
+    internal fun isBoardPowerPlayable(card: Card, war: War): Boolean {
+        if (card.cardType !== CardTypeEnum.LOCATION || !card.canPower()) return false
+        return runCatching {
+            card.action.generatePowerActions(war, war.me).isNotEmpty()
+        }.getOrDefault(false)
+    }
+
     /**
      * Returns true only when the live state is clear to finish.  If an input
      * is rejected or state does not refresh, this returns false and the
@@ -217,6 +230,7 @@ object TurnEndActionGuard {
                     "playableHand=${before.playableHandCards} " +
                     "heroCanAttack=${before.attackableHero} " +
                     "heroPowerPlayable=${before.playableHeroPower} " +
+                    "boardPowersPlayable=${before.playableBoardPowers} " +
                     "heroPower=${WAR.me.playArea.power?.let(::displayName) ?: "none"} " +
                     "heroPowerCost=${WAR.me.playArea.power?.cost ?: 0} " +
                     "heroAttack=${WAR.me.playArea.hero?.atc ?: 0} " +
@@ -246,7 +260,7 @@ object TurnEndActionGuard {
                 log.info {
                         "TURN_END_GUARD_RESULT pass=$pass turn=${WAR.me.turn} " +
                         "dispatched=0 remainingMinions=0 remainingPlayableHand=0 " +
-                        "remainingHeroAttack=false remainingHeroPower=false safe=true " +
+                        "remainingHeroAttack=false remainingHeroPower=false remainingBoardPowers=0 safe=true " +
                         "endTurnButtonColor=$buttonColor"
                 }
                 return true
@@ -266,7 +280,8 @@ object TurnEndActionGuard {
                     "dispatched=$dispatched remainingMinions=${after.attackableMinions} " +
                     "remainingPlayableHand=${after.playableHandCards} " +
                     "remainingHeroAttack=${after.attackableHero} " +
-                    "remainingHeroPower=${after.playableHeroPower}"
+                    "remainingHeroPower=${after.playableHeroPower} " +
+                    "remainingBoardPowers=${after.playableBoardPowers}"
             }
             if (!shouldBlockEndTurn(after)) {
                 val buttonColor = readEndTurnButtonColor()
@@ -303,6 +318,7 @@ object TurnEndActionGuard {
                     "playableHand=${blocked.playableHandCards} " +
                     "heroCanAttack=${blocked.attackableHero} " +
                     "heroPowerPlayable=${blocked.playableHeroPower} " +
+                    "boardPowersPlayable=${blocked.playableBoardPowers} " +
                     "heroPower=${WAR.me.playArea.power?.let(::displayName) ?: "none"} " +
                     "heroPowerCost=${WAR.me.playArea.power?.cost ?: 0} " +
                     "heroAttack=${WAR.me.playArea.hero?.atc ?: 0} " +
@@ -351,6 +367,10 @@ object TurnEndActionGuard {
                     canPower = power.canPower(),
                 )
             } == true,
+            playableBoardPowers = me.playArea.cards.count { card ->
+                isMctsActionableCreator(card.entityId, mctsActionableCreatorIds, ignoredCreatorIds) &&
+                    isBoardPowerPlayable(card, WAR)
+            },
             attackableHero = me.playArea.hero?.let { hero ->
                 if (!isMctsActionableCreator(hero.entityId, mctsActionableCreatorIds, ignoredCreatorIds)) {
                     return@let false

@@ -1,7 +1,10 @@
 package club.xiaojiawei.hsscriptcardsdk.mcts
 
+import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
+import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
+import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
@@ -54,6 +57,66 @@ class MctsReplayTraceTest {
             assertTrue(text.contains("\"completedCycle\":1"))
             assertTrue(text.contains("\"nextCycle\":2"))
             assertTrue(text.contains("YOD_032-entity"))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `replay stream preserves location power refresh and screenshot evidence`() {
+        val root = Files.createTempDirectory("mcts-replay-location-").toFile()
+        try {
+            val war = war("location-game", 103L)
+            val location = Card(TestCardAction()).apply {
+                entityId = "location-1"
+                cardId = "LOCATION_TEST"
+                entityName = "Test Location"
+                cardType = CardTypeEnum.LOCATION
+                health = 3
+            }
+            war.addCard(location, war.me.playArea)
+
+            val scan = MctsReplayTrace.record(
+                war,
+                "live_actionability_scan",
+                "fresh live scan exposes a clickable board PowerAction",
+                mapOf(
+                    "actionableCreatorIds" to listOf("location-1"),
+                    "clickableLocations" to listOf(
+                        mapOf("entityId" to "location-1", "actionable" to true),
+                    ),
+                ),
+                root,
+            )!!.toFile()
+            MctsReplayTrace.record(
+                war,
+                "action_dispatched",
+                "location activation dispatched",
+                mapOf("action" to "使用技能/效果(LOCATION_TEST)", "screenshotBefore" to "before-location.png"),
+                root,
+            )
+            MctsReplayTrace.record(
+                war,
+                "action_confirmed",
+                "location cooldown and board state refreshed",
+                mapOf("screenshotAfterConfirmed" to "after-location.png"),
+                root,
+            )
+            val endScan = MctsReplayTrace.record(
+                war,
+                "turn_end_full_rescan",
+                "end-turn guard sees the refreshed location state",
+                mapOf("playableBoardPowers" to 1, "fullRescan" to true),
+                root,
+            )!!.toFile()
+
+            val text = endScan.readText()
+            assertTrue(text.contains("LOCATION_TEST"))
+            assertTrue(text.contains("playableBoardPowers"))
+            assertTrue(text.contains("after-location.png"))
+            assertTrue(text.contains("clickableLocations"))
+            assertTrue(scan.readText().contains("location-1"))
+            assertTrue(text.indexOf("action_confirmed") < text.indexOf("turn_end_full_rescan"))
         } finally {
             root.deleteRecursively()
         }
