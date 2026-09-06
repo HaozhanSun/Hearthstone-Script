@@ -176,6 +176,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             freeSlots(war) >= cliffsideActivationSlots(war)
 
     override fun isActionLegal(action: Action, war: War): Boolean {
+        if (!PirateHeroAttackTargetPolicy.isLegal(action, war)) return false
         if (action === TurnOverAction) {
             // EndTurn is never legal while the parser still exposes a
             // hero/weapon attack signal. This deliberately uses the state

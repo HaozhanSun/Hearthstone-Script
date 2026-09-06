@@ -22,6 +22,67 @@ import kotlin.test.assertTrue
 
 class PirateWarriorMctsModelTest {
     @Test
+    fun `hero attack allows lethal face but otherwise targets a nonlethal minion`() {
+        val war = testWar(turn = 2, mana = 3)
+        val hero = testCard("WARRIOR_HERO", cost = 0, attack = 3).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("WARRIOR_RIVAL_HERO", cost = 0, attack = 0).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 5
+            armor = 0
+        }
+        val largeMinion = testCard("LARGE_MINION", cost = 0, attack = 4).apply { health = 8 }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(largeMinion, war.rival.playArea)
+
+        val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
+        assertTrue(!PirateWarriorMctsModel.isActionLegal(face, war))
+        val minionAttack = AttackAction({}, {}, hero, targetEntityId = largeMinion.entityId)
+        assertTrue(PirateWarriorMctsModel.isActionLegal(minionAttack, war))
+
+        rivalHero.health = 3
+        assertTrue(PirateWarriorMctsModel.isActionLegal(face, war))
+    }
+
+    @Test
+    fun `hero attack respects a taunt even when it cannot be killed`() {
+        val war = testWar(turn = 2, mana = 3)
+        val hero = testCard("TAUNT_HERO", cost = 0, attack = 3).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("TAUNT_RIVAL_HERO", cost = 0, attack = 0).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 20
+        }
+        val taunt = testCard("TAUNT", cost = 0, attack = 4).apply {
+            health = 8
+            isTaunt = true
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(taunt, war.rival.playArea)
+
+        val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
+        val tauntAttack = AttackAction({}, {}, hero, targetEntityId = taunt.entityId)
+        assertTrue(!PirateWarriorMctsModel.isActionLegal(face, war))
+        assertTrue(PirateWarriorMctsModel.isActionLegal(tauntAttack, war))
+    }
+
+    @Test
+    fun `released pirate warrior strategy exposes a versioned display name`() {
+        assertEquals("海盗战 V1.0", HsPirateWarriorMctsDeckStrategy().name())
+    }
+    @Test
     fun `cannon is mandatory before treasure distributor`() {
         val war = testWar(turn = 1, mana = 2)
         val cannon = testCard(PirateWarriorMctsModel.SHIPS_CANNON, cost = 2)

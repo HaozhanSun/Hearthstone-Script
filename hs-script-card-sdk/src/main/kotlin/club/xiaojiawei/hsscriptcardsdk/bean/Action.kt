@@ -30,6 +30,10 @@ open class AttackAction(
     simulate: Consumer<War>,
     creator: Card? = null,
     recalculate: Boolean = false,
+    /** Stable target identity captured when this attack candidate is generated. */
+    val targetEntityId: String? = null,
+    /** True when [targetEntityId] is the opposing hero rather than a minion. */
+    val targetIsHero: Boolean = false,
 ) : Action(exec, simulate, creator, recalculate)
 
 /**

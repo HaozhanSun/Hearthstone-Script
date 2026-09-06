@@ -233,6 +233,7 @@ abstract class CardAction(
                                 }
                             },
                             belongCard,
+                            targetEntityId = rivalPlayCard.entityId,
                         ),
                     )
                 }
@@ -259,6 +260,8 @@ abstract class CardAction(
                                     }
                                 },
                                 belongCard,
+                                targetEntityId = rivalHero.entityId,
+                                targetIsHero = true,
                             ),
                         )
                     }

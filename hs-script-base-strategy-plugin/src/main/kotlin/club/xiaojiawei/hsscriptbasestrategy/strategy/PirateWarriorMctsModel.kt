@@ -70,6 +70,9 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         card.entityId.isNotBlank() && !card.isUncertain &&
             opaqueKnownCards.any { isCard(card, it) }
 
+    override fun isActionLegal(action: Action, war: War): Boolean =
+        PirateHeroAttackTargetPolicy.isLegal(action, war)
+
     /** Keep Patches available only as a last-resort action; mulligan removes it. */
     override fun actionPrior(action: Action, war: War): Double {
         val card = action.creator ?: return 0.0

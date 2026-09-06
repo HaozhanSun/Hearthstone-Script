@@ -10,7 +10,7 @@ import club.xiaojiawei.hsscriptstrategysdk.deck.MCTSDeckStrategy
 
 /** Released entry point for the isolated Pirate Warrior MCTS model. */
 class HsPirateWarriorMctsDeckStrategy : MCTSDeckStrategy() {
-    override fun name(): String = "海盗战 MCTS"
+    override fun name(): String = "海盗战 V1.0"
 
     override fun description(): String =
         "海盗战 MCTS：船载火炮 P0、首回合任务、宝藏经销商铺场与海盗光环奖励"

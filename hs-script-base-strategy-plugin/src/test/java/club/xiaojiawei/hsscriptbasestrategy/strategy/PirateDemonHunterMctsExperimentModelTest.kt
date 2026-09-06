@@ -26,6 +26,62 @@ import kotlin.test.assertTrue
 class PirateDemonHunterMctsExperimentModelTest {
 
     @Test
+    fun `hero attack suppresses nonlethal face and keeps the first deterministic kill target`() {
+        val war = testWar()
+        val hero = testCard("DH_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 0
+            atc = 3
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("DH_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 0
+            atc = 0
+            health = 20
+        }
+        val firstKill = testCard("FIRST_KILL").apply { cost = 0; atc = 1; health = 2 }
+        val secondKill = testCard("SECOND_KILL").apply { cost = 0; atc = 1; health = 1 }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(firstKill, war.rival.playArea)
+        war.addCard(secondKill, war.rival.playArea)
+
+        val generated = hero.action.generateAttackActions(war, war.me)
+        assertTrue(generated.isNotEmpty())
+        assertTrue(generated.all { !it.targetEntityId.isNullOrBlank() })
+        assertTrue(generated.any { it.targetIsHero })
+        assertFalse(
+            PirateDemonHunterMctsExperimentModel.isActionLegal(
+                AttackAction({}, {}, hero),
+                war,
+            ),
+        )
+
+        assertFalse(
+            PirateDemonHunterMctsExperimentModel.isActionLegal(
+                AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true),
+                war,
+            ),
+        )
+        assertTrue(
+            PirateDemonHunterMctsExperimentModel.isActionLegal(
+                AttackAction({}, {}, hero, targetEntityId = firstKill.entityId),
+                war,
+            ),
+        )
+        assertFalse(
+            PirateDemonHunterMctsExperimentModel.isActionLegal(
+                AttackAction({}, {}, hero, targetEntityId = secondKill.entityId),
+                war,
+            ),
+        )
+    }
+
+    @Test
     fun `captain and hozen are downranked without another pirate on board`() {
         val war = testWar()
         val captain = testCard(PirateDemonHunterMctsExperimentModel.SOUTHSEA_CAPTAIN)
@@ -276,7 +332,7 @@ class PirateDemonHunterMctsExperimentModelTest {
         val card = testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND)
         val war = testWar()
         assertFalse(PirateDemonHunterMctsExperimentModel.shouldDefer(card, war))
-        assertEquals("海盗瞎 MCTS", HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name())
+        assertEquals("海盗瞎 V1.0", HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name())
     }
 
     @Test
@@ -937,7 +993,7 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         assertEquals(MctsRootSelectionPolicy.GLOBAL_TURN_PLAN, global.rootSelectionPolicy)
         assertTrue(global.decisionModel === PirateDemonHunterMctsGlobalPlanModel)
-        assertEquals("海盗瞎 MCTS", HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name())
+        assertEquals("海盗瞎 V1.0", HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name())
     }
 
     @Test
