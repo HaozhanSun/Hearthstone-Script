@@ -117,7 +117,10 @@ object PirateWarriorMctsModel : MctsDecisionModel {
                 FrontlineAxeTarget.UNKNOWN -> -1_000.0
             }
             action is AttackAction && isPirate(card) ->
-                effectivePirateAttack(card, war) * 0.45
+                effectivePirateAttack(card, war) * 0.45 +
+                    PirateHeroAttackTargetPolicy.nuLingNagaAttackPrior(action, war)
+            action is AttackAction && card.cardType === CardTypeEnum.MINION ->
+                PirateHeroAttackTargetPolicy.nuLingNagaAttackPrior(action, war)
             else -> 0.0
         }
     }

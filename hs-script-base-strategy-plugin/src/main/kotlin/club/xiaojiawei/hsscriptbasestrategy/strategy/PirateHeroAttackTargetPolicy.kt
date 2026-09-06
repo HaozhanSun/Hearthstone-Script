@@ -20,10 +20,48 @@ import club.xiaojiawei.hsscriptcardsdk.bean.DEFAULT_WAR_SCORE_CALCULATOR
  * bypassing the rule.
  */
 object PirateHeroAttackTargetPolicy {
+    const val NU_LING_NAGA = "BT_355"
+
     private data class TargetPlan(
         val target: Card,
         val requiresFriendlySetup: Boolean,
     )
+
+    /** True while the death-trigger Naga is alive on our board. */
+    fun hasNuLingNaga(war: War): Boolean =
+        war.me.playArea.cards.any { isNuLingNaga(it) && it.isAlive() }
+
+    fun isNuLingNaga(card: Card): Boolean =
+        card.cardId == NU_LING_NAGA || card.cardId == "CORE_$NU_LING_NAGA"
+
+    /**
+     * Softly prefer other friendly minions to trade into enemy minions while
+     * Nu Ling Naga is alive.  The Naga's own attack is excluded deliberately:
+     * the rule is for preserving the death-trigger body while other minions
+     * create the favorable death trigger.  A lethal face attack is left
+     * untouched because the shared first-pass lethal gate outranks this
+     * preference.
+     */
+    fun nuLingNagaAttackPrior(action: Action, war: War): Double {
+        if (!hasNuLingNaga(war)) return 0.0
+        if (action !is AttackAction || action.creator?.cardType !== CardTypeEnum.MINION) return 0.0
+        if (action.creator?.let(::isNuLingNaga) == true) return 0.0
+
+        val targetId = action.targetEntityId ?: return 0.0
+        val rivalHeroId = war.rival.playArea.hero?.entityId
+        val targetIsHero = action.targetIsHero || targetId == rivalHeroId
+        if (targetIsHero) {
+            if (PirateLethalAttackPolicy.isLethalFaceAction(action, war)) return 0.0
+            return if (hasAttackableEnemyMinion(war)) -60.0 else 0.0
+        }
+
+        val target = war.rival.playArea.cards.firstOrNull { it.entityId == targetId }
+        return if (target?.cardType === CardTypeEnum.MINION && target.isAlive() && target.canBeAttacked()) {
+            60.0
+        } else {
+            0.0
+        }
+    }
 
     fun isLegal(action: Action, war: War): Boolean {
         if (action !is AttackAction || action.creator?.cardType !== CardTypeEnum.HERO) return true
@@ -66,6 +104,11 @@ object PirateHeroAttackTargetPolicy {
                 target.canBeAttacked()
         }
     }
+
+    private fun hasAttackableEnemyMinion(war: War): Boolean =
+        war.rival.playArea.cards.any {
+            it.cardType === CardTypeEnum.MINION && it.isAlive() && it.canBeAttacked()
+        }
 
     private fun targetPlan(war: War, heroAttack: Int): TargetPlan? {
         val legalMinions = legalEnemyMinions(war)

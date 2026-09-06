@@ -82,6 +82,44 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `nu ling naga makes other minions prefer enemy minions over nonlethal face`() {
+        val war = testWar()
+        val rivalHero = testCard("NAGA_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            health = 20
+        }
+        val naga = testCard(PirateHeroAttackTargetPolicy.NU_LING_NAGA).apply {
+            cardType = CardTypeEnum.MINION
+            health = 3
+            isExhausted = true
+        }
+        val attacker = testCard("NAGA_ATTACKER").apply {
+            cardType = CardTypeEnum.MINION
+            cardRace = CardRaceEnum.PIRATE
+            atc = 3
+            health = 3
+            isExhausted = false
+        }
+        val rivalMinion = testCard("NAGA_RIVAL_MINION").apply {
+            cardType = CardTypeEnum.MINION
+            health = 4
+            atc = 2
+        }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(naga, war.me.playArea)
+        war.addCard(attacker, war.me.playArea)
+        war.addCard(rivalMinion, war.rival.playArea)
+
+        val minionAttack = AttackAction({}, {}, attacker, targetEntityId = rivalMinion.entityId)
+        val faceAttack = AttackAction({}, {}, attacker, targetEntityId = rivalHero.entityId, targetIsHero = true)
+
+        assertTrue(
+            PirateDemonHunterMctsExperimentModel.actionPrior(minionAttack, war) >
+                PirateDemonHunterMctsExperimentModel.actionPrior(faceAttack, war),
+        )
+    }
+
+    @Test
     fun `hero attack chooses the highest threat among killable minions`() {
         val war = testWar()
         val hero = testCard("THREAT_HERO").apply {

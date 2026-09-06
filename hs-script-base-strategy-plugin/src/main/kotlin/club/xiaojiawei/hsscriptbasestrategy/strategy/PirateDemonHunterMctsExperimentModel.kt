@@ -498,13 +498,18 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 if (shouldPrioritizeEarlyZilliax(war)) 40.0
                 else if (friendlyMinions == 0) -6.0 else 6.0 + attackablePirates
             isCard(card, RAGEWING) -> if (card.cost <= 1) 12.0 else 1.0
-            else -> if (action is AttackAction && isPirate(card)) {
-                // A Pirate attack is also a hero-attack resource while a
-                // Fiend is alive.  Keep this as a soft prior: the rollout
-                // still decides whether attacking now is better than a
-                // target-specific trade or another hand play.
-                2.0 + expectedAdrenalineHeroAttack(war) * 0.75 +
-                    effectivePirateAttack(card, war) * 0.2
+            else -> if (action is AttackAction && card.cardType === CardTypeEnum.MINION) {
+                val piratePrior = if (isPirate(card)) {
+                    // A Pirate attack is also a hero-attack resource while a
+                    // Fiend is alive.  Keep this as a soft prior: the rollout
+                    // still decides whether attacking now is better than a
+                    // target-specific trade or another hand play.
+                    2.0 + expectedAdrenalineHeroAttack(war) * 0.75 +
+                        effectivePirateAttack(card, war) * 0.2
+                } else {
+                    0.0
+                }
+                piratePrior + PirateHeroAttackTargetPolicy.nuLingNagaAttackPrior(action, war)
             } else 0.0
         }
     }
