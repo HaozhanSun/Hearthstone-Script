@@ -83,7 +83,13 @@ class MctsReplayTraceTest {
                 mapOf(
                     "actionableCreatorIds" to listOf("location-1"),
                     "clickableLocations" to listOf(
-                        mapOf("entityId" to "location-1", "actionable" to true),
+                        mapOf(
+                            "entityId" to "location-1",
+                            "canPower" to true,
+                            "rawPowerActions" to 0,
+                            "opaquePowerFallback" to true,
+                            "actionable" to true,
+                        ),
                     ),
                 ),
                 root,
@@ -113,6 +119,8 @@ class MctsReplayTraceTest {
             val text = endScan.readText()
             assertTrue(text.contains("LOCATION_TEST"))
             assertTrue(text.contains("playableBoardPowers"))
+            assertTrue(text.contains("opaquePowerFallback"))
+            assertTrue(text.contains("\"rawPowerActions\":0"))
             assertTrue(text.contains("after-location.png"))
             assertTrue(text.contains("clickableLocations"))
             assertTrue(scan.readText().contains("location-1"))

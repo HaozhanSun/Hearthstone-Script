@@ -196,12 +196,22 @@ object TurnEndActionGuard {
         canPower: Boolean,
     ): Boolean = canPower && powerCost <= usableMana
 
-    /** A live board PowerAction, most notably a clickable location. */
-    internal fun isBoardPowerPlayable(card: Card, war: War): Boolean {
+    /**
+     * A live board PowerAction, most notably a clickable location. A parser
+     * may expose no raw PowerAction for an opaque location; in that case the
+     * MCTS live scan is the authority that the deck model deliberately
+     * accepted an opaque board action for this entity.
+     */
+    internal fun isBoardPowerPlayable(
+        card: Card,
+        war: War,
+        mctsActionableCreatorIds: Set<String>? = null,
+    ): Boolean {
         if (card.cardType !== CardTypeEnum.LOCATION || !card.canPower()) return false
-        return runCatching {
+        val generated = runCatching {
             card.action.generatePowerActions(war, war.me).isNotEmpty()
         }.getOrDefault(false)
+        return generated || mctsActionableCreatorIds?.contains(card.entityId) == true
     }
 
     /**
@@ -369,7 +379,7 @@ object TurnEndActionGuard {
             } == true,
             playableBoardPowers = me.playArea.cards.count { card ->
                 isMctsActionableCreator(card.entityId, mctsActionableCreatorIds, ignoredCreatorIds) &&
-                    isBoardPowerPlayable(card, WAR)
+                    isBoardPowerPlayable(card, WAR, mctsActionableCreatorIds)
             },
             attackableHero = me.playArea.hero?.let { hero ->
                 if (!isMctsActionableCreator(hero.entityId, mctsActionableCreatorIds, ignoredCreatorIds)) {

@@ -132,6 +132,41 @@ class TurnEndActionGuardTest {
     }
 
     @Test
+    fun `opaque location power is blocked only when mcts marks its creator actionable`() {
+        val war = War(false)
+        val player = Player(playerId = "me", war = war).apply {
+            resources = 0
+        }
+        war.me = player
+        val opaqueLocation = Card(TestCardAction()).apply {
+            entityId = "vac-929-entity-60"
+            cardType = CardTypeEnum.LOCATION
+            health = 3
+            isLocationActionCooldown = false
+            isExhausted = false
+            action.belongCard = this
+        }
+        war.addCard(opaqueLocation, player.playArea)
+
+        assertFalse(TurnEndActionGuard.isBoardPowerPlayable(opaqueLocation, war))
+        assertTrue(
+            TurnEndActionGuard.isBoardPowerPlayable(
+                opaqueLocation,
+                war,
+                mctsActionableCreatorIds = setOf(opaqueLocation.entityId),
+            ),
+        )
+        opaqueLocation.isLocationActionCooldown = true
+        assertFalse(
+            TurnEndActionGuard.isBoardPowerPlayable(
+                opaqueLocation,
+                war,
+                mctsActionableCreatorIds = setOf(opaqueLocation.entityId),
+            ),
+        )
+    }
+
+    @Test
     fun `coin is reserved for a non-coin card it unlocks`() {
         val war = War(false)
         val player = Player(playerId = "me", war = war).apply {
