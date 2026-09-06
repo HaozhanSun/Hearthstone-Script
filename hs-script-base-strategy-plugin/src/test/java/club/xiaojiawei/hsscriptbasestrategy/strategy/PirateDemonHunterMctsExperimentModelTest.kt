@@ -82,6 +82,105 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `hero attack chooses the highest threat among killable minions`() {
+        val war = testWar()
+        val hero = testCard("THREAT_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 3
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("THREAT_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 20
+        }
+        val lowThreat = testCard("LOW_THREAT").apply { atc = 1; health = 3 }
+        val highThreat = testCard("HIGH_THREAT").apply { atc = 6; health = 3 }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(lowThreat, war.rival.playArea)
+        war.addCard(highThreat, war.rival.playArea)
+
+        val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
+        val lowThreatAttack = AttackAction({}, {}, hero, targetEntityId = lowThreat.entityId)
+        val highThreatAttack = AttackAction({}, {}, hero, targetEntityId = highThreat.entityId)
+
+        assertTrue(!PirateDemonHunterMctsExperimentModel.isActionLegal(face, war))
+        assertTrue(!PirateDemonHunterMctsExperimentModel.isActionLegal(lowThreatAttack, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.isActionLegal(highThreatAttack, war))
+    }
+
+    @Test
+    fun `hero may attack face when no enemy minion is killable`() {
+        val war = testWar()
+        val hero = testCard("FACE_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 3
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("FACE_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 20
+        }
+        val largeMinion = testCard("FACE_LARGE_MINION").apply { atc = 4; health = 6 }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(largeMinion, war.rival.playArea)
+
+        val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
+        val minionAttack = AttackAction({}, {}, hero, targetEntityId = largeMinion.entityId)
+
+        assertTrue(PirateDemonHunterMctsExperimentModel.isActionLegal(face, war))
+        assertTrue(!PirateDemonHunterMctsExperimentModel.isActionLegal(minionAttack, war))
+    }
+
+    @Test
+    fun `friendly setup attack is required for a combined hero kill`() {
+        val war = testWar()
+        val hero = testCard("COMBO_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 3
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("COMBO_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 20
+        }
+        val rivalMinion = testCard("COMBO_RIVAL_MINION").apply { atc = 5; health = 5 }
+        val setupMinion = testCard("COMBO_SETUP_MINION").apply {
+            atc = 2
+            health = 2
+            isExhausted = false
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(rivalMinion, war.rival.playArea)
+        war.addCard(setupMinion, war.me.playArea)
+
+        val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
+        val heroAttack = AttackAction({}, {}, hero, targetEntityId = rivalMinion.entityId)
+        val setupAttack = setupMinion.action.generateAttackActions(war, war.me)
+            .first { it.targetEntityId == rivalMinion.entityId }
+
+        assertTrue(!PirateDemonHunterMctsExperimentModel.isActionLegal(face, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.isActionLegal(heroAttack, war))
+        assertTrue(PirateHeroAttackTargetPolicy.requiresFriendlySetupAttack(war))
+        assertTrue(PirateHeroAttackTargetPolicy.isRequiredFriendlySetupAttack(setupAttack, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.isMandatoryAction(setupAttack, war))
+    }
+
+    @Test
     fun `captain and hozen are downranked without another pirate on board`() {
         val war = testWar()
         val captain = testCard(PirateDemonHunterMctsExperimentModel.SOUTHSEA_CAPTAIN)

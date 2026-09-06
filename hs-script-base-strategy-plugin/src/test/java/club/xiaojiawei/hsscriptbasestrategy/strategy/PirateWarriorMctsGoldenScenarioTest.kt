@@ -203,7 +203,7 @@ class PirateWarriorMctsGoldenScenarioTest {
     }
 
     @Test
-    fun `frontline axe blocks face at ten health but permits it below ten`() {
+    fun `frontline axe follows threat target policy regardless of own health`() {
         val atTen = frontlineAxeWar(heroHealth = 10, rivalHeroHealth = 30, minionHealth = 3)
         val atTenActions = heroAttackActions(atTen)
         val atTenLegal = atTenActions.filter { PirateWarriorMctsModel.isActionLegal(it, atTen) }
@@ -213,8 +213,8 @@ class PirateWarriorMctsGoldenScenarioTest {
         val atNine = frontlineAxeWar(heroHealth = 9, rivalHeroHealth = 30, minionHealth = 3)
         val atNineActions = heroAttackActions(atNine)
         val atNineLegal = atNineActions.filter { PirateWarriorMctsModel.isActionLegal(it, atNine) }
-        assertEquals(2, atNineLegal.size)
-        assertTrue(atNineLegal.any { !hitsRivalMinion(it, atNine) })
+        assertEquals(1, atNineLegal.size)
+        assertTrue(atNineLegal.all { hitsRivalMinion(it, atNine) })
 
         val lethal = frontlineAxeWar(heroHealth = 9, rivalHeroHealth = 3, minionHealth = 3)
         val lethalFace = heroAttackActions(lethal).first { !hitsRivalMinion(it, lethal) }
@@ -258,7 +258,8 @@ class PirateWarriorMctsGoldenScenarioTest {
         val minionActions = actions.filter { hitsRivalMinion(it, war) }
 
         assertEquals(2, minionActions.size)
-        assertTrue(minionActions.all { PirateWarriorMctsModel.isActionLegal(it, war) })
+        assertEquals(1, minionActions.count { PirateWarriorMctsModel.isActionLegal(it, war) })
+        assertTrue(minionActions.any { PirateWarriorMctsModel.isActionLegal(it, war) })
         assertTrue(minionActions.all { PirateWarriorMctsModel.isDeferredAction(it, war) })
     }
 

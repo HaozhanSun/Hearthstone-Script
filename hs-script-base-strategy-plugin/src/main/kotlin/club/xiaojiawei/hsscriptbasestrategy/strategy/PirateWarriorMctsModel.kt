@@ -104,10 +104,13 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             action is PowerAction && card.cardType === CardTypeEnum.HERO_POWER ->
                 if (hasOtherUsefulNonHeroPowerAction(war)) -1_000.0 else -10.0
             isFrontlineAxeHeroAttack(action, war) -> when (frontlineAxeTarget(action, war)) {
-                FrontlineAxeTarget.MINION -> if (frontlineAxeCanKill(action, war)) 30.0 else -100.0
-                FrontlineAxeTarget.HERO -> if (war.me.playArea.hero?.blood()?.let { it < 10 } == true) {
-                    val heroAttack = max(war.me.playArea.hero?.atc ?: 0, war.me.playArea.weapon?.atc ?: 0)
-                    if (war.rival.playArea.hero?.blood()?.let { it <= heroAttack } == true) 80.0 else 20.0
+                FrontlineAxeTarget.MINION -> if (PirateHeroAttackTargetPolicy.isLegal(action, war)) {
+                    if (frontlineAxeCanKill(action, war)) 30.0 else 10.0
+                } else -1_000.0
+                FrontlineAxeTarget.HERO -> if (PirateLethalAttackPolicy.isLethalFaceAction(action, war)) {
+                    80.0
+                } else if (PirateHeroAttackTargetPolicy.isLegal(action, war)) {
+                    20.0
                 } else {
                     -1_000.0
                 }
@@ -143,6 +146,13 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         if (distributor != null) {
             return action is PlayAction && action.creator?.let { isCard(it, TREASURE_DISTRIBUTOR) } == true
         }
+
+        // If the hero needs friendly minion damage to finish the selected
+        // highest-threat enemy, commit those setup attacks to that target
+        // before allowing the hero attack phase to begin.
+        if (PirateHeroAttackTargetPolicy.requiresFriendlySetupAttack(war)) {
+            return PirateHeroAttackTargetPolicy.isRequiredFriendlySetupAttack(action, war)
+        }
         return false
     }
 
@@ -152,17 +162,17 @@ object PirateWarriorMctsModel : MctsDecisionModel {
      * requirement. This is intentionally separate from actionPrior.
      */
     override fun isActionLegal(action: Action, war: War): Boolean {
+        if (PirateLethalAttackPolicy.isLethalFaceAction(action, war)) return true
+
+        if (!PirateHeroAttackTargetPolicy.isLegal(action, war)) return false
+
         if (isFrontlineAxeHeroAttack(action, war)) {
             return when (frontlineAxeTarget(action, war)) {
                 FrontlineAxeTarget.MINION -> true
-                FrontlineAxeTarget.HERO -> war.me.playArea.hero?.blood()?.let { it < 10 } == true
+                FrontlineAxeTarget.HERO -> true
                 FrontlineAxeTarget.UNKNOWN -> false
             }
         }
-
-        if (!PirateLethalAttackPolicy.isLethalFaceAction(action, war) &&
-            !PirateHeroAttackTargetPolicy.isLegal(action, war)
-        ) return false
 
         val creator = action.creator
         if (creator != null && action is PlayAction && isCard(creator, CAPTAIN_CROWLEY)) {

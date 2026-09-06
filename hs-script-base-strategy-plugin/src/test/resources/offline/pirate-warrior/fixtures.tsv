@@ -1,6 +1,6 @@
 # id|focus|strategy|expected|evaluator|runtime_review
 frontline-axe-kill|BAR_844|优先命中可触发抽牌的随从|AXE_MINION_KILL|pass|needs-review
-frontline-axe-no-kill|BAR_844|不能有效触发时避免并尽量最后|DEFER_AXE|pass|needs-review
+frontline-axe-no-kill|BAR_844|组合击杀时先完成友方攻击再由战斧收尾|COMBO_AXE_AFTER_SETUP|pass|needs-review
 crowley-two-slots|CAP_106|少于三空位不下|CROWLEY_FILTERED|pass|needs-review
 crowley-three-slots|CAP_106|至少三空位才允许|CROWLEY_PLAY|pass|needs-review
 warrior-power-last|HERO_01bp|有其他价值动作时英雄技能最后|DEFER_POWER|pass|needs-review

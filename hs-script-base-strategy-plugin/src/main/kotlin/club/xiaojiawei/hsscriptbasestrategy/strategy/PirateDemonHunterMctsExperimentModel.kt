@@ -300,6 +300,15 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             return action is AttackAction && action.creator?.cardType === CardTypeEnum.MINION
         }
 
+        // When the hero cannot kill a threat by itself but the hero plus one
+        // or more friendly minions can, spend the setup attacks on that exact
+        // target before the hero attack. The phase fence already puts these
+        // attacks before the hero; this mandatory filter prevents MCTS from
+        // wasting the setup damage on a different target.
+        if (PirateHeroAttackTargetPolicy.requiresFriendlySetupAttack(war)) {
+            return PirateHeroAttackTargetPolicy.isRequiredFriendlySetupAttack(action, war)
+        }
+
         // A hero attack consumes the trigger window for the location chain.
         // Once the attack has happened, the parser marks the hero exhausted
         // while an available Cliffside with two open slots is still usable.

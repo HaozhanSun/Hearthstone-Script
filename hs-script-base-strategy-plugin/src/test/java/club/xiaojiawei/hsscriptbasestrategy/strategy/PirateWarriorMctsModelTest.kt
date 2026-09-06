@@ -42,12 +42,104 @@ class PirateWarriorMctsModelTest {
         war.addCard(largeMinion, war.rival.playArea)
 
         val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
-        assertTrue(!PirateWarriorMctsModel.isActionLegal(face, war))
+        assertTrue(PirateWarriorMctsModel.isActionLegal(face, war))
         val minionAttack = AttackAction({}, {}, hero, targetEntityId = largeMinion.entityId)
-        assertTrue(PirateWarriorMctsModel.isActionLegal(minionAttack, war))
+        assertTrue(!PirateWarriorMctsModel.isActionLegal(minionAttack, war))
 
         rivalHero.health = 3
         assertTrue(PirateWarriorMctsModel.isActionLegal(face, war))
+    }
+
+    @Test
+    fun `hero attack chooses the highest threat among killable minions`() {
+        val war = testWar(turn = 2, mana = 3)
+        val hero = testCard("THREAT_HERO", cost = 0, attack = 3).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("THREAT_RIVAL_HERO", cost = 0, attack = 0).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 20
+        }
+        val lowThreat = testCard("LOW_THREAT", cost = 0, attack = 1).apply { health = 3 }
+        val highThreat = testCard("HIGH_THREAT", cost = 0, attack = 6).apply { health = 3 }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(lowThreat, war.rival.playArea)
+        war.addCard(highThreat, war.rival.playArea)
+
+        val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
+        val lowThreatAttack = AttackAction({}, {}, hero, targetEntityId = lowThreat.entityId)
+        val highThreatAttack = AttackAction({}, {}, hero, targetEntityId = highThreat.entityId)
+
+        assertTrue(!PirateWarriorMctsModel.isActionLegal(face, war))
+        assertTrue(!PirateWarriorMctsModel.isActionLegal(lowThreatAttack, war))
+        assertTrue(PirateWarriorMctsModel.isActionLegal(highThreatAttack, war))
+    }
+
+    @Test
+    fun `hero may attack face when no enemy minion is killable`() {
+        val war = testWar(turn = 2, mana = 3)
+        val hero = testCard("FACE_HERO", cost = 0, attack = 3).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("FACE_RIVAL_HERO", cost = 0, attack = 0).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 20
+        }
+        val largeMinion = testCard("FACE_LARGE_MINION", cost = 0, attack = 4).apply { health = 6 }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(largeMinion, war.rival.playArea)
+
+        val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
+        val minionAttack = AttackAction({}, {}, hero, targetEntityId = largeMinion.entityId)
+
+        assertTrue(PirateWarriorMctsModel.isActionLegal(face, war))
+        assertTrue(!PirateWarriorMctsModel.isActionLegal(minionAttack, war))
+    }
+
+    @Test
+    fun `friendly setup attack is required for a combined hero kill`() {
+        val war = testWar(turn = 2, mana = 3)
+        val hero = testCard("COMBO_HERO", cost = 0, attack = 3).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("COMBO_RIVAL_HERO", cost = 0, attack = 0).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 20
+        }
+        val rivalMinion = testCard("COMBO_RIVAL_MINION", cost = 0, attack = 5).apply { health = 5 }
+        val setupMinion = testCard("COMBO_SETUP_MINION", cost = 0, attack = 2).apply {
+            health = 2
+            isExhausted = false
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(rivalMinion, war.rival.playArea)
+        war.addCard(setupMinion, war.me.playArea)
+
+        val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
+        val heroAttack = AttackAction({}, {}, hero, targetEntityId = rivalMinion.entityId)
+        val setupAttack = setupMinion.action.generateAttackActions(war, war.me)
+            .first { it.targetEntityId == rivalMinion.entityId }
+
+        assertTrue(!PirateWarriorMctsModel.isActionLegal(face, war))
+        assertTrue(PirateWarriorMctsModel.isActionLegal(heroAttack, war))
+        assertTrue(PirateHeroAttackTargetPolicy.requiresFriendlySetupAttack(war))
+        assertTrue(PirateHeroAttackTargetPolicy.isRequiredFriendlySetupAttack(setupAttack, war))
+        assertTrue(PirateWarriorMctsModel.isMandatoryAction(setupAttack, war))
     }
 
     @Test
