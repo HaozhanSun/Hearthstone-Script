@@ -60,6 +60,9 @@
             </TabPane>
         </VBox>
     </SplitPane>
+    <HBox alignment="TOP_RIGHT" mouseTransparent="true" style="-fx-padding: 8;">
+        <Button text="刷新策略（下回合生效）" onAction="#requestStrategyRefresh" mouseTransparent="false"/>
+    </HBox>
     <ProgressModal fx:id="rootProgressModal" title="加载插件中..."/>
     <NotificationManager fx:id="notificationManager" notificationPos="BOTTOM_CENTER">
         <NotificationFactory showingCloseBtn="false" size="SMALL"/>
