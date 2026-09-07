@@ -1,5 +1,9 @@
 package club.xiaojiawei.hsscript.utils
 
+import java.io.File
+import java.net.URI
+import java.nio.file.Paths
+
 /**
  * Converts the operational log feed into short messages suitable for the
  * small, always-visible application window. The file appenders still receive
@@ -9,6 +13,10 @@ object UiLogFormatter {
 
     private val whitespace = Regex("\\s+")
     private val keyValue = Regex("(?:^|\\s)([A-Za-z][A-Za-z0-9_]*)=([^\\s]+)")
+    private val fileTargetPattern = Regex(
+        "(?:^|\\s)(?:screenshotLink|unknownStateScreenshotLink|path|link)=" +
+            "((?:file:/|[A-Za-z]:[\\\\/]|\\\\\\\\).+?)(?=\\s+[A-Za-z][A-Za-z0-9_]*=|$)"
+    )
 
     /**
      * Machine-readable post-mortem diagnostics that belong in hs_script.log,
@@ -32,6 +40,24 @@ object UiLogFormatter {
 
     fun isHiddenFromUi(message: String?): Boolean =
         message?.trim()?.let { raw -> hiddenUiPrefixes.any(raw::startsWith) } == true
+
+    /**
+     * Returns the local file represented by a screenshot diagnostic, if one
+     * is present. The compact UI deliberately hides absolute paths, but the
+     * side panel still needs the target to create a real clickable control.
+     */
+    fun fileTarget(message: String?): String? {
+        val raw = message?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        val target = fileTargetPattern.find(raw)?.groupValues?.getOrNull(1)?.trim() ?: return null
+        return runCatching {
+            if (target.startsWith("file:", ignoreCase = true)) {
+                Paths.get(URI(target)).toFile().absolutePath
+            } else {
+                File(target).absolutePath
+            }
+        }.getOrNull()
+    }
 
     fun format(message: String?): String {
         val raw = message?.trim().orEmpty()

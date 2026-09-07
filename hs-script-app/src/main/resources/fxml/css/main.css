@@ -29,6 +29,16 @@
     -fx-font-size: 13px;
     -fx-padding: 2 4 2 4;
 }
+.logScreenshotLink{
+    -fx-border-width: 0;
+    -fx-padding: 0 2 0 2;
+    -fx-text-fill: #1982fd;
+    -fx-underline: false;
+}
+.logScreenshotLink:hover{
+    -fx-cursor: hand;
+    -fx-underline: true;
+}
 .btnPressed{
     -fx-text-fill: gray !important;
 }

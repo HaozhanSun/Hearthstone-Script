@@ -12,6 +12,7 @@ import club.xiaojiawei.hsscript.bean.DownloaderParam
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.bean.single.WarEx.resetStatistics
 import club.xiaojiawei.hsscript.component.ConfigCheckBox
+import club.xiaojiawei.hsscript.component.UrlLabel
 import club.xiaojiawei.hsscript.component.WorkTimeItem
 import club.xiaojiawei.hsscript.controller.javafx.view.MainView
 import club.xiaojiawei.hsscript.enums.ConfigEnum
@@ -57,8 +58,11 @@ import javafx.scene.control.Tooltip
 import javafx.scene.input.MouseButton
 import javafx.scene.input.MouseEvent
 import javafx.scene.layout.AnchorPane
+import javafx.scene.layout.HBox
 import javafx.scene.layout.Region
 import javafx.scene.layout.VBox
+import javafx.geometry.Pos
+import javafx.scene.layout.Priority
 import javafx.stage.Popup
 import javafx.util.Duration
 import javafx.util.StringConverter
@@ -295,7 +299,31 @@ class MainController : MainView() {
                 label.text = "$message，查看脚本日志获取详细错误信息"
                 label.styleClass.add("errorLog")
             }
-            list.add(label)
+            val screenshotTarget = UiLogFormatter.fileTarget(rawMessage)
+            if (screenshotTarget == null) {
+                list.add(label)
+            } else {
+                // Standalone log labels are width-bound. Unbind this one before
+                // placing it beside the link so the link remains visible.
+                label.prefWidthProperty().unbind()
+                label.prefWidth = Region.USE_COMPUTED_SIZE
+                val screenshotLink = UrlLabel().apply {
+                    text = "打开截图"
+                    file = screenshotTarget
+                    isFocusTraversable = false
+                    styleClass.add("logScreenshotLink")
+                    tooltip = Tooltip("打开截图文件")
+                }
+                val row = HBox(4.0, label, screenshotLink).apply {
+                    alignment = Pos.CENTER_LEFT
+                    maxWidth = Double.MAX_VALUE
+                    styleClass.add("logEntry")
+                }
+                label.maxWidth = Double.MAX_VALUE
+                HBox.setHgrow(label, Priority.ALWAYS)
+                bindLogWidth(row)
+                list.add(row)
+            }
         }
     }
 

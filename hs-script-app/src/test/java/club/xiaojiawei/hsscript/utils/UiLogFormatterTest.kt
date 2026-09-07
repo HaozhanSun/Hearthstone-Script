@@ -19,6 +19,26 @@ class UiLogFormatterTest {
     }
 
     @Test
+    fun `screenshot diagnostics expose a clickable Windows file target`() {
+        val target = UiLogFormatter.fileTarget(
+            "DEBUG_SCREENSHOT event=screen-recovery " +
+                "path=C:\\Users\\test user\\screenshots\\recovery.png " +
+                "link=file:/C:/Users/test%20user/screenshots/recovery.png"
+        )
+
+        assertEquals("C:\\Users\\test user\\screenshots\\recovery.png", target)
+    }
+
+    @Test
+    fun `screenshot diagnostics accept file URI when only link is present`() {
+        val target = UiLogFormatter.fileTarget(
+            "RANK_OCR_EVIDENCE link=file:/C:/Users/test%20user/screenshots/rank.png"
+        )
+
+        assertEquals("C:\\Users\\test user\\screenshots\\rank.png", target)
+    }
+
+    @Test
     fun `rank messages retain the readable result but hide OCR candidate noise`() {
         val message = UiLogFormatter.format(
             "RANK_OCR text=8 candidates=939|51|191|91 visualTenHint=true tier=SILVER rank=10"
