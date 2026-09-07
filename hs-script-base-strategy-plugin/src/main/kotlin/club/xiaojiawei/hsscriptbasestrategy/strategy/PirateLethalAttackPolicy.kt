@@ -1,9 +1,11 @@
 package club.xiaojiawei.hsscriptbasestrategy.strategy
 
+import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptcardsdk.bean.Action
 import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Shared first-pass lethal calculation for the two Pirate MCTS models.
@@ -15,11 +17,26 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
  * face damage.
  */
 object PirateLethalAttackPolicy {
+    private val lastLoggedLethalState = AtomicReference<String?>(null)
+
     fun isLethalFaceAction(action: Action, war: War): Boolean {
         if (action !is AttackAction || !isFaceAction(action, war)) return false
         val rivalHero = war.rival.playArea.hero ?: return false
         val remainingLife = (rivalHero.bloodLimit() - rivalHero.damage).coerceAtLeast(0)
-        return legalFaceDamage(war) >= remainingLife
+        val totalFaceAttack = legalFaceDamage(war)
+        val lethal = totalFaceAttack >= remainingLife
+        if (!lethal) {
+            lastLoggedLethalState.set(null)
+            return false
+        }
+
+        val stateKey = "${war.me.turn}|$totalFaceAttack|$remainingLife"
+        if (lastLoggedLethalState.getAndSet(stateKey) != stateKey) {
+            log.info {
+                "海盗MCTS斩杀检查：总场攻=$totalFaceAttack，敌方英雄血量=$remainingLife，可斩杀"
+            }
+        }
+        return true
     }
 
     fun legalFaceDamage(war: War): Int {

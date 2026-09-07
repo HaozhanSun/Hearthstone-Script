@@ -41,12 +41,14 @@ object OcrRuntime {
         image: BufferedImage?,
         desc: String = "",
         roi: String? = null,
+        timeoutMs: Long? = null,
         legacyOcr: () -> String,
     ): String = recognize(
         image = image,
         desc = desc,
         allowEmptyProbeResult = false,
         roi = roi,
+        timeoutMs = timeoutMs,
         legacyOcr = legacyOcr,
     )
 
@@ -55,12 +57,14 @@ object OcrRuntime {
         desc: String = "",
         allowEmptyProbeResult: Boolean = false,
         roi: String? = null,
+        timeoutMs: Long? = null,
         legacyOcr: () -> String,
     ): String = recognizeResult(
         image = image,
         desc = desc,
         allowEmptyProbeResult = allowEmptyProbeResult,
         roi = roi,
+        timeoutMs = timeoutMs,
         legacyOcr = legacyOcr,
     ).text
 
@@ -69,6 +73,7 @@ object OcrRuntime {
         desc: String = "",
         allowEmptyProbeResult: Boolean = false,
         roi: String? = null,
+        timeoutMs: Long? = null,
         legacyOcr: () -> String,
     ): OcrRecognition {
         if (image == null) {
@@ -98,7 +103,7 @@ object OcrRuntime {
         }
         val settings = settingsProvider()
         return runCatching {
-            val recognition = paddleXBridge(settings).recognizeWithConfidence(image, desc, roi)
+            val recognition = paddleXBridge(settings).recognizeWithConfidence(image, desc, roi, timeoutMs)
             lastProviderUsed = OcrProviderKind.PADDLEX
             if (allowEmptyProbeResult && recognition.text.isBlank()) {
                 log.debug {

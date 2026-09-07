@@ -22,6 +22,36 @@ import kotlin.test.assertTrue
 
 class PirateWarriorMctsModelTest {
     @Test
+    fun `battlefield is downranked until warrior has two friendly minions`() {
+        val emptyBoard = testWar(turn = 2, mana = 3)
+        val battlefield = testCard(PirateWarriorMctsModel.BATTLEFIELD, cost = 3)
+        val emptyPrior = PirateWarriorMctsModel.actionPrior(
+            PlayAction({}, {}, battlefield),
+            emptyBoard,
+        )
+        assertTrue(emptyPrior < 0.0)
+
+        val oneMinionBoard = testWar(turn = 2, mana = 3).apply {
+            addCard(testCard("FRIENDLY_MINION", cost = 0), me.playArea)
+        }
+        val oneMinionPrior = PirateWarriorMctsModel.actionPrior(
+            PlayAction({}, {}, testCard(PirateWarriorMctsModel.BATTLEFIELD, cost = 3)),
+            oneMinionBoard,
+        )
+        assertTrue(oneMinionPrior < 0.0)
+
+        val establishedBoard = testWar(turn = 2, mana = 3).apply {
+            addCard(testCard("FRIENDLY_MINION_1", cost = 0), me.playArea)
+            addCard(testCard("FRIENDLY_MINION_2", cost = 0), me.playArea)
+        }
+        val establishedPrior = PirateWarriorMctsModel.actionPrior(
+            PlayAction({}, {}, testCard(PirateWarriorMctsModel.BATTLEFIELD, cost = 3)),
+            establishedBoard,
+        )
+        assertTrue(establishedPrior > 0.0)
+    }
+
+    @Test
     fun `hero attack allows lethal face but otherwise targets a nonlethal minion`() {
         val war = testWar(turn = 2, mana = 3)
         val hero = testCard("WARRIOR_HERO", cost = 0, attack = 3).apply {
@@ -234,7 +264,7 @@ class PirateWarriorMctsModelTest {
 
     @Test
     fun `released pirate warrior strategy exposes a versioned display name`() {
-        assertEquals("海盗战 V1.0", HsPirateWarriorMctsDeckStrategy().name())
+        assertTrue(HsPirateWarriorMctsDeckStrategy().name().startsWith("海盗战 V1.2 · build "))
     }
     @Test
     fun `cannon is mandatory before treasure distributor`() {
@@ -522,6 +552,57 @@ class PirateWarriorMctsModelTest {
         assertTrue(
             !PirateWarriorMctsModel.isDeferredAction(PowerAction({}, {}, power), war),
         )
+    }
+
+    @Test
+    fun `taunt exception spends hero power before hero attack then exposes minion attacks`() {
+        // TestCardAction models a hero power as a launchpad and therefore
+        // falls back to the SDK's five-resource launch cost when no child
+        // launch card is attached.
+        val war = testWar(turn = 3, mana = 5)
+        val hero = testCard("TAUNT_EXCEPTION_HERO", cost = 0, attack = 1).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("TAUNT_EXCEPTION_RIVAL_HERO", cost = 0).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+            atc = 0
+        }
+        val taunt = testCard("TAUNT_EXCEPTION_TAUNT", cost = 0).apply {
+            isTaunt = true
+            atc = 0
+            health = 5
+        }
+        val minion = testCard("TAUNT_EXCEPTION_MINION", cost = 0).apply { isExhausted = false }
+        val heroPower = testCard("TAUNT_EXCEPTION_POWER", cost = 1).apply {
+            cardType = CardTypeEnum.HERO_POWER
+            cardRace = CardRaceEnum.UNKNOWN
+            isLaunchpad = true
+            isExhausted = false
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(minion, war.me.playArea)
+        war.addCard(heroPower, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(taunt, war.rival.playArea)
+
+        val root = MonteCarloTreeNode(war, InitAction, testMctsArg())
+        assertTrue(root.actions.isNotEmpty())
+        assertTrue(root.actions.all { it is PowerAction && it.creator?.entityId == heroPower.entityId })
+
+        val afterPower = root.buildNextNode(root.actions.single())
+        assertTrue(afterPower.actions.isNotEmpty())
+        assertTrue(afterPower.actions.all {
+            it is AttackAction && it.creator?.entityId == hero.entityId && it.targetEntityId == taunt.entityId
+        })
+
+        val afterHero = afterPower.buildNextNode(afterPower.actions.single())
+        assertTrue(afterHero.actions.isNotEmpty())
+        assertTrue(afterHero.actions.all { it is AttackAction && it.creator?.entityId == minion.entityId })
     }
 
     @Test

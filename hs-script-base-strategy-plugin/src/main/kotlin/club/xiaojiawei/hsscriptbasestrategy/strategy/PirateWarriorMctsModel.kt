@@ -31,6 +31,7 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     const val SOUTHSEA_CAPTAIN = "NEW1_027"
     const val HOZEN_ROUGHHOUSER = "VAC_938"
     const val RAGEWING = "YOD_032"
+    const val BATTLEFIELD = "AV_661"
 
     const val HOOKFIST = "CORE_NX2_028"
     const val ANCHOR = "DRG_025"
@@ -86,6 +87,13 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             isCard(card, SHIPS_CANNON) -> 100.0
             isCard(card, QUESTLINE) && isFirstTurn(war) -> 95.0
             isCard(card, TREASURE_DISTRIBUTOR) -> 90.0 + otherPirates * 2.0
+            isCard(card, BATTLEFIELD) -> {
+                val friendlyMinions = war.me.playArea.cards.count { it.cardType === CardTypeEnum.MINION }
+                // Battlefield's delayed buff is weak without an established
+                // board. Keep it as a legal fallback, but deprioritize it
+                // until at least two friendly minions are present.
+                if (friendlyMinions <= 1) -22.0 else 4.0 + friendlyMinions
+            }
             isCard(card, CANNONMASTER) -> if (freeSlots > 0) 36.0 else -36.0
             isCard(card, BLASTPOWDER_ENGINEER) ->
                 if (otherPirates > 0 || attackablePirates > 0) 28.0 else 8.0
@@ -150,6 +158,17 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         }
         if (distributor != null) {
             return action is PlayAction && action.creator?.let { isCard(it, TREASURE_DISTRIBUTOR) } == true
+        }
+
+        // A visible Taunt permits hero-first combat after hand plays. Consume
+        // an otherwise usable hero power before the hero's Taunt attack; the
+        // next re-plan then exposes friendly minion attacks. Combined-damage
+        // routes stay on the existing setup-first path.
+        if (allowsTauntEarlyHeroAction(war)) {
+            if (PirateAttackOrderPolicy.hasUsableHeroPowerAction(war)) {
+                return PirateAttackOrderPolicy.isHeroPowerAction(action)
+            }
+            return action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO
         }
 
         // If the hero needs friendly minion damage to finish the selected
@@ -229,13 +248,17 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             action is AttackAction && action.creator?.cardType === CardTypeEnum.MINION ->
                 MctsActionOrderPhase.MINION_ATTACK
             action is PowerAction && action.creator?.cardType === CardTypeEnum.HERO_POWER ->
-                if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
+                if (allowsTauntEarlyHeroAction(war)) {
+                    MctsActionOrderPhase.EARLY_HERO_ACTION
+                } else if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
                     MctsActionOrderPhase.HERO_POWER
                 } else {
                     MctsActionOrderPhase.EARLY_HERO_ACTION
                 }
             action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO ->
-                if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
+                if (allowsTauntEarlyHeroAction(war)) {
+                    MctsActionOrderPhase.EARLY_HERO_ACTION
+                } else if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
                     MctsActionOrderPhase.HERO_ATTACK
                 } else {
                     MctsActionOrderPhase.EARLY_HERO_ACTION
@@ -518,6 +541,11 @@ object PirateWarriorMctsModel : MctsDecisionModel {
 
     private fun hasOtherUsefulNonHeroPowerAction(war: War): Boolean =
         hasOtherUsefulNonAxeAction(war)
+
+    private fun allowsTauntEarlyHeroAction(war: War): Boolean =
+        PirateAttackOrderPolicy.hasAttackableEnemyTaunt(war) &&
+            PirateAttackOrderPolicy.hasHeroAttackAction(war) &&
+            !PirateHeroAttackTargetPolicy.requiresFriendlySetupAttack(war)
 
     private fun hasOtherUsefulNonAxeAction(war: War): Boolean {
         val me = war.me

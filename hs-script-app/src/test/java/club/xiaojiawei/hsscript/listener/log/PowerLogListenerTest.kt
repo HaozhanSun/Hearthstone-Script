@@ -1,8 +1,10 @@
 package club.xiaojiawei.hsscript.listener.log
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import java.nio.file.Files
 
 class PowerLogListenerTest {
 
@@ -43,5 +45,24 @@ class PowerLogListenerTest {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun `recovery starts at the newest unfinished game instead of byte zero`() {
+        val log = Files.createTempFile("power-recovery", ".log")
+        try {
+            Files.writeString(
+                log,
+                "CREATE_GAME old\n" +
+                    "TAG_CHANGE Entity=1 tag=PLAYSTATE value=WON\n" +
+                    "CREATE_GAME current\n" +
+                    "TAG_CHANGE Entity=1 tag=PLAYSTATE value=PLAYING\n",
+            )
+            val expected = "CREATE_GAME old\n".toByteArray(Charsets.UTF_8).size.toLong() +
+                "TAG_CHANGE Entity=1 tag=PLAYSTATE value=WON\n".toByteArray(Charsets.UTF_8).size
+            assertEquals(expected, PowerLogListener.unfinishedGameStartOffset(log.toString()))
+        } finally {
+            Files.deleteIfExists(log)
+        }
     }
 }

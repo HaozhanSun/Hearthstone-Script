@@ -1,11 +1,7 @@
 package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
-import club.xiaojiawei.hsscript.ocr.OcrTextBridge
-import club.xiaojiawei.hsscript.ocr.OcrHealth
-import club.xiaojiawei.hsscript.ocr.OcrProviderKind
 import club.xiaojiawei.hsscript.ocr.OcrProviderMode
-import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrCancelledException
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -17,13 +13,11 @@ import java.awt.image.BufferedImage
 class ScreenWatchdogTest {
 
     private val originalSettingsProvider = OcrRuntime.settingsProvider
-    private val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
     private val originalProviderModeProvider = OcrRuntime.providerModeProvider
 
     @AfterEach
     fun tearDown() {
         OcrRuntime.settingsProvider = originalSettingsProvider
-        OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
         OcrRuntime.providerModeProvider = originalProviderModeProvider
     }
 
@@ -95,34 +89,17 @@ class ScreenWatchdogTest {
     }
 
     @Test
-    fun `fake PaddleX bridge OCR classifies same captured image`() {
+    fun `watchdog uses local OCR even when PaddleX is selected`() {
         OcrRuntime.providerModeProvider = { OcrProviderMode.PADDLEX_ONLY }
-        OcrRuntime.settingsProvider = {
-            PaddleXOcrSettings(
-                enabled = true,
-                pythonExecutable = "fake-python",
-                modulePath = "fake-module",
-                device = "cpu",
-                modelCachePath = "",
-                timeoutMs = 1000,
-            )
-        }
-        OcrRuntime.paddleXBridgeFactory = {
-            object : OcrTextBridge {
-                override fun recognize(image: BufferedImage, desc: String): String = "失败 点击继续"
-
-                override fun healthCheck(): OcrHealth =
-                    OcrHealth(true, OcrProviderKind.PADDLEX, "ok", "fake")
-            }
-        }
 
         val observation = ScreenWatchdog.inspectForSurrender(
             state = "mode=GAMEPLAY|warPhase=DRAWN_INIT_CARD",
             attempts = 4,
             captureProvider = { BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB) },
+            ocrProvider = { "失败 点击继续" },
         )
 
-        assertEquals("PADDLEX", observation.provider)
+        assertEquals("LEGACY", observation.provider)
         assertEquals(ScreenWatchdogKind.LOST, observation.kind)
         assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_LOSS, observation.action)
     }

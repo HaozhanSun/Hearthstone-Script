@@ -1,10 +1,8 @@
 package club.xiaojiawei.hsscript.status
 
-import club.xiaojiawei.hsscript.bean.TesseractEx
 import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.enums.ConfigEnum
-import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrCancelledException
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptbase.config.log
@@ -18,6 +16,7 @@ import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.CancellationException
+import net.sourceforge.tess4j.Tesseract
 
 enum class ScreenWatchdogKind {
     WIN,
@@ -103,7 +102,10 @@ object ScreenWatchdog {
         ocrProvider: (BufferedImage) -> String = ::runOCR,
     ): ScreenWatchdogObservation {
         val runId = System.getProperty("hs.script.e2e.run-id", "normal")
-        val provider = OcrRuntime.currentProvider().name
+        // This watchdog only classifies terminal/menu screens. Keep it on the
+        // local OCR path so a PaddleX rank request can never block surrender
+        // recovery or hold the action executor for a long sidecar timeout.
+        val provider = "LEGACY"
         val image = runCatching { captureProvider() }.getOrElse { error ->
             log.warn(error) {
                 "SCREEN_WATCHDOG_CAPTURE_FAILED runId=$runId trigger=$trigger state=$state attempts=$attempts"
@@ -164,7 +166,7 @@ object ScreenWatchdog {
             }
             ""
         }
-        val providerUsed = OcrRuntime.lastProviderUsed().name
+        val providerUsed = "LEGACY"
         val kind = classify(ocrText)
         val action = decide(kind)
         log.warn {
@@ -273,12 +275,12 @@ object ScreenWatchdog {
 
     private fun runOCR(image: BufferedImage): String {
         val ocrImage = resizeForOcr(image)
-        return TesseractEx().apply {
+        return Tesseract().apply {
             setDatapath(File(TESS_DATA_PATH).absolutePath)
             setLanguage(CHI_SIM_DATA)
             setPageSegMode(11)
             setVariable("user_defined_dpi", "160")
-        }.doOCR(ocrImage, "screen-watchdog")
+        }.doOCR(ocrImage)
     }
 
     private fun resizeForOcr(image: BufferedImage): BufferedImage {

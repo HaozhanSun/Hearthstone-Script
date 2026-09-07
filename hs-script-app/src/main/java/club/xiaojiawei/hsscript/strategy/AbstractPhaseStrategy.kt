@@ -29,6 +29,7 @@ import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import club.xiaojiawei.hsscriptbase.util.isTrue
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * 游戏阶段抽象类
@@ -38,6 +39,7 @@ import java.io.IOException
 abstract class AbstractPhaseStrategy : PhaseStrategy {
 
     protected val war = WAR
+    private val lastTerminalSkipLog = AtomicReference<String?>(null)
 
     override fun deal(line: String) {
         dealing = true
@@ -119,12 +121,17 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
      */
     private fun surrenderImmediatelyForResolvedOpponentHero(): Boolean {
         if (GameUtil.isTerminalGameState()) {
-            log.info {
-                "SURRENDER_POLICY_SKIPPED reason=terminal-state-priority " +
-                    "phase=${war.currentPhase.name} step=${war.currentTurnStep?.name ?: "NONE"}"
+            val marker = "${war.currentPhase.name}|${war.currentTurnStep?.name ?: "NONE"}|" +
+                "${war.won}|${war.lost}|${war.conceded}"
+            if (lastTerminalSkipLog.getAndSet(marker) != marker) {
+                log.info {
+                    "SURRENDER_POLICY_SKIPPED reason=terminal-state-priority " +
+                        "phase=${war.currentPhase.name} step=${war.currentTurnStep?.name ?: "NONE"}"
+                }
             }
             return true
         }
+        lastTerminalSkipLog.set(null)
         val result = SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war) ?: return false
         return dispatchSurrenderDecision(result, "opponent-hero")
     }

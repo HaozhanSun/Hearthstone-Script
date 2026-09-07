@@ -34,6 +34,18 @@ class ImmediateLocationActionModelTest {
         assertTrue(model.isDeferredAction(play, war))
     }
 
+    @Test
+    fun `blindeye judge is recognized by the executor wait guard`() {
+        val blindeyeJudge = card("blindeye-judge", CardTypeEnum.MINION).apply {
+            cardId = "MAW_008"
+        }
+        val regularMinion = card("regular-minion", CardTypeEnum.MINION)
+
+        assertTrue(requiresBlindeyeJudgeAnimationWait(PlayAction({}, {}, blindeyeJudge)))
+        assertFalse(requiresBlindeyeJudgeAnimationWait(PlayAction({}, {}, regularMinion)))
+        assertFalse(requiresBlindeyeJudgeAnimationWait(PowerAction({}, {}, blindeyeJudge)))
+    }
+
     private fun card(entityId: String, type: CardTypeEnum): Card = Card(TestCardAction()).apply {
         this.entityId = entityId
         cardId = entityId

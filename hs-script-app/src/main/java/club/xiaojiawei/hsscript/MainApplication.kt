@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscript.bean.CommonCardAction.Companion.DEFAULT
 import club.xiaojiawei.hsscript.config.InitializerConfig
 import club.xiaojiawei.hsscript.config.ShutdownHookConfig
 import club.xiaojiawei.hsscript.consts.*
+import club.xiaojiawei.hsscript.controller.javafx.StartupController
 import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.dll.CSystemDll
 import club.xiaojiawei.hsscript.enums.ConfigEnum
@@ -167,20 +168,45 @@ class MainApplication : Application() {
     }
 
     override fun start(stage: Stage?) {
-        runCatching {
-            for (string in ScriptStatus.programArgs) {
-                if (string.startsWith("--window=")) {
-                    val windowEnum = WindowEnum.fromString(string.split("=")[1]) ?: break
-                    WindowUtil.showStage(windowEnum)
-                    return
-                }
+        for (string in ScriptStatus.programArgs) {
+            if (string.startsWith("--window=")) {
+                val windowEnum = WindowEnum.fromString(string.split("=")[1]) ?: break
+                WindowUtil.showStage(windowEnum)
+                return
             }
-            preInit()
-            InitializerConfig.initializer.init()
-        }.onFailure {
-            log.error { it }
         }
-        showMainPage()
+
+        // The old flow performed OCR health checks, service startup, and
+        // plugin loading before the first JavaFX window was shown. That made
+        // a slow PaddleX initialization indistinguishable from a failed
+        // launch. Show the real startup window first, then initialize off the
+        // JavaFX thread while publishing deterministic progress messages.
+        val startupStage = WindowUtil.buildStage(WindowEnum.STARTUP)
+        startupStage.show()
+        StartupController.begin()
+        Thread {
+            runCatching {
+                StartupController.update(0.12, "$PROGRAM_NAME：读取配置与 OCR 状态…")
+                preInit()
+                StartupController.update(0.48, "$PROGRAM_NAME：加载插件与策略…")
+                InitializerConfig.initializer.init()
+                StartupController.update(0.82, "$PROGRAM_NAME：准备主界面…")
+            }.onSuccess {
+                Platform.runLater {
+                    showMainPage()
+                    StartupController.complete()
+                }
+            }.onFailure { error ->
+                log.error(error) { "启动初始化失败，保留启动页显示失败原因" }
+                StartupController.failed(
+                    error.message?.replace(Regex("\\s+"), " ")?.take(120) ?: error.javaClass.simpleName,
+                )
+            }
+        }.apply {
+            name = "hs-script-startup"
+            isDaemon = false
+            start()
+        }
 //        testJava()
 //        testKt()
 //        compileAndRunExternalKtFiles(listOf("S:\\IdeaProjects\\fs32\\src\\main\\java\\com\\fs\\TestUtil.kt"), System.getProperty("java.class.path"))

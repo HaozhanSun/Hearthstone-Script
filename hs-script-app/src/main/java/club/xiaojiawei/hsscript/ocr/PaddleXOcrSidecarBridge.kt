@@ -17,6 +17,12 @@ interface OcrTextBridge {
         OcrRecognition(recognize(image, desc), confidence = null)
     fun recognizeWithConfidence(image: BufferedImage, desc: String = "", roi: String?): OcrRecognition =
         recognizeWithConfidence(image, desc)
+    fun recognizeWithConfidence(
+        image: BufferedImage,
+        desc: String = "",
+        roi: String?,
+        timeoutMs: Long?,
+    ): OcrRecognition = recognizeWithConfidence(image, desc, roi)
     fun healthCheck(): OcrHealth
 }
 
@@ -63,8 +69,18 @@ class PaddleXOcrSidecarBridge(
     }
 
     override fun recognizeWithConfidence(image: BufferedImage, desc: String): OcrRecognition {
+        return recognizeWithConfidence(image, desc, roi = null, timeoutMs = null)
+    }
+
+    override fun recognizeWithConfidence(
+        image: BufferedImage,
+        desc: String,
+        roi: String?,
+        timeoutMs: Long?,
+    ): OcrRecognition {
         val input = writeTempImage(image, desc)
         try {
+            val requestTimeoutMs = timeoutMs ?: settings.timeoutMs
             val result = processRunner.run(
                 command = baseCommand() + listOf(
                     "-m",
@@ -77,10 +93,10 @@ class PaddleXOcrSidecarBridge(
                 ),
                 workingDirectory = File(settings.modulePath).parentFile,
                 environment = pythonEnvironment(),
-                timeoutMs = settings.timeoutMs,
+                timeoutMs = requestTimeoutMs,
             )
             if (result.timedOut) {
-                throw PaddleXOcrException("PaddleX OCR sidecar timed out after ${settings.timeoutMs}ms")
+                throw PaddleXOcrException("PaddleX OCR sidecar timed out after ${requestTimeoutMs}ms")
             }
             if (result.exitCode != 0) {
                 throw PaddleXOcrException(

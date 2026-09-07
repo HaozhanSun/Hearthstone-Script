@@ -15,6 +15,7 @@ import club.xiaojiawei.hsscriptbase.enums.StepEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import java.io.File
+import java.io.RandomAccessFile
 import java.util.concurrent.TimeUnit
 
 /**
@@ -42,6 +43,8 @@ object PowerLogListener :
     private var terminalTailFence = false
 
     private const val RESERVE_SIZE_B = 4 * 1024 * 1024
+    private const val ACTIVE_GAME_SCAN_CHUNK_B = 4 * 1024 * 1024
+    private const val ACTIVE_GAME_SCAN_MAX_B = 128 * 1024 * 1024
 
     override fun dealOldLog() {
         WarEx.reset()
@@ -49,7 +52,13 @@ object PowerLogListener :
         terminalTailFence = false
 
         logFile?.let {
-            val replayExistingGame = hasUnfinishedGame(it.path())
+            val unfinishedGameStart = unfinishedGameStartOffset(it.path())
+            val replayExistingGame = unfinishedGameStart != null
+            log.info {
+                "POWER_LOG_ATTACH_PROBE path=${it.path()} " +
+                    "replayExistingGame=$replayExistingGame " +
+                    "unfinishedGameStart=${unfinishedGameStart ?: "none"}"
+            }
             if (replayExistingGame || System.getProperty("hs.script.e2e") == "true") {
                 // A restart or late attach must reconstruct an already active
                 // game before consuming new lines; otherwise the phase machine
@@ -60,10 +69,16 @@ object PowerLogListener :
                 replayingExistingLog = true
                 try {
                     log.info {
-                        "Power.log恢复：从开头回放当前未结束对局 " +
+                        "Power.log恢复：从未结束对局起点回放 " +
+                            "offset=${unfinishedGameStart ?: 0} " +
                             "reason=${if (replayExistingGame) "active-game-detected" else "e2e-watchdog"}"
                     }
-                    it.seek(0)
+                    // Power.log is append-only across multiple games. Replaying
+                    // from byte zero makes startup latency proportional to the
+                    // entire historical log and suppresses live clicks for the
+                    // whole replay. Only the newest unfinished CREATE_GAME block
+                    // is needed to rebuild the current WAR model.
+                    it.seek(unfinishedGameStart ?: 0L)
                     dealNewLog()
                 } finally {
                     replayingExistingLog = false
@@ -84,23 +99,56 @@ object PowerLogListener :
     }
 
     /**
-     * Detect whether the newest CREATE_GAME block is still live.  Starting a
-     * listener after Hearthstone has already entered a match otherwise seeks
-     * directly to EOF and loses the in-memory card model.  A completed match
-     * is fenced by its authoritative WON/LOST PLAYSTATE, so result/home/deck
-     * screens do not trigger an unsafe historical replay.
+     * Return the byte offset of the newest unfinished game, or null when the
+     * log ends after a completed game. The offset lets the live listener skip
+     * all completed historical matches while retaining the existing state
+     * reconstruction behavior for a game that is already on screen.
      */
-    private fun hasUnfinishedGame(path: String): Boolean = runCatching {
-        val active = File(path).bufferedReader(Charsets.UTF_8).useLines { lines ->
-            hasUnfinishedGame(lines)
+    internal fun unfinishedGameStartOffset(path: String): Long? = runCatching {
+        RandomAccessFile(File(path), "r").use { file ->
+            val fileLength = file.length()
+            var scanEnd = fileLength
+            var scannedBytes = 0L
+            var newestCreateGame: Long? = null
+            var newestTerminalPlayState: Long? = null
+
+            // Power.log is append-only and the newest game is always near EOF.
+            // Scanning the whole historical file here can hold the listener for
+            // tens of seconds, which is long enough to miss the mulligan window.
+            // Walk backwards in bounded chunks and stop as soon as the newest
+            // CREATE_GAME marker is found.
+            while (scanEnd > 0L && scannedBytes < ACTIVE_GAME_SCAN_MAX_B) {
+                val chunkStart = (scanEnd - ACTIVE_GAME_SCAN_CHUNK_B).coerceAtLeast(0L)
+                file.seek(chunkStart)
+                if (chunkStart > 0L) file.readLine() // discard a partial line
+                while (file.filePointer < scanEnd) {
+                    val lineStart = file.filePointer
+                    val line = file.readLine() ?: break
+                    if (line.contains("CREATE_GAME")) newestCreateGame = lineStart
+                    if (line.contains("tag=PLAYSTATE value=WON") ||
+                        line.contains("tag=PLAYSTATE value=LOST")
+                    ) {
+                        newestTerminalPlayState = lineStart
+                    }
+                }
+                if (newestCreateGame != null && newestTerminalPlayState != null) break
+                scannedBytes += scanEnd - chunkStart
+                scanEnd = chunkStart
+            }
+
+            val gameStart = newestCreateGame ?: return@runCatching null
+            // Because both markers were found while walking backwards, each
+            // is the newest occurrence in the file. A terminal marker after
+            // the newest CREATE_GAME means the latest game is complete; a
+            // marker before it belongs to the previous game and the latest
+            // game is still active.
+            gameStart.takeUnless { start ->
+                newestTerminalPlayState?.let { terminal -> terminal > start } == true
+            }
         }
-        log.info {
-            "POWER_LOG_ATTACH_PROBE path=$path replayExistingGame=$active"
-        }
-        active
     }.getOrElse { error ->
-        log.warn(error) { "POWER_LOG_ATTACH_PROBE_FAILED path=$path" }
-        false
+        log.warn(error) { "POWER_LOG_ACTIVE_GAME_OFFSET_FAILED path=$path" }
+        null
     }
 
     internal fun hasUnfinishedGame(lines: Sequence<String>): Boolean {

@@ -313,7 +313,7 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
-    fun `battlefield is downranked on an empty minion board but cannon is still enabled`() {
+    fun `battlefield is downranked with zero or one friendly minion`() {
         val war = testWar()
         val battlefield = testCard(PirateDemonHunterMctsExperimentModel.BATTLEFIELD)
         val cannon = testCard(PirateDemonHunterMctsExperimentModel.SHIPS_CANNON)
@@ -331,6 +331,25 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         assertTrue(battlefieldPrior < 0.0)
         assertTrue(cannonPrior > 0.0)
+
+        val oneMinionWar = testWar().apply {
+            addCard(testCard("FRIENDLY_MINION"), me.playArea)
+        }
+        val oneMinionBattlefieldPrior = PirateDemonHunterMctsExperimentModel.actionPrior(
+            PlayAction({}, {}, testCard(PirateDemonHunterMctsExperimentModel.BATTLEFIELD)),
+            oneMinionWar,
+        )
+        assertTrue(oneMinionBattlefieldPrior < 0.0)
+
+        val establishedBoardWar = testWar().apply {
+            addCard(testCard("FRIENDLY_MINION_1"), me.playArea)
+            addCard(testCard("FRIENDLY_MINION_2"), me.playArea)
+        }
+        val establishedBoardPrior = PirateDemonHunterMctsExperimentModel.actionPrior(
+            PlayAction({}, {}, testCard(PirateDemonHunterMctsExperimentModel.BATTLEFIELD)),
+            establishedBoardWar,
+        )
+        assertTrue(establishedBoardPrior > 0.0)
     }
 
     @Test
@@ -577,7 +596,7 @@ class PirateDemonHunterMctsExperimentModelTest {
         val card = testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND)
         val war = testWar()
         assertFalse(PirateDemonHunterMctsExperimentModel.shouldDefer(card, war))
-        assertEquals("海盗瞎 V1.0", HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name())
+        assertTrue(HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().startsWith("海盗瞎 V1.2 · build "))
     }
 
     @Test
@@ -623,6 +642,30 @@ class PirateDemonHunterMctsExperimentModelTest {
         val node = MonteCarloTreeNode(war, InitAction, arg)
         assertFalse(node.actions.any { it.creator?.cardId == PirateDemonHunterMctsExperimentModel.BLINDEYE_JUDGE })
         assertTrue(node.actions.any { it.creator?.cardId == PirateDemonHunterMctsExperimentModel.PUFFERFIST })
+    }
+
+    @Test
+    fun `global plan keeps blindeye judge behind an already playable two-cost card`() {
+        val war = testWar().apply { me.resources = 6 }
+        val judge = testCard(PirateDemonHunterMctsExperimentModel.BLINDEYE_JUDGE).apply {
+            cost = 4
+        }
+        val twoCostCard = testCard("OTHER_TWO_COST_CARD").apply {
+            cost = 2
+        }
+        war.addCard(judge, war.me.handArea)
+        war.addCard(twoCostCard, war.me.handArea)
+
+        val arg = testMctsArg(experimentalSearch = true).copy(
+            decisionModel = PirateDemonHunterMctsGlobalPlanModel,
+        )
+        val root = MonteCarloTreeNode(war, InitAction, arg)
+        assertTrue(root.actions.isNotEmpty())
+        assertTrue(root.actions.all { it.creator?.entityId == twoCostCard.entityId })
+
+        val afterTwoCostCard = root.buildNextNode(root.actions.single())
+        assertTrue(afterTwoCostCard.actions.isNotEmpty())
+        assertTrue(afterTwoCostCard.actions.all { it.creator?.entityId == judge.entityId })
     }
 
     @Test
@@ -853,6 +896,65 @@ class PirateDemonHunterMctsExperimentModelTest {
         assertEquals(1, afterHeroPower.actions.size)
         assertTrue(afterHeroPower.actions.single() is AttackAction)
         assertEquals(hero.entityId, afterHeroPower.actions.single().creator?.entityId)
+    }
+
+    @Test
+    fun `taunt exception spends hero power before hero attack then exposes minion attacks`() {
+        // TestCardAction models a hero power as a launchpad and therefore
+        // falls back to the SDK's five-resource launch cost when no child
+        // launch card is attached.
+        val war = testWar().apply { me.resources = 5 }
+        val hero = testCard("TAUNT_EXCEPTION_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 0
+            atc = 1
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("TAUNT_EXCEPTION_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 0
+            health = 30
+            atc = 0
+        }
+        val taunt = testCard("TAUNT_EXCEPTION_TAUNT").apply {
+            cost = 0
+            isTaunt = true
+            atc = 0
+            health = 5
+        }
+        val minion = testCard("TAUNT_EXCEPTION_MINION").apply {
+            cost = 0
+            isExhausted = false
+        }
+        val heroPower = testCard("TAUNT_EXCEPTION_POWER").apply {
+            cardType = CardTypeEnum.HERO_POWER
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 1
+            isLaunchpad = true
+            isExhausted = false
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(minion, war.me.playArea)
+        war.addCard(heroPower, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(taunt, war.rival.playArea)
+
+        val root = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertTrue(root.actions.isNotEmpty())
+        assertTrue(root.actions.all { it is PowerAction && it.creator?.entityId == heroPower.entityId })
+
+        val afterPower = root.buildNextNode(root.actions.single())
+        assertTrue(afterPower.actions.isNotEmpty())
+        assertTrue(afterPower.actions.all {
+            it is AttackAction && it.creator?.entityId == hero.entityId && it.targetEntityId == taunt.entityId
+        })
+
+        val afterHero = afterPower.buildNextNode(afterPower.actions.single())
+        assertTrue(afterHero.actions.isNotEmpty())
+        assertTrue(afterHero.actions.all { it is AttackAction && it.creator?.entityId == minion.entityId })
     }
 
     @Test
@@ -1284,7 +1386,7 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         assertEquals(MctsRootSelectionPolicy.GLOBAL_TURN_PLAN, global.rootSelectionPolicy)
         assertTrue(global.decisionModel === PirateDemonHunterMctsGlobalPlanModel)
-        assertEquals("海盗瞎 V1.0", HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name())
+        assertTrue(HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().startsWith("海盗瞎 V1.2 · build "))
     }
 
     @Test

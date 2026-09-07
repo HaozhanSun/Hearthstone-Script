@@ -51,10 +51,18 @@ internal class PersistentPaddleXOcrSidecarBridge(
         image: BufferedImage,
         desc: String,
         roi: String?,
+    ): OcrRecognition = recognizeWithConfidence(image, desc, roi, timeoutMs = null)
+
+    override fun recognizeWithConfidence(
+        image: BufferedImage,
+        desc: String,
+        roi: String?,
+        timeoutMs: Long?,
     ): OcrRecognition {
         val input = writeTempImage(image, desc)
         try {
-            return PaddleXOcrRequestCoordinator.execute(desc, roi, settings.timeoutMs) { requestId ->
+            val requestTimeoutMs = timeoutMs ?: settings.timeoutMs
+            return PaddleXOcrRequestCoordinator.execute(desc, roi, requestTimeoutMs) { requestId ->
                 val payload = objectMapper.writeValueAsString(
                     mapOf(
                         "request_id" to requestId.toString(),
@@ -64,7 +72,7 @@ internal class PersistentPaddleXOcrSidecarBridge(
                     ),
                 )
                 try {
-                    val response = objectMapper.readTree(ensureSession().request(payload, settings.timeoutMs))
+                    val response = objectMapper.readTree(ensureSession().request(payload, requestTimeoutMs))
                     parseResponse(response, requestId)
                 } catch (error: Throwable) {
                     // A timed-out/corrupt protocol session is not reusable;

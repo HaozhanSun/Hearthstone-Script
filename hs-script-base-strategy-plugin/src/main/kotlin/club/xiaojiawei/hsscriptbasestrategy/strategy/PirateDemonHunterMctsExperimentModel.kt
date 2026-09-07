@@ -234,6 +234,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         PirateLethalAttackPolicy.isLethalFaceAction(action, war)
 
     override fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? {
+        val tauntEarlyHeroAction = allowsTauntEarlyHeroAction(war)
         val cliffsideAction = action.creator?.let { isCard(it, DANGEROUS_CLIFFSIDE) } == true
         val cliffside = war.me.playArea.cards.firstOrNull {
             isCard(it, DANGEROUS_CLIFFSIDE) && it.isAlive()
@@ -273,13 +274,17 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             action is AttackAction && action.creator?.cardType === CardTypeEnum.MINION ->
                 MctsActionOrderPhase.MINION_ATTACK
             action is PowerAction && action.creator?.cardType === CardTypeEnum.HERO_POWER ->
-                if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
+                if (tauntEarlyHeroAction) {
+                    MctsActionOrderPhase.EARLY_HERO_ACTION
+                } else if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
                     MctsActionOrderPhase.HERO_POWER
                 } else {
                     MctsActionOrderPhase.EARLY_HERO_ACTION
                 }
             action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO ->
-                if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
+                if (tauntEarlyHeroAction) {
+                    MctsActionOrderPhase.EARLY_HERO_ACTION
+                } else if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
                     MctsActionOrderPhase.HERO_ATTACK
                 } else {
                     MctsActionOrderPhase.EARLY_HERO_ACTION
@@ -299,6 +304,17 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         }
         if (earlyZilliax != null) {
             return action is PlayAction && action.creator?.entityId == earlyZilliax.entityId
+        }
+
+        // A visible Taunt permits hero-first combat after hand plays. Consume
+        // an otherwise usable hero power before the hero's Taunt attack; the
+        // next re-plan then exposes friendly minion attacks. Combined-damage
+        // routes stay on the existing setup-first path.
+        if (allowsTauntEarlyHeroAction(war)) {
+            if (PirateAttackOrderPolicy.hasUsableHeroPowerAction(war)) {
+                return PirateAttackOrderPolicy.isHeroPowerAction(action)
+            }
+            return action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO
         }
 
         // With Adrenaline Fiend on board, every ready minion attack is a
@@ -390,7 +406,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         // attackable friendly minions first, spend the hero power if it is
         // available, and only then attack with the hero.
         if (hasAdrenalineFiend(war) && action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO) {
-            return hasAttackableMinionAction(war) || hasUsableHeroPowerAction(war)
+            return hasAttackableMinionAction(war) || PirateAttackOrderPolicy.hasUsableHeroPowerAction(war)
         }
 
         // Equipping a weapon replaces the currently equipped weapon. Hiding
@@ -458,7 +474,12 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             isCard(card, SIGIL_OF_SKYDIVING) ->
                 if (freeSlots(war) >= 2) 16.0 + futurePirates * 1.5 else -16.0
             isCard(card, BATTLEFIELD) ->
-                if (friendlyMinions == 0) -22.0 else 4.0 + friendlyMinions
+                // Battlefield only pays off when there are already enough
+                // friendly minions to benefit from its delayed attack buffs.
+                // With zero or one minion, keep it available but make it a
+                // last-resort development play instead of competing with
+                // immediate board actions.
+                if (friendlyMinions <= 1) -22.0 else 4.0 + friendlyMinions
             isCard(card, ADRENALINE_FIEND) ->
                 // This is a board-development Pirate DH card.  A current
                 // attack is valuable, but its absence must not turn the card
@@ -731,10 +752,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 !card.isUncertain &&
                 card.cost <= me.usableResource &&
                 (card.cardType !== CardTypeEnum.MINION || !me.playArea.isFull) &&
-                (
-                    card.action.generatePlayActions(war, me).isNotEmpty() ||
-                        canCreateOpaqueAction(card, war)
-                )
+                hasPlayableHandAction(card, war)
         }
         val boardAction = me.playArea.cards.any { hasGeneratedBoardAction(it, war) }
         val heroAttack = canUseHeroAttack(war)
@@ -745,6 +763,18 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             }.getOrDefault(false)
         } == true
         return handAction || boardAction || heroAttack || heroPower
+    }
+
+    /**
+     * Count only a hand action that would survive the same legality and
+     * deferral checks as the MCTS root.  A parser-generated action by itself
+     * is not enough: special-card policy may still remove it before search.
+     */
+    private fun hasPlayableHandAction(card: Card, war: War): Boolean {
+        val generated = runCatching { card.action.generatePlayActions(war, war.me) }
+            .getOrDefault(emptyList())
+        return generated.any { isActionLegal(it, war) && !isDeferredAction(it, war) } ||
+            (generated.isEmpty() && canCreateOpaqueAction(card, war))
     }
 
     /** Whether the current state has useful work other than hero power. */
@@ -785,12 +815,10 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                     .getOrDefault(false)
             }
 
-    private fun hasUsableHeroPowerAction(war: War): Boolean {
-        val power = war.me.playArea.power ?: return false
-        if (war.me.usableResource < power.cost || !power.canPower()) return false
-        return runCatching { power.action.generatePowerActions(war, war.me).isNotEmpty() }
-            .getOrDefault(false)
-    }
+    private fun allowsTauntEarlyHeroAction(war: War): Boolean =
+        PirateAttackOrderPolicy.hasAttackableEnemyTaunt(war) &&
+            PirateAttackOrderPolicy.hasHeroAttackAction(war) &&
+            !PirateHeroAttackTargetPolicy.requiresFriendlySetupAttack(war)
 
     private fun isPostHeroAttackCliffsideReady(war: War): Boolean {
         val hero = war.me.playArea.hero ?: return false

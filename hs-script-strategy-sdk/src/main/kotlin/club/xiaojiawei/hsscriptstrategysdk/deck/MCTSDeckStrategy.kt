@@ -23,6 +23,23 @@ import club.xiaojiawei.hsscriptcardsdk.mcts.MctsTurnPhaseFence
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 
+private const val BLINDEYE_JUDGE_CARD_ID = "MAW_008"
+private const val BLINDEYE_JUDGE_ANIMATION_WAIT_MILLIS = 5_000L
+
+/**
+ * Blindeye Judge draws cards for both players and its board transition is
+ * longer than an ordinary card play. Keep this check at the executor layer
+ * so both normal and receding-horizon MCTS paths receive the same guard.
+ */
+internal fun requiresBlindeyeJudgeAnimationWait(action: Action): Boolean {
+    if (action !is PlayAction) return false
+    val cardId = action.creator?.cardId ?: return false
+    return cardId == BLINDEYE_JUDGE_CARD_ID ||
+        cardId == "CORE_$BLINDEYE_JUDGE_CARD_ID" ||
+        cardId.startsWith("${BLINDEYE_JUDGE_CARD_ID}t") ||
+        cardId.startsWith("CORE_${BLINDEYE_JUDGE_CARD_ID}t")
+}
+
 internal class ImmediateLocationFenceState {
     var pendingCreatorId: String? = null
         private set
@@ -446,6 +463,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                             "stateChangedImmediately" to (stateFingerprint(war) != before),
                         ),
                     )
+                    waitForBlindeyeJudgeAnimation(applyAction)
                     if (applyAction.recalculate) {
                         Thread.sleep(RandomUtil.getActionInterval(1500).toLong())
                         continueCurrent = true
@@ -866,6 +884,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                         "stateChangedImmediately" to (stateFingerprint(war) != before),
                     ),
                 )
+                waitForBlindeyeJudgeAnimation(action)
             } catch (error: Throwable) {
                 if (!war.isMyTurn) {
                     log.info {
@@ -1129,6 +1148,13 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
 
         override fun actionPrior(action: Action, war: War): Double =
             if (isTarget(action)) Double.MAX_VALUE else delegate.actionPrior(action, war)
+    }
+
+    private fun waitForBlindeyeJudgeAnimation(action: Action) {
+        if (!requiresBlindeyeJudgeAnimationWait(action)) return
+        log.info { "盲眼法官动画等待开始：${BLINDEYE_JUDGE_ANIMATION_WAIT_MILLIS}ms" }
+        Thread.sleep(BLINDEYE_JUDGE_ANIMATION_WAIT_MILLIS)
+        log.info { "盲眼法官动画等待结束" }
     }
 
     /**
