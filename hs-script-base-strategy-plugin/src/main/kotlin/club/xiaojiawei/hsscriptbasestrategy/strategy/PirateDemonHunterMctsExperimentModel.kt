@@ -296,6 +296,11 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
     override fun isMandatoryAction(action: Action, war: War): Boolean {
         val cliffside = war.me.playArea.cards.firstOrNull { isCard(it, DANGEROUS_CLIFFSIDE) && it.isAlive() }
 
+        // Nu Ling Naga must remain the last friendly-minion attacker. Do not
+        // let the Adrenaline Fiend or setup mandatory filters pull its attack
+        // back into the current node while another minion can still attack.
+        if (PirateAttackOrderPolicy.shouldDeferNuLingNagaAttack(action, war)) return false
+
         val earlyZilliax = war.me.handArea.cards.firstOrNull {
             isZilliax(it) &&
                 !it.isUncertain &&
@@ -394,6 +399,8 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             (!war.me.playArea.isFull || card.cardType !== CardTypeEnum.MINION)
 
     override fun isDeferredAction(action: Action, war: War): Boolean {
+        if (PirateAttackOrderPolicy.shouldDeferNuLingNagaAttack(action, war)) return true
+
         // Demon Hunter's hero power is a resource sink, not an opening move.
         // Keep it out of the current node while any non-hero-power action is
         // still available. It becomes legal again on the next re-plan after

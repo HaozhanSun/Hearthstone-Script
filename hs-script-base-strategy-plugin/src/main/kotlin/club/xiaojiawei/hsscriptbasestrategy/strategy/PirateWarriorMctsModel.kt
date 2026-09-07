@@ -141,6 +141,11 @@ object PirateWarriorMctsModel : MctsDecisionModel {
      * deadline is checked after Cannon because Cannon is the user's P0 rule.
      */
     override fun isMandatoryAction(action: Action, war: War): Boolean {
+        // Nu Ling Naga must remain the last friendly-minion attacker. Keep
+        // this ahead of the combo/setup mandatory filter so another legal
+        // minion attack gets its death-trigger window first.
+        if (PirateAttackOrderPolicy.shouldDeferNuLingNagaAttack(action, war)) return false
+
         val cannon = war.me.handArea.cards.firstOrNull { isCannonPlayable(it, war) }
         if (cannon != null) {
             return action is PlayAction && action.creator?.let { isCard(it, SHIPS_CANNON) } == true
@@ -211,6 +216,8 @@ object PirateWarriorMctsModel : MctsDecisionModel {
 
     /** Keep Warrior's armor power behind all useful Pirate Warrior work. */
     override fun isDeferredAction(action: Action, war: War): Boolean {
+        if (PirateAttackOrderPolicy.shouldDeferNuLingNagaAttack(action, war)) return true
+
         if (isHeroPowerAction(action)) {
             return PirateAttackOrderPolicy.hasAdrenalineFiend(war) && hasOtherUsefulNonHeroPowerAction(war)
         }
