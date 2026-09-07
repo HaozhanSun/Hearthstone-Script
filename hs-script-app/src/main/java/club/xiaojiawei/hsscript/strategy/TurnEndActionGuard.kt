@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.data.CARD_DATA_TRIE
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionAvailability
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsReplayTrace
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import java.awt.Color
@@ -188,13 +189,14 @@ object TurnEndActionGuard {
         usableMana: Int,
         boardFull: Boolean,
     ): Boolean =
-        cost <= usableMana && !(boardFull && (cardType === CardTypeEnum.MINION || cardType === CardTypeEnum.LOCATION))
+        MctsActionAvailability.isCostPayable(cost, usableMana) &&
+            !MctsActionAvailability.isPermanentPlayBlockedByFullBoard(cardType, boardFull)
 
     internal fun isHeroPowerPlayable(
         powerCost: Int,
         usableMana: Int,
         canPower: Boolean,
-    ): Boolean = canPower && powerCost <= usableMana
+    ): Boolean = MctsActionAvailability.isHeroPowerPlayable(powerCost, usableMana, canPower)
 
     /**
      * A live board PowerAction, most notably a clickable location. A parser

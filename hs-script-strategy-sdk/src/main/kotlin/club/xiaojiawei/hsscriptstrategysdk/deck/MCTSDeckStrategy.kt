@@ -20,6 +20,7 @@ import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsReplayTrace
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsTurnPhaseFence
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionAvailability
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 
@@ -88,14 +89,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
     @Volatile
     private var activeDecisionModel: MctsDecisionModel? = null
 
-    private var experimentalTurnNumber: Int? = null
-    @Volatile
-    private var experimentalTurnCycle = 0
-    private val suppressedExperimentalCreatorIds = mutableSetOf<String>()
-
-    /** A confirmed/attempted weapon play is a once-per-turn resource decision. */
-    @Volatile
-    private var experimentalTurnPlayedWeapon = false
+    private val experimentalTurnState = MctsTurnSessionState()
 
     fun hasUnconfirmedExperimentalDispatch(): Boolean =
         lastExperimentalTurnHadUnconfirmedDispatch
@@ -109,16 +103,14 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
     fun hasLastExperimentalTurnProducedAction(): Boolean =
         lastExperimentalTurnProducedAction
 
-    fun currentExperimentalTurnCycle(): Int = experimentalTurnCycle
+    fun currentExperimentalTurnCycle(): Int = experimentalTurnState.cycle
 
     /**
      * Creators whose last live dispatch produced no observable confirmation
      * in this turn.  The app-side MCTS end-turn observer uses this set to
      * avoid re-planning an action that this strategy has already quarantined.
      */
-    fun suppressedExperimentalCreatorIds(): Set<String> = synchronized(this) {
-        suppressedExperimentalCreatorIds.toSet()
-    }
+    fun suppressedExperimentalCreatorIds(): Set<String> = experimentalTurnState.suppressedCreatorIds()
 
     /**
      * Return only creators for which the same live action model used by MCTS
@@ -133,9 +125,15 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
     ): Set<String> {
         val me = war.me
         val model = activeDecisionModel
+        if (model != null) {
+            // The app-side end-turn scan can run before the next experimental
+            // planning pass. Refresh the session identity here as well so a
+            // stale model cannot carry suppression/weapon state into a new
+            // game that starts on the same turn number.
+            experimentalTurnState.begin(experimentalSessionKey(war))
+        }
         val suppressed = suppressedExperimentalCreatorIds()
-        val weaponAlreadyPlayedThisTurn = blockWeaponPlays ||
-            (experimentalTurnNumber == me.turn && experimentalTurnPlayedWeapon)
+        val weaponAlreadyPlayedThisTurn = blockWeaponPlays || experimentalTurnState.weaponPlayed
         val result = linkedSetOf<String>()
         val decisions = mutableListOf<Map<String, Any?>>()
         fun decision(details: Map<String, Any?>) {
@@ -156,7 +154,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "uncertain-card"))
                 return@forEach
             }
-            if (card.cost > me.usableResource) {
+            if (!MctsActionAvailability.isCostPayable(card.cost, me.usableResource)) {
                 decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "cost" to card.cost, "mana" to me.usableResource, "outcome" to "FILTERED", "reason" to "insufficient-mana"))
                 return@forEach
             }
@@ -164,9 +162,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "coin-has-no-immediate-payoff"))
                 return@forEach
             }
-            if (me.playArea.isFull &&
-                (card.cardType === CardTypeEnum.MINION || card.cardType === CardTypeEnum.LOCATION)
-            ) {
+            if (MctsActionAvailability.isPermanentPlayBlockedByFullBoard(card.cardType, me.playArea.isFull)) {
                 decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "board-full-for-permanent"))
                 return@forEach
             }
@@ -312,7 +308,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 decision(mapOf("kind" to "HERO_POWER", "entityId" to power.entityId, "outcome" to "FILTERED", "reason" to "suppressed-after-unconfirmed-dispatch"))
                 return@let
             }
-            if (power.canPower() && runCatching {
+            if (MctsActionAvailability.isHeroPowerPlayable(power.cost, me.usableResource, power.canPower()) && runCatching {
                     power.action.generatePowerActions(war, me)
                         .any { isLiveActionLegal(it) && model?.isDeferredAction(it, war) != true }
                 }.getOrDefault(false)
@@ -374,6 +370,11 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             executeExperimentalTurn(war, experimentalArg)
             return
         }
+        // A strategy instance can be reused after an experimental strategy or
+        // after a strategy switch. Do not let the previous model/session
+        // influence the legacy path or its end-turn scan.
+        activeDecisionModel = null
+        experimentalTurnState.clear()
         val monteCarloTreeSearch = MonteCarloTreeSearch()
         var execTime = 0L
         val size = mctsArgList.size
@@ -492,17 +493,9 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
     private fun executeExperimentalTurn(war: War, template: MCTSArg) {
         lastExperimentalTurnHadUnconfirmedDispatch = false
         lastExperimentalTurnProducedAction = false
-        synchronized(this) {
-            if (experimentalTurnNumber != war.me.turn) {
-                experimentalTurnNumber = war.me.turn
-                suppressedExperimentalCreatorIds.clear()
-                experimentalTurnPlayedWeapon = false
-                experimentalTurnCycle = 0
-            }
-            experimentalTurnCycle++
-        }
-        var cycle = experimentalTurnCycle
-        var weaponPlayedThisTurn = experimentalTurnPlayedWeapon
+        experimentalTurnState.begin(experimentalSessionKey(war))
+        var cycle = experimentalTurnState.nextCycle()
+        var weaponPlayedThisTurn = experimentalTurnState.weaponPlayed
         val phaseFence = MctsTurnPhaseFence(cycle)
         val turnDeadline = System.currentTimeMillis() + template.experimentalTurnBudgetMillis
         val search = MonteCarloTreeSearch()
@@ -667,9 +660,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 } else if (liveCreators.isNotEmpty()) {
                     val nextCycle = phaseFence.startNewCycle()
                     cycle = nextCycle
-                    synchronized(this) {
-                        experimentalTurnCycle = nextCycle
-                    }
+                    experimentalTurnState.setCycle(nextCycle)
                     val cycleAction = liveFallbackAction(war, arg, blockedCreatorIds)
                     val cycleActionPhase = cycleAction?.let { template.decisionModel?.actionOrderPhase(it, war) }
                     MctsReplayTrace.record(
@@ -859,7 +850,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 phaseFence.observe(actionPhase)
                 if (action is PlayAction && action.creator?.cardType === CardTypeEnum.WEAPON) {
                     weaponPlayedThisTurn = true
-                    experimentalTurnPlayedWeapon = true
+                    experimentalTurnState.markWeaponPlayed()
                 }
                 val afterDispatchScreenshot = MctsReplayTrace.captureActionSnapshot(
                     war,
@@ -940,9 +931,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                     // exhaust the outer turn-end guard; hide it only for the
                     // remainder of this turn and let MCTS choose another
                     // currently visible action.
-                    synchronized(this) {
-                        suppressedExperimentalCreatorIds += creatorId
-                    }
+                    experimentalTurnState.suppressCreator(creatorId)
                     blockedCreatorIds += creatorId
                     log.info {
                         "MCTS_EXPERIMENT_ACTION_SUPPRESSED strategy=${name()} " +
@@ -1046,6 +1035,16 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
         )
         log.info { "MCTS_EXPERIMENT_TURN_DONE strategy=${name()} actions=$actionCount" }
     }
+
+    private fun experimentalSessionKey(war: War): MctsTurnSessionKey = MctsTurnSessionKey(
+        localGameId = war.me.gameId,
+        rivalGameId = war.rival.gameId,
+        firstPlayerGameId = war.firstPlayerGameId,
+        startTime = war.startTime,
+        strategyId = "${this::class.java.name}|${name()}",
+        turn = war.me.turn,
+        warIdentity = System.identityHashCode(war),
+    )
 
     /**
      * Build a fresh root against the live WAR and return one executable

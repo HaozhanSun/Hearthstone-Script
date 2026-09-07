@@ -142,11 +142,8 @@ class MonteCarloTreeNode(
                     // available and can cause repeated stale replans.
                     val timingCardCurrentlyPlayable =
                         !card.isUncertain &&
-                            me.usableResource >= card.cost &&
-                            !(playArea.isFull &&
-                                card.cardType !== CardTypeEnum.HERO &&
-                                card.cardType !== CardTypeEnum.SPELL &&
-                                card.cardType !== CardTypeEnum.WEAPON)
+                            MctsActionAvailability.isCostPayable(card.cost, me.usableResource) &&
+                            !MctsActionAvailability.isPermanentPlayBlockedByFullBoard(card.cardType, playArea.isFull)
                     if (CardTimingPolicy.isEndOfTurnCostReductionCard(card) && timingCardCurrentlyPlayable) {
                         val deferredPlayActions = runCatching { card.action.generatePlayActions(war, me) }
                             .getOrElse {
@@ -195,11 +192,11 @@ class MonteCarloTreeNode(
                     scanCard(card, "FILTERED", "uncertain-card")
                     continue
                 }
-                if (me.usableResource < card.cost) {
+                if (!MctsActionAvailability.isCostPayable(card.cost, me.usableResource)) {
                     scanCard(card, "FILTERED", "insufficient-mana")
                     continue
                 }
-                if (playArea.isFull && card.cardType !== CardTypeEnum.HERO && card.cardType !== CardTypeEnum.SPELL && card.cardType !== CardTypeEnum.WEAPON) {
+                if (MctsActionAvailability.isPermanentPlayBlockedByFullBoard(card.cardType, playArea.isFull)) {
                     scanCard(card, "FILTERED", "board-full-for-permanent")
                     continue
                 }
@@ -237,7 +234,8 @@ class MonteCarloTreeNode(
                 if (attackActions.isNotEmpty()) {
                     result.addAll(attackActions)
                     addScan(mapOf("kind" to "BOARD_CARD", "entityId" to card.entityId, "cardId" to card.cardId, "outcome" to "ADDED", "reason" to "attack-actions", "rawActions" to attackActions.size))
-                } else if (card.canPower()) {
+                }
+                if (card.canPower()) {
                     val powerActions = runCatching { card.action.generatePowerActions(war, me) }.getOrElse {
                         addScan(mapOf("kind" to "BOARD_CARD", "entityId" to card.entityId, "cardId" to card.cardId, "outcome" to "FILTERED", "reason" to "power-action-generation-error:${it::class.java.simpleName}"))
                         emptyList()
@@ -246,7 +244,7 @@ class MonteCarloTreeNode(
                     val opaquePower = powerActions.isEmpty() && arg.decisionModel?.canCreateOpaquePowerAction(card, war) == true
                     if (opaquePower) result.add(createOpaquePowerAction(card))
                     addScan(mapOf("kind" to "BOARD_CARD", "entityId" to card.entityId, "cardId" to card.cardId, "outcome" to if (powerActions.isNotEmpty() || opaquePower) "ADDED" else "FILTERED", "reason" to when { powerActions.isNotEmpty() -> "power-actions"; opaquePower -> "opaque-power-fallback"; else -> "no-power-action-and-no-opaque-fallback" }, "rawActions" to powerActions.size, "opaqueFallback" to opaquePower))
-                } else {
+                } else if (attackActions.isEmpty()) {
                     addScan(mapOf("kind" to "BOARD_CARD", "entityId" to card.entityId, "cardId" to card.cardId, "outcome" to "FILTERED", "reason" to "not-attackable-and-not-powerable"))
                 }
             }
