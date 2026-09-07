@@ -114,6 +114,13 @@ sys.exit(0 if row else 1)
     return $false
 }
 
+function Get-PomProperty([string]$Text, [string]$PropertyName) {
+    $pattern = "(?s)<$([regex]::Escape($PropertyName))>\s*([^<]+?)\s*</$([regex]::Escape($PropertyName))>"
+    $match = [regex]::Match($Text, $pattern)
+    if (-not $match.Success) { throw "POM property was not found: $PropertyName" }
+    return $match.Groups[1].Value.Trim()
+}
+
 function Assert-UsableCardDatabase([string]$Path, [string]$Context) {
     if (-not (Test-UsableCardDatabase $Path)) {
         throw "$Context does not contain a usable SQLite cards table: $Path"
@@ -168,6 +175,7 @@ foreach ($runner in @($debugRunnerSource, $debugRunnerCmdSource)) {
 
 $pomText = [System.IO.File]::ReadAllText($pomPath)
 $currentVersion = Get-PomVersion $pomText
+$strategyPluginVersion = Get-PomProperty $pomText 'hs-script-base-strategy-plugin-version'
 $deployedVersion = $null
 if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
     try {
@@ -199,6 +207,8 @@ if (-not [string]::IsNullOrWhiteSpace($deployedVersion) -and $currentVersion -eq
     }
     [System.IO.File]::WriteAllText($pomPath, $rootPomWithTimestamp, $utf8NoBom)
     $currentVersion = $nextVersion
+    $pomText = [System.IO.File]::ReadAllText($pomPath)
+    $strategyPluginVersion = Get-PomProperty $pomText 'hs-script-base-strategy-plugin-version'
     Write-Output "BUILD_TIMESTAMP_PACIFIC=$buildTimestampPacific"
 }
 
@@ -280,7 +290,7 @@ try {
             Copy-Item -LiteralPath $pluginJar.FullName -Destination (Join-Path $runtimeRoot "plugin\$($pluginJar.Name)") -Force
         }
     }
-    Copy-Item -LiteralPath $strategyTarget -Destination (Join-Path $runtimeLib 'hs-script-base-strategy-plugin-1.1.6.jar') -Force
+    Copy-Item -LiteralPath $strategyTarget -Destination (Join-Path $runtimeLib "hs-script-base-strategy-plugin-$strategyPluginVersion.jar") -Force
     Copy-Item -LiteralPath $cardPluginTarget -Destination (Join-Path $runtimeLib 'hs-script-base-card-plugin-1.1.4.jar') -Force
     Copy-Item -LiteralPath $strategyTarget -Destination (Join-Path $runtimePlugin 'hs-script-base-strategy-plugin.jar') -Force
     Copy-Item -LiteralPath $cardPluginTarget -Destination (Join-Path $runtimePlugin 'hs-script-base-card-plugin.jar') -Force
@@ -327,7 +337,8 @@ foreach ($entryName in ($classPathLine.Substring('Class-Path:'.Length).Trim() -s
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Runtime Class-Path entry missing: $relative" }
     $runtimeLibHashes[$relative] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
-$strategyLib = Join-Path $runtimeRoot 'lib\hs-script-base-strategy-plugin-1.1.6.jar'
+$strategyLibRelative = "lib\hs-script-base-strategy-plugin-$strategyPluginVersion.jar"
+$strategyLib = Join-Path $runtimeRoot $strategyLibRelative
 $cardSdkLib = Join-Path $runtimeRoot 'lib\hs-script-card-sdk-1.3.0.jar'
 $strategyPlugin = Join-Path $runtimeRoot 'plugin\hs-script-base-strategy-plugin.jar'
 if (-not (Test-Path -LiteralPath $strategyLib -PathType Leaf) -or -not (Test-Path -LiteralPath $cardSdkLib -PathType Leaf) -or -not (Test-Path -LiteralPath $strategyPlugin -PathType Leaf)) { throw 'Required strategy/card runtime artifacts are missing' }
@@ -343,7 +354,7 @@ $manifest = [ordered]@{
     generatedAt = (Get-Date).ToUniversalTime().ToString('o')
     appJar = Split-Path -Leaf $deployedJar
     appJarSha256 = $appHash
-    strategyPluginLib = 'lib\hs-script-base-strategy-plugin-1.1.6.jar'
+    strategyPluginLib = $strategyLibRelative
     strategyPlugin = 'plugin\hs-script-base-strategy-plugin.jar'
     strategyPluginSha256 = $strategyHash
     cardSdk = 'lib\hs-script-card-sdk-1.3.0.jar'
