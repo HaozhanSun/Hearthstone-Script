@@ -92,8 +92,26 @@ row=connection.execute("select 1 from sqlite_master where type='table' and name=
 connection.close()
 sys.exit(0 if row else 1)
 '@
-    & $python.Source -c $probe $Path *> $null
-    return $LASTEXITCODE -eq 0
+    # Capture stderr as data instead of allowing PowerShell's native-command
+    # error promotion to abort the release before the exit code is checked.
+    # A short retry also covers the brief AV/file-sharing window immediately
+    # after extracting the assembled card database.
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $probeOutput = @(& $python.Source -c $probe $Path 2>&1)
+        } catch {
+            $probeOutput = @($_.Exception.Message)
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($LASTEXITCODE -eq 0) { return $true }
+        if ($attempt -lt 3) { Start-Sleep -Milliseconds 250 }
+    }
+    Write-Output "CARD_DB_PROBE_FAILED=$Path"
+    if ($probeOutput.Count -gt 0) { Write-Output ($probeOutput -join [Environment]::NewLine) }
+    return $false
 }
 
 function Assert-UsableCardDatabase([string]$Path, [string]$Context) {
@@ -289,8 +307,12 @@ $iconPath = Join-Path $runtimeRoot $iconFileName
 if ($Channel -eq 'beta') {
     $iconGenerator = Join-Path $projectRoot 'tools\create-beta-icon.ps1'
     if (-not (Test-Path -LiteralPath $iconGenerator -PathType Leaf)) { throw "Beta icon generator missing: $iconGenerator" }
+    # The generator is a PowerShell script, so LASTEXITCODE may still contain
+    # the exit code of an earlier native build command. Use the invocation
+    # status for this child script and reserve LASTEXITCODE for native tools.
+    $global:LASTEXITCODE = 0
     & $iconGenerator -SourceExe (Join-Path $runtimeRoot 'hs-script.exe') -OutputPath $iconPath
-    if ($LASTEXITCODE -ne 0) { throw "Beta icon generation failed with exit code $LASTEXITCODE" }
+    if (-not $?) { throw "Beta icon generation failed: $iconGenerator" }
 }
 if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) { throw "Application icon missing: $iconPath" }
 $appHash = (Get-FileHash -LiteralPath $deployedJar -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -332,7 +354,7 @@ $manifest = [ordered]@{
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
 & (Join-Path $projectRoot 'sync-shortcuts.ps1') -RuntimeRoot $runtimeRoot -ShortcutName $ShortcutName -IconPath $iconPath
-if ($LASTEXITCODE -ne 0) { throw "Shortcut synchronization failed with exit code $LASTEXITCODE" }
+if (-not $?) { throw "Shortcut synchronization failed" }
 
 Write-Output "DEPLOYED_JAR=$deployedJar"
 Write-Output "DEPLOYMENT_ID=$($manifest.deploymentId)"

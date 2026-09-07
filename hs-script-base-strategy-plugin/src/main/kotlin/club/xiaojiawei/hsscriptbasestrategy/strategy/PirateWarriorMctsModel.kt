@@ -257,7 +257,10 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             action is PowerAction && action.creator?.cardType === CardTypeEnum.HERO_POWER ->
                 if (allowsTauntEarlyHeroAction(war)) {
                     MctsActionOrderPhase.EARLY_HERO_ACTION
-                } else if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
+                } else if (
+                    PirateAttackOrderPolicy.shouldUseHeroPowerBeforeWeaponAttack(war) ||
+                    PirateAttackOrderPolicy.hasAdrenalineFiend(war)
+                ) {
                     MctsActionOrderPhase.HERO_POWER
                 } else {
                     MctsActionOrderPhase.EARLY_HERO_ACTION
@@ -265,7 +268,10 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO ->
                 if (allowsTauntEarlyHeroAction(war)) {
                     MctsActionOrderPhase.EARLY_HERO_ACTION
-                } else if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
+                } else if (
+                    PirateAttackOrderPolicy.shouldUseHeroPowerBeforeWeaponAttack(war) ||
+                    PirateAttackOrderPolicy.hasAdrenalineFiend(war)
+                ) {
                     MctsActionOrderPhase.HERO_ATTACK
                 } else {
                     MctsActionOrderPhase.EARLY_HERO_ACTION

@@ -78,6 +78,16 @@ object PirateAttackOrderPolicy {
         }.getOrDefault(false)
     }
 
+    /**
+     * A weapon-backed hero attack consumes the weapon's current attack window.
+     * If the hero power is also usable, it must be spent before that attack;
+     * otherwise the power's attack buff cannot affect the attack that follows.
+     * This is intentionally a narrow exception to the no-Fiend early-hero
+     * override, which remains useful when no weapon is equipped.
+     */
+    fun shouldUseHeroPowerBeforeWeaponAttack(war: War): Boolean =
+        (war.me.playArea.weapon?.atc ?: 0) > 0 && hasUsableHeroPowerAction(war)
+
     fun isHeroPowerAction(action: Any): Boolean =
         action is PowerAction && action.creator?.cardType === CardTypeEnum.HERO_POWER
 }

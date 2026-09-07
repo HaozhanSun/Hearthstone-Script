@@ -555,6 +555,49 @@ class PirateWarriorMctsModelTest {
     }
 
     @Test
+    fun `equipped weapon forces usable hero power before hero attack`() {
+        val war = testWar(turn = 2, mana = 2)
+        val hero = testCard("WEAPON_ORDER_HERO", cost = 0, attack = 0).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("WEAPON_ORDER_RIVAL_HERO", cost = 0, attack = 0).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+        }
+        val weapon = testCard("WEAPON_ORDER_EQUIPPED", cost = 0, attack = 3).apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            durability = 2
+        }
+        val power = testCard("WEAPON_ORDER_POWER", cost = 2, attack = 0).apply {
+            cardType = CardTypeEnum.HERO_POWER
+            cardRace = CardRaceEnum.UNKNOWN
+            entityId = "WEAPON_ORDER_POWER-test"
+            isLaunchpad = true
+            isExhausted = false
+            child += testCard("GDB_905", cost = 2, attack = 0)
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.me.playArea.weapon = weapon
+        war.addCard(power, war.me.playArea)
+
+        assertTrue(PirateAttackOrderPolicy.shouldUseHeroPowerBeforeWeaponAttack(war))
+        assertEquals(
+            MctsActionOrderPhase.HERO_POWER,
+            PirateWarriorMctsModel.actionOrderPhase(PowerAction({}, {}, power), war),
+        )
+        assertEquals(
+            MctsActionOrderPhase.HERO_ATTACK,
+            PirateWarriorMctsModel.actionOrderPhase(AttackAction({}, {}, hero), war),
+        )
+    }
+
+    @Test
     fun `taunt exception spends hero power before hero attack then exposes minion attacks`() {
         // TestCardAction models a hero power as a launchpad and therefore
         // falls back to the SDK's five-resource launch cost when no child

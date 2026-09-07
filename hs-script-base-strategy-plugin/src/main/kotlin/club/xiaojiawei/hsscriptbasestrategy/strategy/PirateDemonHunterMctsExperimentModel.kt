@@ -235,6 +235,8 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
 
     override fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? {
         val tauntEarlyHeroAction = allowsTauntEarlyHeroAction(war)
+        val weaponAttackNeedsHeroPower =
+            PirateAttackOrderPolicy.shouldUseHeroPowerBeforeWeaponAttack(war)
         val cliffsideAction = action.creator?.let { isCard(it, DANGEROUS_CLIFFSIDE) } == true
         val cliffside = war.me.playArea.cards.firstOrNull {
             isCard(it, DANGEROUS_CLIFFSIDE) && it.isAlive()
@@ -276,7 +278,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             action is PowerAction && action.creator?.cardType === CardTypeEnum.HERO_POWER ->
                 if (tauntEarlyHeroAction) {
                     MctsActionOrderPhase.EARLY_HERO_ACTION
-                } else if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
+                } else if (weaponAttackNeedsHeroPower || PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
                     MctsActionOrderPhase.HERO_POWER
                 } else {
                     MctsActionOrderPhase.EARLY_HERO_ACTION
@@ -284,7 +286,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO ->
                 if (tauntEarlyHeroAction) {
                     MctsActionOrderPhase.EARLY_HERO_ACTION
-                } else if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
+                } else if (weaponAttackNeedsHeroPower || PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
                     MctsActionOrderPhase.HERO_ATTACK
                 } else {
                     MctsActionOrderPhase.EARLY_HERO_ACTION

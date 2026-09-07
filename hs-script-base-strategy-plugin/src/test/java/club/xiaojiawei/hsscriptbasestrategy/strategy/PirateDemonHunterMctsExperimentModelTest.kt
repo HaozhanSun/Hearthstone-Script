@@ -1620,6 +1620,52 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `equipped weapon forces usable hero power before hero attack`() {
+        val war = testWar().apply { me.resources = 2 }
+        val hero = testCard("WEAPON_ORDER_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("WEAPON_ORDER_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+        }
+        val weapon = testCard("WEAPON_ORDER_EQUIPPED").apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 3
+            durability = 2
+        }
+        val power = testCard("WEAPON_ORDER_POWER").apply {
+            cardType = CardTypeEnum.HERO_POWER
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 2
+            isLaunchpad = true
+            isExhausted = false
+            child += testCard("GDB_905").apply { cost = 2 }
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.me.playArea.weapon = weapon
+        war.addCard(power, war.me.playArea)
+
+        assertTrue(PirateAttackOrderPolicy.shouldUseHeroPowerBeforeWeaponAttack(war))
+        assertEquals(
+            MctsActionOrderPhase.HERO_POWER,
+            PirateDemonHunterMctsExperimentModel.actionOrderPhase(PowerAction({}, {}, power), war),
+        )
+        assertEquals(
+            MctsActionOrderPhase.HERO_ATTACK,
+            PirateDemonHunterMctsExperimentModel.actionOrderPhase(AttackAction({}, {}, hero), war),
+        )
+    }
+
+    @Test
     fun `adrenaline fiend keeps hero actions after minion attacks`() {
         val war = testWar()
         val hero = testCard("FIEND_HERO").apply { cardType = CardTypeEnum.HERO }
