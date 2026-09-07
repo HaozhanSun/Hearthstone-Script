@@ -183,6 +183,37 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `hero cannot attack a seven-health minion when four attack cannot kill it`() {
+        val war = testWar()
+        val hero = testCard("FOUR_ATTACK_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 4
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("FOUR_ATTACK_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 20
+        }
+        val killable = testCard("KILLABLE_THREAT").apply { atc = 3; health = 4 }
+        val tooHealthy = testCard("SEVEN_HEALTH_THREAT").apply { atc = 7; health = 7 }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(killable, war.rival.playArea)
+        war.addCard(tooHealthy, war.rival.playArea)
+
+        val killableAttack = AttackAction({}, {}, hero, targetEntityId = killable.entityId)
+        val tooHealthyAttack = AttackAction({}, {}, hero, targetEntityId = tooHealthy.entityId)
+        val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
+
+        assertTrue(PirateDemonHunterMctsExperimentModel.isActionLegal(killableAttack, war))
+        assertTrue(!PirateDemonHunterMctsExperimentModel.isActionLegal(tooHealthyAttack, war))
+        assertTrue(!PirateDemonHunterMctsExperimentModel.isActionLegal(face, war))
+    }
+
+    @Test
     fun `hero attack exposes ordinary minion targets on a wide enemy board`() {
         val war = testWar()
         val hero = testCard("WIDE_BOARD_HERO").apply {
@@ -596,7 +627,10 @@ class PirateDemonHunterMctsExperimentModelTest {
         val card = testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND)
         val war = testWar()
         assertFalse(PirateDemonHunterMctsExperimentModel.shouldDefer(card, war))
-        assertTrue(HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().startsWith("海盗瞎 V1.3 · build "))
+        assertTrue(
+            HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name()
+                .startsWith("海盗瞎 V${PirateMctsStrategyVersion.REVISION} · build "),
+        )
     }
 
     @Test
@@ -1386,7 +1420,10 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         assertEquals(MctsRootSelectionPolicy.GLOBAL_TURN_PLAN, global.rootSelectionPolicy)
         assertTrue(global.decisionModel === PirateDemonHunterMctsGlobalPlanModel)
-        assertTrue(HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().startsWith("海盗瞎 V1.3 · build "))
+        assertTrue(
+            HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name()
+                .startsWith("海盗瞎 V${PirateMctsStrategyVersion.REVISION} · build "),
+        )
     }
 
     @Test

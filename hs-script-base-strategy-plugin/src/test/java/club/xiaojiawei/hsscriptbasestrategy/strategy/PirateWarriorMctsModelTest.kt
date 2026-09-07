@@ -81,6 +81,36 @@ class PirateWarriorMctsModelTest {
     }
 
     @Test
+    fun `warrior hero cannot attack a seven-health minion with only four attack`() {
+        val war = testWar(turn = 2, mana = 3)
+        val hero = testCard("WARRIOR_FOUR_ATTACK_HERO", cost = 0, attack = 4).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("WARRIOR_FOUR_ATTACK_RIVAL_HERO", cost = 0, attack = 0).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 20
+        }
+        val killable = testCard("WARRIOR_KILLABLE_THREAT", cost = 0, attack = 2).apply { health = 4 }
+        val tooHealthy = testCard("WARRIOR_SEVEN_HEALTH_THREAT", cost = 0, attack = 7).apply { health = 7 }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(killable, war.rival.playArea)
+        war.addCard(tooHealthy, war.rival.playArea)
+
+        val killableAttack = AttackAction({}, {}, hero, targetEntityId = killable.entityId)
+        val tooHealthyAttack = AttackAction({}, {}, hero, targetEntityId = tooHealthy.entityId)
+        val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
+
+        assertTrue(PirateWarriorMctsModel.isActionLegal(killableAttack, war))
+        assertTrue(!PirateWarriorMctsModel.isActionLegal(tooHealthyAttack, war))
+        assertTrue(!PirateWarriorMctsModel.isActionLegal(face, war))
+    }
+
+    @Test
     fun `nu ling naga makes other minions prefer enemy minions over nonlethal face`() {
         val war = testWar(turn = 2, mana = 3)
         val rivalHero = testCard("NAGA_RIVAL_HERO", cost = 0, attack = 0).apply {

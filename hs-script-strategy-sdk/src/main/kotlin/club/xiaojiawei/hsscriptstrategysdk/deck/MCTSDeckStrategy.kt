@@ -438,6 +438,26 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 var continueCurrent = false
                 for (action in bestNodes) {
                     val applyAction = action.applyAction
+                    if (arg.decisionModel?.isActionLegal(applyAction, war) == false) {
+                        log.warn {
+                            "MCTS_LEGACY_ACTION_SKIPPED strategy=${name()} " +
+                                "action=${describeAction(applyAction)} phase=${i + 1} " +
+                                "reason=live-legality-changed-before-dispatch"
+                        }
+                        MctsReplayTrace.record(
+                            war,
+                            "controller_branch",
+                            "legacy MCTS action rejected by live legality recheck",
+                            mapOf(
+                                "strategy" to name(),
+                                "phase" to i + 1,
+                                "action" to describeAction(applyAction),
+                                "reason" to "live-legality-changed-before-dispatch",
+                            ),
+                        )
+                        continueCurrent = true
+                        break
+                    }
                     val before = stateFingerprint(war)
                     MctsReplayTrace.record(
                         war,
@@ -795,6 +815,31 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                     mapOf("strategy" to name(), "step" to actionCount + 1, "creatorId" to creatorId, "action" to describeAction(action)),
                 )
                 break
+            }
+
+            // Re-read hard strategy legality immediately before the click.
+            // Search and live Power.log parsing are concurrent; a target can
+            // become non-killable or disappear after the root was built. In
+            // particular, never dispatch a stale hero attack into a high-health
+            // minion when the shared Pirate target policy now rejects it.
+            if (template.decisionModel?.isActionLegal(action, war) == false) {
+                log.warn {
+                    "MCTS_EXPERIMENT_ACTION_SKIPPED strategy=${name()} " +
+                        "action=${describeAction(action)} step=${actionCount + 1} " +
+                        "reason=live-legality-changed-before-dispatch"
+                }
+                MctsReplayTrace.record(
+                    war,
+                    "controller_branch",
+                    "experimental MCTS action rejected by live legality recheck",
+                    mapOf(
+                        "strategy" to name(),
+                        "step" to actionCount + 1,
+                        "action" to describeAction(action),
+                        "reason" to "live-legality-changed-before-dispatch",
+                    ),
+                )
+                continue
             }
 
             val before = stateFingerprint(war)
