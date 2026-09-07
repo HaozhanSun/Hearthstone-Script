@@ -1,5 +1,8 @@
 package club.xiaojiawei.hsscript.status
 
+import club.xiaojiawei.hsscriptbase.enums.ModeEnum
+import java.awt.Rectangle
+import javax.imageio.ImageIO
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -90,6 +93,67 @@ class ScreenStateRecoveryTest {
     }
 
     @Test
+    fun `supplied recovery screenshots retain their two small capture local anchors`() {
+        val traditional = loadFixture("traditional-battle-screen.png")
+        val deckSelection = loadFixture("deck-selection-screen.png")
+        val traditionalRoi = ScreenStateRoiSelector
+            .selectTargeted(traditional.width, traditional.height)
+            .first { it.name == ScreenStateRoiSelector.TRADITIONAL_BATTLE_ROI }
+            .bounds
+        val deckSelectionRoi = ScreenStateRoiSelector
+            .selectTargeted(deckSelection.width, deckSelection.height)
+            .first { it.name == ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI }
+            .bounds
+
+        assertEquals(Rectangle(873, 297, 173, 64), traditionalRoi)
+        assertEquals(Rectangle(652, 107, 201, 65), deckSelectionRoi)
+        assertTrue(traditionalRoi.contains(958, 329))
+        assertTrue(deckSelectionRoi.contains(750, 135))
+    }
+
+    @Test
+    fun `targeted anchors drive the correct recovery transitions and do not cross trigger`() {
+        val hubTransition = ScreenStateRecovery.recoveryTransitionForTest(
+            ocrText = "",
+            targeted = mapOf(
+                ScreenStateRoiSelector.TRADITIONAL_BATTLE_ROI to "传统\n对战",
+            ),
+        )
+        assertEquals("HOME", hubTransition?.screen)
+        assertEquals(ModeEnum.HUB, hubTransition?.mode)
+        assertEquals(true, hubTransition?.enterStrategy)
+        assertEquals("ENTER_MODE_STRATEGY", hubTransition?.action)
+
+        val deckTransition = ScreenStateRecovery.recoveryTransitionForTest(
+            ocrText = "",
+            targeted = mapOf(
+                ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI to "选择 套牌",
+            ),
+        )
+        assertEquals("DECK_SELECTION", deckTransition?.screen)
+        assertEquals(ModeEnum.TOURNAMENT, deckTransition?.mode)
+        assertEquals(false, deckTransition?.enterStrategy)
+        assertEquals("START_MATCHING", deckTransition?.action)
+
+        assertNull(
+            ScreenStateRecovery.recoveryTransitionForTest(
+                ocrText = "",
+                targeted = mapOf(
+                    ScreenStateRoiSelector.TRADITIONAL_BATTLE_ROI to "选择套牌",
+                ),
+            ),
+        )
+        assertNull(
+            ScreenStateRecovery.recoveryTransitionForTest(
+                ocrText = "",
+                targeted = mapOf(
+                    ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI to "传统对战",
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun `persistent collection navigation label alone is not an opened collection page`() {
         assertFalse(ScreenStateRecovery.looksLikeHubText("我的收藏"))
         assertFalse(ScreenStateRecovery.looksLikeCollectionText("我的收藏"))
@@ -114,5 +178,9 @@ class ScreenStateRecoveryTest {
         assertEquals(20_000L, ScreenStateRecovery.stalledReconnectAnchorForTest(0L, 20_000L, 30_000L))
         assertEquals(30_000L, ScreenStateRecovery.stalledReconnectAnchorForTest(0L, 0L, 30_000L))
     }
+
+    private fun loadFixture(name: String) = ImageIO.read(
+        requireNotNull(javaClass.getResourceAsStream("/offline-ocr/screen-recovery/$name")),
+    )
 
 }

@@ -80,6 +80,11 @@ object ScreenStateRecovery {
         val gameWindowKnown: Boolean,
     )
 
+    private data class OcrEvidence(
+        val text: String,
+        val targeted: Map<String, String>,
+    )
+
     private data class VisualSignature(
         val sampleHash: Long,
         val warmRatio: Double,
@@ -108,6 +113,13 @@ object ScreenStateRecovery {
         val mode: ModeEnum,
         val confidence: Int,
         val evidence: String,
+    )
+
+    internal data class RecoveryTransitionForTest(
+        val screen: String,
+        val mode: ModeEnum,
+        val enterStrategy: Boolean,
+        val action: String,
     )
 
     /**
@@ -144,12 +156,13 @@ object ScreenStateRecovery {
                 "visual=${capture.visual}"
         }
 
-        val ocrText = runOCR(capture)
+        val ocrEvidence = runOCR(capture)
+        val ocrText = ocrEvidence.text
         if (!stateStillCurrent()) {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-during-inspection state=$stateFingerprint" }
             return false
         }
-        val detection = detect(ocrText, capture.visual)
+        val detection = detect(ocrEvidence, capture.visual)
         log.info {
             "SCREEN_RECOVERY_OBSERVATION " +
                 "provider=LEGACY " +
@@ -281,7 +294,7 @@ object ScreenStateRecovery {
         null
     }
 
-    private fun runOCR(capture: Capture): String {
+    private fun runOCR(capture: Capture): OcrEvidence {
         val tessData = File(TESS_DATA_PATH)
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
         if (!chiSim.isFile) {
@@ -289,29 +302,78 @@ object ScreenStateRecovery {
                 "SCREEN_RECOVERY_OCR_SKIPPED provider=LEGACY reason=missing-tessdata " +
                     "path=${chiSim.absolutePath}"
             }
-            return ""
+            return OcrEvidence("", emptyMap())
         }
         return runCatching {
+            // Probe the two screen-specific labels first. These are small,
+            // explicit crops and are sufficient to identify the special
+            // screens without OCR-ing the full client. Only when neither
+            // target matches do we use the existing bounded center fallback
+            // for all other recovery screens.
+            val targeted = ScreenStateRoiSelector
+                .selectTargeted(capture.image.width, capture.image.height)
+                .associate { roi ->
+                    log.info {
+                        "SCREEN_RECOVERY_OCR_ROI name=${roi.name} " +
+                            "x=${roi.bounds.x} y=${roi.bounds.y} " +
+                            "w=${roi.bounds.width} h=${roi.bounds.height} space=capture-local"
+                    }
+                    roi.name to ocrScreenRoi(crop(capture.image, roi.bounds), tessData, targeted = true)
+                }
+            if (targetedScreenDetection(targeted) != null) {
+                return@runCatching OcrEvidence(targeted.values.joinToString(separator = ""), targeted)
+            }
+
             // A full-screen client often has the script log window over the
             // right edge. The center menu crop contains the home/deck labels,
             // avoids OCR-ing our own UI, and is sufficient for this recovery
             // path. This is deliberately local OCR: PaddleX is reserved for
             // rank detection and must never stall menu recovery.
-            val rois = ScreenStateRoiSelector.select(capture.image.width, capture.image.height)
-                .filter { it.name == "screen-state-center" }
-            rois.joinToString(separator = "") { roi ->
-                val image = resizeForOcr(crop(capture.image, roi.bounds))
-                Tesseract().apply {
-                    setDatapath(tessData.absolutePath)
-                    setLanguage(CHI_SIM_DATA)
-                    setPageSegMode(11)
-                    setVariable("user_defined_dpi", "160")
-                }.doOCR(image).replace(Regex("\\s+"), "")
-            }
+            val center = ScreenStateRoiSelector
+                .select(capture.image.width, capture.image.height)
+                .firstOrNull { it.name == "screen-state-center" }
+                ?.let { roi ->
+                    log.info {
+                        "SCREEN_RECOVERY_OCR_ROI name=${roi.name} " +
+                            "x=${roi.bounds.x} y=${roi.bounds.y} " +
+                            "w=${roi.bounds.width} h=${roi.bounds.height} space=capture-local"
+                    }
+                    ocrScreenRoi(crop(capture.image, roi.bounds), tessData, targeted = false)
+                }
+                .orEmpty()
+            OcrEvidence(center, targeted)
         }.getOrElse { error ->
             log.warn(error) { "SCREEN_RECOVERY_OCR_FAILED" }
-            ""
+            OcrEvidence("", emptyMap())
         }
+    }
+
+    private fun ocrScreenRoi(image: BufferedImage, tessData: File, targeted: Boolean): String {
+        val ocrImage = if (targeted) enlargeTargetedOcr(image) else resizeForOcr(image)
+        return Tesseract().apply {
+            setDatapath(tessData.absolutePath)
+            setLanguage(CHI_SIM_DATA)
+            setPageSegMode(if (targeted) 7 else 11)
+            setVariable("user_defined_dpi", "180")
+        }.doOCR(ocrImage).replace(Regex("\\s+"), "")
+    }
+
+    private fun enlargeTargetedOcr(image: BufferedImage): BufferedImage {
+        val scale = 4
+        val enlarged = BufferedImage(
+            (image.width * scale).coerceAtLeast(1),
+            (image.height * scale).coerceAtLeast(1),
+            BufferedImage.TYPE_INT_RGB,
+        )
+        val graphics = enlarged.createGraphics()
+        try {
+            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
+            graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+            graphics.drawImage(image, 0, 0, enlarged.width, enlarged.height, null)
+        } finally {
+            graphics.dispose()
+        }
+        return enlarged
     }
 
     private fun looksLikeHearthstoneVisual(visual: VisualSignature): Boolean =
@@ -436,7 +498,13 @@ object ScreenStateRecovery {
         )
     }
 
-    private fun detect(ocrText: String, visual: VisualSignature): Detection? {
+    private fun detect(ocrText: String, visual: VisualSignature): Detection? =
+        detect(OcrEvidence(ocrText, emptyMap()), visual)
+
+    private fun detect(evidence: OcrEvidence, visual: VisualSignature): Detection? {
+        targetedScreenDetection(evidence.targeted)?.let { return it }
+
+        val ocrText = evidence.text
         val text = ocrText.lowercase(Locale.ROOT)
         fun has(vararg terms: String): Boolean = terms.all { text.contains(it) }
 
@@ -520,6 +588,47 @@ object ScreenStateRecovery {
         // a false recovery while the user is looking at the client.
         if (visual.warmRatio > 0.0 || visual.blueRatio > 0.0) return null
         return null
+    }
+
+    private fun targetedScreenDetection(targeted: Map<String, String>): Detection? {
+        // A label is only authoritative when it came from its own ROI. This
+        // prevents an OCR spill from the deck title into the traditional-mode
+        // branch (or vice versa) from changing the recovery state.
+        val deckTitle = targeted[ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI].orEmpty()
+        if (looksLikeDeckSelectionTitleText(deckTitle)) {
+            return Detection(
+                ScreenKind.DECK_SELECTION,
+                ModeEnum.TOURNAMENT,
+                100,
+                "deck-selection-title-roi",
+            )
+        }
+        val traditionalBattle = targeted[ScreenStateRoiSelector.TRADITIONAL_BATTLE_ROI].orEmpty()
+        if (looksLikeTraditionalBattleText(traditionalBattle)) {
+            // This is the hub's central mode selector. The tournament strategy
+            // has not entered yet, so recover to HUB and let its normal
+            // want-enter click choose traditional battle.
+            return Detection(
+                ScreenKind.HOME,
+                ModeEnum.HUB,
+                100,
+                "traditional-battle-roi",
+            )
+        }
+        return null
+    }
+
+    private fun normalizedScreenText(ocrText: String): String =
+        ocrText.lowercase(Locale.ROOT).replace(Regex("[\\s，。、“”‘’：:！!？?]"), "")
+
+    internal fun looksLikeTraditionalBattleText(ocrText: String): Boolean {
+        val text = normalizedScreenText(ocrText)
+        return text.contains("传统对战") || text.contains("传统對戰")
+    }
+
+    internal fun looksLikeDeckSelectionTitleText(ocrText: String): Boolean {
+        val text = normalizedScreenText(ocrText)
+        return text.contains("选择套牌") || text.contains("選擇套牌")
     }
 
     /**
@@ -658,6 +767,47 @@ object ScreenStateRecovery {
             resultBannerLowSaturationRatio = 0.0,
         ),
     )?.evidence
+
+    internal fun recoveryTransitionForTest(
+        ocrText: String,
+        targeted: Map<String, String> = emptyMap(),
+    ): RecoveryTransitionForTest? = detect(
+        OcrEvidence(ocrText, targeted),
+        VisualSignature(
+            sampleHash = 0L,
+            warmRatio = 0.0,
+            blueRatio = 0.0,
+            loadingCentralDarkRatio = 0.0,
+            resultContinueGrayLightRatio = 0.0,
+            resultBannerLowSaturationRatio = 0.0,
+        ),
+    )?.let { detection ->
+        RecoveryTransitionForTest(
+            screen = detection.kind.code,
+            mode = detection.mode,
+            enterStrategy = detection.kind != ScreenKind.DECK_SELECTION &&
+                detection.kind != ScreenKind.RESULT &&
+                detection.kind != ScreenKind.MATCHMAKING &&
+                detection.kind != ScreenKind.RECONNECT &&
+                detection.kind != ScreenKind.RECONNECT_FAILURE &&
+                detection.kind != ScreenKind.LOADING,
+            action = when (detection.kind) {
+                ScreenKind.DECK_SELECTION -> "START_MATCHING"
+                ScreenKind.HOME,
+                ScreenKind.TOURNAMENT,
+                ScreenKind.GAME_MODE,
+                ScreenKind.COLLECTION,
+                ScreenKind.PACK_OPENING,
+                ScreenKind.LOGIN,
+                -> "ENTER_MODE_STRATEGY"
+                ScreenKind.RESULT -> "DISMISS_STALE_RESULT"
+                ScreenKind.MATCHMAKING -> "WAIT_FOR_GAMEPLAY"
+                ScreenKind.RECONNECT -> "CLICK_RECONNECT"
+                ScreenKind.RECONNECT_FAILURE -> "DISMISS_RECOVERY_DIALOG"
+                ScreenKind.LOADING -> "WAIT_FOR_CLIENT"
+            },
+        )
+    }
 
     /**
      * Result pages have a stable action label even when the outcome title is
