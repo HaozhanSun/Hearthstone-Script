@@ -29,7 +29,7 @@ $consoleLog = Join-Path $logDirectory "java-console-debug.log"
 $powerLogRoot = "D:\Hearthstone\Logs"
 $e2ePlayerName = if ($env:HS_E2E_PLAYER) { $env:HS_E2E_PLAYER } else { "laz#12793" }
 $testOnlySkipSurrender = $env:HS_E2E_SKIP_SURRENDER -eq "true"
-$gamesRequired = 2
+$gamesRequired = 3
 $maxRestarts = 50
 $runId = "{0}_{1}" -f (Get-Random -Minimum 10000 -Maximum 99999), (Get-Random -Minimum 1000 -Maximum 9999)
 

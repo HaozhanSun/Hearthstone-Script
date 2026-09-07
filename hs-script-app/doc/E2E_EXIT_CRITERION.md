@@ -3,14 +3,14 @@
 Unless the user explicitly overrides it, every implementation change in this
 session has the following completion gate:
 
-1. The current deployed build completes two consecutive real Hearthstone games
+1. The current deployed build completes three consecutive real Hearthstone games
    from start to a terminal screen without agent intervention.
 2. The script process remains alive through both games, with no unhandled crash
    or unexplained self-exit in the run log.
 3. Each game has a fresh authoritative terminal marker in the current
    `Power.log`. For a successful-win claim, the marker must be
    `PLAYSTATE=WON`.
-4. A screenshot saved by the run at the end of the second game is retained as
+4. A screenshot saved by the run at the end of the third game is retained as
    evidence, together with the exact log path and run identifier.
 
 A single game, a simulated test, an old screenshot, or a run that required
