@@ -78,6 +78,33 @@
                     </execution>
                 </executions>
             </plugin>
+            <!-- The generated Java release identity is needed while Kotlin
+                 sources compile. Compile only that real generated source
+                 before the inherited Kotlin compile; the normal Java compile
+                 remains responsible for the rest of the module. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>${maven-compiler-plugin-version}</version>
+                <executions>
+                    <execution>
+                        <id>compile-generated-version-before-kotlin</id>
+                        <phase>process-sources</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <compileSourceRoots>
+                                <compileSourceRoot>${project.build.directory}/generated-sources/version</compileSourceRoot>
+                            </compileSourceRoots>
+                            <includes>
+                                <include>VersionInfo.java</include>
+                            </includes>
+                            <outputDirectory>${project.build.outputDirectory}</outputDirectory>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 

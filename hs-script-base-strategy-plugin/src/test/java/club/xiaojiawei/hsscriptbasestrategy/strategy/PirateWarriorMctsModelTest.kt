@@ -264,7 +264,10 @@ class PirateWarriorMctsModelTest {
 
     @Test
     fun `released pirate warrior strategy exposes a versioned display name`() {
-        assertTrue(HsPirateWarriorMctsDeckStrategy().name().startsWith("海盗战 V1.2 · build "))
+        assertTrue(
+            HsPirateWarriorMctsDeckStrategy().name()
+                .startsWith("海盗战 V${PirateMctsStrategyVersion.REVISION} · build "),
+        )
     }
     @Test
     fun `cannon is mandatory before treasure distributor`() {
