@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.ocr
 
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.utils.ConfigUtil
+import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import java.awt.image.BufferedImage
 import java.util.concurrent.CancellationException
@@ -176,13 +177,23 @@ object OcrRuntime {
         }
         if (provider == OcrProviderKind.LEGACY) return
 
-        val health = paddleXBridge(settings).healthCheck()
-        val message = "OCR_PROVIDER_HEALTH provider=${health.provider} ok=${health.ok} " +
-            "message=${health.message} details=${health.details}"
-        if (health.ok) {
-            log.info { message }
-        } else {
-            log.warn { message }
+        // Pipeline initialization can take tens of seconds on a cold PaddleX
+        // process. It must not block the JavaFX startup path; the first real
+        // request still uses the same shared bridge and reports its own
+        // request latency/failure.
+        log.info { "OCR_PROVIDER_HEALTH_SCHEDULED provider=PADDLEX async=true" }
+        EXTRA_THREAD_POOL.execute {
+            val health = runCatching { paddleXBridge(settings).healthCheck() }
+                .getOrElse { error ->
+                    log.warn(error) {
+                        "OCR_PROVIDER_HEALTH provider=PADDLEX ok=false async=true " +
+                            "error=${error.javaClass.simpleName}:${error.message ?: "no-message"}"
+                    }
+                    return@execute
+                }
+            val message = "OCR_PROVIDER_HEALTH provider=${health.provider} ok=${health.ok} async=true " +
+                "message=${health.message} details=${health.details}"
+            if (health.ok) log.info { message } else log.warn { message }
         }
     }
 

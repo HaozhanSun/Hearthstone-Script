@@ -6,6 +6,8 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrCancelledException
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptbase.config.log
+import com.sun.jna.platform.win32.User32
+import com.sun.jna.platform.win32.WinDef
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
@@ -252,20 +254,11 @@ object ScreenWatchdog {
             .map { it.defaultConfiguration.bounds }
             .fold(Rectangle()) { all, next -> all.union(next) }
         if (allScreens.width <= 0 || allScreens.height <= 0) return null
-        val gameRect = ScriptStatus.GAME_RECT
-        val candidate = if (gameRect.right - gameRect.left >= 400 &&
-            gameRect.bottom - gameRect.top >= 300
-        ) {
-            Rectangle(
-                gameRect.left,
-                gameRect.top,
-                gameRect.right - gameRect.left,
-                gameRect.bottom - gameRect.top,
-            )
-        } else {
-            allScreens
-        }
-        val bounds = candidate.intersection(allScreens)
+        val bounds = gameBounds(allScreens)?.intersection(allScreens)
+            ?: run {
+                log.info { "SCREEN_WATCHDOG_CAPTURE_SKIPPED reason=game-bounds-unknown" }
+                return null
+            }
         if (bounds.width < 400 || bounds.height < 300) return null
         Robot().createScreenCapture(bounds)
     }.getOrElse { error ->
@@ -298,6 +291,30 @@ object ScreenWatchdog {
             graphics.dispose()
         }
         return resized
+    }
+
+    /** Resolve only the Hearthstone client bounds; never OCR the whole desktop. */
+    private fun gameBounds(allScreens: Rectangle): Rectangle? {
+        val gameRect = ScriptStatus.GAME_RECT
+        if (gameRect.right - gameRect.left >= 400 && gameRect.bottom - gameRect.top >= 300) {
+            return Rectangle(
+                gameRect.left,
+                gameRect.top,
+                gameRect.right - gameRect.left,
+                gameRect.bottom - gameRect.top,
+            )
+        }
+
+        val hwnd = ScriptStatus.gameHWND ?: return null
+        val windowRect = WinDef.RECT()
+        if (!User32.INSTANCE.GetWindowRect(hwnd, windowRect)) return null
+        val width = windowRect.right - windowRect.left
+        val height = windowRect.bottom - windowRect.top
+        return if (width >= 400 && height >= 300) {
+            Rectangle(windowRect.left, windowRect.top, width, height)
+        } else {
+            null
+        }
     }
 
     private fun sanitize(value: String): String = value

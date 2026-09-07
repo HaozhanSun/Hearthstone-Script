@@ -13,6 +13,8 @@ import club.xiaojiawei.hsscript.utils.MouseUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
+import com.sun.jna.platform.win32.User32
+import com.sun.jna.platform.win32.WinDef
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
@@ -219,8 +221,9 @@ object ScreenStateRecovery {
         if (allScreens.width <= 0 || allScreens.height <= 0) return null
 
         // GAME_RECT is the most useful crop when the game is windowed. If it
-        // is not initialized yet, capture the desktop only for cheap visual
-        // checks and durable evidence; PaddleX receives bounded ROIs below.
+        // is not initialized yet, resolve the client window itself. Never use
+        // the entire desktop: the script UI and other windows can otherwise
+        // be mistaken for Hearthstone and the image is unnecessarily large.
         val gameRect = ScriptStatus.GAME_RECT
         val gameRectKnown = gameRect.right - gameRect.left >= 400 &&
             gameRect.bottom - gameRect.top >= 300
@@ -254,15 +257,15 @@ object ScreenStateRecovery {
                 gameRect.bottom - gameRect.top,
             )
         } else {
-            allScreens
+            gameWindowBounds(ScriptStatus.gameHWND)
+                ?: run {
+                    log.info { "SCREEN_RECOVERY_CAPTURE_SKIPPED reason=game-bounds-unknown" }
+                    return null
+                }
         }
         val bounds = candidate.intersection(allScreens)
         if (bounds.width < 400 || bounds.height < 300) return null
-        val image = try {
-            Robot().createScreenCapture(bounds)
-        } catch (_: Exception) {
-            Robot().createScreenCapture(allScreens)
-        }
+        val image = Robot().createScreenCapture(bounds)
         val saved = DebugScreenshotRing.save(image, "screen-recovery", "stale-screen")
         val file = saved?.file
         Capture(
@@ -317,6 +320,19 @@ object ScreenStateRecovery {
     private fun crop(image: BufferedImage, bounds: Rectangle): BufferedImage {
         val safe = bounds.intersection(Rectangle(0, 0, image.width, image.height))
         return image.getSubimage(safe.x, safe.y, safe.width.coerceAtLeast(1), safe.height.coerceAtLeast(1))
+    }
+
+    private fun gameWindowBounds(hwnd: WinDef.HWND?): Rectangle? {
+        if (hwnd == null) return null
+        val windowRect = WinDef.RECT()
+        if (!User32.INSTANCE.GetWindowRect(hwnd, windowRect)) return null
+        val width = windowRect.right - windowRect.left
+        val height = windowRect.bottom - windowRect.top
+        return if (width >= 400 && height >= 300) {
+            Rectangle(windowRect.left, windowRect.top, width, height)
+        } else {
+            null
+        }
     }
 
     private fun resizeForOcr(image: BufferedImage): BufferedImage {

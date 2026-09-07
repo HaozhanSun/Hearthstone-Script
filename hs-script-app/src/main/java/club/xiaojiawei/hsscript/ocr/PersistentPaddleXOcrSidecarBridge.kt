@@ -223,13 +223,30 @@ internal class PersistentPaddleXOcrSidecarBridge(
 private class ProcessPaddleXOcrSidecarSession(
     private val process: Process,
 ) : PaddleXOcrSidecarSession {
+    private companion object {
+        const val STDERR_TAIL_LIMIT = 4_000
+    }
+
     private val writer: BufferedWriter = OutputStreamWriter(process.outputStream, StandardCharsets.UTF_8).buffered()
     private val reader: BufferedReader = InputStreamReader(process.inputStream, StandardCharsets.UTF_8).buffered()
+    private val stderrLock = Any()
+    private val stderrTail = StringBuilder()
     private val responseExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "paddlex-ocr-response-reader").apply { isDaemon = true }
     }
     private val stderrThread = Thread {
-        process.errorStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
+        runCatching {
+            process.errorStream.bufferedReader(StandardCharsets.UTF_8).useLines { lines ->
+                lines.forEach { line ->
+                    synchronized(stderrLock) {
+                        stderrTail.append(line).append('\n')
+                        if (stderrTail.length > STDERR_TAIL_LIMIT) {
+                            stderrTail.delete(0, stderrTail.length - STDERR_TAIL_LIMIT)
+                        }
+                    }
+                }
+            }
+        }
     }.apply {
         isDaemon = true
         name = "paddlex-ocr-sidecar-stderr"
@@ -249,7 +266,10 @@ private class ProcessPaddleXOcrSidecarSession(
         } catch (error: TimeoutException) {
             read.cancel(true)
             destroy("request-timeout")
-            throw PaddleXOcrException("PaddleX persistent sidecar timed out after ${timeoutMs}ms", error)
+            throw PaddleXOcrException(
+                "PaddleX persistent sidecar timed out after ${timeoutMs}ms stderr=${stderrSnapshot()}",
+                error,
+            )
         } catch (error: InterruptedException) {
             read.cancel(true)
             destroy("request-cancelled")
@@ -257,7 +277,10 @@ private class ProcessPaddleXOcrSidecarSession(
             throw PaddleXOcrCancelledException("PaddleX persistent sidecar request was cancelled", error)
         } catch (error: ExecutionException) {
             destroy("response-read-failed")
-            throw PaddleXOcrException("PaddleX persistent sidecar response read failed", error.cause)
+            throw PaddleXOcrException(
+                "PaddleX persistent sidecar response read failed stderr=${stderrSnapshot()}",
+                error.cause,
+            )
         }
     }
 
@@ -269,6 +292,13 @@ private class ProcessPaddleXOcrSidecarSession(
         if (process.isAlive) process.destroyForcibly()
         responseExecutor.shutdownNow()
         runCatching { responseExecutor.awaitTermination(1, TimeUnit.SECONDS) }
-        log.info { "PADDLEX_OCR_SIDECAR_STOPPED provider=PADDLEX reason=$reason" }
+        log.info {
+            "PADDLEX_OCR_SIDECAR_STOPPED provider=PADDLEX reason=$reason " +
+                "stderr=${stderrSnapshot().replace(Regex("\\s+"), " ").takeLast(STDERR_TAIL_LIMIT)}"
+        }
+    }
+
+    private fun stderrSnapshot(): String = synchronized(stderrLock) {
+        stderrTail.toString().trim().ifBlank { "<empty>" }
     }
 }

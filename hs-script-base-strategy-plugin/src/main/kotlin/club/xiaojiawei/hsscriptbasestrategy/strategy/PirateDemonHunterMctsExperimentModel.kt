@@ -434,6 +434,16 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             return hasOtherPlayableAction(war, action.creator)
         }
 
+        // Patches is a last-resort free/one-mana board-development action.
+        // Keeping it visible beside another playable card lets the generic
+        // score model choose it too early, which can strand mana that a
+        // higher-cost location or minion would have consumed.  Defer it while
+        // another card or board action is available, but retain it when it is
+        // genuinely the only remaining card action.
+        if (action is PlayAction && action.creator?.let { isCard(it, PATCHES_THE_PIRATE) } == true) {
+            return hasOtherPlayableCardAction(war, action.creator)
+        }
+
         // Blindeye Judge is a last-resort draw card. Remove it from the
         // current node while any useful hand play, board attack, location
         // activation, or hero power remains. This is deliberately separate
@@ -772,6 +782,27 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             }.getOrDefault(false)
         } == true
         return handAction || boardAction || heroAttack || heroPower
+    }
+
+    /**
+     * Patches must yield to another playable card, but not to a hero power or
+     * an attack. Those actions are still valid follow-up work after the card
+     * phase has exhausted the hand.
+     */
+    private fun hasOtherPlayableCardAction(war: War, excluded: Card?): Boolean {
+        val me = war.me
+        val handAction = me.handArea.cards.any { card ->
+            card.entityId != excluded?.entityId &&
+                !isCard(card, BLINDEYE_JUDGE) &&
+                !isCard(card, PARACHUTE_BRIGAND) &&
+                !isCard(card, PATCHES_THE_PIRATE) &&
+                !card.isUncertain &&
+                card.cost <= me.usableResource &&
+                (card.cardType !== CardTypeEnum.MINION || !me.playArea.isFull) &&
+                hasPlayableHandAction(card, war)
+        }
+        val boardAction = me.playArea.cards.any { hasGeneratedBoardAction(it, war) }
+        return handAction || boardAction
     }
 
     /**

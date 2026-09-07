@@ -596,7 +596,7 @@ class PirateDemonHunterMctsExperimentModelTest {
         val card = testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND)
         val war = testWar()
         assertFalse(PirateDemonHunterMctsExperimentModel.shouldDefer(card, war))
-        assertTrue(HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().startsWith("海盗瞎 V1.2 · build "))
+        assertTrue(HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().startsWith("海盗瞎 V1.3 · build "))
     }
 
     @Test
@@ -1386,7 +1386,7 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         assertEquals(MctsRootSelectionPolicy.GLOBAL_TURN_PLAN, global.rootSelectionPolicy)
         assertTrue(global.decisionModel === PirateDemonHunterMctsGlobalPlanModel)
-        assertTrue(HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().startsWith("海盗瞎 V1.2 · build "))
+        assertTrue(HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().startsWith("海盗瞎 V1.3 · build "))
     }
 
     @Test
@@ -1913,6 +1913,35 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         assertTrue(node.actions.any { it.creator?.cardId == brigand.cardId })
         assertTrue(node.actions.none { it.javaClass.simpleName == "TurnOverAction" })
+    }
+
+    @Test
+    fun `patches is deferred behind another playable card but remains a last resort`() {
+        val war = testWar().apply { me.resources = 4 }
+        val patches = testCard(PirateDemonHunterMctsExperimentModel.PATCHES_THE_PIRATE).apply { cost = 1 }
+        val cliffside = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {
+            cardType = CardTypeEnum.LOCATION
+            cost = 4
+        }
+        war.addCard(patches, war.me.handArea)
+        war.addCard(cliffside, war.me.handArea)
+
+        assertTrue(
+            PirateDemonHunterMctsExperimentModel.isDeferredAction(
+                PlayAction({}, {}, patches),
+                war,
+            ),
+        )
+
+        val onlyPatches = testWar().apply { me.resources = 1 }
+        val onlyCard = testCard(PirateDemonHunterMctsExperimentModel.PATCHES_THE_PIRATE).apply { cost = 1 }
+        onlyPatches.addCard(onlyCard, onlyPatches.me.handArea)
+        assertFalse(
+            PirateDemonHunterMctsExperimentModel.isDeferredAction(
+                PlayAction({}, {}, onlyCard),
+                onlyPatches,
+            ),
+        )
     }
 
     @Test
