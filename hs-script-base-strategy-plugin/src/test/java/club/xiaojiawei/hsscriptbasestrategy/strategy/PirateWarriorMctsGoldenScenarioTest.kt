@@ -203,7 +203,7 @@ class PirateWarriorMctsGoldenScenarioTest {
     }
 
     @Test
-    fun `frontline axe blocks face at ten health but permits it below ten`() {
+    fun `frontline axe follows threat target policy regardless of own health`() {
         val atTen = frontlineAxeWar(heroHealth = 10, rivalHeroHealth = 30, minionHealth = 3)
         val atTenActions = heroAttackActions(atTen)
         val atTenLegal = atTenActions.filter { PirateWarriorMctsModel.isActionLegal(it, atTen) }
@@ -213,8 +213,8 @@ class PirateWarriorMctsGoldenScenarioTest {
         val atNine = frontlineAxeWar(heroHealth = 9, rivalHeroHealth = 30, minionHealth = 3)
         val atNineActions = heroAttackActions(atNine)
         val atNineLegal = atNineActions.filter { PirateWarriorMctsModel.isActionLegal(it, atNine) }
-        assertEquals(2, atNineLegal.size)
-        assertTrue(atNineLegal.any { !hitsRivalMinion(it, atNine) })
+        assertEquals(1, atNineLegal.size)
+        assertTrue(atNineLegal.all { hitsRivalMinion(it, atNine) })
 
         val lethal = frontlineAxeWar(heroHealth = 9, rivalHeroHealth = 3, minionHealth = 3)
         val lethalFace = heroAttackActions(lethal).first { !hitsRivalMinion(it, lethal) }
@@ -258,7 +258,8 @@ class PirateWarriorMctsGoldenScenarioTest {
         val minionActions = actions.filter { hitsRivalMinion(it, war) }
 
         assertEquals(2, minionActions.size)
-        assertTrue(minionActions.all { PirateWarriorMctsModel.isActionLegal(it, war) })
+        assertEquals(1, minionActions.count { PirateWarriorMctsModel.isActionLegal(it, war) })
+        assertTrue(minionActions.any { PirateWarriorMctsModel.isActionLegal(it, war) })
         assertTrue(minionActions.all { PirateWarriorMctsModel.isDeferredAction(it, war) })
     }
 
@@ -291,6 +292,7 @@ class PirateWarriorMctsGoldenScenarioTest {
     @Test
     fun `warrior hero power is last resort while minions or attacks remain`() {
         val withMinion = testWar(turn = 2, mana = 2)
+        withMinion.addCard(testCard(PirateAttackOrderPolicy.ADRENALINE_FIEND, 2), withMinion.me.playArea)
         val power = testHeroPower()
         val minion = testCard("PLAYABLE_PIRATE", 1)
         withMinion.addCard(power, withMinion.me.playArea)
@@ -303,6 +305,7 @@ class PirateWarriorMctsGoldenScenarioTest {
             PirateWarriorMctsModel.actionPrior(minionAction, withMinion))
 
         val withAttack = testWar(turn = 2, mana = 2)
+        withAttack.addCard(testCard(PirateAttackOrderPolicy.ADRENALINE_FIEND, 2), withAttack.me.playArea)
         val attackPower = testHeroPower()
         val attacker = testCard("READY_PIRATE", 1)
         withAttack.addCard(testHero("MY_HERO", health = 4), withAttack.me.playArea)

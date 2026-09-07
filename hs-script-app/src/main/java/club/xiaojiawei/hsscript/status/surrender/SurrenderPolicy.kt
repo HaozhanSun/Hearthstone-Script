@@ -16,6 +16,7 @@ import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.utils.ConfigUtil
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import java.time.LocalDateTime
 
 /**
@@ -127,6 +128,7 @@ object SurrenderPolicy {
      */
     private var lastPreMulliganHeroName = ""
     private var earlySurrenderTriggered = false
+    @Volatile
     private var rankCheckCompleted = false
     private var rankInspectionAttempts = 0
     private var lastRankInspectionAt = 0L
@@ -513,9 +515,10 @@ object SurrenderPolicy {
 
         earlySurrenderTriggered = true
         log.warn {
-            "SURRENDER_POLICY_TRIGGERED stage=${context.stage.name} " +
+                "SURRENDER_POLICY_TRIGGERED stage=${context.stage.name} " +
                 "rule=${result.ruleId} rivalHero=${context.rivalHeroName} " +
                 "rivalPlayer=${context.rivalPlayerName.ifBlank { "<blank>" }} " +
+                "reason=${result.reason ?: "policy-requested-surrender"} " +
                 "timing=before-mulligan"
         }
         return result
@@ -578,7 +581,7 @@ object SurrenderPolicy {
             OpponentHeroInspectionState.NOT_RESOLVED,
             OpponentHeroInspectionState.WAITING_FOR_HERO,
             -> {
-                log.info {
+                log.debug {
                     "RANK_POLICY_WAITING_FOR_OPPONENT_HERO state=$opponentHeroInspectionState " +
                         "action=WAIT rankDetector=false"
                 }
@@ -595,7 +598,7 @@ object SurrenderPolicy {
         }
         if (!ReplaceCardPhaseStrategy.isRankInspectionReady()) {
             rankInspectionState = RankInspectionState.NOT_READY
-            log.info {
+            log.debug {
                 "RANK_POLICY_WAITING_FOR_RANK reason=mulligan-input-not-confirmed " +
                     "phase=${WAR.currentPhase.name} inWar=${WarEx.inWar} " +
                     "action=WAIT provider=NONE"
@@ -620,7 +623,7 @@ object SurrenderPolicy {
         val grace = rankInspectionGraceDecision(rankInspectionEligibleAt, now)
         if (!grace.probeAllowed) {
             rankInspectionState = RankInspectionState.WAITING_FOR_RANK
-            log.info {
+            log.debug {
                 "RANK_POLICY_WAITING_FOR_INITIAL_GRACE trigger=game-entry-mulligan " +
                     "eligibleAt=$rankInspectionEligibleAt delayMs=$INITIAL_RANK_INSPECTION_GRACE_MS " +
                     "remainingMs=${grace.remainingMs} action=WAIT rankDetector=false"
@@ -648,25 +651,20 @@ object SurrenderPolicy {
         }
         val rank = detection?.rank
         if (rank == null) {
-            if (detection != null) {
-                rankCheckCompleted = true
-                rankInspectionState = RankInspectionState.RESOLVED
-                val result = unresolvedRankSurrenderDecision(detection.tier)
-                log.warn {
-                    "SURRENDER_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                        "rule=${result.ruleId} reason=${result.reason} " +
-                        "detectionAvailable=true tier=${detection.tier.name} action=SURRENDER pause=false"
-                }
-                return result
-            }
+            // A provider can return a Detection object even when it found no
+            // usable number (for example, a badge-color match with empty OCR).
+            // That is not evidence for a surrender: only a confirmed numeric
+            // rank 1..10 may trigger this rule, while a confirmed Legendary
+            // result is handled above. Retry the same way for provider output
+            // and provider failure, then block the surrender if unresolved.
             val readDecision = classifyRankInspection(
                 rank = null,
-                detectionAvailable = false,
+                detectionAvailable = detection != null,
                 attempt = rankInspectionAttempts,
             )
             if (readDecision.wait) {
                 rankInspectionState = readDecision.state
-                log.warn {
+                log.debug {
                     "RANK_POLICY_WAITING_FOR_RANK stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
                         "attempt=$rankInspectionAttempts maxAttempts=$MAX_RANK_INSPECTION_ATTEMPTS " +
                         "providerResult=${readDecision.reason} " +
@@ -682,8 +680,17 @@ object SurrenderPolicy {
                 }
                 return result
             }
-            rankCheckCompleted = true
-            return blockForUnresolvedRank(rankInspectionAttempts)
+            // A blank/failed OCR read is retryable.  Returning a non-null
+            // SurrenderRuleResult here used to make the generic caller treat
+            // an unresolved read as a surrender request, while marking the
+            // check complete prevented any later retry.  The mulligan
+            // preflight owns the bounded retry and fail-soft decision.
+            log.warn {
+                "RANK_POLICY_WAITING_FOR_RANK stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                    "attempt=$rankInspectionAttempts provider=${if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"} " +
+                    "action=RETRY pause=false surrender=false"
+            }
+            return null
         }
 
         rankCheckCompleted = true
@@ -759,14 +766,6 @@ object SurrenderPolicy {
      * null) is a non-surrender continuation after the retry budget; it must
      * not pause the runtime.
      */
-    internal fun unresolvedRankSurrenderDecision(tier: CurrentRankDetector.RankTier): SurrenderRuleResult =
-        SurrenderRuleResult(
-            ruleId = "rank-ocr-unresolved-surrender",
-            matched = true,
-            shouldSurrender = true,
-            reason = "rank-unresolved-without-legendary tier=${tier.name} target-ranks=5,10",
-        )
-
     internal fun classifyRankInspection(
         rank: Int?,
         detectionAvailable: Boolean,
@@ -812,13 +811,20 @@ object SurrenderPolicy {
     internal fun blockForUnresolvedRank(attempts: Int): SurrenderRuleResult {
         val result = unresolvedRankDecision(attempts)
         rankInspectionState = RankInspectionState.RESOLVED
+        // OCR uncertainty is not a script-fatal condition. The mulligan
+        // state machine owns the bounded retry/continue decision; pausing
+        // here strands the game in WAITING_FOR_RANK and makes a transient
+        // sidecar failure look like a user-visible crash.
         log.warn {
             "RANK_POLICY_BLOCKED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                "rule=${result.ruleId} reason=${result.reason} action=CONTINUE " +
+                "rule=${result.ruleId} reason=${result.reason} action=CONTINUE_MULLIGAN " +
                 "surrender=false pause=false ocrFailure=true"
         }
         return result
     }
+
+    /** True when a rank read already produced a final safe or unsafe result. */
+    internal fun currentRankCheckCompleted(): Boolean = rankCheckCompleted
 
     data class WinRateSnapshot(
         val games: Int,
@@ -966,7 +972,13 @@ object SurrenderPolicy {
         )
 
         for (rule in turnStartRules) {
-            val result = rule.evaluate(context)
+            // Keep this live-turn path consistent with the pre-mulligan path.
+            // The settings toggle is read at decision time so changing it in
+            // the UI applies without restarting the policy object.
+            val result = applyOpponentHeroSurrenderSetting(
+                rule.evaluate(context),
+                opponentHeroNonOriginalSurrenderEnabled(),
+            )
             log.info {
                 "SURRENDER_CHECK stage=${context.stage.name} rule=${result.ruleId} " +
                     "rivalHeroRaw=${context.rivalHeroNameRaw.ifBlank { "<blank>" }} " +
@@ -991,7 +1003,8 @@ object SurrenderPolicy {
                 log.warn {
                     "SURRENDER_POLICY_TRIGGERED stage=${context.stage.name} " +
                         "rule=${result.ruleId} rivalHero=${context.rivalHeroName.ifBlank { "<blank>" }} " +
-                        "rivalPlayer=${context.rivalPlayerName.ifBlank { "<blank>" }}"
+                        "rivalPlayer=${context.rivalPlayerName.ifBlank { "<blank>" }} " +
+                        "reason=${result.reason ?: "policy-requested-surrender"}"
                 }
                 return result
             }

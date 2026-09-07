@@ -203,6 +203,7 @@ class GameStarter : AbstractStarter() {
                         ScreenStateRecovery.inspectAndRecover(
                             stuckForMs = 0L,
                             stateFingerprint = "STARTUP_PROBE",
+                            startupProbe = true,
                         )
                     }
                     var applied = false

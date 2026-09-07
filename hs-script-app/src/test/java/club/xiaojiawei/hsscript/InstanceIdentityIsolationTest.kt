@@ -5,6 +5,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -32,10 +33,59 @@ class InstanceIdentityIsolationTest {
         val launcher = Files.readString(root.resolve("hs-script-app/src/main/resources/bat/launch-newest-as-admin.ps1"))
         assertTrue(launcher.contains("Resolve-Deployment \$scriptDirectory"))
         assertTrue(launcher.contains("Start-Process -FilePath \$javaPath"))
+        assertFalse(launcher.contains("--pause=false"))
         assertTrue(!launcher.contains("Hearthstone Script\\deployment-manifest.json"))
 
         val channel = Files.readString(root.resolve("release-channel.json"))
         assertTrue(channel.contains("\"runtimeDirectoryName\": \"Hearthstone Script Beta\""))
+    }
+
+    @Test
+    fun `unchecked start on open remains paused without an explicit start signal`() {
+        assertFalse(
+            shouldAutoStart(
+                rawArgs = emptyList(),
+                namedPause = null,
+                systemAutoStart = false,
+                configuredAutoStart = false,
+            ),
+        )
+        assertFalse(
+            shouldAutoStart(
+                rawArgs = listOf("--pause=true"),
+                namedPause = null,
+                systemAutoStart = false,
+                configuredAutoStart = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `explicit start signals still start when start on open is disabled`() {
+        assertTrue(
+            shouldAutoStart(
+                rawArgs = listOf("--pause=false"),
+                namedPause = null,
+                systemAutoStart = false,
+                configuredAutoStart = false,
+            ),
+        )
+        assertTrue(
+            shouldAutoStart(
+                rawArgs = emptyList(),
+                namedPause = "false",
+                systemAutoStart = false,
+                configuredAutoStart = false,
+            ),
+        )
+        assertTrue(
+            shouldAutoStart(
+                rawArgs = emptyList(),
+                namedPause = null,
+                systemAutoStart = true,
+                configuredAutoStart = false,
+            ),
+        )
     }
 
     private fun repositoryRoot(): Path {

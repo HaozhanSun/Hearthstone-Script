@@ -68,6 +68,10 @@ object WarEx {
     @Volatile
     var surrenderRequested = false
 
+    /** Policy/executor reason for the local surrender request in this game. */
+    @Volatile
+    var surrenderReason: String? = null
+
     /**
      * 已挂胜场
      */
@@ -143,6 +147,7 @@ object WarEx {
         inWar = false
         aEXP = 0L
         surrenderRequested = false
+        surrenderReason = null
         print.isTrue {
             log.info { "已重置游戏状态" }
         }
@@ -183,6 +188,19 @@ object WarEx {
         // the old code then leaked the previous game's isWin value into the
         // current result screenshot/statistics.
         val finalResult = resultOverride ?: printResult()
+        // Authoritative Power.log results bypass printResult(), but they are
+        // still completed games and must update the same live counters.  The
+        // UI refreshes when warCount changes, so leaving winCount untouched
+        // here makes a run with real wins display 0% despite correct XP and
+        // game totals.
+        if (resultOverride != null) {
+            if (resultOverride) {
+                winCount++
+                winStreak++
+            } else {
+                winStreak = 0
+            }
+        }
         isWin = finalResult
         war.run {
             me.safeRun {

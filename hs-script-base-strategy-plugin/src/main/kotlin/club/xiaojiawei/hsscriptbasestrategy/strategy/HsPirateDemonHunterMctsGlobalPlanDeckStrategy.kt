@@ -15,7 +15,7 @@ import club.xiaojiawei.hsscriptstrategysdk.deck.MCTSDeckStrategy
  */
 class HsPirateDemonHunterMctsGlobalPlanDeckStrategy : MCTSDeckStrategy() {
 
-    override fun name(): String = "海盗瞎 MCTS"
+    override fun name(): String = PirateMctsStrategyVersion.displayName("海盗瞎")
 
     override fun description(): String =
         "海盗瞎全局规划MCTS：按整回合可达资源评估动作序列，执行时仍逐步重扫描"

@@ -114,4 +114,5 @@ class ScreenStateRecoveryTest {
         assertEquals(20_000L, ScreenStateRecovery.stalledReconnectAnchorForTest(0L, 20_000L, 30_000L))
         assertEquals(30_000L, ScreenStateRecovery.stalledReconnectAnchorForTest(0L, 0L, 30_000L))
     }
+
 }

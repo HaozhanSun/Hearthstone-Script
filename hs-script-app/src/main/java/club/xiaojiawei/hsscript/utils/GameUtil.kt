@@ -95,6 +95,17 @@ object GameUtil {
             gameEndTasks.isNotEmpty()
 
     /**
+     * A new CREATE_GAME/TURN=1 boundary supersedes any result-page cleanup
+     * task left by the previous game. Without this reset, a stale task makes
+     * the next rank-triggered surrender look terminal and silently rejects
+     * the request before it can send input.
+     */
+    @Synchronized
+    fun resetForNewGame() {
+        cancelGameEndTask()
+    }
+
+    /**
      * The first stale-result recovery click is deliberately deterministic so
      * the center of the visible continue control is exercised before the
      * bounded, humanized retry points are used.
@@ -466,14 +477,25 @@ object GameUtil {
      * 左击套牌位置
      */
     fun lClickDeckPos(count: Int = 1) {
-        val chooseDeckPos = if (ConfigUtil.getBoolean(ConfigEnum.WORK_TIME_RULE_HIGH_PRIORITY)) {
-            WorkTimeListener.getCurrentWorkTimeRule()?.deckPos?.toMutableList() ?: ConfigExUtil.getChooseDeckPos()
-        } else ConfigExUtil.getChooseDeckPos()
+        val activeScheduleRule = WorkTimeListener
+            .getCurrentWorkTimeRule()
+            ?.takeIf { WorkTimeListener.isInsideConfiguredSchedule() }
+        val globalDeckPositions = ConfigExUtil.getChooseDeckPos()
+        val chooseDeckPos = DeckPositionSelector.resolve(activeScheduleRule, globalDeckPositions)
 
-        if (chooseDeckPos.isEmpty()) return
+        if (chooseDeckPos.isEmpty()) {
+            log.warn { "没有设置可用卡组位" }
+            return
+        }
         val deckPos = chooseDeckPos.randomSelectOrNull() ?: let {
             log.warn { "没有设置可用卡组位" }
             return
+        }
+        log.info {
+            "DECK_POSITION_SELECTION source=${if (activeScheduleRule != null) "schedule" else "global"} " +
+                "scheduleRule=${activeScheduleRule?.strategyId ?: "none"} " +
+                "candidates=${chooseDeckPos.sorted()} selected=$deckPos " +
+                "highPriority=${ConfigUtil.getBoolean(ConfigEnum.WORK_TIME_RULE_HIGH_PRIORITY)}"
         }
         DECK_POS_RECTS.getOrNull(deckPos - 1)?.let { rect ->
             repeat(count) {
@@ -623,10 +645,10 @@ object GameUtil {
     /**
      * 游戏里投降
      */
-    fun surrender(skipEndTurn: Boolean = false) {
+    fun surrender(skipEndTurn: Boolean = false, reason: String? = null): Boolean {
         if (PowerLogListener.replayingExistingLog) {
             log.info { "Power.log恢复回放：跳过历史投降请求" }
-            return
+            return false
         }
         if (isTerminalGameState()) {
             log.info {
@@ -635,15 +657,21 @@ object GameUtil {
                     "won=${WAR.won.isNotBlank()} lost=${WAR.lost.isNotBlank()} " +
                     "conceded=${WAR.conceded.isNotBlank()} settlementTask=${gameEndTasks.isNotEmpty()} dispatch=false"
             }
-            return
+            return false
         }
-        if (NeverSurrenderPolicy.blockSurrender("GameUtil.surrender")) return
-        if (!ActionDispatchGate.allow("surrender.request")) return
+        if (NeverSurrenderPolicy.blockSurrender("GameUtil.surrender")) return false
+        if (!ActionDispatchGate.allow("surrender.request")) return false
 //        SystemUtil.frontWindow(ScriptStaticData.getGameHWND());
 //        按ESC键弹出投降界面
 //        ScriptStaticData.ROBOT.keyPress(27);
 //        ScriptStaticData.ROBOT.keyRelease(27);
-        if (gameEndTasks.isNotEmpty()) return
+        if (gameEndTasks.isNotEmpty()) {
+            log.warn {
+                "SURRENDER_ACTION_BLOCKED reason=stale-settlement-task " +
+                    "settlementTask=true dispatch=false pause=false continue=true"
+            }
+            return false
+        }
         val initialMode = Mode.currMode
         val initialInWar = WarEx.inWar
         if (!isSurrenderStateConfirmed(initialMode, initialInWar)) {
@@ -653,21 +681,19 @@ object GameUtil {
                     "warCount=${WarEx.warCount} " +
                     "reason=mode-not-gameplay-and-war-not-active"
             }
-            return
+            return false
         }
         // Keep a process-local ownership signal for statistics. A fast
         // surrender can reach GAME_OVER before PLAYSTATE=CONCEDED is parsed
         // or before war.me has been assigned its game id.
         WarEx.surrenderRequested = true
+        WarEx.surrenderReason = reason?.takeIf { it.isNotBlank() }
         if (System.getProperty("hs.script.e2e") == "true") {
-            E2ETrace.markSurrenderRequested()
+            E2ETrace.markSurrenderRequested(reason)
         }
         log.info {
-            if (skipEndTurn) {
-                "触发投降（非我方回合流程，跳过回合结束点击）"
-            } else {
-                "触发投降"
-            }
+            "SURRENDER_EXECUTOR_REQUESTED reason=${reason?.takeIf { it.isNotBlank() } ?: "unspecified"} " +
+                "skipEndTurn=$skipEndTurn"
         }
         val warCount = WarEx.warCount
         if (!skipEndTurn) {
@@ -727,6 +753,14 @@ object GameUtil {
                             }
                             when (observation.action) {
                                 ScreenWatchdogRecoveryAction.CONTINUE_ACTION -> Unit
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_NO_ACTION -> {
+                                    stopSurrenderTask()
+                                    log.info {
+                                        "SCREEN_WATCHDOG_CANCELLED reason=${observation.reason} " +
+                                            "provider=${observation.provider} screenshot=${observation.screenshotPath ?: "not-saved"}"
+                                    }
+                                    return@scheduleWithFixedDelay
+                                }
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_WIN,
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_LOSS,
                                 -> {
@@ -807,6 +841,7 @@ object GameUtil {
                 TimeUnit.MILLISECONDS,
             ),
         )
+        return true
     }
 
     /**

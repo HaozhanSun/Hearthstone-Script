@@ -183,10 +183,13 @@ class PirateWarriorOfflineReplayTest {
         val legal = PirateWarriorMctsModel.isActionLegal(axeAction, war)
         val deferred = PirateWarriorMctsModel.isDeferredAction(axeAction, war)
         val prior = PirateWarriorMctsModel.actionPrior(axeAction, war)
+        val setupRequired = PirateHeroAttackTargetPolicy.requiresFriendlySetupAttack(war)
         return Evaluation(
-            selected = if (deferred && prior < 0.0) "DEFER_AXE" else "BUG",
-            candidates = listOf("AXE_MINION_NONKILL:legal=$legal:deferred=$deferred:prior=$prior"),
-            reason = "随从血量高于战斧攻击力，不兑现可靠抽牌效果，且有其他 Pirate 动作",
+            selected = if (legal && deferred && prior > 0.0 && setupRequired) "COMBO_AXE_AFTER_SETUP" else "BUG",
+            candidates = listOf(
+                "AXE_MINION_COMBO:legal=$legal:deferred=$deferred:prior=$prior:setupRequired=$setupRequired",
+            ),
+            reason = "战斧与场上 Pirate 可形成组合击杀，先完成友方随从攻击再保留战斧收尾",
         )
     }
 
@@ -202,9 +205,9 @@ class PirateWarriorOfflineReplayTest {
         val actions = heroAttackActions(war)
         val legal = actions.count { PirateWarriorMctsModel.isActionLegal(it, war) }
         return Evaluation(
-            selected = if (actions.isNotEmpty() && legal == 0) "NO_AXE_ACTION" else "BUG",
+            selected = if (actions.isNotEmpty() && legal == actions.size) "AXE_HERO_FACE_ALLOWED" else "BUG",
             candidates = listOf("BAR_844:actions=${actions.size}:legal=$legal"),
-            reason = "无法确认可接受的随从目标且脸部攻击未过血线规则时 fail-closed",
+            reason = "没有敌方随从目标时，战斧可以按统一英雄攻击策略攻击敌方英雄",
         )
     }
 
@@ -226,6 +229,7 @@ class PirateWarriorOfflineReplayTest {
 
     private fun warriorPowerLast(): Evaluation {
         val war = testWar(turn = 2, mana = 2)
+        war.addCard(testCard(PirateAttackOrderPolicy.ADRENALINE_FIEND, 2), war.me.playArea)
         val power = testHeroPower()
         val minion = testCard("PLAYABLE_PIRATE", 1)
         war.addCard(power, war.me.playArea)

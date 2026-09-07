@@ -700,7 +700,11 @@ class TimeSettingsController :
         // Replacing that model fires selection-normalization listeners, so
         // reading the ComboBoxes after storeWorkTimeRuleSet can capture a
         // stale/default preset even though the save itself succeeds.
-        val workTimeSetting = selectedWorkTimeSetting()
+        val workTimeSetting = WorkTimeStatus.resolveSavedWorkTimeSetting(
+            currentSetting = selectedWorkTimeSetting(),
+            selectedRuleSetId = workTimeRuleSetTable.selectionModel.selectedItem?.id.orEmpty(),
+            applyRulePaneExpanded = applyRulePane.isExpanded,
+        )
         WorkTimeStatus.storeWorkTimeSchedule(
             workTimeRuleSetTable.items.toList(),
             workTimeSetting,

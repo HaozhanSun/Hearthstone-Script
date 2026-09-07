@@ -24,35 +24,36 @@ class StartupController : Initializable {
 
     override fun initialize(url: URL?, resourceBundle: ResourceBundle?) {
         staticProgressBar = progressBar
-        tip.text = PROGRAM_NAME + "启动中......"
-        timer = Timer().apply {
-            scheduleAtFixedRate(object : TimerTask() {
-                override fun run() {
-                    if (++count >= 100) {
-                        cancel()
-                    } else {
-                        Platform.runLater {
-                            progressBar.progress =
-                                count.toDouble() / 100
-                        }
-                    }
-                }
-            }, 0, 20)
-        }
+        staticTip = tip
+        begin()
     }
 
     companion object {
-        private var count = 0
         private var staticProgressBar: ProgressBar? = null
-        private var timer: Timer? = null
+        private var staticTip: Text? = null
+
+        fun begin() = update(0.04, "$PROGRAM_NAME：正在启动…")
+
+        fun update(progress: Double, message: String) {
+            Platform.runLater {
+                staticProgressBar?.progress = progress.coerceIn(0.0, 1.0)
+                staticTip?.text = message
+            }
+        }
+
+        fun failed(message: String) {
+            update(0.0, "$PROGRAM_NAME：启动失败 · $message")
+        }
 
         /**
          * 完成进度条并隐藏此窗口
          */
         fun complete() {
-            timer?.cancel()
-            staticProgressBar?.progress = 1.0
-            hideStage(WindowEnum.STARTUP)
+            Platform.runLater {
+                staticProgressBar?.progress = 1.0
+                staticTip?.text = "$PROGRAM_NAME：启动完成"
+                hideStage(WindowEnum.STARTUP)
+            }
         }
     }
 }

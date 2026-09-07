@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscript.component.PluginItem
 import club.xiaojiawei.hsscript.interfaces.StageHook
 import club.xiaojiawei.hsscript.status.PluginManager.CARD_ACTION_PLUGINS
 import club.xiaojiawei.hsscript.status.PluginManager.DECK_STRATEGY_PLUGINS
+import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.utils.SystemUtil.openURL
 import club.xiaojiawei.hsscript.utils.runUI
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
@@ -299,6 +300,12 @@ class PluginSettingsController : Initializable, StageHook {
         val homeUrl = selectedItem.pluginWrapper.plugin.homeUrl()
         if (homeUrl.isBlank() || !homeUrl.contains("http")) return
         openURL(homeUrl)
+    }
+
+    @FXML
+    private fun requestStrategyRefresh(actionEvent: ActionEvent?) {
+        val requestId = DeckStrategyManager.requestStrategyRefresh("plugin-settings-ui")
+        notificationManager.showInfo("策略刷新已排队，将在下一个我方回合生效（请求#$requestId）", 5)
     }
 
     override fun onShown() {

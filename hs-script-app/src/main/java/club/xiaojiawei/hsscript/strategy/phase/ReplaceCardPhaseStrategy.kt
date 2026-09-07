@@ -10,6 +10,8 @@ import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator.changeCard
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.E2ETrace
+import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.MulliganScreenshot
 import club.xiaojiawei.hsscriptbase.enums.StepEnum
@@ -26,9 +28,13 @@ import java.util.concurrent.ConcurrentLinkedQueue
  */
 object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
 
-    private val changeCardScheduled = AtomicBoolean(false)
+    private val changeCardScheduled = MulliganActionGate()
     private val mulliganStageConfirmed = AtomicBoolean(false)
     private val mulliganInputConfirmed = AtomicBoolean(false)
+    private val rankSurrenderRequested = AtomicBoolean(false)
+
+    @Volatile
+    private var rankPreflight: MulliganRankPreflight? = null
 
     @Volatile
     private var latestMyMulliganState: MulliganStateEnum? = null
@@ -58,9 +64,11 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
      * INPUT line.
      */
     fun resetForNewGame() {
-        changeCardScheduled.set(false)
+        cancelRankPreflight("new-game")
+        changeCardScheduled.reset()
         mulliganStageConfirmed.set(false)
         mulliganInputConfirmed.set(false)
+        rankSurrenderRequested.set(false)
         latestMyMulliganState = null
         replayedMulliganInput = null
         pendingUnknownMulliganInputs.clear()
@@ -82,6 +90,7 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
     }
 
     fun discardAfterExistingLogReplay() {
+        cancelRankPreflight("historical-replay-finished")
         if (replayedMulliganInput != null) {
             log.info { "E2E恢复回放完成：当前已离开换牌阶段，丢弃历史换牌输入" }
         }
@@ -116,6 +125,10 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             return
         }
 
+        // DrawnInitCardPhaseStrategy can forward an early INPUT directly
+        // before this phase's normal tag handler has stored the state.
+        latestMyMulliganState = MulliganStateEnum.INPUT
+
         if (!isMyMulliganEvent(tagChangeEntity)) {
             if (!hasPlayerIdentity()) {
                 pendingUnknownMulliganInputs.add(tagChangeEntity)
@@ -139,44 +152,17 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         // This is the first authoritative event that proves the local
         // mulligan UI exists. Rank OCR is not allowed before this boundary.
         mulliganInputConfirmed.set(true)
-        val opponentHeroDecision = SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war)
-        if (opponentHeroDecision != null &&
-            dispatchSurrenderDecision(opponentHeroDecision, "opponent-hero")
-        ) {
-            return
-        }
-        if (SurrenderPolicy.currentOpponentHeroInspectionState() !==
-            club.xiaojiawei.hsscript.status.surrender.OpponentHeroInspectionState.ORIGINAL_HERO_ALLOWED
-        ) {
-            log.info {
-                "MULLIGAN_ACTION_WAITING_FOR_OPPONENT_HERO " +
-                    "state=${SurrenderPolicy.currentOpponentHeroInspectionState()} action=WAIT dispatch=false"
-            }
-            return
-        }
-        val rankDecision = SurrenderPolicy.evaluateCurrentRankBeforeMulligan()
-        if (rankDecision != null &&
-            dispatchSurrenderDecision(rankDecision, "mulligan-input-preflight")
-        ) {
-            return
-        }
-        if (System.getProperty("hs.script.e2e.skip-surrender-policy") != "true" &&
-            SurrenderPolicy.currentRankInspectionState() !==
-            club.xiaojiawei.hsscript.status.surrender.RankInspectionState.RESOLVED
-        ) {
-            log.warn {
-                "MULLIGAN_ACTION_WAITING_FOR_RANK state=${SurrenderPolicy.currentRankInspectionState()} " +
-                    "action=WAIT dispatch=false"
-            }
-            return
-        }
-
-        val scheduled = changeCardScheduled.compareAndSet(false, true)
+        // The normal mulligan action is independent from rank/OCR. Reserve it
+        // immediately; the delayed executor still rechecks live phase/pause
+        // state before clicking, and an explicit surrender can cancel it.
+        val scheduled = changeCardScheduled.tryReserve()
         log.info {
             "收到换牌输入：${tagChangeEntity.entity}，自动换牌线程调度结果：$scheduled"
         }
         if (!scheduled) return
 
+        rankSurrenderRequested.set(false)
+        startRankPreflight()
         cancelAllTask()
         val skipMulliganSurrender =
             System.getProperty("hs.script.e2e.skip-mulligan-surrender") == "true"
@@ -216,6 +202,55 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         }.also { addTask(it) }).start()
     }
 
+    private fun startRankPreflight() {
+        if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") {
+            log.info { "MULLIGAN_RANK_PREFLIGHT_SKIPPED reason=e2e-policy-bypass action=CONTINUE_MULLIGAN pause=false" }
+            return
+        }
+        rankPreflight?.cancel("replaced-by-new-input")
+        rankPreflight = MulliganRankPreflight(
+            isEligible = ::isRankPreflightEligible,
+            inspect = { SurrenderPolicy.evaluateCurrentRankBeforeMulligan() },
+            isResolved = { SurrenderPolicy.currentRankCheckCompleted() },
+            provider = {
+                if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
+            },
+            onSurrender = surrender@{ result ->
+                if (!isRankPreflightEligible()) {
+                    log.info {
+                        "MULLIGAN_RANK_PREFLIGHT_DECISION_DISCARDED reason=phase-or-input-left " +
+                            "rule=${result.ruleId} action=NO_ACTION pause=false"
+                    }
+                    return@surrender
+                }
+                if (!rankSurrenderRequested.compareAndSet(false, true)) return@surrender
+                cancelAllTask()
+                dispatchSurrenderDecision(result, "mulligan-rank-preflight")
+            },
+            onContinue = {
+                log.info {
+                    "MULLIGAN_RANK_PREFLIGHT_CONTINUE action=CONTINUE_MULLIGAN " +
+                        "provider=${if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"} pause=false"
+                }
+            },
+        ).also { it.start() }
+    }
+
+    private fun isRankPreflightEligible(): Boolean =
+        war.currentPhase === WarPhaseEnum.REPLACE_CARD &&
+            latestMyMulliganState === MulliganStateEnum.INPUT &&
+            !PowerLogListener.replayingExistingLog &&
+            !PauseStatus.isPause &&
+            !rankSurrenderRequested.get()
+
+    internal fun cancelRankPreflight(reason: String) {
+        rankPreflight?.cancel(reason)
+        rankPreflight = null
+    }
+
+    /** Guard every mulligan click against a late rank decision or phase exit. */
+    internal fun isMulliganActionStillAllowed(): Boolean = isRankPreflightEligible()
+
     override fun dealTagChangeThenIsOver(line: String, tagChangeEntity: TagChangeEntity): Boolean {
         flushPendingMulliganInputs()
         if (tagChangeEntity.tag === TagEnum.MULLIGAN_STATE) {
@@ -244,7 +279,10 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
 
             if (state === MulliganStateEnum.INPUT) {
                 handleMulliganInput(tagChangeEntity)
-            } else if (state === MulliganStateEnum.DONE &&
+            } else {
+                cancelRankPreflight("mulligan-state-${state?.name?.lowercase() ?: "unknown"}")
+            }
+            if (state === MulliganStateEnum.DONE &&
                 mulliganStageConfirmed.compareAndSet(false, true)
             ) {
                 log.info { "换牌阶段确认完成：当前玩家MULLIGAN_STATE=DONE" }
@@ -252,6 +290,7 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
                 E2ETrace.markMulliganCompleted()
             }
         } else if (tagChangeEntity.tag == TagEnum.NEXT_STEP && StepEnum.MAIN_READY.name == tagChangeEntity.value) {
+            cancelRankPreflight("main-ready")
             if (mulliganStageConfirmed.compareAndSet(false, true)) {
                 log.info { "换牌阶段确认完成：收到NEXT_STEP=MAIN_READY" }
                 E2ETrace.markMulliganCompleted()

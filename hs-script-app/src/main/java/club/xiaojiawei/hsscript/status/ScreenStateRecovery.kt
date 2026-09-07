@@ -1,6 +1,5 @@
 package club.xiaojiawei.hsscript.status
 
-import club.xiaojiawei.hsscript.bean.TesseractEx
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
@@ -25,6 +24,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
+import net.sourceforge.tess4j.Tesseract
 
 /**
  * Visual fallback for a stale LoadingScreen state.
@@ -74,6 +74,8 @@ object ScreenStateRecovery {
         val bounds: Rectangle,
         val file: File?,
         val visual: VisualSignature,
+        val gameRectKnown: Boolean,
+        val gameWindowKnown: Boolean,
     )
 
     private data class VisualSignature(
@@ -113,6 +115,7 @@ object ScreenStateRecovery {
     fun inspectAndRecover(
         stuckForMs: Long,
         stateFingerprint: String,
+        startupProbe: Boolean = false,
         stateStillCurrent: () -> Boolean = { true },
     ): Boolean {
         if (!WorkTimeListener.working || PauseStatus.isPause || WarEx.inWar) {
@@ -139,7 +142,7 @@ object ScreenStateRecovery {
                 "visual=${capture.visual}"
         }
 
-        val ocrText = runOCR(capture.image)
+        val ocrText = runOCR(capture)
         if (!stateStillCurrent()) {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-during-inspection state=$stateFingerprint" }
             return false
@@ -147,7 +150,7 @@ object ScreenStateRecovery {
         val detection = detect(ocrText, capture.visual)
         log.info {
             "SCREEN_RECOVERY_OBSERVATION " +
-                "provider=${OcrRuntime.lastProviderUsed().name} " +
+                "provider=LEGACY " +
                 "ocr=${ocrText.ifBlank { "<empty>" }.take(MAX_OCR_TEXT_LENGTH)} " +
                 "detected=${detection?.kind?.code ?: "UNKNOWN"} " +
                 "confidence=${detection?.confidence ?: 0} " +
@@ -216,12 +219,34 @@ object ScreenStateRecovery {
         if (allScreens.width <= 0 || allScreens.height <= 0) return null
 
         // GAME_RECT is the most useful crop when the game is windowed. If it
-        // is not initialized yet, use the whole desktop so startup recovery
-        // still has a chance to inspect an already-open client.
+        // is not initialized yet, capture the desktop only for cheap visual
+        // checks and durable evidence; PaddleX receives bounded ROIs below.
         val gameRect = ScriptStatus.GAME_RECT
-        val candidate = if (gameRect.right - gameRect.left >= 400 &&
+        val gameRectKnown = gameRect.right - gameRect.left >= 400 &&
             gameRect.bottom - gameRect.top >= 300
-        ) {
+
+        // Recovery OCR is a desktop Robot capture.  The Beta UI can remain
+        // visible in front of Hearthstone, so without an explicit focus check
+        // the probe can OCR Codex/the script log instead of the game and leave
+        // the lifecycle permanently in mode=NONE.  Use the same bounded focus
+        // primitive as recovery input before taking the observation.  If the
+        // client cannot be made foreground, fail closed rather than treating
+        // unrelated desktop text as a Hearthstone screen.
+        val gameWindow = ScriptStatus.gameHWND
+        if (RuntimeSafety.safeNative && gameWindow != null) {
+            val focused = MouseUtil.focusWindowForInput(gameWindow)
+            log.info {
+                "SCREEN_RECOVERY_FOREGROUND gameWindow=$gameWindow confirmed=$focused"
+            }
+            if (!focused) {
+                log.warn {
+                    "SCREEN_RECOVERY_CAPTURE_SKIPPED reason=game-foreground-unconfirmed " +
+                        "gameWindow=$gameWindow"
+                }
+                return null
+            }
+        }
+        val candidate = if (gameRectKnown) {
             Rectangle(
                 gameRect.left,
                 gameRect.top,
@@ -240,32 +265,58 @@ object ScreenStateRecovery {
         }
         val saved = DebugScreenshotRing.save(image, "screen-recovery", "stale-screen")
         val file = saved?.file
-        Capture(image, bounds, file, visualSignature(image))
+        Capture(
+            image,
+            bounds,
+            file,
+            visualSignature(image),
+            gameRectKnown,
+            ScriptStatus.gameHWND != null,
+        )
     }.getOrElse { error ->
         log.warn(error) { "SCREEN_RECOVERY_FAILED reason=capture-exception" }
         null
     }
 
-    private fun runOCR(image: BufferedImage): String {
+    private fun runOCR(capture: Capture): String {
         val tessData = File(TESS_DATA_PATH)
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
-        if (OcrRuntime.isLegacySelected() && !chiSim.isFile) {
-            log.info { "SCREEN_RECOVERY_OCR_SKIPPED reason=missing-tessdata path=${chiSim.absolutePath}" }
+        if (!chiSim.isFile) {
+            log.info {
+                "SCREEN_RECOVERY_OCR_SKIPPED provider=LEGACY reason=missing-tessdata " +
+                    "path=${chiSim.absolutePath}"
+            }
             return ""
         }
         return runCatching {
-            val ocrImage = resizeForOcr(image)
-            TesseractEx().apply {
-                setDatapath(tessData.absolutePath)
-                setLanguage(CHI_SIM_DATA)
-                setPageSegMode(11)
-                setVariable("user_defined_dpi", "160")
-            }.doOCR(ocrImage, "screen-recovery")
-                .replace(Regex("\\s+"), "")
+            // A full-screen client often has the script log window over the
+            // right edge. The center menu crop contains the home/deck labels,
+            // avoids OCR-ing our own UI, and is sufficient for this recovery
+            // path. This is deliberately local OCR: PaddleX is reserved for
+            // rank detection and must never stall menu recovery.
+            val rois = ScreenStateRoiSelector.select(capture.image.width, capture.image.height)
+                .filter { it.name == "screen-state-center" }
+            rois.joinToString(separator = "") { roi ->
+                val image = resizeForOcr(crop(capture.image, roi.bounds))
+                Tesseract().apply {
+                    setDatapath(tessData.absolutePath)
+                    setLanguage(CHI_SIM_DATA)
+                    setPageSegMode(11)
+                    setVariable("user_defined_dpi", "160")
+                }.doOCR(image).replace(Regex("\\s+"), "")
+            }
         }.getOrElse { error ->
             log.warn(error) { "SCREEN_RECOVERY_OCR_FAILED" }
             ""
         }
+    }
+
+    private fun looksLikeHearthstoneVisual(visual: VisualSignature): Boolean =
+        visual.warmRatio >= 0.005 || visual.blueRatio >= 0.005
+
+    private fun crop(image: BufferedImage, bounds: Rectangle): BufferedImage {
+        val safe = bounds.intersection(Rectangle(0, 0, image.width, image.height))
+        return image.getSubimage(safe.x, safe.y, safe.width.coerceAtLeast(1), safe.height.coerceAtLeast(1))
     }
 
     private fun resizeForOcr(image: BufferedImage): BufferedImage {
@@ -632,7 +683,7 @@ object ScreenStateRecovery {
      */
     internal fun isResultVisibleForRecovery(): Boolean? = runCatching {
         val capture = captureScreen() ?: return@runCatching null
-        val detection = detect(runOCR(capture.image), capture.visual)
+        val detection = detect(runOCR(capture), capture.visual)
         when {
             detection == null || detection.confidence < 85 -> null
             detection.kind == ScreenKind.RESULT -> true
@@ -712,7 +763,23 @@ object ScreenStateRecovery {
             ScreenKind.RECONNECT -> {
                 Mode.recover(ModeEnum.LOGIN, "visible-reconnect-screen", enterStrategy = false)
                 val now = System.currentTimeMillis()
-                if (shouldAttemptReconnect(now)) {
+                val acceptedReconnectAt = reconnectAcceptedAt.get()
+                if (acceptedReconnectAt > 0L &&
+                    shouldRestartStalledReconnect(acceptedReconnectAt, now) &&
+                    reconnectAcceptedAt.compareAndSet(acceptedReconnectAt, 0L)
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_APPLIED screen=RECONNECT action=RESTART_CLIENT " +
+                            "reason=stalled-reconnect elapsedMs=${now - acceptedReconnectAt} " +
+                            "thresholdMs=$STALLED_RECONNECT_LOADING_RESTART_MS"
+                    }
+                    // Some client builds leave the original disconnect dialog
+                    // visible after consuming the reconnect click.  Do not
+                    // wait for the optional slow-loading warning: once the
+                    // confirmed reconnect attempt has been stuck for the
+                    // recovery threshold, restart the client directly.
+                    Core.restart()
+                } else if (acceptedReconnectAt <= 0L && shouldAttemptReconnect(now)) {
                     log.warn {
                         "SCREEN_RECOVERY_APPLIED screen=RECONNECT mode=LOGIN " +
                             "action=CLICK_RECONNECT retryIntervalMs=$RECONNECT_RETRY_INTERVAL_MS"

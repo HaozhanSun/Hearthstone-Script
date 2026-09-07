@@ -16,5 +16,5 @@ Add-Content -LiteralPath $selectionLog -Value ("{0} selected={1} deploymentId={2
 
 $arguments = '-Dhs.script.launch.source=shortcut -Djna.library.path="' +
     $scriptDirectory + '" -Dhs.script.deployment.id="' + $deployment.DeploymentId +
-    '" -Dhs.script.deployment.manifest="' + $deployment.ManifestPath + '" -jar "' + $deployment.AppJar + '" --pause=false'
+    '" -Dhs.script.deployment.manifest="' + $deployment.ManifestPath + '" -jar "' + $deployment.AppJar + '"'
 Start-Process -FilePath $javaPath -ArgumentList $arguments -WorkingDirectory $scriptDirectory

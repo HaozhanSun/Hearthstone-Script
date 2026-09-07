@@ -203,17 +203,25 @@ foreach ($artifact in @($builtJar, $builtZip, $strategyTarget, $cardPluginTarget
     if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) { throw "Expected build artifact missing: $artifact" }
 }
 
-$markerPath = Join-Path $runtimeRoot 'hs-script.pid.json'
-if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
-    try {
-        $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
-        $process = Get-Process -Id ([int]$marker.pid) -ErrorAction Stop
-        if ($process.ProcessName -in @('java', 'javaw')) {
-            Stop-Process -Id $process.Id -Force
-            Start-Sleep -Milliseconds 500
-        }
-    } catch { }
-    Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
+$deploymentContractSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\deployment-contract.ps1'
+if (-not (Test-Path -LiteralPath $deploymentContractSource -PathType Leaf)) {
+    throw "Deployment contract is missing: $deploymentContractSource"
+}
+. $deploymentContractSource
+$stoppedRuntimeProcesses = @(Stop-ManagedHsScriptProcesses $runtimeRoot)
+if ($stoppedRuntimeProcesses.Count -gt 0) {
+    Write-Output "STOPPED_RUNTIME_PROCESSES=$($stoppedRuntimeProcesses -join ',')"
+    foreach ($stoppedPid in $stoppedRuntimeProcesses) {
+        try { Wait-Process -Id ([int]$stoppedPid) -Timeout 10 -ErrorAction SilentlyContinue } catch { }
+    }
+}
+$remainingRuntimeProcesses = @(Get-CimInstance Win32_Process | Where-Object {
+    $_.Name -in @('java.exe', 'javaw.exe') -and
+    ([string]$_.CommandLine).IndexOf(([System.IO.Path]::GetFullPath($runtimeRoot).TrimEnd('\')), [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+    ([string]$_.CommandLine) -match 'hs-script_.*\.jar'
+})
+if ($remainingRuntimeProcesses.Count -gt 0) {
+    throw "Refusing to deploy while the channel runtime is still running: $($remainingRuntimeProcesses.ProcessId -join ',')"
 }
 
 $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("hs-script-deploy-" + [guid]::NewGuid().ToString('N'))

@@ -23,6 +23,11 @@ object UiLogFormatter {
         // The ROI line repeats the same evidence path already shown by
         // RANK_OCR_EVIDENCE. Keep it in the file log, not the compact UI.
         "RANK_OCR_ROI",
+        // Waiting is an internal retry/state signal, not a user-facing
+        // decision. It can be emitted once per Power.log batch while the
+        // mulligan boundary is not ready.
+        "RANK_POLICY_WAITING_",
+        "RANK_POLICY_SKIP",
     )
 
     fun isHiddenFromUi(message: String?): Boolean =
@@ -45,6 +50,9 @@ object UiLogFormatter {
                 "等级截图已保存 · 识别结果待确认"
             raw.startsWith("RANK_OCR") -> formatRankOcr(raw)
             raw.startsWith("RANK_POLICY") -> formatRankPolicy(raw)
+            raw.startsWith("SURRENDER_POLICY_TRIGGERED") -> formatSurrenderTrigger(raw)
+            raw.startsWith("SURRENDER_ACTION_REQUESTED") -> formatSurrenderAction(raw, requested = true)
+            raw.startsWith("SURRENDER_ACTION_BLOCKED") -> formatSurrenderAction(raw, requested = false)
             raw.startsWith("MCTS_NEW_DECK_CARD") -> formatDeckCardSummary(raw)
             raw.startsWith("SCREEN_RECOVERY") -> formatRecovery(raw)
             raw.startsWith("UNKNOWN_STATE_SCREENSHOT") -> "未知画面截图已保存"
@@ -79,7 +87,38 @@ object UiLogFormatter {
             else -> "已评估"
         }
         val level = if (tier != null && rank != null) " · $tier${rank}级" else ""
-        return "等级策略$level · $decision"
+        val reason = value(raw, "reason")?.takeUnless { it.isUnknownValue() }
+        return listOfNotNull("等级策略$level · $decision", reason).joinToString(" · ")
+    }
+
+    private fun formatSurrenderTrigger(raw: String): String {
+        val stage = value(raw, "stage")
+        val rank = value(raw, "rank")?.takeUnless { it.isUnknownValue() }
+        val tier = tierLabel(value(raw, "tier"))
+        val reason = value(raw, "reason")?.takeUnless { it.isUnknownValue() }
+        val context = listOfNotNull(
+            tier,
+            rank?.let { "${it}级" },
+            stage?.takeUnless { it.isUnknownValue() },
+        ).joinToString(" ")
+        return listOfNotNull(
+            if (stage == "CURRENT_RANK_RESOLVED") "等级策略 · 触发投降" else "投降策略 · 触发投降",
+            context.takeIf { it.isNotBlank() },
+            reason,
+        ).joinToString(" · ")
+    }
+
+    private fun formatSurrenderAction(raw: String, requested: Boolean): String {
+        val source = value(raw, "source")
+        val rule = value(raw, "rule")
+        val reason = value(raw, "reason")?.takeUnless { it.isUnknownValue() }
+            ?: value(raw, "requestedReason")?.takeUnless { it.isUnknownValue() }
+        return listOfNotNull(
+            if (requested) "投降动作已请求" else "投降动作已阻止",
+            source?.let { "来源=$it" },
+            rule?.let { "规则=$it" },
+            reason,
+        ).joinToString(" · ")
     }
 
     private fun formatDeckCardSummary(raw: String): String {

@@ -6,10 +6,12 @@ import club.xiaojiawei.hsscriptcardsdk.bean.MCTSArg
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
+import club.xiaojiawei.hsscriptcardsdk.bean.TurnOverAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import kotlin.test.Test
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class MonteCarloTreeNodeDeferredActionTest {
@@ -55,6 +57,46 @@ class MonteCarloTreeNodeDeferredActionTest {
         assertTrue(node.actions.any { it.creator?.cardId == "YOD_032" })
         assertTrue(node.actions.any { it.creator?.cardId == "OTHER_CARD" })
         assertTrue(node.actions.none { it.javaClass.simpleName == "TurnOverAction" })
+    }
+
+    @Test
+    fun `unaffordable deferred timing card is not resurrected as a live action`() {
+        val war = War()
+        val me = Player(playerId = "me", war = war)
+        val rival = Player(playerId = "rival", war = war)
+        war.me = me
+        war.rival = rival
+        war.player1 = me
+        war.player2 = rival
+        war.currentPlayer = me
+        war.isMyTurn = true
+        me.resources = 1
+
+        val timingCard = card("YOD_032").apply {
+            entityName = "狂暴邪翼蝠"
+            cost = 2
+        }
+        war.addCard(timingCard, me.handArea)
+
+        val model = object : MctsDecisionModel {
+            override fun shouldDefer(card: Card, war: War): Boolean =
+                card.cardId == "YOD_032"
+        }
+        val arg = MCTSArg(
+            endMillisTime = Long.MAX_VALUE,
+            turnCount = 1,
+            turnFactor = 0.5,
+            countPerTurn = 1,
+            scoreCalculator = { 0.0 },
+            enableMultiThread = false,
+            decisionModel = model,
+            experimentalSearch = true,
+        )
+
+        val node = MonteCarloTreeNode(war, InitAction, arg)
+
+        assertFalse(node.actions.any { it.creator?.cardId == "YOD_032" })
+        assertTrue(node.actions.any { it === TurnOverAction })
     }
 
     @Test
@@ -107,6 +149,29 @@ class MonteCarloTreeNodeDeferredActionTest {
         assertTrue(node.actions.any { it.creator?.entityId == hero.entityId })
     }
 
+    @Test
+    fun `coin is not an actionable payoff when no non-coin card is unlocked`() {
+        val war = testWar()
+        war.me.resources = 1
+        val coin = card("COIN").apply { isCoinCard = true }
+        war.addCard(coin, war.me.handArea)
+
+        assertFalse(CoinActionPolicy.hasImmediatePayoff(war))
+    }
+
+    @Test
+    fun `coin is actionable only when it unlocks an otherwise unaffordable card`() {
+        val war = testWar()
+        war.me.resources = 1
+        war.addCard(card("COIN").apply { isCoinCard = true }, war.me.handArea)
+        war.addCard(card("TWO_COST").apply {
+            cardType = CardTypeEnum.SPELL
+            cost = 2
+        }, war.me.handArea)
+
+        assertTrue(CoinActionPolicy.hasImmediatePayoff(war))
+    }
+
     private fun card(cardId: String): Card = Card(TestCardAction()).apply {
         entityId = "$cardId-entity"
         this.cardId = cardId
@@ -116,5 +181,18 @@ class MonteCarloTreeNodeDeferredActionTest {
         atc = 1
         health = 1
         action.belongCard = this
+    }
+
+    private fun testWar(): War {
+        val war = War()
+        val me = Player(playerId = "me", war = war)
+        val rival = Player(playerId = "rival", war = war)
+        war.me = me
+        war.rival = rival
+        war.player1 = me
+        war.player2 = rival
+        war.currentPlayer = me
+        war.isMyTurn = true
+        return war
     }
 }

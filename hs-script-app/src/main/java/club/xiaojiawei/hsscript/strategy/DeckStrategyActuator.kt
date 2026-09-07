@@ -17,6 +17,7 @@ import club.xiaojiawei.hsscript.utils.MulliganScreenshot
 import club.xiaojiawei.hsscript.utils.MctsRoundScreenshot
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscript.utils.go
+import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.enums.StepEnum
@@ -43,7 +44,7 @@ import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 object DeckStrategyActuator {
 
     private val war = WAR
-    private const val MAX_MCTS_TURN_END_REPLANS = 2
+    private const val MAX_MCTS_TURN_END_REPLANS = MctsTurnEndReplanPolicy.MAX_REPLANS
 
     fun reset() {
         DeckStrategyManager.currentDeckStrategy?.reset()
@@ -123,6 +124,12 @@ object DeckStrategyActuator {
         val mulliganDelay = RandomUtil.getMulliganDelay(distortionEnabled)
         log.info { "自动换牌等待${mulliganDelay}毫秒（畸变：$distortionEnabled）" }
         SystemUtil.delay(mulliganDelay)
+        if (!ReplaceCardPhaseStrategy.isMulliganActionStillAllowed()) {
+            log.info {
+                "自动换牌请求被取消：排位预检或换牌阶段已结束 action=NO_ACTION pause=false"
+            }
+            return false
+        }
         val canExecute = canExec()
         log.info { "自动换牌延迟结束，当前状态可执行：$canExecute" }
         if (!canExecute) {
@@ -130,7 +137,12 @@ object DeckStrategyActuator {
             return false
         }
 
-        if (PauseStatus.isPause) return false
+        if (PauseStatus.isPause || !ReplaceCardPhaseStrategy.isMulliganActionStillAllowed()) {
+            log.info {
+                "自动换牌请求被取消：当前阶段不再允许输入 action=NO_ACTION pause=${PauseStatus.isPause}"
+            }
+            return false
+        }
         log.info { "执行换牌策略" }
         war.run {
             log.info { "1号玩家牌库数量：" + player1.deckArea.cards.size }
@@ -203,6 +215,10 @@ object DeckStrategyActuator {
             }
             val mulliganCardIndices = handCards.indices.filter { handCards[it].cardId != COIN_CARD_ID }
             val mulliganClickPositions = mulliganCardIndices.map { mulliganCardRect(it).getCenterClickPos() }
+            if (!ReplaceCardPhaseStrategy.isMulliganActionStillAllowed()) {
+                log.info { "换牌输入被取消：交互检查前阶段已结束 action=NO_ACTION pause=false" }
+                return false
+            }
             val mulliganUiReady = MulliganScreenshot.awaitInteractiveHand(mulliganClickPositions)
             if (!mulliganUiReady) {
                 log.warn {
@@ -215,6 +231,10 @@ object DeckStrategyActuator {
             // of matchmaking.
             MulliganScreenshot.capture("before-selection", WarEx.warCount + 1)
             for (handIndex in handCards.indices) {
+                if (!ReplaceCardPhaseStrategy.isMulliganActionStillAllowed()) {
+                    log.info { "换牌输入被取消：阶段或投降请求已改变 action=NO_ACTION pause=false" }
+                    return false
+                }
                 val card = handCards[handIndex]
                 if (card.cardId == COIN_CARD_ID) continue
                 if (!copyHandCards.contains(card) && mulliganUiReady) {
@@ -265,14 +285,20 @@ object DeckStrategyActuator {
             // control and use the shared randomized short delay.
             try {
                 for (i in 0..2) {
-                    if (Thread.currentThread().isInterrupted) break
+                    if (Thread.currentThread().isInterrupted ||
+                        !ReplaceCardPhaseStrategy.isMulliganActionStillAllowed()
+                    ) break
                     GameUtil.CONFIRM_RECT.lClick(false)
                     SystemUtil.delayShort()
                 }
-                if (!Thread.currentThread().isInterrupted) {
+                if (!Thread.currentThread().isInterrupted &&
+                    ReplaceCardPhaseStrategy.isMulliganActionStillAllowed()
+                ) {
                     GameUtil.CENTER_RECT.lClick(false)
                 }
-                log.info { "自动换牌确认已提交" }
+                log.info {
+                    "自动换牌确认${if (ReplaceCardPhaseStrategy.isMulliganActionStillAllowed()) "已提交" else "已取消"}"
+                }
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
                 log.warn { "自动换牌确认被中断" }
@@ -422,6 +448,7 @@ object DeckStrategyActuator {
                         "requiresReplan" to inspection.requiresReplan,
                         "buttonColor" to inspection.buttonColor.name,
                         "mctsActionableCreatorIds" to liveActionableCreatorIds,
+                        "cycle" to strategy.currentExperimentalTurnCycle(),
                         "fullRescan" to true,
                         "remainingMana" to war.me.usableResource,
                         "hand" to war.me.handArea.cards.map { "${it.cardId}:${it.entityName}(cost=${it.cost})" },
@@ -440,7 +467,11 @@ object DeckStrategyActuator {
                 continue
             }
 
-            if (replans >= MAX_MCTS_TURN_END_REPLANS) {
+            val replanDecision = MctsTurnEndReplanPolicy.decide(
+                completedReplans = replans,
+                liveActionable = inspection.requiresReplan,
+            )
+            if (!replanDecision.shouldReplan) {
                 val evidence = UnknownStateScreenshot.capture(
                     category = UnknownStateScreenshot.CATEGORY_TURN_END_STUCK,
                     trigger = "mcts-turn-end-replan-exhausted",
@@ -450,18 +481,74 @@ object DeckStrategyActuator {
                 )
                 log.error {
                     "MCTS_TURN_END_REPLAN_EXHAUSTED turn=${war.me.turn} replans=$replans " +
-                        "remainingActions=true; no legacy fallback action was dispatched " +
+                        "maxReplans=$MAX_MCTS_TURN_END_REPLANS planningPasses=${replanDecision.planningPass} " +
+                        "remainingActions=${inspection.requiresReplan} reason=${replanDecision.reason}; " +
+                        "freshLiveRescan=${replanDecision.freshLiveRescanRequired} " +
+                        "reusedPreviousPlan=${replanDecision.reusePreviousPlan}; " +
+                        "fallback=end-turn-click " +
                         "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                         "screenshotLink=${evidence?.link ?: "none"}"
+                }
+                if (replanDecision.allowEndTurnWhenExhausted) {
+                    MctsReplayTrace.record(
+                        war,
+                        "turn_end_fallback_selected",
+                        "MCTS replan budget exhausted; click EndTurn instead of remaining idle",
+                        mapOf(
+                            "strategy" to strategy.name(),
+                            "safeToEnd" to inspection.safeToEnd,
+                            "requiresReplan" to inspection.requiresReplan,
+                            "replans" to replans,
+                            "maxReplans" to MAX_MCTS_TURN_END_REPLANS,
+                            "planningPass" to replanDecision.planningPass,
+                            "reason" to replanDecision.reason,
+                            "fallback" to "end-turn-click",
+                            "fullRescan" to true,
+                            "remainingMana" to war.me.usableResource,
+                        ),
+                    )
+                    MctsRoundScreenshot.capture(war, war.me.turn)
+                    clickEndTurnUntilTransition()
                 }
                 return
             }
 
-            replans++
+            replans = replanDecision.attempt
             log.warn {
-                "MCTS_TURN_END_REPLAN turn=${war.me.turn} attempt=$replans/$MAX_MCTS_TURN_END_REPLANS " +
-                    "reason=live-state-still-actionable-after-strategy-return"
+                "MCTS_TURN_END_REPLAN turn=${war.me.turn} attempt=${replanDecision.attempt}/$MAX_MCTS_TURN_END_REPLANS " +
+                    "planningPass=${replanDecision.planningPass} reason=${replanDecision.reason} " +
+                    "freshLiveRescan=${replanDecision.freshLiveRescanRequired} " +
+                    "reusedPreviousPlan=${replanDecision.reusePreviousPlan}"
             }
+            MctsReplayTrace.record(
+                war,
+                "turn_end_replan_requested",
+                "fresh live scan found actionable work; request a new MCTS planning pass",
+                mapOf(
+                    "strategy" to strategy.name(),
+                    "attempt" to replanDecision.attempt,
+                    "maxReplans" to MAX_MCTS_TURN_END_REPLANS,
+                    "planningPass" to replanDecision.planningPass,
+                    "freshLiveRescan" to replanDecision.freshLiveRescanRequired,
+                    "reusedPreviousPlan" to replanDecision.reusePreviousPlan,
+                    "liveActionableCreatorIds" to liveActionableCreatorIds,
+                    "reason" to replanDecision.reason,
+                    "completedCycle" to strategy.currentExperimentalTurnCycle(),
+                    "nextCycle" to strategy.currentExperimentalTurnCycle() + 1,
+                ),
+            )
+            MctsReplayTrace.record(
+                war,
+                "turn_cycle_boundary",
+                "full live rescan found newly actionable work; the next strategy pass starts a fresh ordered cycle",
+                mapOf(
+                    "strategy" to strategy.name(),
+                    "completedCycle" to strategy.currentExperimentalTurnCycle(),
+                    "nextCycle" to strategy.currentExperimentalTurnCycle() + 1,
+                    "liveActionableCreatorIds" to liveActionableCreatorIds,
+                    "fullRescan" to true,
+                ),
+            )
             SystemUtil.delayShortMedium()
             strategy.executeOutCard()
         }

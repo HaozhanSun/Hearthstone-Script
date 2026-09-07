@@ -94,4 +94,30 @@ class UiLogFormatterTest {
         assertTrue(UiLogFormatter.isHiddenFromUi("RANK_OCR_ROI provider=PADDLEX screenshot=rank.png"))
         assertFalse(UiLogFormatter.isHiddenFromUi("RANK_OCR_EVIDENCE provider=PADDLEX path=rank.png"))
     }
+
+    @Test
+    fun `rank policy waiting and skip diagnostics stay out of compact feed`() {
+        assertTrue(
+            UiLogFormatter.isHiddenFromUi(
+                "RANK_POLICY_WAITING_FOR_RANK reason=mulligan-input-not-confirmed action=WAIT"
+            )
+        )
+        assertTrue(
+            UiLogFormatter.isHiddenFromUi(
+                "RANK_POLICY_SKIP reason=opponent-hero-surrender-already-requested action=SKIP"
+            )
+        )
+    }
+
+    @Test
+    fun `surrender decision feed includes the rule and reason`() {
+        val message = UiLogFormatter.format(
+            "SURRENDER_POLICY_TRIGGERED stage=CURRENT_RANK_RESOLVED " +
+                "rule=rank-ocr-unresolved-surrender reason=rank-unresolved-without-legendary " +
+                "tier=UNKNOWN action=SURRENDER"
+        )
+
+        assertTrue(message.startsWith("等级策略 · 触发投降"))
+        assertTrue(message.contains("rank-unresolved-without-legendary"))
+    }
 }

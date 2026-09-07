@@ -10,7 +10,7 @@ import club.xiaojiawei.hsscriptstrategysdk.deck.MCTSDeckStrategy
 
 /** Released entry point for the isolated Pirate Warrior MCTS model. */
 class HsPirateWarriorMctsDeckStrategy : MCTSDeckStrategy() {
-    override fun name(): String = "海盗战 MCTS"
+    override fun name(): String = PirateMctsStrategyVersion.displayName("海盗战")
 
     override fun description(): String =
         "海盗战 MCTS：船载火炮 P0、首回合任务、宝藏经销商铺场与海盗光环奖励"
@@ -61,7 +61,11 @@ class HsPirateWarriorMctsDeckStrategy : MCTSDeckStrategy() {
                 experimentalSearch = true,
                 experimentalTurnBudgetMillis = 20_000L,
                 experimentalActionBudgetMillis = 1_800L,
-                rootSelectionPolicy = MctsRootSelectionPolicy.VISITS_THEN_VALUE,
+                // Use the same complete-turn objective as Pirate DH. The
+                // executor still dispatches one action and re-plans from the
+                // confirmed live WAR, while the root choice is based on the
+                // best discovered resource-efficient turn plan.
+                rootSelectionPolicy = MctsRootSelectionPolicy.GLOBAL_TURN_PLAN,
             ),
         )
     }

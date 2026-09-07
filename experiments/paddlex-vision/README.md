@@ -22,8 +22,11 @@ PaddleX OCR switch is enabled.
 shape mirrors the current `TesseractEx.doOCR` contract (`image -> String`) so it
 can be exercised independently before any production integration is considered.
 The CLI also supports `--ocr-only`, which runs only the PaddleX OCR pipeline
-and emits the same JSON contract with empty `objects` and `relations`. The main
-application uses this out-of-process shape when PaddleX OCR is enabled.
+and emits the same JSON contract with empty `objects` and `relations`. The
+`--server` mode loads that OCR pipeline once and serves newline-delimited JSON
+requests until stdin closes. The main application uses this persistent
+out-of-process mode when PaddleX OCR is enabled; a shared JVM coordinator
+serializes startup, screen-recovery, and rank requests.
 
 For the current rank incident, `RankBadgeProbe` is the controlled experiment:
 it crops only the lower-left numeric badge, upscales that crop, runs the
@@ -68,6 +71,22 @@ For the production text-only bridge:
   --device cpu
 ```
 
+For a long-lived sidecar smoke test:
+
+```powershell
+..\.venv\Scripts\python.exe -m paddlex_vision_experiment.cli `
+  --server `
+  --device cpu
+```
+
+The server accepts one JSON object per line. Use `{"op":"health",
+"request_id":"..."}` to verify that the pipeline has loaded, or
+`{"op":"ocr","request_id":"...","input":"..."}` for OCR. Every
+response echoes `request_id`; request-local errors are returned as JSON and do
+not terminate the process. The Kotlin bridge bounds queue and request time,
+and destroys a failed session so the next request cannot reuse a corrupt
+protocol process.
+
 The first real run may download model weights. Use an actual Hearthstone
 screenshot for an application-level result; the repository currently does not
 contain a stable labeled Hearthstone image fixture.
@@ -84,6 +103,14 @@ because the PaddlePaddle 3.x CPU runner can otherwise fail in a PIR/oneDNN
 conversion path.
 Set `PADDLEX_DISABLE_MKLDNN=0` only after validating a local runtime where the
 oneDNN path works.
+
+Screen-state recovery sends PaddleX only a known `GAME_RECT` or bounded
+screen-state ROIs after a cheap game-window/visual gate. It never sends the
+whole desktop to PaddleX solely because `GAME_RECT` is unavailable. In `AUTO`,
+an unsafe missing-rect observation has an explicit `LEGACY_FALLBACK` path; in
+`PADDLEX_ONLY` it is recorded as `SKIP_UNSAFE`. Rank recognition remains
+badge-only and uses a separate rank ROI; it is not used as menu-state
+detection.
 
 The JSON shape is:
 

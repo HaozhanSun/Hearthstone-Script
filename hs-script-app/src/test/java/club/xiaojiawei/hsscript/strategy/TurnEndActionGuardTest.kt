@@ -39,6 +39,16 @@ class TurnEndActionGuardTest {
                 ),
             ),
         )
+        assertTrue(
+            TurnEndActionGuard.shouldBlockEndTurn(
+                TurnEndActionGuard.TurnEndObservation(
+                    attackableMinions = 0,
+                    playableHandCards = 0,
+                    attackableHero = false,
+                    playableBoardPowers = 1,
+                ),
+            ),
+        )
         assertFalse(
             TurnEndActionGuard.shouldBlockEndTurn(
                 TurnEndActionGuard.TurnEndObservation(attackableMinions = 0, playableHandCards = 0, attackableHero = false),
@@ -93,6 +103,67 @@ class TurnEndActionGuardTest {
         assertTrue(TurnEndActionGuard.isHeroPowerPlayable(powerCost = 0, usableMana = 0, canPower = true))
         assertFalse(TurnEndActionGuard.isHeroPowerPlayable(powerCost = 2, usableMana = 1, canPower = true))
         assertFalse(TurnEndActionGuard.isHeroPowerPlayable(powerCost = 1, usableMana = 1, canPower = false))
+    }
+
+    @Test
+    fun `clickable location power is visible to the shared end-turn scan`() {
+        val war = War(false)
+        val player = Player(playerId = "me", war = war).apply {
+            resources = 5
+        }
+        war.me = player
+        val location = Card(TestCardAction()).apply {
+            entityId = "location-power"
+            cardType = CardTypeEnum.LOCATION
+            cost = 0
+            health = 3
+            // TestCardAction's launch path provides a deterministic generated
+            // PowerAction without depending on a production card parser.
+            isLaunchpad = true
+            isLocationActionCooldown = false
+            isExhausted = false
+            action.belongCard = this
+        }
+        war.addCard(location, player.playArea)
+
+        assertTrue(TurnEndActionGuard.isBoardPowerPlayable(location, war))
+        location.isLocationActionCooldown = true
+        assertFalse(TurnEndActionGuard.isBoardPowerPlayable(location, war))
+    }
+
+    @Test
+    fun `opaque location power is blocked only when mcts marks its creator actionable`() {
+        val war = War(false)
+        val player = Player(playerId = "me", war = war).apply {
+            resources = 0
+        }
+        war.me = player
+        val opaqueLocation = Card(TestCardAction()).apply {
+            entityId = "vac-929-entity-60"
+            cardType = CardTypeEnum.LOCATION
+            health = 3
+            isLocationActionCooldown = false
+            isExhausted = false
+            action.belongCard = this
+        }
+        war.addCard(opaqueLocation, player.playArea)
+
+        assertFalse(TurnEndActionGuard.isBoardPowerPlayable(opaqueLocation, war))
+        assertTrue(
+            TurnEndActionGuard.isBoardPowerPlayable(
+                opaqueLocation,
+                war,
+                mctsActionableCreatorIds = setOf(opaqueLocation.entityId),
+            ),
+        )
+        opaqueLocation.isLocationActionCooldown = true
+        assertFalse(
+            TurnEndActionGuard.isBoardPowerPlayable(
+                opaqueLocation,
+                war,
+                mctsActionableCreatorIds = setOf(opaqueLocation.entityId),
+            ),
+        )
     }
 
     @Test

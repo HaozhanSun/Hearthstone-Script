@@ -15,6 +15,14 @@ interface OcrTextBridge {
     fun recognize(image: BufferedImage, desc: String = ""): String
     fun recognizeWithConfidence(image: BufferedImage, desc: String = ""): OcrRecognition =
         OcrRecognition(recognize(image, desc), confidence = null)
+    fun recognizeWithConfidence(image: BufferedImage, desc: String = "", roi: String?): OcrRecognition =
+        recognizeWithConfidence(image, desc)
+    fun recognizeWithConfidence(
+        image: BufferedImage,
+        desc: String = "",
+        roi: String?,
+        timeoutMs: Long?,
+    ): OcrRecognition = recognizeWithConfidence(image, desc, roi)
     fun healthCheck(): OcrHealth
 }
 
@@ -30,7 +38,10 @@ data class OcrHealth(
     val details: String = "",
 )
 
-class PaddleXOcrException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+open class PaddleXOcrException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+
+/** Cancellation is control flow from the owning task, not an OCR failure. */
+class PaddleXOcrCancelledException(message: String, cause: Throwable? = null) : PaddleXOcrException(message, cause)
 
 data class SidecarProcessResult(
     val exitCode: Int,
@@ -58,8 +69,18 @@ class PaddleXOcrSidecarBridge(
     }
 
     override fun recognizeWithConfidence(image: BufferedImage, desc: String): OcrRecognition {
+        return recognizeWithConfidence(image, desc, roi = null, timeoutMs = null)
+    }
+
+    override fun recognizeWithConfidence(
+        image: BufferedImage,
+        desc: String,
+        roi: String?,
+        timeoutMs: Long?,
+    ): OcrRecognition {
         val input = writeTempImage(image, desc)
         try {
+            val requestTimeoutMs = timeoutMs ?: settings.timeoutMs
             val result = processRunner.run(
                 command = baseCommand() + listOf(
                     "-m",
@@ -72,10 +93,10 @@ class PaddleXOcrSidecarBridge(
                 ),
                 workingDirectory = File(settings.modulePath).parentFile,
                 environment = pythonEnvironment(),
-                timeoutMs = settings.timeoutMs,
+                timeoutMs = requestTimeoutMs,
             )
             if (result.timedOut) {
-                throw PaddleXOcrException("PaddleX OCR sidecar timed out after ${settings.timeoutMs}ms")
+                throw PaddleXOcrException("PaddleX OCR sidecar timed out after ${requestTimeoutMs}ms")
             }
             if (result.exitCode != 0) {
                 throw PaddleXOcrException(
@@ -236,7 +257,16 @@ class PaddleXOcrSidecarBridge(
             val stderrThread = streamReaderThread(process.errorStream, stderr)
             stdoutThread.start()
             stderrThread.start()
-            val completed = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            val completed = try {
+                process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            } catch (error: InterruptedException) {
+                process.destroyForcibly()
+                runCatching { process.waitFor(1_000, TimeUnit.MILLISECONDS) }
+                stdoutThread.join(1_000)
+                stderrThread.join(1_000)
+                Thread.currentThread().interrupt()
+                throw PaddleXOcrCancelledException("PaddleX OCR sidecar process was cancelled", error)
+            }
             if (!completed) {
                 process.destroyForcibly()
                 stdoutThread.join(1_000)

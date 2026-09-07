@@ -57,23 +57,32 @@ object PluginManager {
         return loadCard.readOnlyProperty
     }
 
+    /**
+     * Load both plugin families off to the side and publish them together.
+     * The old implementation cleared the live maps before loading; a failed
+     * ServiceLoader pass could therefore expose a half-loaded catalog to a
+     * running turn. The maps remain the compatibility surface for existing
+     * callers, but they are only mutated after both new catalogs are ready.
+     */
+    @Synchronized
     fun loadAllPlugins() {
-        loadCardPlugin()
-        loadDeckPlugin()
-    }
-
-    private fun loadDeckPlugin() {
-        DeckStrategyManager
-        loadDeck.set(false)
-        loadPlugin(DeckStrategy::class.java, StrategyPlugin::class.java, DECK_STRATEGY_PLUGINS)
-        loadDeck.set(true)
-    }
-
-    private fun loadCardPlugin() {
+        // Ensure the managers and their property listeners exist before the
+        // load-state notifications are published.
         CardActionManager
+        DeckStrategyManager
+
+        val cardPlugins = buildPluginMap(CardAction::class.java, CardPlugin::class.java)
+        val deckPlugins = buildPluginMap(DeckStrategy::class.java, StrategyPlugin::class.java)
+
+        CARD_ACTION_PLUGINS.clear()
+        CARD_ACTION_PLUGINS.putAll(cardPlugins)
+        DECK_STRATEGY_PLUGINS.clear()
+        DECK_STRATEGY_PLUGINS.putAll(deckPlugins)
+
         loadCard.set(false)
-        loadPlugin(CardAction::class.java, CardPlugin::class.java, CARD_ACTION_PLUGINS)
+        loadDeck.set(false)
         loadCard.set(true)
+        loadDeck.set(true)
     }
 
     private val pluginDir by lazy {
@@ -84,12 +93,11 @@ object PluginManager {
         }
     }
 
-    private fun <T, P : Plugin> loadPlugin(
+    private fun <T, P : Plugin> buildPluginMap(
         aClass: Class<T>,
         pluginClass: Class<P>,
-        pluginWrapperMap: MutableMap<String, MutableList<PluginWrapper<T>>>
-    ) {
-        pluginWrapperMap.clear()
+    ): MutableMap<String, MutableList<PluginWrapper<T>>> {
+        val pluginWrapperMap = mutableMapOf<String, MutableList<PluginWrapper<T>>>()
         val result = ClassLoaderUtil.getClassLoader(pluginDir)
         val pendingPlugins = mutableListOf<PendingPlugin<T>>()
 
@@ -183,6 +191,7 @@ object PluginManager {
         }
 
         applyHighestVersionPolicy(pendingPlugins, pluginWrapperMap, pluginClass.simpleName)
+        return pluginWrapperMap
     }
 
     private fun <T> applyHighestVersionPolicy(

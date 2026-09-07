@@ -1,10 +1,10 @@
 package club.xiaojiawei.hsscript
 
 import club.xiaojiawei.hsscript.bean.CommonCardAction.Companion.DEFAULT
-import club.xiaojiawei.hsscript.bean.Release
 import club.xiaojiawei.hsscript.config.InitializerConfig
 import club.xiaojiawei.hsscript.config.ShutdownHookConfig
 import club.xiaojiawei.hsscript.consts.*
+import club.xiaojiawei.hsscript.controller.javafx.StartupController
 import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.dll.CSystemDll
 import club.xiaojiawei.hsscript.enums.ConfigEnum
@@ -49,9 +49,19 @@ import java.net.URLClassLoader
 import java.util.Locale.getDefault
 import java.util.function.Consumer
 import java.util.function.Supplier
-import java.util.prefs.Preferences
 import javax.swing.AbstractAction
 import kotlin.system.exitProcess
+
+internal fun shouldAutoStart(
+    rawArgs: List<String>,
+    namedPause: String?,
+    systemAutoStart: Boolean,
+    configuredAutoStart: Boolean,
+): Boolean {
+    val explicitPause = rawArgs.firstOrNull { it.startsWith(ARG_PAUSE) }
+        ?.substringAfter('=', missingDelimiterValue = "")
+    return explicitPause == "false" || namedPause == "false" || systemAutoStart || configuredAutoStart
+}
 
 /**
  * javaFX启动器
@@ -158,20 +168,45 @@ class MainApplication : Application() {
     }
 
     override fun start(stage: Stage?) {
-        runCatching {
-            for (string in ScriptStatus.programArgs) {
-                if (string.startsWith("--window=")) {
-                    val windowEnum = WindowEnum.fromString(string.split("=")[1]) ?: break
-                    WindowUtil.showStage(windowEnum)
-                    return
-                }
+        for (string in ScriptStatus.programArgs) {
+            if (string.startsWith("--window=")) {
+                val windowEnum = WindowEnum.fromString(string.split("=")[1]) ?: break
+                WindowUtil.showStage(windowEnum)
+                return
             }
-            preInit()
-            InitializerConfig.initializer.init()
-        }.onFailure {
-            log.error { it }
         }
-        showMainPage()
+
+        // The old flow performed OCR health checks, service startup, and
+        // plugin loading before the first JavaFX window was shown. That made
+        // a slow PaddleX initialization indistinguishable from a failed
+        // launch. Show the real startup window first, then initialize off the
+        // JavaFX thread while publishing deterministic progress messages.
+        val startupStage = WindowUtil.buildStage(WindowEnum.STARTUP)
+        startupStage.show()
+        StartupController.begin()
+        Thread {
+            runCatching {
+                StartupController.update(0.12, "$PROGRAM_NAME：读取配置与 OCR 状态…")
+                preInit()
+                StartupController.update(0.48, "$PROGRAM_NAME：加载插件与策略…")
+                InitializerConfig.initializer.init()
+                StartupController.update(0.82, "$PROGRAM_NAME：准备主界面…")
+            }.onSuccess {
+                Platform.runLater {
+                    showMainPage()
+                    StartupController.complete()
+                }
+            }.onFailure { error ->
+                log.error(error) { "启动初始化失败，保留启动页显示失败原因" }
+                StartupController.failed(
+                    error.message?.replace(Regex("\\s+"), " ")?.take(120) ?: error.javaClass.simpleName,
+                )
+            }
+        }.apply {
+            name = "hs-script-startup"
+            isDaemon = false
+            start()
+        }
 //        testJava()
 //        testKt()
 //        compileAndRunExternalKtFiles(listOf("S:\\IdeaProjects\\fs32\\src\\main\\java\\com\\fs\\TestUtil.kt"), System.getProperty("java.class.path"))
@@ -482,26 +517,25 @@ class MainApplication : Application() {
         val namedPause = this.parameters.named["pause"]
         val systemAutoStart = System.getProperty("hs.script.autostart") == "true"
         val startOnOpen = ConfigUtil.getBoolean(ConfigEnum.START_ON_OPEN)
-        if ("false" == pause || "false" == namedPause || systemAutoStart || startOnOpen) {
+        val shouldStart = shouldAutoStart(
+            rawArgs = args,
+            namedPause = namedPause ?: pause,
+            systemAutoStart = systemAutoStart,
+            configuredAutoStart = startOnOpen,
+        )
+        log.info {
+            "AUTO_START_DECISION rawPause=$pause namedPause=$namedPause " +
+                "systemProperty=$systemAutoStart configStartOnOpen=$startOnOpen decision=$shouldStart"
+        }
+        if (shouldStart) {
             log.info { "接收到开始参数，开始脚本" }
             Thread.sleep(1000)
             PauseStatus.isPause = false
         } else {
-            val preferences = Preferences.userNodeForPackage(this::class.java)
-            val key = "used"
-            val version = ConfigUtil.getString(ConfigEnum.CURRENT_VERSION)
-            if (Release.compareVersion(BuildInfo.VERSION, version) > 0) {
-                runUI {
-                    WindowUtil.showStage(WindowEnum.ABOUT)
-                    WindowUtil.showStage(WindowEnum.VERSION_MSG, WindowUtil.getStage(WindowEnum.MAIN))
-                    ConfigUtil.putString(ConfigEnum.CURRENT_VERSION, BuildInfo.VERSION)
-                }
-            } else {
-                if (preferences.get(key, "").isNullOrBlank()) {
-                    WindowUtil.showStage(WindowEnum.ABOUT)
-                }
-            }
-            preferences.put(key, "true")
+            // Keep normal launches quiet.  The About and Version windows
+            // remain available from the main UI, but an upgrade or first run
+            // must not cover the game/script window automatically.
+            log.info { "启动提示窗口已跳过：项目介绍和版本说明可从主界面手动打开" }
         }
     }
 

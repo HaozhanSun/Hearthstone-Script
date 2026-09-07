@@ -9,7 +9,9 @@ import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.bean.WarScoreCalculatorBuilder
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
+import club.xiaojiawei.hsscriptcardsdk.mcts.defaultMctsActionOrderPhase
 import kotlin.math.max
 
 /**
@@ -24,10 +26,13 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     const val TREASURE_DISTRIBUTOR = "TOY_518"
     const val QUESTLINE = "SW_028"
     const val PATCHES_THE_PIRATE = "CFM_637"
+    const val PARACHUTE_BRIGAND = "DRG_056"
     const val SHIPS_CANNON = "GVG_075"
     const val SOUTHSEA_CAPTAIN = "NEW1_027"
     const val HOZEN_ROUGHHOUSER = "VAC_938"
     const val RAGEWING = "YOD_032"
+    const val BATTLEFIELD = "AV_661"
+
     const val HOOKFIST = "CORE_NX2_028"
     const val ANCHOR = "DRG_025"
     const val FRONTLINE_AXE = "BAR_844"
@@ -77,9 +82,18 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         val freeSlots = freeSlots(war)
 
         return when {
+            isCard(card, PirateHeroAttackTargetPolicy.NU_LING_NAGA) ->
+                PirateHeroAttackTargetPolicy.nuLingNagaPlayPrior(action, war)
             isCard(card, SHIPS_CANNON) -> 100.0
             isCard(card, QUESTLINE) && isFirstTurn(war) -> 95.0
             isCard(card, TREASURE_DISTRIBUTOR) -> 90.0 + otherPirates * 2.0
+            isCard(card, BATTLEFIELD) -> {
+                val friendlyMinions = war.me.playArea.cards.count { it.cardType === CardTypeEnum.MINION }
+                // Battlefield's delayed buff is weak without an established
+                // board. Keep it as a legal fallback, but deprioritize it
+                // until at least two friendly minions are present.
+                if (friendlyMinions <= 1) -22.0 else 4.0 + friendlyMinions
+            }
             isCard(card, CANNONMASTER) -> if (freeSlots > 0) 36.0 else -36.0
             isCard(card, BLASTPOWDER_ENGINEER) ->
                 if (otherPirates > 0 || attackablePirates > 0) 28.0 else 8.0
@@ -100,17 +114,23 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             action is PowerAction && card.cardType === CardTypeEnum.HERO_POWER ->
                 if (hasOtherUsefulNonHeroPowerAction(war)) -1_000.0 else -10.0
             isFrontlineAxeHeroAttack(action, war) -> when (frontlineAxeTarget(action, war)) {
-                FrontlineAxeTarget.MINION -> if (frontlineAxeCanKill(action, war)) 30.0 else -100.0
-                FrontlineAxeTarget.HERO -> if (war.me.playArea.hero?.blood()?.let { it < 10 } == true) {
-                    val heroAttack = max(war.me.playArea.hero?.atc ?: 0, war.me.playArea.weapon?.atc ?: 0)
-                    if (war.rival.playArea.hero?.blood()?.let { it <= heroAttack } == true) 80.0 else 20.0
+                FrontlineAxeTarget.MINION -> if (PirateHeroAttackTargetPolicy.isLegal(action, war)) {
+                    if (frontlineAxeCanKill(action, war)) 30.0 else 10.0
+                } else -1_000.0
+                FrontlineAxeTarget.HERO -> if (PirateLethalAttackPolicy.isLethalFaceAction(action, war)) {
+                    80.0
+                } else if (PirateHeroAttackTargetPolicy.isLegal(action, war)) {
+                    20.0
                 } else {
                     -1_000.0
                 }
                 FrontlineAxeTarget.UNKNOWN -> -1_000.0
             }
             action is AttackAction && isPirate(card) ->
-                effectivePirateAttack(card, war) * 0.45
+                effectivePirateAttack(card, war) * 0.45 +
+                    PirateHeroAttackTargetPolicy.nuLingNagaAttackPrior(action, war)
+            action is AttackAction && card.cardType === CardTypeEnum.MINION ->
+                PirateHeroAttackTargetPolicy.nuLingNagaAttackPrior(action, war)
             else -> 0.0
         }
     }
@@ -139,6 +159,24 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         if (distributor != null) {
             return action is PlayAction && action.creator?.let { isCard(it, TREASURE_DISTRIBUTOR) } == true
         }
+
+        // A visible Taunt permits hero-first combat after hand plays. Consume
+        // an otherwise usable hero power before the hero's Taunt attack; the
+        // next re-plan then exposes friendly minion attacks. Combined-damage
+        // routes stay on the existing setup-first path.
+        if (allowsTauntEarlyHeroAction(war)) {
+            if (PirateAttackOrderPolicy.hasUsableHeroPowerAction(war)) {
+                return PirateAttackOrderPolicy.isHeroPowerAction(action)
+            }
+            return action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO
+        }
+
+        // If the hero needs friendly minion damage to finish the selected
+        // highest-threat enemy, commit those setup attacks to that target
+        // before allowing the hero attack phase to begin.
+        if (PirateHeroAttackTargetPolicy.requiresFriendlySetupAttack(war)) {
+            return PirateHeroAttackTargetPolicy.isRequiredFriendlySetupAttack(action, war)
+        }
         return false
     }
 
@@ -148,25 +186,33 @@ object PirateWarriorMctsModel : MctsDecisionModel {
      * requirement. This is intentionally separate from actionPrior.
      */
     override fun isActionLegal(action: Action, war: War): Boolean {
+        if (PirateLethalAttackPolicy.isLethalFaceAction(action, war)) return true
+
+        if (!PirateHeroAttackTargetPolicy.isLegal(action, war)) return false
+
+        if (isFrontlineAxeHeroAttack(action, war)) {
+            return when (frontlineAxeTarget(action, war)) {
+                FrontlineAxeTarget.MINION -> true
+                FrontlineAxeTarget.HERO -> true
+                FrontlineAxeTarget.UNKNOWN -> false
+            }
+        }
+
         val creator = action.creator
         if (creator != null && action is PlayAction && isCard(creator, CAPTAIN_CROWLEY)) {
             return freeSlots(war) >= 3
         }
 
-        if (isFrontlineAxeHeroAttack(action, war)) {
-            return when (frontlineAxeTarget(action, war)) {
-                FrontlineAxeTarget.MINION -> true
-                FrontlineAxeTarget.HERO -> war.me.playArea.hero?.blood()?.let { it < 10 } == true
-                FrontlineAxeTarget.UNKNOWN -> false
-            }
-        }
         return true
     }
+
+    override fun isLethalAction(action: Action, war: War): Boolean =
+        PirateLethalAttackPolicy.isLethalFaceAction(action, war)
 
     /** Keep Warrior's armor power behind all useful Pirate Warrior work. */
     override fun isDeferredAction(action: Action, war: War): Boolean {
         if (isHeroPowerAction(action)) {
-            return hasOtherUsefulNonHeroPowerAction(war)
+            return PirateAttackOrderPolicy.hasAdrenalineFiend(war) && hasOtherUsefulNonHeroPowerAction(war)
         }
 
         if (isFrontlineAxeHeroAttack(action, war) &&
@@ -174,11 +220,51 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         ) {
             return hasOtherUsefulNonAxeAction(war)
         }
+
+        // Parachute Brigand is intentionally the last card we play. It is
+        // still retained by MonteCarloTreeNode when it is the only useful
+        // action, so the free-effect minion cannot strand the turn.
+        val creator = action.creator
+        if (action is PlayAction && creator?.let { isCard(it, PARACHUTE_BRIGAND) } == true) {
+            return hasOtherPlayableAction(war, creator)
+        }
         return false
     }
 
     /** Do not hide Patches when it is literally the only legal action. */
     override fun shouldDefer(card: Card, war: War): Boolean = false
+
+    override fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? =
+        when {
+            action is PlayAction &&
+                (action.creator?.cardType === CardTypeEnum.MINION ||
+                    action.creator?.cardType === CardTypeEnum.LOCATION ||
+                    action.creator?.cardType === CardTypeEnum.WEAPON) ->
+                MctsActionOrderPhase.MINION_PLAY
+            action is PlayAction && action.creator?.cardType === CardTypeEnum.SPELL ->
+                MctsActionOrderPhase.SPELL_PLAY
+            action is PowerAction && action.creator?.cardType === CardTypeEnum.LOCATION ->
+                MctsActionOrderPhase.MINION_PLAY
+            action is AttackAction && action.creator?.cardType === CardTypeEnum.MINION ->
+                MctsActionOrderPhase.MINION_ATTACK
+            action is PowerAction && action.creator?.cardType === CardTypeEnum.HERO_POWER ->
+                if (allowsTauntEarlyHeroAction(war)) {
+                    MctsActionOrderPhase.EARLY_HERO_ACTION
+                } else if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
+                    MctsActionOrderPhase.HERO_POWER
+                } else {
+                    MctsActionOrderPhase.EARLY_HERO_ACTION
+                }
+            action is AttackAction && action.creator?.cardType === CardTypeEnum.HERO ->
+                if (allowsTauntEarlyHeroAction(war)) {
+                    MctsActionOrderPhase.EARLY_HERO_ACTION
+                } else if (PirateAttackOrderPolicy.hasAdrenalineFiend(war)) {
+                    MctsActionOrderPhase.HERO_ATTACK
+                } else {
+                    MctsActionOrderPhase.EARLY_HERO_ACTION
+                }
+            else -> null
+        }
 
     /**
      * Materialize only the deterministic combat buffs for a cloned attack
@@ -320,6 +406,68 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             if (free == 0 && otherPirates < 4) -3.0 else 0.0
     }
 
+    /**
+     * Global-plan objective for Pirate Warrior. The ordinary terminal score
+     * values board quality, but by itself it can prefer a short path that
+     * leaves usable mana behind. Charge the root plan for mana that is
+     * actually reachable by legal card/power actions, while keeping this a
+     * soft opportunity cost so a genuinely empty or blocked state is allowed
+     * to end the turn.
+     */
+    override fun turnPlanAdjustment(root: War, terminal: War, path: List<Action>): Double {
+        val rootMana = root.me.usableResource.coerceAtLeast(0)
+        if (rootMana == 0) return 0.0
+
+        val reachableSpend = maxSpendableMana(root)
+        if (reachableSpend == 0) return 0.0
+
+        val actualSpend = (rootMana - terminal.me.usableResource)
+            .coerceIn(0, rootMana)
+        val missedSpend = (reachableSpend - actualSpend).coerceAtLeast(0)
+        return -missedSpend * 4.0
+    }
+
+    /** Upper bound on mana that the current Warrior root can legally spend. */
+    fun maxSpendableMana(war: War): Int {
+        val mana = war.me.usableResource.coerceAtLeast(0)
+        if (mana == 0) return 0
+
+        val freeSlots = freeSlots(war)
+        val options = mutableListOf<SpendOption>()
+        war.me.handArea.cards.forEach { card ->
+            if (isPlayableHandCard(card, war, mana, freeSlots)) {
+                options += SpendOption(card.cost, if (usesBoardSlot(card)) 1 else 0)
+            }
+        }
+
+        war.me.playArea.power?.let { power ->
+            if (
+                power.cost in 1..mana &&
+                    !power.isExhausted &&
+                    power.canPower() &&
+                    runCatching { power.action.generatePowerActions(war, war.me) }
+                        .getOrDefault(emptyList())
+                        .isNotEmpty()
+            ) {
+                options += SpendOption(power.cost, 0)
+            }
+        }
+
+        if (options.isEmpty()) return 0
+        val reachable = Array(mana + 1) { BooleanArray(freeSlots + 1) }
+        reachable[0][0] = true
+        options.forEach { option ->
+            for (spentMana in mana downTo option.cost) {
+                for (usedSlots in freeSlots downTo option.slot) {
+                    if (reachable[spentMana - option.cost][usedSlots - option.slot]) {
+                        reachable[spentMana][usedSlots] = true
+                    }
+                }
+            }
+        }
+        return (mana downTo 0).firstOrNull { spent -> reachable[spent].any { it } } ?: 0
+    }
+
     fun discoverScore(card: Card): Double {
         val pirate = isPirate(card) || card.cardId in setOf(
             PATCHES_THE_PIRATE,
@@ -394,6 +542,11 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     private fun hasOtherUsefulNonHeroPowerAction(war: War): Boolean =
         hasOtherUsefulNonAxeAction(war)
 
+    private fun allowsTauntEarlyHeroAction(war: War): Boolean =
+        PirateAttackOrderPolicy.hasAttackableEnemyTaunt(war) &&
+            PirateAttackOrderPolicy.hasHeroAttackAction(war) &&
+            !PirateHeroAttackTargetPolicy.requiresFriendlySetupAttack(war)
+
     private fun hasOtherUsefulNonAxeAction(war: War): Boolean {
         val me = war.me
         val handAction = me.handArea.cards.any { card ->
@@ -424,6 +577,19 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     private fun freeSlots(war: War): Int =
         (war.me.playArea.maxSize - war.me.playArea.cards.size).coerceAtLeast(0)
 
+    private fun usesBoardSlot(card: Card): Boolean =
+        card.cardType === CardTypeEnum.MINION || card.cardType === CardTypeEnum.LOCATION
+
+    private fun isPlayableHandCard(card: Card, war: War, mana: Int, freeSlots: Int): Boolean {
+        if (card.isUncertain || card.cost !in 1..mana) return false
+        if (usesBoardSlot(card) && freeSlots == 0) return false
+        val actions = runCatching { card.action.generatePlayActions(war, war.me) }
+            .getOrDefault(emptyList())
+        return actions.isNotEmpty() || canCreateOpaqueAction(card, war)
+    }
+
+    private data class SpendOption(val cost: Int, val slot: Int)
+
     private fun otherPirates(war: War, card: Card): Int =
         war.me.playArea.cards.count { isPirate(it) && it.entityId != card.entityId && it.isAlive() }
 
@@ -434,6 +600,39 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             it !== ignored && it.cardType === CardTypeEnum.WEAPON &&
                 !it.isUncertain && it.cost + ignored.cost <= war.me.usableResource
         }
+
+    /** True when a real action other than the excluded card is available. */
+    private fun hasOtherPlayableAction(war: War, excluded: Card): Boolean {
+        val me = war.me
+        val handAction = me.handArea.cards.any { card ->
+            card.entityId != excluded.entityId &&
+                !isCard(card, PARACHUTE_BRIGAND) &&
+                !card.isUncertain &&
+                card.cost <= me.usableResource &&
+                (card.cardType !== CardTypeEnum.MINION || !me.playArea.isFull) &&
+                (
+                    runCatching { card.action.generatePlayActions(war, me) }
+                        .getOrDefault(emptyList())
+                        .isNotEmpty() || canCreateOpaqueAction(card, war)
+                )
+        }
+        val boardAction = me.playArea.cards.any { card ->
+            (card.canAttack() && runCatching { card.action.generateAttackActions(war, me) }
+                .getOrDefault(emptyList()).isNotEmpty()) ||
+                (card.canPower() && runCatching { card.action.generatePowerActions(war, me) }
+                    .getOrDefault(emptyList()).isNotEmpty())
+        }
+        val heroAction = me.playArea.hero?.let { hero ->
+            hero.canAttack() && runCatching { hero.action.generateAttackActions(war, me) }
+                .getOrDefault(emptyList()).isNotEmpty()
+        } == true
+        val heroPowerAction = me.playArea.power?.let { power ->
+            me.usableResource >= power.cost && power.canPower() && runCatching {
+                power.action.generatePowerActions(war, me)
+            }.getOrDefault(emptyList()).isNotEmpty()
+        } == true
+        return handAction || boardAction || heroAction || heroPowerAction
+    }
 
     private fun hasOtherPlayableMinion(war: War, ignored: Card): Boolean =
         war.me.handArea.cards.any {

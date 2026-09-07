@@ -135,7 +135,19 @@ class MonteCarloTreeNode(
                 val shouldDefer = arg.decisionModel?.shouldDefer(card, war)
                     ?: CardTimingPolicy.shouldDefer(card, war)
                 if (shouldDefer) {
-                    if (CardTimingPolicy.isEndOfTurnCostReductionCard(card)) {
+                    // Deferral is a timing preference, not a legality bypass.
+                    // In particular, a dynamic-cost card must not be put back
+                    // into the root action set while it is still unaffordable;
+                    // doing so makes the controller believe that progress is
+                    // available and can cause repeated stale replans.
+                    val timingCardCurrentlyPlayable =
+                        !card.isUncertain &&
+                            me.usableResource >= card.cost &&
+                            !(playArea.isFull &&
+                                card.cardType !== CardTypeEnum.HERO &&
+                                card.cardType !== CardTypeEnum.SPELL &&
+                                card.cardType !== CardTypeEnum.WEAPON)
+                    if (CardTimingPolicy.isEndOfTurnCostReductionCard(card) && timingCardCurrentlyPlayable) {
                         val deferredPlayActions = runCatching { card.action.generatePlayActions(war, me) }
                             .getOrElse {
                                 scanCard(card, "FILTERED", "deferred-play-action-generation-error:${it::class.java.simpleName}")
@@ -146,6 +158,17 @@ class MonteCarloTreeNode(
                         } else if (arg.decisionModel?.canCreateOpaqueAction(card, war) == true) {
                             deferredTimingActions.add(createOpaquePlayAction(card))
                         }
+                    } else if (CardTimingPolicy.isEndOfTurnCostReductionCard(card)) {
+                        scanCard(
+                            card,
+                            "FILTERED",
+                            when {
+                                card.isUncertain -> "deferred-card-uncertain"
+                                me.usableResource < card.cost -> "deferred-card-insufficient-mana"
+                                playArea.isFull -> "deferred-card-board-full"
+                                else -> "deferred-card-currently-unplayable"
+                            },
+                        )
                     }
                     scanCard(card, "FILTERED", "decision-model-should-defer")
                     if (parent == null && arg.debugName.isNotBlank()) {
@@ -157,7 +180,7 @@ class MonteCarloTreeNode(
                     }
                     continue
                 }
-                if (card.isCoinCard && !hasCoinPayoff(war)) {
+                if (card.isCoinCard && !CoinActionPolicy.hasImmediatePayoff(war)) {
                     scanCard(card, "FILTERED", "coin-has-no-immediate-payoff")
                     if (parent == null && arg.debugName.isNotBlank()) {
                         log.info {
@@ -296,8 +319,85 @@ class MonteCarloTreeNode(
                 )
             }
         }
+        // A legal face-lethal route is a root-level hard gate. It must run
+        // before the ordinary phase fence; otherwise MINION_PLAY or a
+        // non-lethal trade can win the root before the attack actions are
+        // considered. Re-planning creates a fresh root after each attack, so
+        // the calculation naturally falls back to the normal phase order once
+        // the remaining legal damage is no longer lethal.
+        if (parent == null && decisionModel != null) {
+            val lethalActions = result.filter { decisionModel.isLethalAction(it, war) }
+            if (lethalActions.isNotEmpty()) {
+                addScan(
+                    mapOf(
+                        "kind" to "TREE_FILTER",
+                        "outcome" to "LETHAL_FACE_ATTACK_ONLY",
+                        "reason" to "legal-current-damage-reaches-rival-hero-life",
+                        "beforeCount" to result.size,
+                        "afterCount" to lethalActions.size,
+                        "actions" to lethalActions.map(::actionDescription),
+                    ),
+                )
+                rootScan?.let { scan ->
+                    MctsReplayTrace.record(
+                        war,
+                        "action_scan",
+                        "root action scan completed with lethal face-attack restriction",
+                        mapOf(
+                            "strategy" to arg.debugName,
+                            "phase" to "root",
+                            "preFilterActionCount" to result.size,
+                            "lethalActionCount" to lethalActions.size,
+                            "finalActionCount" to lethalActions.size,
+                            "decisions" to scan,
+                        ),
+                    )
+                }
+                return lethalActions.toMutableList()
+            }
+        }
+        // Apply the released deck action order before card-specific mandatory
+        // rules. This is the important root/re-plan boundary: actionPrior can
+        // rank an attack above a minion play, but it must not be able to cross
+        // the explicit minion/location -> spell -> minion attack -> hero power
+        // -> hero attack
+        // phases. When the Pirate Fiend is absent, EARLY_HERO_ACTION is an
+        // intentional exception that lets the model clear a threat before
+        // risking friendly minions. Mandatory Cannon/Quest/location rules
+        // then choose within
+        // the currently allowed phase and cannot violate that order.
+        val orderedActions = arg.decisionModel?.let { model ->
+            val phaseOrder = listOf(
+                MctsActionOrderPhase.POST_HERO_ATTACK_LOCATION,
+                MctsActionOrderPhase.CLIFFSIDE_HERO_ATTACK,
+                MctsActionOrderPhase.MINION_PLAY,
+                MctsActionOrderPhase.SPELL_PLAY,
+                MctsActionOrderPhase.EARLY_HERO_ACTION,
+                MctsActionOrderPhase.MINION_ATTACK,
+                MctsActionOrderPhase.HERO_POWER,
+                MctsActionOrderPhase.HERO_ATTACK,
+            )
+            val selectedPhase = phaseOrder.firstOrNull { phase ->
+                result.any { model.actionOrderPhase(it, war) == phase }
+            }
+            if (selectedPhase == null) {
+                result
+            } else {
+                val filtered = result.filter { model.actionOrderPhase(it, war) == selectedPhase }
+                addScan(
+                    mapOf(
+                        "kind" to "ACTION_ORDER",
+                        "outcome" to "PHASE_RESTRICTED",
+                        "phase" to selectedPhase.name,
+                        "beforeCount" to result.size,
+                        "afterCount" to filtered.size,
+                    ),
+                )
+                filtered
+            }
+        } ?: result
         val mandatoryActions: List<Action> = arg.decisionModel
-            ?.let { model -> result.filter { model.isMandatoryAction(it, war) } }
+            ?.let { model -> orderedActions.filter { model.isMandatoryAction(it, war) } }
             ?: emptyList()
         if (mandatoryActions.isNotEmpty()) {
             addScan(mapOf("kind" to "TREE_FILTER", "outcome" to "MANDATORY_ONLY", "reason" to "decision-model-mandatory-actions", "actions" to mandatoryActions.map(::actionDescription)))
@@ -306,18 +406,18 @@ class MonteCarloTreeNode(
                     war,
                     "action_scan",
                     "root action scan completed with mandatory-action restriction",
-                    mapOf("strategy" to arg.debugName, "phase" to "root", "preFilterActionCount" to result.size, "mandatoryActionCount" to mandatoryActions.size, "finalActionCount" to mandatoryActions.size, "decisions" to scan),
+                    mapOf("strategy" to arg.debugName, "phase" to "root", "preFilterActionCount" to orderedActions.size, "mandatoryActionCount" to mandatoryActions.size, "finalActionCount" to mandatoryActions.size, "decisions" to scan),
                 )
             }
             return mandatoryActions.toMutableList()
         }
 
-        val deferredDecisions = result.map { action ->
+        val deferredDecisions = orderedActions.map { action ->
             action to (arg.decisionModel?.isDeferredAction(action, war) == true)
         }
         val deferredActions = if (arg.decisionModel != null) {
             deferredDecisions.filterNot { it.second }.map { it.first }
-        } else result
+        } else orderedActions
         deferredDecisions.filter { it.second }.forEach { (action, _) ->
             addScan(mapOf("kind" to "ACTION_FILTER", "outcome" to "FILTERED", "reason" to "decision-model-deferred-action", "action" to actionDescription(action)))
         }
@@ -325,11 +425,11 @@ class MonteCarloTreeNode(
         val filteredActions = if (nonEndTurnActions.isNotEmpty()) {
             deferredActions
         } else {
-            // EndTurn is not a useful action for this decision.  When every
-            // currently generated action is deferred, retain those deferred
-            // actions and add the explicitly supported timing-card fallback
-            // instead of treating EndTurn as proof that work is complete.
-            (result + deferredTimingActions).distinct()
+            // EndTurn is not a useful action for this decision. When every
+            // currently generated action is deferred, retain only deferred
+            // timing actions that passed the same payment/board checks above.
+            // An unaffordable timing card must not be resurrected here.
+            (orderedActions + deferredTimingActions).distinct()
         }
         if (deferredTimingActions.isNotEmpty() && nonEndTurnActions.isEmpty()) {
             addScan(
@@ -350,42 +450,16 @@ class MonteCarloTreeNode(
         } else {
             filteredActions.toMutableList()
         }
-        addScan(mapOf("kind" to "TREE_FILTER", "outcome" to "FINAL", "reason" to if (arg.experimentalSearch && filteredActions.any { it !== TurnOverAction }) "experimental-end-turn-removed" else "end-turn-retained", "preFilterActionCount" to result.size, "deferredActionCount" to deferredActions.size, "finalActionCount" to finalActions.size, "finalActions" to finalActions.map(::actionDescription)))
+        addScan(mapOf("kind" to "TREE_FILTER", "outcome" to "FINAL", "reason" to if (arg.experimentalSearch && filteredActions.any { it !== TurnOverAction }) "experimental-end-turn-removed" else "end-turn-retained", "preFilterActionCount" to orderedActions.size, "deferredActionCount" to deferredActions.size, "finalActionCount" to finalActions.size, "finalActions" to finalActions.map(::actionDescription)))
         rootScan?.let { scan ->
             MctsReplayTrace.record(
                 war,
                 "action_scan",
                 "root action scan completed with per-branch telemetry",
-                mapOf("strategy" to arg.debugName, "phase" to "root", "preFilterActionCount" to result.size, "mandatoryActionCount" to mandatoryActions.size, "deferredActionCount" to deferredActions.size, "finalActionCount" to finalActions.size, "decisions" to scan),
+                mapOf("strategy" to arg.debugName, "phase" to "root", "preFilterActionCount" to orderedActions.size, "mandatoryActionCount" to mandatoryActions.size, "deferredActionCount" to deferredActions.size, "finalActionCount" to finalActions.size, "decisions" to scan),
             )
         }
         return finalActions
-    }
-
-    /**
-     * Coin is useful here only as a one-mana conversion that immediately
-     * unlocks another legal action. This prevents MCTS from selecting
-     * Coin -> one-mana hero power when it could simply use that power without
-     * consuming Coin, while preserving Coin when it enables a two-mana card
-     * or a two-mana hero power.
-     */
-    private fun hasCoinPayoff(war: War): Boolean {
-        val me = war.me
-        val currentMana = me.usableResource
-        val coinMana = currentMana + 1
-        val boardFull = me.playArea.isFull
-        val handPayoff = me.handArea.cards.any { card ->
-            !card.isUncertain &&
-                !card.isCoinCard &&
-                !CardTimingPolicy.shouldDefer(card, war) &&
-                card.cost > currentMana &&
-                card.cost <= coinMana &&
-                (!boardFull || card.cardType === CardTypeEnum.HERO || card.cardType === CardTypeEnum.SPELL || card.cardType === CardTypeEnum.WEAPON)
-        }
-        val powerPayoff = me.playArea.power?.let { power ->
-            !power.isExhausted && power.cost > currentMana && power.cost <= coinMana && power.canPower()
-        } == true
-        return handPayoff || powerPayoff
     }
 
     /**

@@ -15,6 +15,7 @@ import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy.resetForNewGame
 import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator
 import club.xiaojiawei.hsscript.utils.ConfigUtil
+import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.WindowUtil
 import club.xiaojiawei.hsscript.utils.runUI
 
@@ -27,6 +28,7 @@ object FillDeckPhaseStrategy : AbstractPhaseStrategy() {
 
     override fun dealTagChangeThenIsOver(line: String, tagChangeEntity: TagChangeEntity): Boolean {
         if (tagChangeEntity.tag == TagEnum.TURN && tagChangeEntity.value == "1") {
+            GameUtil.resetForNewGame()
             resetForNewGame()
             SurrenderPolicy.resetForNewGame()
             E2ETrace.resetForNewGame()
@@ -38,6 +40,7 @@ object FillDeckPhaseStrategy : AbstractPhaseStrategy() {
 
     override fun dealOtherThenIsOver(line: String): Boolean {
         if (line.contains("CREATE_GAME")) {
+            GameUtil.resetForNewGame()
             SurrenderPolicy.resetForNewGame()
             if (ConfigUtil.getBoolean(ConfigEnum.AUTO_OPEN_GAME_ANALYSIS)) {
                 runUI {

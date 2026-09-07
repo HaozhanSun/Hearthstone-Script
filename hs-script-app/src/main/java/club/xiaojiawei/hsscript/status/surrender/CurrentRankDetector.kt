@@ -267,6 +267,7 @@ object CurrentRankDetector {
                 evidenceTrigger,
                 legacyOcr = { "" },
                 allowEmptyProbeResult = true,
+                roi = "rank-badge",
             )
             val rawOcrTexts = listOf(recognition.text)
             val ocrTexts = rawOcrTexts.map(::normalizeOcrText)

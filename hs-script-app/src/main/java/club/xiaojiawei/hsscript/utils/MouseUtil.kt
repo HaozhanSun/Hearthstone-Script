@@ -335,8 +335,17 @@ object MouseUtil {
                     log.info { "E2E_INPUT_ROBOT_CANCELLED_AFTER_FOCUS client=(${pos.x},${pos.y}) hwnd=$hwnd" }
                     return@submit false
                 }
-                if (!foregroundFocused) {
-                    log.warn { "E2E_INPUT_ROBOT_FOREGROUND_UNCONFIRMED hwnd=$hwnd" }
+                if (!shouldDispatchE2ERobotInput(foregroundFocused, Thread.currentThread().isInterrupted)) {
+                    // Robot delivers to the actual foreground window.  If
+                    // activation was rejected, continuing here can send the
+                    // click to the script UI, Start menu, or another app.
+                    // Fail closed and let the caller retry after the next
+                    // state/focus observation.
+                    log.warn {
+                        "E2E_INPUT_ROBOT_FOREGROUND_UNCONFIRMED hwnd=$hwnd " +
+                            "input=not-sent actual=${User32.INSTANCE.GetForegroundWindow()}"
+                    }
+                    return@submit false
                 }
                 // The E2E game is deliberately kept borderless/full-screen.
                 // Keep the coordinate conversion screen-relative after the
@@ -375,8 +384,12 @@ object MouseUtil {
                     delay(RandomUtil.getInteractionDelay(35))
                     mouseRelease(buttonMask)
                 }
+                val foregroundAfterInput = User32.INSTANCE.GetForegroundWindow()
+                val focusAfterInput = foregroundAfterInput != null &&
+                    Pointer.nativeValue(foregroundAfterInput.pointer) == Pointer.nativeValue(hwnd.pointer)
                 log.info {
-                    "E2E_INPUT_ROBOT_SENT client=(${pos.x},${pos.y}) screen=(${screenPoint.x},${screenPoint.y}) hwnd=$hwnd"
+                    "E2E_INPUT_ROBOT_SENT client=(${pos.x},${pos.y}) screen=(${screenPoint.x},${screenPoint.y}) " +
+                        "hwnd=$hwnd foregroundAfter=$foregroundAfterInput focusedAfter=$focusAfterInput"
                 }
                 true
             }
@@ -906,6 +919,11 @@ object MouseUtil {
         hwnd ?: return false
         return ConfigUtil.getBoolean(ConfigEnum.ENABLE_MOUSE) && WorkTimeListener.working
     }
+
+    internal fun shouldDispatchE2ERobotInput(
+        foregroundConfirmed: Boolean,
+        workerInterrupted: Boolean,
+    ): Boolean = foregroundConfirmed && !workerInterrupted
 
     /**
      * 鼠标移动

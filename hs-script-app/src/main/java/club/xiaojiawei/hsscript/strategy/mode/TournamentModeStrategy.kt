@@ -7,6 +7,7 @@ import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
@@ -22,6 +23,7 @@ import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import club.xiaojiawei.hsscriptstrategysdk.DeckStrategy
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 传统对战
@@ -29,6 +31,8 @@ import java.util.concurrent.TimeUnit
  * @date 2022/11/25 12:39
  */
 object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
+    private val matchmakingTraceSequence = AtomicLong()
+
     val START_RECT: GameRect by lazy { GameRect(0.2586, 0.3459, 0.2706, 0.3794) }
 
     /** 自动补全不完整套牌确认按钮（新版套牌选择页） */
@@ -193,23 +197,62 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
     }
 
     fun startMatching() {
-        log.info { "开始匹配" }
+        val traceId = matchmakingTraceSequence.incrementAndGet()
+        log.info { "开始匹配 trace=$traceId" }
+        logMatchmakingCheckpoint(traceId, "before-start")
         // Keep the upstream entry sequence: Hearthstone may first display the
         // automatic deck-completion dialog.  A single start click can leave
         // the client on the deck-selection page while the script has already
         // logged START_MATCHING, which is not a real state transition.
         START_RECT.lClick()
+        logMatchmakingCheckpoint(traceId, "after-start-click")
         SystemUtil.delayLong()
         log.info { "尝试确认自动补全套牌弹窗" }
+        logMatchmakingCheckpoint(traceId, "before-complete-deck-click-1")
         COMPLETE_DECK_CONFIRM_RECT.lClick()
+        logMatchmakingCheckpoint(traceId, "after-complete-deck-click-1")
         SystemUtil.delayShortMedium()
         log.info { "重试确认自动补全套牌弹窗" }
+        logMatchmakingCheckpoint(traceId, "before-complete-deck-click-2")
         COMPLETE_DECK_CONFIRM_RECT.lClick()
+        logMatchmakingCheckpoint(traceId, "after-complete-deck-click-2")
         SystemUtil.delayShortMedium()
         log.info { "确认补全后再次点击开始" }
+        logMatchmakingCheckpoint(traceId, "before-final-start-click")
         START_RECT.lClick()
+        logMatchmakingCheckpoint(traceId, "after-final-start-click")
+        captureMatchmakingCheckpoint(traceId, "after-final-start-click")
         generateTimer()
-        scheduleMatchmakingDialogRecovery()
+        scheduleMatchmakingDialogRecovery(traceId)
+    }
+
+    private fun logMatchmakingCheckpoint(traceId: Long, stage: String) {
+        val powerLog = PowerLogListener.logFile
+        log.info {
+            "MATCHMAKING_TRACE trace=$traceId stage=$stage " +
+                "mode=${Mode.currMode?.name ?: "NONE"} " +
+                "pause=${PauseStatus.isPause} working=${WorkTimeListener.working} " +
+                "gameHwnd=${ScriptStatus.gameHWND} " +
+                "powerLog=${powerLog?.path() ?: "none"} " +
+                "powerPos=${powerLog?.getPosition() ?: -1} " +
+                "powerLen=${powerLog?.length() ?: -1}"
+        }
+    }
+
+    private fun captureMatchmakingCheckpoint(traceId: Long, stage: String) {
+        if (System.getProperty("hs.script.e2e") != "true") return
+        val evidence = UnknownStateScreenshot.capture(
+            category = UnknownStateScreenshot.CATEGORY_POPUP_RECOVERY,
+            trigger = "matchmaking-$stage",
+            state = "trace=$traceId|mode=${Mode.currMode?.name ?: "NONE"}",
+            phase = "tournament-matchmaking",
+            label = stage,
+        )
+        log.info {
+            "MATCHMAKING_TRACE_SCREENSHOT trace=$traceId stage=$stage " +
+                "path=${evidence?.file?.absolutePath ?: "not-saved"} " +
+                "link=${evidence?.link ?: "none"}"
+        }
     }
 
     /**
@@ -218,7 +261,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
      * fires.  It is safe to probe this centered button while the mode is still
      * TOURNAMENT, but never keep probing after a game starts.
      */
-    private fun scheduleMatchmakingDialogRecovery() {
+    private fun scheduleMatchmakingDialogRecovery(traceId: Long) {
         var attempts = 0
         lateinit var recoveryTask: ScheduledFuture<*>
         recoveryTask = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
@@ -244,8 +287,10 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                     recoveryTask.cancel(false)
                     return@LRunnable
                 }
-                log.info { "匹配入口弹窗恢复尝试 #$attempts" }
+                log.info { "匹配入口弹窗恢复尝试 #$attempts trace=$traceId" }
+                logMatchmakingCheckpoint(traceId, "before-popup-recovery-$attempts")
                 ERROR_RECT.lClickCenter(false)
+                logMatchmakingCheckpoint(traceId, "after-popup-recovery-$attempts")
             },
             800,
             1_000,

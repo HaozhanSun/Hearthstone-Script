@@ -36,7 +36,9 @@ object StatisticsListener {
                     "STATISTICS_SURRENDER_LABEL conceded=${conceded.ifBlank { "<blank>" }} " +
                             "ourGameId=${me.gameId.ifBlank { "<blank>" }} " +
                             "opponentGameId=${rival.gameId.ifBlank { "<blank>" }} " +
-                            "requestByUs=${WarEx.surrenderRequested} label=${surrendered ?: "UNKNOWN"}"
+                            "requestByUs=${WarEx.surrenderRequested} " +
+                            "surrenderReason=${WarEx.surrenderReason ?: "<blank>"} " +
+                            "label=${surrendered ?: "UNKNOWN"}"
                 }
                 recordDao.insert(
                     Record(

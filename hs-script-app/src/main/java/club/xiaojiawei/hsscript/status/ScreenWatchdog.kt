@@ -1,10 +1,9 @@
 package club.xiaojiawei.hsscript.status
 
-import club.xiaojiawei.hsscript.bean.TesseractEx
 import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.enums.ConfigEnum
-import club.xiaojiawei.hsscript.ocr.OcrRuntime
+import club.xiaojiawei.hsscript.ocr.PaddleXOcrCancelledException
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
@@ -16,6 +15,8 @@ import java.awt.image.BufferedImage
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.CancellationException
+import net.sourceforge.tess4j.Tesseract
 
 enum class ScreenWatchdogKind {
     WIN,
@@ -30,6 +31,7 @@ enum class ScreenWatchdogKind {
 
 enum class ScreenWatchdogRecoveryAction {
     CONTINUE_ACTION,
+    STOP_SURRENDER_NO_ACTION,
     STOP_SURRENDER_AND_RECORD_WIN,
     STOP_SURRENDER_AND_RECORD_LOSS,
     STOP_SURRENDER_AND_CLEAR_RESULT,
@@ -100,7 +102,10 @@ object ScreenWatchdog {
         ocrProvider: (BufferedImage) -> String = ::runOCR,
     ): ScreenWatchdogObservation {
         val runId = System.getProperty("hs.script.e2e.run-id", "normal")
-        val provider = OcrRuntime.currentProvider().name
+        // This watchdog only classifies terminal/menu screens. Keep it on the
+        // local OCR path so a PaddleX rank request can never block surrender
+        // recovery or hold the action executor for a long sidecar timeout.
+        val provider = "LEGACY"
         val image = runCatching { captureProvider() }.getOrElse { error ->
             log.warn(error) {
                 "SCREEN_WATCHDOG_CAPTURE_FAILED runId=$runId trigger=$trigger state=$state attempts=$attempts"
@@ -137,16 +142,35 @@ object ScreenWatchdog {
         }
 
         val ocrText = runCatching { ocrProvider(image).replace(Regex("\\s+"), "") }.getOrElse { error ->
+            if (error is PaddleXOcrCancelledException ||
+                error is CancellationException ||
+                error is InterruptedException ||
+                Thread.currentThread().isInterrupted
+            ) {
+                log.info(error) {
+                    "SCREEN_WATCHDOG_OCR_CANCELLED runId=$runId provider=$provider trigger=$trigger " +
+                        "screenshot=${evidence?.file?.absolutePath ?: "not-saved"}"
+                }
+                return ScreenWatchdogObservation(
+                    kind = ScreenWatchdogKind.UNKNOWN,
+                    action = ScreenWatchdogRecoveryAction.STOP_SURRENDER_NO_ACTION,
+                    ocrText = "",
+                    screenshotPath = evidence?.file?.absolutePath,
+                    provider = provider,
+                    reason = "ocr-cancelled",
+                )
+            }
             log.warn(error) {
                 "SCREEN_WATCHDOG_OCR_FAILED runId=$runId provider=$provider trigger=$trigger " +
                     "screenshot=${evidence?.file?.absolutePath ?: "not-saved"}"
             }
             ""
         }
+        val providerUsed = "LEGACY"
         val kind = classify(ocrText)
         val action = decide(kind)
         log.warn {
-            "SCREEN_WATCHDOG_OCR runId=$runId provider=$provider kind=$kind action=$action " +
+            "SCREEN_WATCHDOG_OCR runId=$runId provider=$providerUsed kind=$kind action=$action " +
                 "chars=${ocrText.length} screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                 "ocr=${sanitize(ocrText).take(240).ifBlank { "<empty>" }}"
         }
@@ -155,7 +179,7 @@ object ScreenWatchdog {
             action = action,
             ocrText = ocrText,
             screenshotPath = evidence?.file?.absolutePath,
-            provider = provider,
+            provider = providerUsed,
             reason = "ocr-classified",
         )
     }
@@ -251,12 +275,12 @@ object ScreenWatchdog {
 
     private fun runOCR(image: BufferedImage): String {
         val ocrImage = resizeForOcr(image)
-        return TesseractEx().apply {
+        return Tesseract().apply {
             setDatapath(File(TESS_DATA_PATH).absolutePath)
             setLanguage(CHI_SIM_DATA)
             setPageSegMode(11)
             setVariable("user_defined_dpi", "160")
-        }.doOCR(ocrImage, "screen-watchdog")
+        }.doOCR(ocrImage)
     }
 
     private fun resizeForOcr(image: BufferedImage): BufferedImage {

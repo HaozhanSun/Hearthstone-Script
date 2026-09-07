@@ -197,6 +197,59 @@ class OcrRuntimeTest {
     }
 
     @Test
+    fun cancelledPaddleXDoesNotFallbackToLegacy() {
+        OcrRuntime.providerModeProvider = { OcrProviderMode.AUTO }
+        OcrRuntime.settingsProvider = {
+            PaddleXOcrSettings(true, "python", "fake-module", "cpu", "", 1000)
+        }
+        var legacyCalled = false
+        OcrRuntime.paddleXBridgeFactory = {
+            object : OcrTextBridge {
+                override fun recognize(image: java.awt.image.BufferedImage, desc: String): String =
+                    throw PaddleXOcrCancelledException("cancelled by terminal cleanup")
+
+                override fun healthCheck(): OcrHealth = OcrHealth(true, OcrProviderKind.PADDLEX, "ok")
+            }
+        }
+
+        kotlin.test.assertFailsWith<PaddleXOcrCancelledException> {
+            OcrRuntime.recognize(TestImages.onePixel(), "cancelled-test") {
+                legacyCalled = true
+                "legacy-must-not-run"
+            }
+        }
+        assertFalse(legacyCalled)
+        assertEquals(OcrProviderKind.PADDLEX, OcrRuntime.lastProviderUsed())
+    }
+
+    @Test
+    fun emptyProbeRemainsEmptyWhenAutoFallbackHasNoLegacyText() {
+        OcrRuntime.providerModeProvider = { OcrProviderMode.AUTO }
+        OcrRuntime.settingsProvider = {
+            PaddleXOcrSettings(true, "python", "fake-module", "cpu", "", 1000)
+        }
+        OcrRuntime.paddleXBridgeFactory = {
+            object : OcrTextBridge {
+                override fun recognize(image: java.awt.image.BufferedImage, desc: String): String =
+                    throw PaddleXOcrException("sidecar timeout")
+
+                override fun healthCheck(): OcrHealth = OcrHealth(false, OcrProviderKind.PADDLEX, "timeout")
+            }
+        }
+
+        assertEquals(
+            "",
+            OcrRuntime.recognize(
+                TestImages.onePixel(),
+                "rank-probe-fallback-empty",
+                legacyOcr = { "" },
+                allowEmptyProbeResult = true,
+            ),
+        )
+        assertEquals(OcrProviderKind.LEGACY, OcrRuntime.lastProviderUsed())
+    }
+
+    @Test
     fun autoThrowsWhenBothProvidersFailContract() {
         OcrRuntime.providerModeProvider = { OcrProviderMode.AUTO }
         OcrRuntime.settingsProvider = {

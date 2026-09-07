@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.TaskManager
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
+import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.PowerLogUtil
@@ -28,6 +29,7 @@ import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import club.xiaojiawei.hsscriptbase.util.isTrue
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * 游戏阶段抽象类
@@ -37,6 +39,7 @@ import java.io.IOException
 abstract class AbstractPhaseStrategy : PhaseStrategy {
 
     protected val war = WAR
+    private val lastTerminalSkipLog = AtomicReference<String?>(null)
 
     override fun deal(line: String) {
         dealing = true
@@ -118,18 +121,29 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
      */
     private fun surrenderImmediatelyForResolvedOpponentHero(): Boolean {
         if (GameUtil.isTerminalGameState()) {
-            log.info {
-                "SURRENDER_POLICY_SKIPPED reason=terminal-state-priority " +
-                    "phase=${war.currentPhase.name} step=${war.currentTurnStep?.name ?: "NONE"}"
+            val marker = "${war.currentPhase.name}|${war.currentTurnStep?.name ?: "NONE"}|" +
+                "${war.won}|${war.lost}|${war.conceded}"
+            if (lastTerminalSkipLog.getAndSet(marker) != marker) {
+                log.info {
+                    "SURRENDER_POLICY_SKIPPED reason=terminal-state-priority " +
+                        "phase=${war.currentPhase.name} step=${war.currentTurnStep?.name ?: "NONE"}"
+                }
             }
             return true
         }
+        lastTerminalSkipLog.set(null)
         val result = SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war) ?: return false
         return dispatchSurrenderDecision(result, "opponent-hero")
     }
 
     private fun surrenderImmediatelyForCurrentRank(): Boolean {
         if (GameUtil.isTerminalGameState()) return true
+        if (war.currentPhase == WarPhaseEnum.REPLACE_CARD) {
+            // The rank read belongs to ReplaceCardPhaseStrategy's bounded
+            // asynchronous preflight.  Never let PaddleX or Tesseract block
+            // the Power.log listener or consume the mulligan window here.
+            return false
+        }
         val result = SurrenderPolicy.evaluateCurrentRankBeforeMulligan() ?: return false
         return dispatchSurrenderDecision(result, "current-rank")
     }
@@ -152,12 +166,22 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
             return false
         }
         cancelAllTask()
+        if (war.currentPhase == WarPhaseEnum.REPLACE_CARD) {
+            ReplaceCardPhaseStrategy.cancelRankPreflight("surrender-requested-$source")
+        }
         log.warn {
             "SURRENDER_ACTION_REQUESTED source=$source rule=${result.ruleId} " +
                 "reason=${result.reason ?: "none"} dispatch=requested"
         }
-        GameUtil.surrender(skipEndTurn = true)
-        return true
+        val dispatched = GameUtil.surrender(skipEndTurn = true, reason = result.reason)
+        if (!dispatched) {
+            log.warn {
+                "SURRENDER_ACTION_BLOCKED source=$source rule=${result.ruleId} " +
+                    "reason=surrender-executor-rejected requestedReason=${result.reason ?: "none"} " +
+                    "pause=false dispatch=false continue=true"
+            }
+        }
+        return dispatched
     }
 
     protected fun beforeDeal() {

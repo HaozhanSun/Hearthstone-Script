@@ -45,3 +45,23 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
 - Promote beta to `main` only after the exact beta artifact passes the online
   E2E completion gate. The checked-in channel validation workflow must pass
   before promotion.
+
+## Operational feedback
+
+- Workers report to the current secretary session; only that session deploys.
+- Route workers to the current session ID, never an archived secretary; do not
+  wait on workers when a completion notification is available.
+- Before diagnosis, capture the exact runtime version, PID, channel, log file,
+  and matching screenshot; do not infer state from stale UI text.
+- Treat `F2`/pause, crash, idle, and blocked-action as different states; record
+  the direct trigger before changing code or restarting anything.
+- Every fix needs an offline test plus a live log/screenshot correlation; a
+  green build alone is not evidence of end-to-end correctness.
+- Keep app launch, game launch, strategy refresh, and deployment separate;
+  verify each explicitly and never launch during build-only work.
+- Bump the strategy version on every strategy change and verify the running
+  dropdown/runtime contract, not only source files or package contents.
+- Keep Beta and Stable artifacts, manifests, logs, PIDs, shortcuts, and user
+  data isolated; never kill a live run unless the user authorized that scope.
+- For recovery/OCR, prefer the smallest required ROI and a persistent service;
+  log provider, timeout, fallback, ROI, and result so failures are actionable.

@@ -9,18 +9,287 @@ import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
+import club.xiaojiawei.hsscriptcardsdk.bean.TurnOverAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeNode
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsTurnPhaseFence
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class PirateDemonHunterMctsExperimentModelTest {
+
+    @Test
+    fun `hero attack suppresses nonlethal face and keeps the first deterministic kill target`() {
+        val war = testWar()
+        val hero = testCard("DH_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 0
+            atc = 3
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("DH_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 0
+            atc = 0
+            health = 20
+        }
+        val firstKill = testCard("FIRST_KILL").apply { cost = 0; atc = 1; health = 2 }
+        val secondKill = testCard("SECOND_KILL").apply { cost = 0; atc = 1; health = 1 }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(firstKill, war.rival.playArea)
+        war.addCard(secondKill, war.rival.playArea)
+
+        val generated = hero.action.generateAttackActions(war, war.me)
+        assertTrue(generated.isNotEmpty())
+        assertTrue(generated.all { !it.targetEntityId.isNullOrBlank() })
+        assertTrue(generated.any { it.targetIsHero })
+        assertFalse(
+            PirateDemonHunterMctsExperimentModel.isActionLegal(
+                AttackAction({}, {}, hero),
+                war,
+            ),
+        )
+
+        assertFalse(
+            PirateDemonHunterMctsExperimentModel.isActionLegal(
+                AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true),
+                war,
+            ),
+        )
+        assertTrue(
+            PirateDemonHunterMctsExperimentModel.isActionLegal(
+                AttackAction({}, {}, hero, targetEntityId = firstKill.entityId),
+                war,
+            ),
+        )
+        assertFalse(
+            PirateDemonHunterMctsExperimentModel.isActionLegal(
+                AttackAction({}, {}, hero, targetEntityId = secondKill.entityId),
+                war,
+            ),
+        )
+    }
+
+    @Test
+    fun `nu ling naga makes other minions prefer enemy minions over nonlethal face`() {
+        val war = testWar()
+        val rivalHero = testCard("NAGA_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            health = 20
+        }
+        val naga = testCard(PirateHeroAttackTargetPolicy.NU_LING_NAGA).apply {
+            cardType = CardTypeEnum.MINION
+            health = 3
+            isExhausted = true
+        }
+        val attacker = testCard("NAGA_ATTACKER").apply {
+            cardType = CardTypeEnum.MINION
+            cardRace = CardRaceEnum.PIRATE
+            atc = 3
+            health = 3
+            isExhausted = false
+        }
+        val rivalMinion = testCard("NAGA_RIVAL_MINION").apply {
+            cardType = CardTypeEnum.MINION
+            health = 4
+            atc = 2
+        }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(naga, war.me.playArea)
+        war.addCard(attacker, war.me.playArea)
+        war.addCard(rivalMinion, war.rival.playArea)
+
+        val minionAttack = AttackAction({}, {}, attacker, targetEntityId = rivalMinion.entityId)
+        val faceAttack = AttackAction({}, {}, attacker, targetEntityId = rivalHero.entityId, targetIsHero = true)
+
+        assertTrue(
+            PirateDemonHunterMctsExperimentModel.actionPrior(minionAttack, war) >
+                PirateDemonHunterMctsExperimentModel.actionPrior(faceAttack, war),
+        )
+    }
+
+    @Test
+    fun `nu ling naga is downranked until a friendly minion can attack`() {
+        val war = testWar()
+        val rivalHero = testCard("NAGA_PLAY_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            health = 20
+        }
+        val naga = testCard(PirateHeroAttackTargetPolicy.NU_LING_NAGA).apply {
+            cardType = CardTypeEnum.MINION
+            cost = 3
+        }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(naga, war.me.handArea)
+
+        val nagaAction = PlayAction({}, {}, naga)
+        val noAttackerPrior = PirateDemonHunterMctsExperimentModel.actionPrior(nagaAction, war)
+
+        val attacker = testCard("NAGA_PLAY_ATTACKER").apply {
+            cardType = CardTypeEnum.MINION
+            cardRace = CardRaceEnum.PIRATE
+            atc = 2
+            health = 2
+            isExhausted = false
+        }
+        war.addCard(attacker, war.me.playArea)
+        val attackerAvailablePrior = PirateDemonHunterMctsExperimentModel.actionPrior(nagaAction, war)
+
+        assertTrue(noAttackerPrior < attackerAvailablePrior)
+        assertTrue(noAttackerPrior < 0.0)
+    }
+
+    @Test
+    fun `hero attack chooses the highest threat among killable minions`() {
+        val war = testWar()
+        val hero = testCard("THREAT_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 3
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("THREAT_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 20
+        }
+        val lowThreat = testCard("LOW_THREAT").apply { atc = 1; health = 3 }
+        val highThreat = testCard("HIGH_THREAT").apply { atc = 6; health = 3 }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(lowThreat, war.rival.playArea)
+        war.addCard(highThreat, war.rival.playArea)
+
+        val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
+        val lowThreatAttack = AttackAction({}, {}, hero, targetEntityId = lowThreat.entityId)
+        val highThreatAttack = AttackAction({}, {}, hero, targetEntityId = highThreat.entityId)
+
+        assertTrue(!PirateDemonHunterMctsExperimentModel.isActionLegal(face, war))
+        assertTrue(!PirateDemonHunterMctsExperimentModel.isActionLegal(lowThreatAttack, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.isActionLegal(highThreatAttack, war))
+    }
+
+    @Test
+    fun `hero attack exposes ordinary minion targets on a wide enemy board`() {
+        val war = testWar()
+        val hero = testCard("WIDE_BOARD_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 1
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("WIDE_BOARD_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            health = 20
+        }
+        val enemyMinions = (1..4).map { index ->
+            testCard("WIDE_BOARD_MINION_$index").apply {
+                cardType = CardTypeEnum.MINION
+                atc = if (index == 4) 6 else 1
+                health = if (index == 1) 1 else 4
+            }
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        enemyMinions.forEach { war.addCard(it, war.rival.playArea) }
+
+        val generated = hero.action.generateAttackActions(war, war.me)
+
+        assertEquals(5, generated.size)
+        assertTrue(generated.any { it.targetEntityId == enemyMinions.first().entityId })
+        assertTrue(
+            generated.any {
+                it.targetEntityId == enemyMinions.first().entityId &&
+                    PirateDemonHunterMctsExperimentModel.isActionLegal(it, war)
+            },
+        )
+        assertTrue(
+            generated.none {
+                it.targetIsHero && PirateDemonHunterMctsExperimentModel.isActionLegal(it, war)
+            },
+        )
+    }
+
+    @Test
+    fun `hero may attack face when no enemy minion is killable`() {
+        val war = testWar()
+        val hero = testCard("FACE_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 3
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("FACE_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 20
+        }
+        val largeMinion = testCard("FACE_LARGE_MINION").apply { atc = 4; health = 6 }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(largeMinion, war.rival.playArea)
+
+        val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
+        val minionAttack = AttackAction({}, {}, hero, targetEntityId = largeMinion.entityId)
+
+        assertTrue(PirateDemonHunterMctsExperimentModel.isActionLegal(face, war))
+        assertTrue(!PirateDemonHunterMctsExperimentModel.isActionLegal(minionAttack, war))
+    }
+
+    @Test
+    fun `friendly setup attack is required for a combined hero kill`() {
+        val war = testWar()
+        val hero = testCard("COMBO_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 3
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("COMBO_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 20
+        }
+        val rivalMinion = testCard("COMBO_RIVAL_MINION").apply { atc = 5; health = 5 }
+        val setupMinion = testCard("COMBO_SETUP_MINION").apply {
+            atc = 2
+            health = 2
+            isExhausted = false
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(rivalMinion, war.rival.playArea)
+        war.addCard(setupMinion, war.me.playArea)
+
+        val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
+        val heroAttack = AttackAction({}, {}, hero, targetEntityId = rivalMinion.entityId)
+        val setupAttack = setupMinion.action.generateAttackActions(war, war.me)
+            .first { it.targetEntityId == rivalMinion.entityId }
+
+        assertTrue(!PirateDemonHunterMctsExperimentModel.isActionLegal(face, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.isActionLegal(heroAttack, war))
+        assertTrue(PirateHeroAttackTargetPolicy.requiresFriendlySetupAttack(war))
+        assertTrue(PirateHeroAttackTargetPolicy.isRequiredFriendlySetupAttack(setupAttack, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.isMandatoryAction(setupAttack, war))
+    }
 
     @Test
     fun `captain and hozen are downranked without another pirate on board`() {
@@ -44,7 +313,7 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
-    fun `battlefield is downranked on an empty minion board but cannon is still enabled`() {
+    fun `battlefield is downranked with zero or one friendly minion`() {
         val war = testWar()
         val battlefield = testCard(PirateDemonHunterMctsExperimentModel.BATTLEFIELD)
         val cannon = testCard(PirateDemonHunterMctsExperimentModel.SHIPS_CANNON)
@@ -62,6 +331,60 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         assertTrue(battlefieldPrior < 0.0)
         assertTrue(cannonPrior > 0.0)
+
+        val oneMinionWar = testWar().apply {
+            addCard(testCard("FRIENDLY_MINION"), me.playArea)
+        }
+        val oneMinionBattlefieldPrior = PirateDemonHunterMctsExperimentModel.actionPrior(
+            PlayAction({}, {}, testCard(PirateDemonHunterMctsExperimentModel.BATTLEFIELD)),
+            oneMinionWar,
+        )
+        assertTrue(oneMinionBattlefieldPrior < 0.0)
+
+        val establishedBoardWar = testWar().apply {
+            addCard(testCard("FRIENDLY_MINION_1"), me.playArea)
+            addCard(testCard("FRIENDLY_MINION_2"), me.playArea)
+        }
+        val establishedBoardPrior = PirateDemonHunterMctsExperimentModel.actionPrior(
+            PlayAction({}, {}, testCard(PirateDemonHunterMctsExperimentModel.BATTLEFIELD)),
+            establishedBoardWar,
+        )
+        assertTrue(establishedBoardPrior > 0.0)
+    }
+
+    @Test
+    fun `affordable zilliax is the mandatory first play on a low risk enemy board`() {
+        val war = testWar().apply { me.resources = 4 }
+        val zilliax = testCard("TOY_330t7").apply {
+            cardType = CardTypeEnum.MINION
+            cost = 4
+            atc = 5
+            health = 7
+        }
+        val other = testCard("OTHER_PLAY").apply { cost = 1 }
+        war.addCard(zilliax, war.me.handArea)
+        war.addCard(other, war.me.handArea)
+
+        assertTrue(PirateDemonHunterMctsExperimentModel.shouldPrioritizeEarlyZilliax(war))
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.isNotEmpty())
+        assertTrue(node.actions.all { it.creator?.entityId == zilliax.entityId })
+    }
+
+    @Test
+    fun `zilliax low risk signal uses enemy count or visible attack total`() {
+        val war = testWar()
+        val first = testCard("RIVAL_ONE").apply { atc = 8 }
+        val second = testCard("RIVAL_TWO").apply { atc = 1 }
+        war.addCard(first, war.rival.playArea)
+        assertTrue(PirateDemonHunterMctsExperimentModel.shouldPrioritizeEarlyZilliax(war))
+
+        war.addCard(second, war.rival.playArea)
+        assertFalse(PirateDemonHunterMctsExperimentModel.shouldPrioritizeEarlyZilliax(war))
+
+        first.atc = 1
+        assertTrue(PirateDemonHunterMctsExperimentModel.shouldPrioritizeEarlyZilliax(war))
     }
 
     @Test
@@ -97,6 +420,85 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         val prior = PirateDemonHunterMctsExperimentModel.actionPrior(PlayAction({}, {}, attendant), war)
         assertTrue(prior >= 14.0)
+    }
+
+    @Test
+    fun `replacement weapon is hard-blocked while equipped weapon still has a valuable attack`() {
+        val war = testWar().apply { me.resources = 3 }
+        val hero = testCard("HERO_WITH_WEAPON").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+        }
+        val equipped = testCard("EQUIPPED_WEAPON").apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 3
+            durability = 2
+            health = 0
+        }
+        val replacement = testCard("REPLACEMENT_WEAPON").apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 4
+            durability = 2
+            health = 0
+            cost = 3
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(equipped, war.me.playArea)
+        war.addCard(replacement, war.me.handArea)
+
+        val replacementAction = PlayAction({}, {}, replacement)
+        assertTrue(PirateDemonHunterMctsExperimentModel.shouldDefer(replacement, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.isDeferredAction(replacementAction, war))
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertTrue(node.actions.none { it.creator?.entityId == replacement.entityId })
+        assertTrue(node.actions.any { it is AttackAction && it.creator?.entityId == hero.entityId })
+    }
+
+    @Test
+    fun `replacement weapon stays blocked while any equipped weapon is still parsed`() {
+        val war = testWar().apply { me.resources = 3 }
+        val hero = testCard("EXHAUSTED_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+            isExhausted = true
+        }
+        val equipped = testCard("SPENT_WEAPON").apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 3
+            durability = 1
+            health = 0
+        }
+        val replacement = testCard("NEXT_WEAPON").apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 4
+            durability = 2
+            health = 0
+            cost = 3
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(equipped, war.me.playArea)
+        war.addCard(replacement, war.me.handArea)
+
+        assertTrue(PirateDemonHunterMctsExperimentModel.shouldDefer(replacement, war))
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertTrue(node.actions.none { it.creator?.entityId == replacement.entityId })
     }
 
     @Test
@@ -194,7 +596,7 @@ class PirateDemonHunterMctsExperimentModelTest {
         val card = testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND)
         val war = testWar()
         assertFalse(PirateDemonHunterMctsExperimentModel.shouldDefer(card, war))
-        assertEquals("海盗瞎 MCTS", HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name())
+        assertTrue(HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().startsWith("海盗瞎 V1.2 · build "))
     }
 
     @Test
@@ -243,8 +645,33 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `global plan keeps blindeye judge behind an already playable two-cost card`() {
+        val war = testWar().apply { me.resources = 6 }
+        val judge = testCard(PirateDemonHunterMctsExperimentModel.BLINDEYE_JUDGE).apply {
+            cost = 4
+        }
+        val twoCostCard = testCard("OTHER_TWO_COST_CARD").apply {
+            cost = 2
+        }
+        war.addCard(judge, war.me.handArea)
+        war.addCard(twoCostCard, war.me.handArea)
+
+        val arg = testMctsArg(experimentalSearch = true).copy(
+            decisionModel = PirateDemonHunterMctsGlobalPlanModel,
+        )
+        val root = MonteCarloTreeNode(war, InitAction, arg)
+        assertTrue(root.actions.isNotEmpty())
+        assertTrue(root.actions.all { it.creator?.entityId == twoCostCard.entityId })
+
+        val afterTwoCostCard = root.buildNextNode(root.actions.single())
+        assertTrue(afterTwoCostCard.actions.isNotEmpty())
+        assertTrue(afterTwoCostCard.actions.all { it.creator?.entityId == judge.entityId })
+    }
+
+    @Test
     fun `hero power is deferred until non-hero-power actions are exhausted`() {
         val war = testWar().apply { me.resources = 2 }
+        war.addCard(testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND), war.me.playArea)
         val heroPower = testCard("HERO_POWER_TEST").apply {
             cardType = CardTypeEnum.HERO_POWER
             cardRace = CardRaceEnum.UNKNOWN
@@ -282,6 +709,7 @@ class PirateDemonHunterMctsExperimentModelTest {
     @Test
     fun `hero power stays deferred when coin bridges to a non-power card`() {
         val war = testWar().apply { me.resources = 1 }
+        war.addCard(testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND), war.me.playArea)
         val heroPower = testCard("HERO_POWER_BRIDGE").apply {
             cardType = CardTypeEnum.HERO_POWER
             cardRace = CardRaceEnum.UNKNOWN
@@ -308,6 +736,91 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `mcts root and replans enforce minion play then minion attack then hero power`() {
+        val war = testWar().apply { me.resources = 10 }
+        war.addCard(testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND), war.me.playArea)
+        val handMinion = testCard("HAND_MINION_FOR_ORDER")
+        val handSpell = testCard(PirateDemonHunterMctsExperimentModel.SIGIL_OF_SKYDIVING).apply {
+            cardType = CardTypeEnum.SPELL
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 1
+        }
+        val readyMinion = testCard("READY_MINION_FOR_ORDER").apply { isExhausted = false }
+        val hero = testCard("HERO_FOR_ORDER_WITH_PLAY").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 1
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("RIVAL_HERO_FOR_ORDER_WITH_PLAY").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+        }
+        val heroPower = testCard("HERO_POWER_FOR_ORDER_WITH_PLAY").apply {
+            cardType = CardTypeEnum.HERO_POWER
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 1
+            isLaunchpad = true
+            isExhausted = false
+        }
+        war.addCard(handMinion, war.me.handArea)
+        war.addCard(handSpell, war.me.handArea)
+        war.addCard(readyMinion, war.me.playArea)
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(heroPower, war.me.playArea)
+
+        val arg = testMctsArg(experimentalSearch = true)
+        val root = MonteCarloTreeNode(war, InitAction, arg)
+        assertTrue(root.actions.isNotEmpty())
+        assertTrue(root.actions.all {
+            it is PlayAction && it.creator?.cardType === CardTypeEnum.MINION
+        })
+
+        val selected = MonteCarloTreeSearch().searchBestNode(
+            war,
+            arg.copy(endMillisTime = System.currentTimeMillis() + 1_000L),
+        )
+        assertTrue(selected.isNotEmpty())
+        assertTrue(selected.first().applyAction is PlayAction)
+        assertEquals(handMinion.cardId, selected.first().applyAction.creator?.cardId)
+
+        val afterMinionPlay = root.buildNextNode(root.actions.single())
+        assertTrue(afterMinionPlay.actions.isNotEmpty())
+        assertTrue(afterMinionPlay.actions.all {
+            it is PlayAction && it.creator?.entityId == handSpell.entityId
+        })
+
+        val afterSpellPlay = afterMinionPlay.buildNextNode(afterMinionPlay.actions.single())
+        assertTrue(afterSpellPlay.actions.isNotEmpty())
+        assertTrue(afterSpellPlay.actions.all {
+            it is AttackAction && it.creator?.cardType === CardTypeEnum.MINION
+        })
+
+        var afterMinionAttacks = afterSpellPlay
+        repeat(afterSpellPlay.actions.size) {
+            assertTrue(afterMinionAttacks.actions.isNotEmpty())
+            assertTrue(afterMinionAttacks.actions.all {
+                it is AttackAction && it.creator?.cardType === CardTypeEnum.MINION
+            })
+            afterMinionAttacks = afterMinionAttacks.buildNextNode(afterMinionAttacks.actions.first())
+        }
+        assertTrue(afterMinionAttacks.actions.isNotEmpty())
+        assertTrue(afterMinionAttacks.actions.all {
+            it is PowerAction && it.creator?.cardType === CardTypeEnum.HERO_POWER
+        })
+
+        val afterHeroPower = afterMinionAttacks.buildNextNode(afterMinionAttacks.actions.single())
+        assertTrue(afterHeroPower.actions.isNotEmpty())
+        assertTrue(afterHeroPower.actions.all {
+            it is AttackAction && it.creator?.cardType === CardTypeEnum.HERO
+        })
+    }
+
+    @Test
     fun `hero power remains available when it is the only bridge to an attack`() {
         val war = testWar().apply { me.resources = 0 }
         val heroPower = testCard("HERO_POWER_ONLY_BRIDGE").apply {
@@ -331,6 +844,316 @@ class PirateDemonHunterMctsExperimentModelTest {
                 war,
             ),
         )
+    }
+
+    @Test
+    fun `mcts orders fiend minion attacks then hero power then hero attack`() {
+        val war = testWar().apply { me.resources = 5 }
+        val fiend = testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND).apply {
+            // The Fiend supplies the aura but is not itself a ready attack in
+            // this fixture, so the first root is unambiguous.
+            isExhausted = true
+        }
+        val attacker = testCard("READY_PIRATE_FOR_ORDER")
+        val hero = testCard("HERO_FOR_ORDER").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 1
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("RIVAL_HERO_FOR_ORDER").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+        }
+        val heroPower = testCard("HERO_POWER_FOR_ORDER").apply {
+            cardType = CardTypeEnum.HERO_POWER
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 1
+            isLaunchpad = true
+            isExhausted = false
+        }
+        war.addCard(fiend, war.me.playArea)
+        war.addCard(attacker, war.me.playArea)
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(heroPower, war.me.playArea)
+
+        val root = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertTrue(root.actions.isNotEmpty())
+        assertTrue(root.actions.all {
+            it is AttackAction && it.creator?.cardType === CardTypeEnum.MINION
+        })
+
+        val afterMinionAttack = root.buildNextNode(root.actions.single())
+        assertEquals(1, afterMinionAttack.actions.size)
+        assertTrue(afterMinionAttack.actions.single() is PowerAction)
+        assertEquals(heroPower.entityId, afterMinionAttack.actions.single().creator?.entityId)
+
+        val afterHeroPower = afterMinionAttack.buildNextNode(afterMinionAttack.actions.single())
+        assertEquals(1, afterHeroPower.actions.size)
+        assertTrue(afterHeroPower.actions.single() is AttackAction)
+        assertEquals(hero.entityId, afterHeroPower.actions.single().creator?.entityId)
+    }
+
+    @Test
+    fun `taunt exception spends hero power before hero attack then exposes minion attacks`() {
+        // TestCardAction models a hero power as a launchpad and therefore
+        // falls back to the SDK's five-resource launch cost when no child
+        // launch card is attached.
+        val war = testWar().apply { me.resources = 5 }
+        val hero = testCard("TAUNT_EXCEPTION_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 0
+            atc = 1
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("TAUNT_EXCEPTION_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 0
+            health = 30
+            atc = 0
+        }
+        val taunt = testCard("TAUNT_EXCEPTION_TAUNT").apply {
+            cost = 0
+            isTaunt = true
+            atc = 0
+            health = 5
+        }
+        val minion = testCard("TAUNT_EXCEPTION_MINION").apply {
+            cost = 0
+            isExhausted = false
+        }
+        val heroPower = testCard("TAUNT_EXCEPTION_POWER").apply {
+            cardType = CardTypeEnum.HERO_POWER
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 1
+            isLaunchpad = true
+            isExhausted = false
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(minion, war.me.playArea)
+        war.addCard(heroPower, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(taunt, war.rival.playArea)
+
+        val root = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertTrue(root.actions.isNotEmpty())
+        assertTrue(root.actions.all { it is PowerAction && it.creator?.entityId == heroPower.entityId })
+
+        val afterPower = root.buildNextNode(root.actions.single())
+        assertTrue(afterPower.actions.isNotEmpty())
+        assertTrue(afterPower.actions.all {
+            it is AttackAction && it.creator?.entityId == hero.entityId && it.targetEntityId == taunt.entityId
+        })
+
+        val afterHero = afterPower.buildNextNode(afterPower.actions.single())
+        assertTrue(afterHero.actions.isNotEmpty())
+        assertTrue(afterHero.actions.all { it is AttackAction && it.creator?.entityId == minion.entityId })
+    }
+
+    @Test
+    fun `without fiend hero attack is not artificially deferred`() {
+        val war = testWar().apply { me.resources = 0 }
+        val hero = testCard("HERO_WITHOUT_FIEND").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 1
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("RIVAL_WITHOUT_FIEND").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+
+        val heroAttack = hero.action.generateAttackActions(war, war.me).single()
+        assertFalse(PirateDemonHunterMctsExperimentModel.isDeferredAction(heroAttack, war))
+    }
+
+    @Test
+    fun `mcts does not spend coin when only hero power would be unlocked`() {
+        val war = testWar().apply { me.resources = 0 }
+        val coin = testCard("COIN_ONLY_HERO_POWER").apply {
+            cardType = CardTypeEnum.SPELL
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 0
+            isCoinCard = true
+        }
+        val heroPower = testCard("HERO_POWER_REQUIRES_COIN").apply {
+            cardType = CardTypeEnum.HERO_POWER
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 1
+            isExhausted = false
+        }
+        war.addCard(coin, war.me.handArea)
+        war.addCard(heroPower, war.me.playArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertTrue(node.actions.none { it.creator?.entityId == coin.entityId })
+    }
+
+    @Test
+    fun `post-hero-attack cliffside is the only action when two slots remain`() {
+        val war = testWar().apply { me.resources = 0 }
+        val cliffside = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {
+            cardType = CardTypeEnum.LOCATION
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 3
+            isExhausted = false
+            isLocationActionCooldown = false
+        }
+        val hero = testCard("EXHAUSTED_HERO_FOR_LOCATION").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+            isExhausted = true
+        }
+        war.addCard(cliffside, war.me.playArea)
+        war.addCard(hero, war.me.playArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertEquals(1, node.actions.size)
+        assertTrue(node.actions.single() is PowerAction)
+        assertEquals(cliffside.entityId, node.actions.single().creator?.entityId)
+    }
+
+    @Test
+    fun `post-hero-attack cliffside is not exposed when two slots do not remain`() {
+        val war = testWar().apply { me.resources = 0 }
+        val cliffside = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {
+            cardType = CardTypeEnum.LOCATION
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 3
+            isExhausted = false
+            isLocationActionCooldown = false
+        }
+        val hero = testCard("EXHAUSTED_HERO_NO_LOCATION_SLOT").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+            isExhausted = true
+        }
+        war.addCard(cliffside, war.me.playArea)
+        repeat(6) { war.addCard(testCard("FULL_BOARD_$it"), war.me.playArea) }
+        war.addCard(hero, war.me.playArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertTrue(node.actions.none { it.creator?.entityId == cliffside.entityId })
+    }
+
+    @Test
+    fun `initial cliffside activation requires three free slots`() {
+        val tooFewSlots = testWar().apply { me.resources = 0 }
+        val cliffside = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {
+            cardType = CardTypeEnum.LOCATION
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 3
+            isExhausted = false
+            isLocationActionCooldown = false
+        }
+        tooFewSlots.addCard(cliffside, tooFewSlots.me.playArea)
+        repeat(4) { tooFewSlots.addCard(testCard("INITIAL_CLIFFSIDE_FILL_$it"), tooFewSlots.me.playArea) }
+
+        assertEquals(2, tooFewSlots.me.playArea.maxSize - tooFewSlots.me.playArea.cards.size)
+        assertFalse(PirateDemonHunterMctsExperimentModel.canCreateOpaquePowerAction(cliffside, tooFewSlots))
+        assertTrue(
+            MonteCarloTreeNode(tooFewSlots, InitAction, testMctsArg(experimentalSearch = true))
+                .actions.none { it.creator?.entityId == cliffside.entityId },
+        )
+
+        val enoughSlots = testWar().apply { me.resources = 0 }
+        val playable = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {
+            cardType = CardTypeEnum.LOCATION
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 3
+            isExhausted = false
+            isLocationActionCooldown = false
+        }
+        enoughSlots.addCard(playable, enoughSlots.me.playArea)
+        repeat(3) { enoughSlots.addCard(testCard("INITIAL_CLIFFSIDE_FILL_OK_$it"), enoughSlots.me.playArea) }
+
+        assertEquals(3, enoughSlots.me.playArea.maxSize - enoughSlots.me.playArea.cards.size)
+        assertTrue(PirateDemonHunterMctsExperimentModel.canCreateOpaquePowerAction(playable, enoughSlots))
+        assertTrue(
+            MonteCarloTreeNode(enoughSlots, InitAction, testMctsArg(experimentalSearch = true))
+                .actions.any { it.creator?.entityId == playable.entityId },
+        )
+    }
+
+    @Test
+    fun `weapon-backed hero attack prevents end turn on a stale hero attack stat`() {
+        val war = testWar().apply { me.resources = 0 }
+        val hero = testCard("STALE_HERO_ATTACK_STAT").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+            isExhausted = false
+        }
+        val weapon = testCard("EQUIPPED_WEAPON_FOR_STALE_ATTACK").apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 3
+            durability = 1
+            health = 0
+        }
+        val rivalHero = testCard("RIVAL_HERO_FOR_STALE_ATTACK").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 30
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(weapon, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertTrue(node.actions.any { it is AttackAction && it.creator?.entityId == hero.entityId })
+        assertTrue(node.actions.none { it === TurnOverAction })
+    }
+
+    @Test
+    fun `simulated weapon play blocks a second weapon in the same turn`() {
+        val war = testWar().apply { me.resources = 6 }
+        val firstWeapon = testCard("FIRST_SIMULATED_WEAPON").apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 2
+            atc = 3
+            durability = 2
+            health = 0
+        }
+        val secondWeapon = testCard("SECOND_SIMULATED_WEAPON").apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 2
+            atc = 4
+            durability = 2
+            health = 0
+        }
+        war.addCard(firstWeapon, war.me.handArea)
+        war.addCard(secondWeapon, war.me.handArea)
+
+        val root = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        val firstPlay = root.actions.first { it.creator?.entityId == firstWeapon.entityId }
+        val afterFirstPlay = root.buildNextNode(firstPlay)
+
+        assertTrue(afterFirstPlay.state.war.me.playArea.weapon != null)
+        assertTrue(afterFirstPlay.actions.none { it.creator?.cardType === CardTypeEnum.WEAPON })
     }
 
     @Test
@@ -481,6 +1304,37 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `stale cliffside cooldown after hero attack requests a bounded perception retry`() {
+        val war = testWar()
+        val cliffside = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {
+            cardType = CardTypeEnum.LOCATION
+            cardRace = CardRaceEnum.UNKNOWN
+            isLocationActionCooldown = true
+        }
+        val hero = testCard("HERO_TEST").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 1
+            health = 30
+            isExhausted = true
+        }
+        war.addCard(cliffside, war.me.playArea)
+        war.addCard(hero, war.me.playArea)
+
+        assertTrue(
+            PirateDemonHunterMctsExperimentModel.shouldRetryAfterEmptySearch(war),
+            "a stale location cooldown after the hero attack is a perception wait, not EndTurn",
+        )
+
+        cliffside.isLocationActionCooldown = false
+        assertFalse(PirateDemonHunterMctsExperimentModel.shouldRetryAfterEmptySearch(war))
+
+        cliffside.isLocationActionCooldown = true
+        repeat(5) { war.addCard(testCard("FULL_$it"), war.me.playArea) }
+        assertFalse(PirateDemonHunterMctsExperimentModel.shouldRetryAfterEmptySearch(war))
+    }
+
+    @Test
     fun `playing cliffside immediately exposes its activation and summons two pirates`() {
         val war = testWar()
         val cliffside = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {
@@ -494,6 +1348,11 @@ class PirateDemonHunterMctsExperimentModelTest {
         }
         war.addCard(cliffside, war.me.handArea)
         war.addCard(testCard("PIRATE_TEMPLATE"), war.me.deckArea)
+
+        assertTrue(
+            PirateDemonHunterMctsExperimentModel.shouldImmediatelyPowerLocation(cliffside, war),
+            "the live executor must arm the immediate power fence after this location is played",
+        )
 
         val root = MonteCarloTreeNode(war, InitAction, testMctsArg())
         val play = root.actions.firstOrNull { it.creator?.entityId == cliffside.entityId }
@@ -527,7 +1386,7 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         assertEquals(MctsRootSelectionPolicy.GLOBAL_TURN_PLAN, global.rootSelectionPolicy)
         assertTrue(global.decisionModel === PirateDemonHunterMctsGlobalPlanModel)
-        assertEquals("海盗瞎 MCTS", HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name())
+        assertTrue(HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().startsWith("海盗瞎 V1.2 · build "))
     }
 
     @Test
@@ -684,6 +1543,105 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `deferred cost minion cannot reopen after hero attack in the same turn`() {
+        val war = testWar().apply { me.resources = 0 }
+        val ragewing = testCard(PirateDemonHunterMctsExperimentModel.RAGEWING).apply {
+            cost = 0
+            entityName = "狂暴邪翼蝠"
+        }
+        val phase = PirateDemonHunterMctsExperimentModel.actionOrderPhase(
+            PlayAction({}, {}, ragewing),
+            war,
+        )
+        val fence = MctsTurnPhaseFence().apply {
+            observe(MctsActionOrderPhase.HERO_ATTACK)
+        }
+
+        assertEquals(MctsActionOrderPhase.MINION_PLAY, phase)
+        assertTrue(
+            !fence.allows(
+                phase,
+                isEndTurn = false,
+                endTurnLegal = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `weapon cannot reopen after hero attack in the same turn`() {
+        val war = testWar().apply { me.resources = 0 }
+        val weapon = testCard("REV_509").apply {
+            cardType = CardTypeEnum.WEAPON
+            cost = 0
+        }
+        val phase = PirateDemonHunterMctsExperimentModel.actionOrderPhase(
+            PlayAction({}, {}, weapon),
+            war,
+        )
+        val fence = MctsTurnPhaseFence().apply {
+            observe(MctsActionOrderPhase.HERO_ATTACK)
+        }
+
+        assertEquals(MctsActionOrderPhase.MINION_PLAY, phase)
+        assertTrue(
+            !fence.allows(
+                phase,
+                isEndTurn = false,
+                endTurnLegal = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `without adrenaline fiend hero actions may precede minion attacks`() {
+        val war = testWar()
+        val hero = testCard("EARLY_HERO").apply { cardType = CardTypeEnum.HERO }
+        val power = testCard("EARLY_POWER").apply { cardType = CardTypeEnum.HERO_POWER }
+        val minion = testCard("EARLY_MINION")
+        war.addCard(hero, war.me.playArea)
+        war.addCard(power, war.me.playArea)
+        war.addCard(minion, war.me.playArea)
+
+        assertEquals(
+            MctsActionOrderPhase.EARLY_HERO_ACTION,
+            PirateDemonHunterMctsExperimentModel.actionOrderPhase(AttackAction({}, {}, hero), war),
+        )
+        assertEquals(
+            MctsActionOrderPhase.EARLY_HERO_ACTION,
+            PirateDemonHunterMctsExperimentModel.actionOrderPhase(PowerAction({}, {}, power), war),
+        )
+        assertEquals(
+            MctsActionOrderPhase.MINION_ATTACK,
+            PirateDemonHunterMctsExperimentModel.actionOrderPhase(AttackAction({}, {}, minion), war),
+        )
+        assertFalse(
+            PirateDemonHunterMctsExperimentModel.isDeferredAction(PowerAction({}, {}, power), war),
+        )
+    }
+
+    @Test
+    fun `adrenaline fiend keeps hero actions after minion attacks`() {
+        val war = testWar()
+        val hero = testCard("FIEND_HERO").apply { cardType = CardTypeEnum.HERO }
+        val power = testCard("FIEND_POWER").apply { cardType = CardTypeEnum.HERO_POWER }
+        val minion = testCard("FIEND_MINION")
+        val fiend = testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND)
+        war.addCard(hero, war.me.playArea)
+        war.addCard(power, war.me.playArea)
+        war.addCard(minion, war.me.playArea)
+        war.addCard(fiend, war.me.playArea)
+
+        assertEquals(
+            MctsActionOrderPhase.HERO_POWER,
+            PirateDemonHunterMctsExperimentModel.actionOrderPhase(PowerAction({}, {}, power), war),
+        )
+        assertEquals(
+            MctsActionOrderPhase.HERO_ATTACK,
+            PirateDemonHunterMctsExperimentModel.actionOrderPhase(AttackAction({}, {}, hero), war),
+        )
+    }
+
+    @Test
     fun `known parser-light pirate dh minions are eligible for opaque replanning`() {
         val war = testWar()
         val patches = testCard(PirateDemonHunterMctsExperimentModel.PATCHES_THE_PIRATE)
@@ -837,6 +1795,36 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `experimental mcts never returns end turn when a fresh root has an attackable minion`() {
+        val war = testWar()
+        val attacker = testCard("READY_MINION").apply {
+            atc = 3
+            health = 3
+            isExhausted = false
+        }
+        val rivalHero = testCard("RIVAL_HERO_FOR_ATTACK").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+        }
+        war.addCard(attacker, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+
+        val path = MonteCarloTreeSearch().searchBestNode(
+            war,
+            testMctsArg(experimentalSearch = true).copy(
+                // Model the same no-rollout window seen in the live failure:
+                // root generation is still required to return a real attack.
+                endMillisTime = System.currentTimeMillis() - 1,
+            ),
+        )
+
+        assertTrue(path.isNotEmpty())
+        assertTrue(path.first().applyAction is AttackAction)
+        assertEquals(attacker.entityId, path.first().applyAction.creator?.entityId)
+    }
+
+    @Test
     fun `experimental mcts preserves mandatory root action in parallel search path`() {
         val war = testWar()
         val cannon = testCard(PirateDemonHunterMctsExperimentModel.SHIPS_CANNON).apply { cost = 2 }
@@ -853,6 +1841,145 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         assertTrue(path.isNotEmpty())
         assertEquals(cannon.cardId, path.first().applyAction.creator?.cardId)
+    }
+
+    @Test
+    fun `parachute brigand is deferred behind another playable card even when free`() {
+        val war = testWar().apply { me.resources = 1 }
+        val brigand = testCard(PirateDemonHunterMctsExperimentModel.PARACHUTE_BRIGAND).apply { cost = 0 }
+        val ordinary = testCard("ORDINARY_AFTER_BRIGAND").apply { cost = 1 }
+        war.addCard(brigand, war.me.handArea)
+        war.addCard(ordinary, war.me.handArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it.creator?.cardId == ordinary.cardId })
+        assertTrue(node.actions.none { it.creator?.cardId == brigand.cardId })
+    }
+
+    @Test
+    fun `parachute brigand remains available as the only free playable action`() {
+        val war = testWar().apply { me.resources = 0 }
+        val brigand = testCard(PirateDemonHunterMctsExperimentModel.PARACHUTE_BRIGAND).apply { cost = 0 }
+        war.addCard(brigand, war.me.handArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it.creator?.cardId == brigand.cardId })
+        assertTrue(node.actions.none { it.javaClass.simpleName == "TurnOverAction" })
+    }
+
+    @Test
+    fun `parachute brigand is not resurrected when the board is full`() {
+        val war = testWar()
+        repeat(war.me.playArea.maxSize) { index ->
+            war.addCard(testCard("BOARD_$index"), war.me.playArea)
+        }
+        val brigand = testCard(PirateDemonHunterMctsExperimentModel.PARACHUTE_BRIGAND).apply { cost = 0 }
+        war.addCard(brigand, war.me.handArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.none { it.creator?.cardId == brigand.cardId })
+    }
+
+    @Test
+    fun `root lethal gate exposes face attacks before nonlethal minion trades`() {
+        val war = testWar()
+        val rivalHero = testCard("LETHAL_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 4
+            atc = 0
+        }
+        val rivalMinion = testCard("LETHAL_RIVAL_MINION").apply { health = 6; atc = 0 }
+        val first = testCard("LETHAL_ATTACKER_ONE").apply { cost = 0; atc = 2; isExhausted = false }
+        val second = testCard("LETHAL_ATTACKER_TWO").apply { cost = 0; atc = 2; isExhausted = false }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(rivalMinion, war.rival.playArea)
+        war.addCard(first, war.me.playArea)
+        war.addCard(second, war.me.playArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it is AttackAction && it.targetIsHero })
+        assertTrue(node.actions.none { it is AttackAction && !it.targetIsHero })
+    }
+
+    @Test
+    fun `taunt prevents the lethal gate from claiming face damage`() {
+        val war = testWar()
+        val rivalHero = testCard("TAUNT_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 4
+            atc = 0
+        }
+        val taunt = testCard("LETHAL_TAUNT").apply { health = 8; atc = 0; isTaunt = true }
+        val attacker = testCard("TAUNT_ATTACKER").apply { cost = 0; atc = 4; isExhausted = false }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(taunt, war.rival.playArea)
+        war.addCard(attacker, war.me.playArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it is AttackAction && it.targetEntityId == taunt.entityId })
+        assertTrue(node.actions.none { it is AttackAction && it.targetIsHero })
+    }
+
+    @Test
+    fun `weapon attack contributes to team lethal face route`() {
+        val war = testWar()
+        val rivalHero = testCard("WEAPON_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 4
+            atc = 0
+        }
+        val rivalMinion = testCard("WEAPON_RIVAL_MINION").apply { health = 6; atc = 0 }
+        val attacker = testCard("WEAPON_ATTACKER").apply { cost = 0; atc = 2; isExhausted = false }
+        val hero = testCard("WEAPON_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+            atc = 0
+            isExhausted = false
+        }
+        val weapon = testCard("WEAPON_FOR_LETHAL").apply {
+            cardType = CardTypeEnum.WEAPON
+            atc = 2
+            health = 2
+        }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(rivalMinion, war.rival.playArea)
+        war.addCard(attacker, war.me.playArea)
+        war.addCard(hero, war.me.playArea)
+        war.addCard(weapon, war.me.playArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it is AttackAction && it.creator?.entityId == hero.entityId && it.targetIsHero })
+        assertTrue(node.actions.none { it is AttackAction && !it.targetIsHero })
+    }
+
+    @Test
+    fun `nonlethal total damage keeps normal minion target fallback`() {
+        val war = testWar()
+        val rivalHero = testCard("NONLETHAL_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 8
+            atc = 0
+        }
+        val rivalMinion = testCard("NONLETHAL_RIVAL_MINION").apply { health = 6; atc = 0 }
+        val attacker = testCard("NONLETHAL_ATTACKER").apply { cost = 0; atc = 2; isExhausted = false }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(rivalMinion, war.rival.playArea)
+        war.addCard(attacker, war.me.playArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+
+        assertTrue(node.actions.any { it is AttackAction && it.targetEntityId == rivalMinion.entityId })
     }
 
     private fun testWar(): War {
