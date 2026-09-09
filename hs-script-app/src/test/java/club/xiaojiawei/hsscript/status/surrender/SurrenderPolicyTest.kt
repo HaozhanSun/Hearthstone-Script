@@ -664,6 +664,85 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun currentRank10FixtureWithEmptyPaddleXOcrIsNotPromotedToLegendary() {
+        val file = File(
+            "C:/Users/yzjsh/Documents/Codex/2026-08-15/for-all-these-delay-short-are-2/outputs/" +
+                "Hearthstone Script Beta/log/unknown-states/rank-detection/2026-09-09/" +
+                "unknown-state-20260909-112802-284-rank-policy-REPLACE_CARD-UNKNOWN_FAIL_CLOSED-" +
+                "7499f7ce-3c8f-4b84-9e7f-b612b2af85fc.png",
+        )
+        if (!file.isFile) return
+
+        val originalSettingsProvider = OcrRuntime.settingsProvider
+        val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
+        val originalOutput = System.getProperty("hs.script.unknown-state.dir")
+        val evidenceRoot = Files.createTempDirectory("rank-legendary-false-positive-").toFile()
+        try {
+            System.setProperty("hs.script.unknown-state.dir", evidenceRoot.absolutePath)
+            OcrRuntime.settingsProvider = {
+                PaddleXOcrSettings(
+                    enabled = true,
+                    pythonExecutable = "python",
+                    modulePath = "offline-empty-fixture",
+                    device = "cpu",
+                    modelCachePath = "",
+                    timeoutMs = 1000,
+                )
+            }
+            OcrRuntime.paddleXBridgeFactory = {
+                object : OcrTextBridge {
+                    override fun recognize(image: BufferedImage, desc: String): String = ""
+
+                    override fun recognizeWithConfidence(
+                        image: BufferedImage,
+                        desc: String,
+                        roi: String?,
+                    ): OcrRecognition = OcrRecognition(text = "", confidence = null)
+
+                    override fun healthCheck(): OcrHealth =
+                        OcrHealth(true, OcrProviderKind.PADDLEX, "offline-empty-fixture")
+                }
+            }
+
+            val detection = CurrentRankDetector.detectCapturedImage(
+                ImageIO.read(file),
+                saveEvidence = true,
+                evidenceTrigger = "rank-policy-REPLACE_CARD",
+                evidencePhase = "REPLACE_CARD",
+            )
+
+            // Provider result and numeric parse stay explicitly empty.
+            assertTrue(detection != null)
+            assertEquals("", detection!!.ocrText)
+            assertNull(detection.rank)
+            // The gray/blue numeric badge must not become visual Legendary.
+            assertFalse(detection.tier == CurrentRankDetector.RankTier.LEGEND)
+            assertFalse(SurrenderPolicy.isLegendaryDetection(detection))
+
+            // The final policy remains the bounded fail-closed block, not a
+            // surrender and not an authoritative Legendary continue.
+            val finalDecision = SurrenderPolicy.unresolvedRankDecision(attempts = 3)
+            assertFalse(finalDecision.shouldSurrender)
+            assertTrue(finalDecision.blocksAutomaticSurrender)
+            assertEquals("rank-ocr-unresolved", finalDecision.ruleId)
+
+            val evidenceFiles = evidenceRoot.walkTopDown()
+                .filter { it.isFile && it.extension == "png" }
+                .toList()
+            assertTrue(evidenceFiles.any { it.name.contains("UNKNOWN_FAIL_CLOSED") })
+        } finally {
+            OcrRuntime.settingsProvider = originalSettingsProvider
+            OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
+            if (originalOutput == null) {
+                System.clearProperty("hs.script.unknown-state.dir")
+            } else {
+                System.setProperty("hs.script.unknown-state.dir", originalOutput)
+            }
+            evidenceRoot.deleteRecursively()
+        }
+    }
+
+    @Test
     fun activeLegendaryWatchdogScreenshotUsesBroadBadgeProbeRoi() {
         val file = File(
             "C:/Users/yzjsh/Documents/Codex/2026-08-15/for-all-these-delay-short-are-2/outputs/Hearthstone Script Beta/log/unknown-states/screen-watchdog/2026-09-04/unknown-state-20260904-131032-989-screen-watchdog-normal-surrender-retry-2f2b75b1-efa0-43a3-b113-9d1844c18d05.png",

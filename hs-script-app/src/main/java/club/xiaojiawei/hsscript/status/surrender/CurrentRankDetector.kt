@@ -671,7 +671,11 @@ object CurrentRankDetector {
         segments += previous - start + 1
         val digitSegments = segments.count { it in 10..35 }
         val digitSpan = activeColumns.last() - activeColumns.first() + 1
-        val confirmedByGlyphs = activeColumns.size >= 50 && digitSpan >= 60
+        // A normal numeric badge can also span 60+ pixels. Require at least
+        // one bounded digit-shaped segment before treating its pale glyphs as
+        // a Legendary rating; otherwise a gray/blue 10 badge can satisfy the
+        // width-only heuristic while PaddleX has returned no rank.
+        val confirmedByGlyphs = digitSegments >= 1 && activeColumns.size >= 50 && digitSpan >= 60
         val confirmed = strongColorSignature || confirmedByGlyphs
         return LegendaryVisualMetrics(
             warmPixels = warm,
