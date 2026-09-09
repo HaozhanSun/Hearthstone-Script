@@ -743,6 +743,113 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun currentRank10FixtureFallsBackFromBigBadgeToScaledSmallNumericRoi() {
+        val file = File(
+            "C:/Users/yzjsh/Documents/Codex/2026-08-15/for-all-these-delay-short-are-2/outputs/" +
+                "Hearthstone Script Beta/log/unknown-states/rank-detection/2026-09-09/" +
+                "unknown-state-20260909-112802-284-rank-policy-REPLACE_CARD-UNKNOWN_FAIL_CLOSED-" +
+                "7499f7ce-3c8f-4b84-9e7f-b612b2af85fc.png",
+        )
+        if (!file.isFile) return
+
+        val originalSettingsProvider = OcrRuntime.settingsProvider
+        val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
+        val calls = mutableListOf<Triple<String, Int, Int>>()
+        try {
+            OcrRuntime.settingsProvider = {
+                PaddleXOcrSettings(
+                    enabled = true,
+                    pythonExecutable = "python",
+                    modulePath = "offline-two-roi-fixture",
+                    device = "cpu",
+                    modelCachePath = "",
+                    timeoutMs = 1000,
+                )
+            }
+            OcrRuntime.paddleXBridgeFactory = {
+                object : OcrTextBridge {
+                    override fun recognize(image: BufferedImage, desc: String): String = ""
+
+                    override fun recognizeWithConfidence(
+                        image: BufferedImage,
+                        desc: String,
+                        roi: String?,
+                    ): OcrRecognition {
+                        calls += Triple(roi ?: "<none>", image.width, image.height)
+                        return OcrRecognition(
+                            text = if (roi == "rank-badge-small") "10" else "",
+                            confidence = if (roi == "rank-badge-small") 0.91 else null,
+                        )
+                    }
+
+                    override fun healthCheck(): OcrHealth =
+                        OcrHealth(true, OcrProviderKind.PADDLEX, "offline-two-roi-fixture")
+                }
+            }
+
+            val detection = CurrentRankDetector.detectCapturedImage(
+                ImageIO.read(file),
+                saveEvidence = false,
+                evidenceTrigger = "rank-policy-REPLACE_CARD",
+                evidencePhase = "REPLACE_CARD",
+            )
+
+            assertEquals(10, detection?.rank)
+            assertEquals("10", detection?.ocrText)
+            assertFalse(detection?.tier == CurrentRankDetector.RankTier.LEGEND)
+            assertEquals(
+                listOf("rank-badge" to (105 to 108), "rank-badge-small" to (140 to 116)),
+                calls.map { it.first to (it.second to it.third) },
+            )
+        } finally {
+            OcrRuntime.settingsProvider = originalSettingsProvider
+            OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
+        }
+    }
+
+    @Test
+    fun rankProbeSelectionCoversBigSuccessSmallFallbackEmptyAndConflict() {
+        fun probe(roi: String, rank: Int?, text: String = rank?.toString().orEmpty()) =
+            CurrentRankDetector.RankProbeResult(
+                roi = roi,
+                bounds = Rectangle(0, 0, 10, 10),
+                scale = if (roi == "bigRoi") 1 else 4,
+                rawText = text,
+                normalizedText = text,
+                candidate = rank?.let { CurrentRankDetector.RankCandidate(it, 0.9) },
+                confidence = 0.9,
+            )
+
+        val bigSuccess = CurrentRankDetector.selectRankProbeResults(
+            probe("bigRoi", 233),
+            probe("smallRoi", null, ""),
+        )
+        assertEquals("bigRoi", bigSuccess.selectedRoi)
+        assertEquals(233, bigSuccess.rank)
+
+        val smallFallback = CurrentRankDetector.selectRankProbeResults(
+            probe("bigRoi", null, "unrecognized"),
+            probe("smallRoi", 10),
+        )
+        assertEquals("smallRoi", smallFallback.selectedRoi)
+        assertEquals(10, smallFallback.rank)
+
+        val bothEmpty = CurrentRankDetector.selectRankProbeResults(
+            probe("bigRoi", null, ""),
+            probe("smallRoi", null, ""),
+        )
+        assertNull(bothEmpty.rank)
+        assertEquals("rank-unrecognized-both-roi", bothEmpty.unknownReason)
+
+        val conflict = CurrentRankDetector.selectRankProbeResults(
+            probe("bigRoi", 8),
+            probe("smallRoi", 10),
+        )
+        assertNull(conflict.rank)
+        assertTrue(conflict.unknownReason.contains("rank-roi-conflict"))
+    }
+
+    @Test
     fun activeLegendaryWatchdogScreenshotUsesBroadBadgeProbeRoi() {
         val file = File(
             "C:/Users/yzjsh/Documents/Codex/2026-08-15/for-all-these-delay-short-are-2/outputs/Hearthstone Script Beta/log/unknown-states/screen-watchdog/2026-09-04/unknown-state-20260904-131032-989-screen-watchdog-normal-surrender-retry-2f2b75b1-efa0-43a3-b113-9d1844c18d05.png",

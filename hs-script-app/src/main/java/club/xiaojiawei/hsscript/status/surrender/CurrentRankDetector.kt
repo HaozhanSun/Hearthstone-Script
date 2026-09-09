@@ -68,6 +68,7 @@ object CurrentRankDetector {
     private const val RANK_VISUAL_WIDTH = 0.30
     private const val RANK_VISUAL_HEIGHT = 0.25
     private const val RANK_TWO_DIGIT_MIN_SPAN = 24
+    private const val RANK_SMALL_ROI_SCALE = 4
 
     data class Detection(
         val rank: Int?,
@@ -81,6 +82,60 @@ object CurrentRankDetector {
         val rank: Int,
         val confidence: Double?,
     )
+
+    /** One provider read, retaining enough provenance for fallback evidence. */
+    internal data class RankProbeResult(
+        val roi: String,
+        val bounds: Rectangle,
+        val scale: Int,
+        val rawText: String,
+        val normalizedText: String,
+        val candidate: RankCandidate?,
+        val confidence: Double?,
+        val attempted: Boolean = true,
+    ) {
+        val rank: Int?
+            get() = candidate?.rank
+    }
+
+    internal data class RankProbeSelection(
+        val selectedRoi: String?,
+        val selected: RankProbeResult?,
+        val rank: Int?,
+        val unknownReason: String,
+    )
+
+    /**
+     * Big ROI is authoritative. The small ROI is only a fallback when the
+     * big read has no usable numeric result. If callers provide two valid
+     * results that disagree, fail closed instead of silently overwriting the
+     * first result.
+     */
+    internal fun selectRankProbeResults(
+        big: RankProbeResult,
+        small: RankProbeResult,
+    ): RankProbeSelection {
+        val bigRank = big.rank
+        val smallRank = small.rank
+        return when {
+            bigRank != null && smallRank != null && bigRank != smallRank ->
+                RankProbeSelection(
+                    selectedRoi = null,
+                    selected = null,
+                    rank = null,
+                    unknownReason = "rank-roi-conflict-big=$bigRank-small=$smallRank",
+                )
+
+            bigRank != null -> RankProbeSelection("bigRoi", big, bigRank, "none")
+            smallRank != null -> RankProbeSelection("smallRoi", small, smallRank, "none")
+            else -> RankProbeSelection(
+                selectedRoi = null,
+                selected = null,
+                rank = null,
+                unknownReason = "rank-unrecognized-both-roi",
+            )
+        }
+    }
 
     /** Parse only valid constructed ranks, preventing unrelated HUD numbers from becoming a decision. */
     internal fun parseRankText(rawText: String): Int? {
@@ -262,48 +317,80 @@ object CurrentRankDetector {
             RANK_DIGIT_HEIGHT,
         )
         if (!OcrRuntime.isLegacySelected()) {
-            val recognition = OcrRuntime.recognizeResult(
-                badgeRegion,
-                evidenceTrigger,
-                legacyOcr = { "" },
-                allowEmptyProbeResult = true,
-                roi = "rank-badge",
-            )
-            val rawOcrTexts = listOf(recognition.text)
-            val ocrTexts = rawOcrTexts.map(::normalizeOcrText)
-            val ocrText = ocrTexts.firstOrNull { it.isNotBlank() }.orEmpty()
             val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
                 looksLikeTwoDigitRank(numericRegion)
-            val rankCandidate = resolveRankCandidate(ocrTexts, visualTenHint, recognition.confidence)
-            val rank = rankCandidate?.rank
-            val confidence = rankCandidate?.confidence
+            val bigProbe = runPaddleXRankProbe(
+                image = badgeRegion,
+                bounds = badgeRegionBounds,
+                roi = "bigRoi",
+                scale = 1,
+                trigger = evidenceTrigger,
+                visualTenHint = false,
+            )
+            // The tight numeric ROI is deliberately enlarged before the
+            // fallback request. It is only sent when the complete badge did
+            // not yield a usable 1..10 rank or >50 Legendary rating.
+            val smallProbe = if (bigProbe.rank == null) {
+                runPaddleXRankProbe(
+                    image = digitRegion,
+                    bounds = numericRegionBounds,
+                    roi = "smallRoi",
+                    scale = RANK_SMALL_ROI_SCALE,
+                    trigger = evidenceTrigger,
+                    visualTenHint = visualTenHint,
+                )
+            } else {
+                skippedRankProbe(
+                    roi = "smallRoi",
+                    bounds = numericRegionBounds,
+                    scale = RANK_SMALL_ROI_SCALE,
+                )
+            }
+            val selection = selectRankProbeResults(bigProbe, smallProbe)
+            val rank = selection.rank
+            val selectedProbe = selection.selected
+            val ocrText = selectedProbe?.normalizedText.orEmpty()
+            val rawOcrText = selectedProbe?.rawText.orEmpty()
+            val confidence = selectedProbe?.confidence
             // PaddleX receives the badge-only crop. The visual classifier and
             // OCR therefore observe the same complete badge, and an empty
             // numeric result cannot hide a valid Legendary color signal.
             val tier = detectTierVisual(badgeVisualRegion)
-            val unknownReason = unknownReason(rank, tier, ocrTexts)
+            val resolvedUnknownReason = if (selection.unknownReason == "none") {
+                unknownReason(rank, tier, listOf(ocrText))
+            } else {
+                selection.unknownReason
+            }
             log.info {
                 "RANK_OCR provider=PADDLEX trigger=$evidenceTrigger phase=$evidencePhase " +
-                    "passes=${ocrTexts.size} bounds=$bounds " +
-                    "roi=x${badgeRegionBounds.x},y${badgeRegionBounds.y},w${badgeRegionBounds.width},h${badgeRegionBounds.height} " +
-                    "raw=${rawOcrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
+                    "passes=2 bounds=$bounds " +
+                    "bigRoi=x${bigProbe.bounds.x},y${bigProbe.bounds.y},w${bigProbe.bounds.width},h${bigProbe.bounds.height} " +
+                    "smallRoi=x${smallProbe.bounds.x},y${smallProbe.bounds.y},w${smallProbe.bounds.width},h${smallProbe.bounds.height} " +
+                    "selectedRoi=${selection.selectedRoi ?: "NONE"} selectedRank=${rank ?: "UNKNOWN"} " +
+                    "selectedScale=${selectedProbe?.scale ?: "NONE"} " +
+                    "raw=${rawOcrText.ifBlank { "<empty>" }} " +
                     "normalized=${ocrText.ifBlank { "<empty>" }} confidence=${formatConfidence(confidence)} " +
-                    "candidates=${ocrTexts.joinToString("|") { it.ifBlank { "<empty>" } }} " +
+                    "unknownReason=$resolvedUnknownReason " +
                     "tierCandidates=<visual-only> visualTenHint=$visualTenHint " +
-                    "tier=${tier.name} rank=${rank ?: "UNKNOWN"} unknownReason=$unknownReason"
+                    "tier=${tier.name} rank=${rank ?: "UNKNOWN"}"
             }
+            logPaddleXRankProbe(bigProbe, evidenceTrigger, evidencePhase)
+            logPaddleXRankProbe(smallProbe, evidenceTrigger, evidencePhase)
             if (saveEvidence) {
                 saveRankEvidence(
                     screen = screen,
                     roiBounds = badgeRegionBounds,
                     provider = "PADDLEX",
-                    rawOcrTexts = rawOcrTexts,
+                    rawOcrTexts = listOf(
+                        "bigRoi=${bigProbe.rawText.ifBlank { "<empty>" }}",
+                        "smallRoi=${smallProbe.rawText.ifBlank { "<empty>" }}",
+                    ),
                     normalizedOcrText = ocrText,
                     numericRank = rank,
                     rank = rank,
                     confidence = confidence,
                     tier = tier,
-                    unknownReason = unknownReason,
+                    unknownReason = resolvedUnknownReason,
                     trigger = evidenceTrigger,
                     phase = evidencePhase,
                 )
@@ -379,6 +466,71 @@ object CurrentRankDetector {
                 "unknownReason=${error.javaClass.simpleName}:${error.message ?: "no-message"}"
         }
         null
+    }
+
+    private fun runPaddleXRankProbe(
+        image: BufferedImage,
+        bounds: Rectangle,
+        roi: String,
+        scale: Int,
+        trigger: String,
+        visualTenHint: Boolean,
+    ): RankProbeResult {
+        val input = if (scale == 1) image else scaleForOcr(image, scale)
+        val providerRoi = if (roi == "bigRoi") "rank-badge" else "rank-badge-small"
+        val description = if (roi == "bigRoi") trigger else "$trigger-$roi"
+        val recognition = OcrRuntime.recognizeResult(
+            input,
+            description,
+            legacyOcr = { "" },
+            allowEmptyProbeResult = true,
+            roi = providerRoi,
+        )
+        val normalized = normalizeOcrText(recognition.text)
+        val candidate = resolveRankCandidate(
+            listOf(normalized),
+            visualTenHint = visualTenHint,
+            nativeConfidence = recognition.confidence,
+        )
+        return RankProbeResult(
+            roi = roi,
+            bounds = bounds,
+            scale = scale,
+            rawText = recognition.text,
+            normalizedText = normalized,
+            candidate = candidate,
+            confidence = recognition.confidence,
+        )
+    }
+
+    private fun skippedRankProbe(
+        roi: String,
+        bounds: Rectangle,
+        scale: Int,
+    ): RankProbeResult = RankProbeResult(
+        roi = roi,
+        bounds = bounds,
+        scale = scale,
+        rawText = "<not-run>",
+        normalizedText = "<not-run>",
+        candidate = null,
+        confidence = null,
+        attempted = false,
+    )
+
+    private fun logPaddleXRankProbe(
+        probe: RankProbeResult,
+        trigger: String,
+        phase: String,
+    ) {
+        log.info {
+            "RANK_OCR_PROBE provider=PADDLEX roi=${probe.roi} attempted=${probe.attempted} " +
+                "x=${probe.bounds.x},y=${probe.bounds.y},w=${probe.bounds.width},h=${probe.bounds.height} " +
+                "scale=${probe.scale} raw=${probe.rawText.ifBlank { "<empty>" }} " +
+                "normalized=${probe.normalizedText.ifBlank { "<empty>" }} " +
+                "textBoxes=unavailable confidence=${formatConfidence(probe.confidence)} " +
+                "parsedRank=${probe.rank ?: "UNKNOWN"} trigger=$trigger phase=$phase"
+        }
     }
 
     private fun saveRankEvidence(
