@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil.addGameEndTask
+import club.xiaojiawei.hsscript.utils.GameUtil.requestResultPageContinueOnce
 import club.xiaojiawei.hsscript.utils.GameResultScreenshot
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
@@ -23,6 +24,18 @@ import java.util.concurrent.atomic.AtomicInteger
  * @date 2022/11/27 13:44
  */
 object GameOverPhaseStrategy : AbstractPhaseStrategy() {
+
+    internal enum class ScreenWatchdogNextHandler {
+        NORMAL_PHASE_LISTENER,
+        GAME_OVER_HANDLER,
+        VISUAL_TERMINAL_FALLBACK,
+        RESULT_PAGE_CONTINUE,
+    }
+
+    internal data class ScreenWatchdogHandoff(
+        val nextHandler: ScreenWatchdogNextHandler,
+        val dispatched: Boolean,
+    )
 
     private val duplicateCallbacks = AtomicInteger(0)
     @Volatile
@@ -106,6 +119,43 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         addGameEndTask()
         WarEx.reset()
         return true
+    }
+
+    /**
+     * Stop the stale surrender retry without making the result path a no-op.
+     * Power.log/model terminal markers own settlement; a visual-only result
+     * gets exactly one continue input; ordinary/mulligan screens simply hand
+     * control back to their normal phase listener.
+     */
+    internal fun handoffFromScreenWatchdog(kind: ScreenWatchdogKind, evidence: String): ScreenWatchdogHandoff {
+        val terminalMarker = war.currentPhase.name == "GAME_OVER" ||
+            war.won.isNotBlank() || war.lost.isNotBlank() || war.conceded.isNotBlank()
+        val decision = selectWatchdogHandoffForTest(kind, terminalMarker)
+        val dispatched = when (decision) {
+            ScreenWatchdogNextHandler.GAME_OVER_HANDLER -> {
+                over()
+                true
+            }
+            ScreenWatchdogNextHandler.VISUAL_TERMINAL_FALLBACK ->
+                forceTerminalFromScreenWatchdog(kind, evidence)
+            ScreenWatchdogNextHandler.RESULT_PAGE_CONTINUE -> requestResultPageContinueOnce(evidence)
+            ScreenWatchdogNextHandler.NORMAL_PHASE_LISTENER -> false
+        }
+        club.xiaojiawei.hsscriptbase.config.log.warn {
+            "SCREEN_WATCHDOG_HANDOFF kind=$kind terminalMarker=$terminalMarker pause=${PauseStatus.isPause} " +
+                "dispatch=$dispatched nextHandler=$decision evidence=$evidence"
+        }
+        return ScreenWatchdogHandoff(decision, dispatched)
+    }
+
+    internal fun selectWatchdogHandoffForTest(
+        kind: ScreenWatchdogKind,
+        terminalMarker: Boolean,
+    ): ScreenWatchdogNextHandler = when {
+        terminalMarker -> ScreenWatchdogNextHandler.GAME_OVER_HANDLER
+        kind == ScreenWatchdogKind.WIN || kind == ScreenWatchdogKind.LOST -> ScreenWatchdogNextHandler.VISUAL_TERMINAL_FALLBACK
+        kind == ScreenWatchdogKind.RESULT -> ScreenWatchdogNextHandler.RESULT_PAGE_CONTINUE
+        else -> ScreenWatchdogNextHandler.NORMAL_PHASE_LISTENER
     }
 
     override fun dealTagChangeThenIsOver(line: String, tagChangeEntity: TagChangeEntity): Boolean {

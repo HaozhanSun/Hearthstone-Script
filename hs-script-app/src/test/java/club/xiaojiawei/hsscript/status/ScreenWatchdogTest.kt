@@ -46,7 +46,17 @@ class ScreenWatchdogTest {
         val kind = ScreenWatchdog.classifyForTest("一些无法判定的文字")
         assertEquals(ScreenWatchdogKind.UNKNOWN, kind)
         assertEquals(
-            ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN,
+            ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_HANDOFF_NORMAL_FLOW,
+            ScreenWatchdog.decideForTest(kind),
+        )
+    }
+
+    @Test
+    fun `Chinese mulligan screen hands control back to the normal phase listener`() {
+        val kind = ScreenWatchdog.classifyForTest("起始手牌 保留或替换卡牌 确认")
+        assertEquals(ScreenWatchdogKind.MULLIGAN, kind)
+        assertEquals(
+            ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_HANDOFF_NORMAL_FLOW,
             ScreenWatchdog.decideForTest(kind),
         )
     }
@@ -60,8 +70,9 @@ class ScreenWatchdogTest {
             ocrProvider = { error("should not OCR without capture") },
         )
         assertEquals(ScreenWatchdogKind.CAPTURE_FAILED, observation.kind)
-        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN, observation.action)
+        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_HANDOFF_NORMAL_FLOW, observation.action)
         assertEquals(null, observation.screenshotPath)
+        assertEquals(null, observation.roi)
     }
 
     @Test
@@ -89,7 +100,7 @@ class ScreenWatchdogTest {
     }
 
     @Test
-    fun `watchdog uses local OCR even when PaddleX is selected`() {
+    fun `watchdog uses selected OCR provider and reports bounded ROI`() {
         OcrRuntime.providerModeProvider = { OcrProviderMode.PADDLEX_ONLY }
 
         val observation = ScreenWatchdog.inspectForSurrender(
@@ -99,7 +110,8 @@ class ScreenWatchdogTest {
             ocrProvider = { "失败 点击继续" },
         )
 
-        assertEquals("LEGACY", observation.provider)
+        assertEquals("PADDLEX", observation.provider)
+        assertEquals("screen-watchdog-center", observation.roi)
         assertEquals(ScreenWatchdogKind.LOST, observation.kind)
         assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_LOSS, observation.action)
     }
@@ -114,7 +126,8 @@ class ScreenWatchdogTest {
         )
 
         assertEquals(ScreenWatchdogKind.UNKNOWN, observation.kind)
-        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_NO_ACTION, observation.action)
+        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_HANDOFF_NORMAL_FLOW, observation.action)
         assertEquals("ocr-cancelled", observation.reason)
+        assertEquals("screen-watchdog-center", observation.roi)
     }
 }

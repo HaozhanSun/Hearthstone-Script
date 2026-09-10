@@ -168,7 +168,15 @@ class OfflinePaddleXOcrMulliganE2ETest {
             )
 
             assertEquals(expected, observation.action, frameId)
-            assertEquals(OcrProviderKind.PADDLEX.name, observation.provider, frameId)
+            assertTrue(
+                observation.provider == "VISUAL" || observation.provider == OcrProviderKind.PADDLEX.name,
+                "$frameId must use the visual terminal signal or the configured PaddleX provider",
+            )
+            if (observation.provider == OcrProviderKind.PADDLEX.name) {
+                assertEquals("screen-watchdog-center", observation.roi, frameId)
+            } else {
+                assertEquals(null, observation.roi, frameId)
+            }
             assertTrue(
                 observation.screenshotPath == null || Files.isRegularFile(Path.of(observation.screenshotPath)),
                 frameId,
@@ -193,8 +201,9 @@ class OfflinePaddleXOcrMulliganE2ETest {
             },
         )
         assertEquals(ScreenWatchdogKind.UNKNOWN, unknown.kind)
-        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN, unknown.action)
+        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_HANDOFF_NORMAL_FLOW, unknown.action)
         assertEquals(OcrProviderKind.PADDLEX.name, unknown.provider)
+        assertEquals("screen-watchdog-center", unknown.roi)
         assertFalse(PauseStatus.isPause)
         assertTrue(unknown.reason.isNotBlank(), "the bounded recovery reason must be auditable")
         assertTrue(Files.isRegularFile(Path.of(fixture.frame("unknown").screenshotPath)))
@@ -207,8 +216,9 @@ class OfflinePaddleXOcrMulliganE2ETest {
             ocrProvider = { error("OCR must not run after capture failure") },
         )
         assertEquals(ScreenWatchdogKind.CAPTURE_FAILED, captureFailed.kind)
-        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN, captureFailed.action)
+        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_HANDOFF_NORMAL_FLOW, captureFailed.action)
         assertEquals(null, captureFailed.screenshotPath)
+        assertEquals(null, captureFailed.roi)
         assertFalse(PauseStatus.isPause)
     }
 

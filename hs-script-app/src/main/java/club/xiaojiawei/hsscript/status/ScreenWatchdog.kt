@@ -3,6 +3,7 @@ package club.xiaojiawei.hsscript.status
 import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrCancelledException
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptbase.config.log
@@ -22,6 +23,7 @@ enum class ScreenWatchdogKind {
     WIN,
     LOST,
     RESULT,
+    MULLIGAN,
     MATCHMAKING,
     MAIN_MENU,
     GAMEPLAY,
@@ -31,13 +33,12 @@ enum class ScreenWatchdogKind {
 
 enum class ScreenWatchdogRecoveryAction {
     CONTINUE_ACTION,
-    STOP_SURRENDER_NO_ACTION,
     STOP_SURRENDER_AND_RECORD_WIN,
     STOP_SURRENDER_AND_RECORD_LOSS,
     STOP_SURRENDER_AND_CLEAR_RESULT,
     STOP_SURRENDER_AND_RECOVER_MATCHMAKING,
     STOP_SURRENDER_AND_RECOVER_MAIN_MENU,
-    STOP_SURRENDER_AND_CONTINUE_UNKNOWN,
+    STOP_SURRENDER_AND_HANDOFF_NORMAL_FLOW,
 }
 
 data class ScreenWatchdogObservation(
@@ -46,6 +47,7 @@ data class ScreenWatchdogObservation(
     val ocrText: String,
     val screenshotPath: String?,
     val provider: String,
+    val roi: String?,
     val reason: String,
 )
 
@@ -60,6 +62,7 @@ data class ScreenWatchdogObservation(
 object ScreenWatchdog {
 
     private const val OCR_MAX_WIDTH = 1280
+    private const val WATCHDOG_CENTER_ROI = "screen-watchdog-center"
     private val lastCaptureAt = AtomicLong(0L)
 
     internal data class TimingDecision(
@@ -99,13 +102,10 @@ object ScreenWatchdog {
         attempts: Int,
         trigger: String = "surrender-retry",
         captureProvider: () -> BufferedImage? = ::captureScreen,
-        ocrProvider: (BufferedImage) -> String = ::runOCR,
+        ocrProvider: ((BufferedImage) -> String)? = null,
     ): ScreenWatchdogObservation {
         val runId = System.getProperty("hs.script.e2e.run-id", "normal")
-        // This watchdog only classifies terminal/menu screens. Keep it on the
-        // local OCR path so a PaddleX rank request can never block surrender
-        // recovery or hold the action executor for a long sidecar timeout.
-        val provider = "LEGACY"
+        val requestedProvider = OcrRuntime.currentProvider().name
         val image = runCatching { captureProvider() }.getOrElse { error ->
             log.warn(error) {
                 "SCREEN_WATCHDOG_CAPTURE_FAILED runId=$runId trigger=$trigger state=$state attempts=$attempts"
@@ -115,10 +115,11 @@ object ScreenWatchdog {
         if (image == null) {
             return ScreenWatchdogObservation(
                 kind = ScreenWatchdogKind.CAPTURE_FAILED,
-                action = ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN,
+                action = ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_HANDOFF_NORMAL_FLOW,
                 ocrText = "",
                 screenshotPath = null,
-                provider = provider,
+                provider = requestedProvider,
+                roi = null,
                 reason = "capture-failed",
             )
         }
@@ -138,39 +139,67 @@ object ScreenWatchdog {
         )
         log.warn {
             "SCREEN_WATCHDOG_CAPTURE runId=$runId trigger=$trigger state=$state attempts=$attempts " +
-                "provider=$provider path=${evidence?.file?.absolutePath ?: "not-saved"}"
+                "provider=$requestedProvider roi=$WATCHDOG_CENTER_ROI path=${evidence?.file?.absolutePath ?: "not-saved"}"
         }
 
-        val ocrText = runCatching { ocrProvider(image).replace(Regex("\\s+"), "") }.getOrElse { error ->
+        // A terminal result page has a stable visual signature. It outranks
+        // OCR so a Chinese result banner is still actionable if an OCR sidecar
+        // is unavailable. The screenshot from the reported incident is a
+        // mulligan page, whose visual signature does not match this branch.
+        if (ScreenStateRecovery.looksLikeResultImageForWatchdog(image)) {
+            val action = decide(ScreenWatchdogKind.RESULT)
+            log.warn {
+                "SCREEN_WATCHDOG_VISUAL runId=$runId kind=RESULT action=$action provider=VISUAL " +
+                    "configuredProvider=$requestedProvider roi=none " +
+                    "screenshot=${evidence?.file?.absolutePath ?: "not-saved"}"
+            }
+            return ScreenWatchdogObservation(
+                kind = ScreenWatchdogKind.RESULT,
+                action = action,
+                ocrText = "",
+                screenshotPath = evidence?.file?.absolutePath,
+                provider = "VISUAL",
+                roi = null,
+                reason = "result-page-visual",
+            )
+        }
+
+        val cropped = cropForWatchdog(image)
+        val providerAndText = runCatching {
+            val text = ocrProvider?.invoke(cropped) ?: runConfiguredOcr(cropped)
+            (if (ocrProvider == null) OcrRuntime.lastProviderUsed().name else requestedProvider) to text
+        }.getOrElse { error ->
             if (error is PaddleXOcrCancelledException ||
                 error is CancellationException ||
                 error is InterruptedException ||
                 Thread.currentThread().isInterrupted
             ) {
                 log.info(error) {
-                    "SCREEN_WATCHDOG_OCR_CANCELLED runId=$runId provider=$provider trigger=$trigger " +
+                    "SCREEN_WATCHDOG_OCR_CANCELLED runId=$runId provider=$requestedProvider roi=$WATCHDOG_CENTER_ROI trigger=$trigger " +
                         "screenshot=${evidence?.file?.absolutePath ?: "not-saved"}"
                 }
                 return ScreenWatchdogObservation(
                     kind = ScreenWatchdogKind.UNKNOWN,
-                    action = ScreenWatchdogRecoveryAction.STOP_SURRENDER_NO_ACTION,
+                    action = ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_HANDOFF_NORMAL_FLOW,
                     ocrText = "",
                     screenshotPath = evidence?.file?.absolutePath,
-                    provider = provider,
+                    provider = if (ocrProvider == null) OcrRuntime.lastProviderUsed().name else requestedProvider,
+                    roi = WATCHDOG_CENTER_ROI,
                     reason = "ocr-cancelled",
                 )
             }
             log.warn(error) {
-                "SCREEN_WATCHDOG_OCR_FAILED runId=$runId provider=$provider trigger=$trigger " +
+                "SCREEN_WATCHDOG_OCR_FAILED runId=$runId provider=$requestedProvider roi=$WATCHDOG_CENTER_ROI trigger=$trigger " +
                     "screenshot=${evidence?.file?.absolutePath ?: "not-saved"}"
             }
-            ""
+            OcrRuntime.lastProviderUsed().name to ""
         }
-        val providerUsed = "LEGACY"
+        val providerUsed = providerAndText.first
+        val ocrText = providerAndText.second.replace(Regex("\\s+"), "")
         val kind = classify(ocrText)
         val action = decide(kind)
         log.warn {
-            "SCREEN_WATCHDOG_OCR runId=$runId provider=$providerUsed kind=$kind action=$action " +
+            "SCREEN_WATCHDOG_OCR runId=$runId provider=$providerUsed roi=$WATCHDOG_CENTER_ROI kind=$kind action=$action " +
                 "chars=${ocrText.length} screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                 "ocr=${sanitize(ocrText).take(240).ifBlank { "<empty>" }}"
         }
@@ -180,6 +209,7 @@ object ScreenWatchdog {
             ocrText = ocrText,
             screenshotPath = evidence?.file?.absolutePath,
             provider = providerUsed,
+            roi = WATCHDOG_CENTER_ROI,
             reason = "ocr-classified",
         )
     }
@@ -200,6 +230,9 @@ object ScreenWatchdog {
         }
         if ((text.contains("失败") || text.contains("败北") || text.contains("defeat") || text.contains("lost")) && hasContinue) {
             return ScreenWatchdogKind.LOST
+        }
+        if (text.contains("起始手牌") || text.contains("保留或替换") || text.contains("替换卡牌")) {
+            return ScreenWatchdogKind.MULLIGAN
         }
         if (ScreenStateRecovery.looksLikeResultText(text) ||
             text.contains("本局结果") ||
@@ -236,12 +269,13 @@ object ScreenWatchdog {
         ScreenWatchdogKind.WIN -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_WIN
         ScreenWatchdogKind.LOST -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_LOSS
         ScreenWatchdogKind.RESULT -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CLEAR_RESULT
+        ScreenWatchdogKind.MULLIGAN -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_HANDOFF_NORMAL_FLOW
         ScreenWatchdogKind.MATCHMAKING -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MATCHMAKING
         ScreenWatchdogKind.MAIN_MENU -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MAIN_MENU
         ScreenWatchdogKind.GAMEPLAY -> ScreenWatchdogRecoveryAction.CONTINUE_ACTION
         ScreenWatchdogKind.UNKNOWN,
         ScreenWatchdogKind.CAPTURE_FAILED,
-        -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN
+        -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_HANDOFF_NORMAL_FLOW
     }
 
     private fun captureScreen(): BufferedImage? = runCatching {
@@ -273,7 +307,15 @@ object ScreenWatchdog {
         null
     }
 
-    private fun runOCR(image: BufferedImage): String {
+    private fun runConfiguredOcr(image: BufferedImage): String = OcrRuntime.recognize(
+        image = image,
+        desc = "screen-watchdog-terminal",
+        roi = WATCHDOG_CENTER_ROI,
+        timeoutMs = 4_000L,
+        legacyOcr = { runLegacyOcr(image) },
+    )
+
+    private fun runLegacyOcr(image: BufferedImage): String {
         val ocrImage = resizeForOcr(image)
         return Tesseract().apply {
             setDatapath(File(TESS_DATA_PATH).absolutePath)
@@ -281,6 +323,16 @@ object ScreenWatchdog {
             setPageSegMode(11)
             setVariable("user_defined_dpi", "160")
         }.doOCR(ocrImage)
+    }
+
+    private fun cropForWatchdog(image: BufferedImage): BufferedImage {
+        // Keep OCR away from the script UI and desktop edges. This centered
+        // crop contains Chinese/English result labels and mulligan banners.
+        val x = (image.width * 0.16).toInt()
+        val y = (image.height * 0.06).toInt()
+        val width = (image.width * 0.68).toInt().coerceAtLeast(1)
+        val height = (image.height * 0.88).toInt().coerceAtLeast(1)
+        return image.getSubimage(x, y, width.coerceAtMost(image.width - x), height.coerceAtMost(image.height - y))
     }
 
     private fun resizeForOcr(image: BufferedImage): BufferedImage {

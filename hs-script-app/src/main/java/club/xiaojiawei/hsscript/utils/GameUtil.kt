@@ -49,6 +49,7 @@ import java.nio.file.Path
 import java.util.*
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
 import kotlin.math.min
@@ -103,6 +104,7 @@ object GameUtil {
     @Synchronized
     fun resetForNewGame() {
         cancelGameEndTask()
+        watchdogResultPageContinueRequested.set(false)
     }
 
     /**
@@ -144,6 +146,56 @@ object GameUtil {
      * starts parsing the next Power.log state.
      */
     private val GAME_END_CONTINUE_RECT: GameRect by lazy { GameRect(-0.0900, 0.0900, 0.4100, 0.4800) }
+
+    private val watchdogResultPageContinueRequested = AtomicBoolean(false)
+
+    /**
+     * Sends the watchdog's result-page acknowledgement exactly once, then
+     * re-checks the boundary without becoming another coordinate-click loop.
+     * Live Power.log settlement remains the authority for the next game.
+     */
+    internal fun requestResultPageContinueOnce(evidence: String): Boolean {
+        if (!watchdogResultPageContinueRequested.compareAndSet(false, true)) {
+            log.warn {
+                "SCREEN_WATCHDOG_RESULT_CONTINUE_SKIPPED reason=already-requested " +
+                    "pause=${PauseStatus.isPause} dispatch=false nextHandler=POWER_LOG_BOUNDARY evidence=$evidence"
+            }
+            return false
+        }
+        if (PauseStatus.isPause) {
+            log.warn {
+                "SCREEN_WATCHDOG_RESULT_CONTINUE_SKIPPED reason=paused pause=true " +
+                    "dispatch=false nextHandler=POWER_LOG_BOUNDARY evidence=$evidence"
+            }
+            return false
+        }
+
+        return runCatching {
+            MouseUtil.leftButtonClickForRecovery(GAME_END_CONTINUE_RECT.getCenterClickPos())
+            log.warn {
+                "SCREEN_WATCHDOG_RESULT_CONTINUE_SENT pause=false dispatch=true " +
+                    "nextHandler=POWER_LOG_BOUNDARY evidence=$evidence"
+            }
+            EXTRA_THREAD_POOL.schedule(
+                {
+                    val resultStillVisible = ScreenStateRecovery.isResultVisibleForRecovery()
+                    log.warn {
+                        "SCREEN_WATCHDOG_RESULT_CONTINUE_RECHECK pause=${PauseStatus.isPause} " +
+                            "resultVisible=$resultStillVisible nextHandler=POWER_LOG_BOUNDARY evidence=$evidence"
+                    }
+                },
+                750L,
+                TimeUnit.MILLISECONDS,
+            )
+            true
+        }.getOrElse { error ->
+            log.warn(error) {
+                "SCREEN_WATCHDOG_RESULT_CONTINUE_FAILED pause=${PauseStatus.isPause} " +
+                    "dispatch=false nextHandler=POWER_LOG_BOUNDARY evidence=$evidence"
+            }
+            false
+        }
+    }
 
     val RECONNECT_RECT: GameRect by lazy { GameRect(-0.1845, -0.0396, 0.2282, 0.2904) }
 
@@ -748,33 +800,27 @@ object GameUtil {
                             )
                             log.warn {
                                 "RECOVERY_ACTION source=screen-watchdog action=${observation.action} " +
-                                    "kind=${observation.kind} provider=${observation.provider} " +
+                                    "kind=${observation.kind} provider=${observation.provider} roi=${observation.roi ?: "none"} " +
                                     "screenshot=${observation.screenshotPath ?: "not-saved"}"
                             }
                             when (observation.action) {
                                 ScreenWatchdogRecoveryAction.CONTINUE_ACTION -> Unit
-                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_NO_ACTION -> {
-                                    stopSurrenderTask()
-                                    log.info {
-                                        "SCREEN_WATCHDOG_CANCELLED reason=${observation.reason} " +
-                                            "provider=${observation.provider} screenshot=${observation.screenshotPath ?: "not-saved"}"
-                                    }
-                                    return@scheduleWithFixedDelay
-                                }
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_WIN,
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_LOSS,
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CLEAR_RESULT,
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_HANDOFF_NORMAL_FLOW,
                                 -> {
                                     stopSurrenderTask()
-                                    GameOverPhaseStrategy.forceTerminalFromScreenWatchdog(
+                                    val handoff = GameOverPhaseStrategy.handoffFromScreenWatchdog(
                                         observation.kind,
                                         observation.screenshotPath ?: observation.reason,
                                     )
-                                    return@scheduleWithFixedDelay
-                                }
-                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CLEAR_RESULT -> {
-                                    stopSurrenderTask()
-                                    Mode.recover(ModeEnum.GAMEPLAY, "screen-watchdog-result-page", enterStrategy = false)
-                                    dismissStaleGameEndScreen()
+                                    log.warn {
+                                        "SCREEN_WATCHDOG_HANDOFF_APPLIED reason=${observation.reason} " +
+                                            "pause=${PauseStatus.isPause} dispatch=${handoff.dispatched} " +
+                                            "nextHandler=${handoff.nextHandler} provider=${observation.provider} " +
+                                            "roi=${observation.roi ?: "none"} screenshot=${observation.screenshotPath ?: "not-saved"}"
+                                    }
                                     return@scheduleWithFixedDelay
                                 }
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MATCHMAKING -> {
@@ -785,16 +831,6 @@ object GameUtil {
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MAIN_MENU -> {
                                     stopSurrenderTask()
                                     Mode.recover(ModeEnum.HUB, "screen-watchdog-main-menu", enterStrategy = true)
-                                    return@scheduleWithFixedDelay
-                                }
-                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN -> {
-                                    stopSurrenderTask()
-                                    log.warn {
-                                        "SCREEN_WATCHDOG_BLOCKED reason=unknown-or-capture-failed " +
-                                            "kind=${observation.kind} attempts=$surrenderAttempts " +
-                                            "screenshot=${observation.screenshotPath ?: "not-saved"} " +
-                                            "action=STOP_SURRENDER_AND_CONTINUE pause=false dispatch=false"
-                                    }
                                     return@scheduleWithFixedDelay
                                 }
                             }

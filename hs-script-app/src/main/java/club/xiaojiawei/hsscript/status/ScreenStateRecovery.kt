@@ -672,6 +672,15 @@ object ScreenStateRecovery {
         resultContinueGrayLightRatio >= RESULT_CONTINUE_GRAY_LIGHT_MIN &&
             resultBannerLowSaturationRatio >= RESULT_BANNER_LOW_SATURATION_MIN
 
+    /** Reuses the existing OCR-free result-page signal for the watchdog. */
+    internal fun looksLikeResultImageForWatchdog(image: BufferedImage): Boolean {
+        val visual = visualSignature(image)
+        return looksLikeResultVisual(
+            visual.resultContinueGrayLightRatio,
+            visual.resultBannerLowSaturationRatio,
+        )
+    }
+
     /**
      * Re-check the actual desktop after a result-page input was sent.
      *
