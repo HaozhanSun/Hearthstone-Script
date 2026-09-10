@@ -12,7 +12,8 @@ import kotlin.test.assertTrue
 class DebugRunUiContractTest {
     @Test
     fun `debug run UI is wired to the non-persistent thirty minute lease`() {
-        val moduleRoot = Path.of("hs-script-app")
+        val moduleRoot = moduleRoot()
+        val projectRoot = if (moduleRoot == Path.of(".")) Path.of("..") else Path.of(".")
         val fxml = moduleRoot.resolve(Path.of("src", "main", "resources", "fxml", "main.fxml"))
         assertTrue(Files.isRegularFile(fxml), "main.fxml must remain checked in")
         val fxmlText = Files.readString(fxml)
@@ -21,6 +22,7 @@ class DebugRunUiContractTest {
         assertTrue(fxmlText.contains("config=\"DEBUG_RUN_MODE\""))
         assertTrue(fxmlText.contains("onAction=\"#toggleDebugRun\""))
         assertTrue(fxmlText.contains("fx:id=\"debugRunStatus\""))
+        assertTrue(fxmlText.contains("启动后默认开启一次，最多运行30分钟"))
 
         val config = moduleRoot.resolve(Path.of(
             "src",
@@ -43,11 +45,20 @@ class DebugRunUiContractTest {
         assertTrue(appText.contains("prearmBeforeScheduleChecks()"))
         assertTrue(appText.indexOf("prearmBeforeScheduleChecks()") < appText.indexOf("launchService()"))
 
+        val mainControllerText = Files.readString(moduleRoot.resolve(Path.of(
+            "src", "main", "java", "club", "xiaojiawei", "hsscript", "controller", "javafx", "MainController.kt",
+        )))
+        assertTrue(mainControllerText.contains("enableDefaultAfterRestart()"))
+        assertTrue(mainControllerText.contains("startupDebugRun.state == DebugRunLease.State.ACTIVE"))
+        assertTrue(mainControllerText.contains("ACTIVE ·"))
+
         val controllerText = Files.readString(moduleRoot.resolve(Path.of(
             "src", "main", "java", "club", "xiaojiawei", "hsscript", "status", "DebugRunController.kt",
         )))
         assertTrue(controllerText.contains("PREARM_PROPERTY"))
         assertTrue(controllerText.contains("DEBUG_OVERRIDE_UI_PREARM_RETAINED"))
+        assertTrue(controllerText.contains("startupDefaultHandled"))
+        assertTrue(controllerText.contains("DEBUG_OVERRIDE_DEFAULT_ACTIVE"))
 
         val runner = moduleRoot.resolve(Path.of("src", "main", "resources", "bat", "run-debug.ps1"))
         val runnerText = Files.readString(runner)
@@ -58,7 +69,7 @@ class DebugRunUiContractTest {
         assertTrue(runnerText.contains("Get-FileHash"))
         assertTrue(!runnerText.contains("\$jar = Get-ChildItem"))
 
-        val deploy = Files.readString(Path.of("build-and-deploy.ps1"))
+        val deploy = Files.readString(projectRoot.resolve("build-and-deploy.ps1"))
         assertTrue(deploy.contains("run-debug.ps1"))
         assertTrue(deploy.contains("debugRunnerSource"))
 
@@ -106,4 +117,8 @@ class DebugRunUiContractTest {
         ))
         assertTrue(Files.isRegularFile(override), "ScheduleOverride.kt must remain checked in")
     }
+
+    private fun moduleRoot(): Path =
+        listOf(Path.of("."), Path.of("hs-script-app"))
+            .first { Files.isRegularFile(it.resolve(Path.of("src", "main", "resources", "fxml", "main.fxml"))) }
 }

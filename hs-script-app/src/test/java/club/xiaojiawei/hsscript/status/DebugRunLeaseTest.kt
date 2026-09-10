@@ -108,6 +108,24 @@ class DebugRunLeaseTest {
     }
 
     @Test
+    fun `restart can arm a fresh default thirty minute lease`() {
+        var nowNanos = 0L
+        var wallClock = 100L
+        val lease = DebugRunLease(nanoTime = { nowNanos }, wallClockMillis = { wallClock })
+
+        val beforeRestart = lease.enable(30_000L)
+        nowNanos = 5_000_000_000L
+        wallClock = 10_000L
+        val afterRestart = lease.resetForRestart(defaultEnabled = true)
+
+        assertEquals(DebugRunLease.State.ACTIVE, afterRestart.state)
+        assertEquals(DebugRunLease.MAX_DURATION_MILLIS, afterRestart.remainingMillis)
+        assertEquals(10_000L, afterRestart.startEpochMillis)
+        assertEquals(10_000L + DebugRunLease.MAX_DURATION_MILLIS, afterRestart.endEpochMillis)
+        assertNotEquals(beforeRestart.endEpochMillis, afterRestart.endEpochMillis)
+    }
+
+    @Test
     fun `concurrent enable requests share one deadline`() {
         var nowNanos = 0L
         val lease = DebugRunLease(nanoTime = { nowNanos })

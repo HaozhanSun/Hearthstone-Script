@@ -19,6 +19,7 @@ object DebugRunController {
     private val timestampFormatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME.withZone(ZoneOffset.UTC)
     private val metadataLock = Any()
     private var activeRunId: String? = null
+    private var startupDefaultHandled = false
 
     private val lease = DebugRunLease(
         schedule = { delayNanos, task ->
@@ -84,6 +85,27 @@ object DebugRunController {
         if (!WorkTimeListener.canWork()) WorkTimeListener.working = false
         snapshot
     }
+
+    fun enableDefaultAfterRestart(reason: String = "process-start-default"): DebugRunLease.Snapshot =
+        synchronized(metadataLock) {
+            if (startupDefaultHandled) return@synchronized lease.snapshot()
+            startupDefaultHandled = true
+            if (System.getProperty(PREARM_PROPERTY) == "true" && lease.isActiveWithoutExpiring()) {
+                val snapshot = lease.snapshot()
+                ConfigUtil.putBoolean(ConfigEnum.DEBUG_RUN_MODE, true)
+                log.info { "DEBUG_OVERRIDE_UI_PREARM_RETAINED runId=${activeRunId ?: "unknown"}" }
+                return@synchronized snapshot
+            }
+
+            val snapshot = lease.resetForRestart(defaultEnabled = true)
+            activeRunId = UUID.randomUUID().toString()
+            ConfigUtil.putBoolean(ConfigEnum.DEBUG_RUN_MODE, true)
+            logSnapshot("DEBUG_OVERRIDE_DEFAULT_ACTIVE", snapshot, reason, activeRunId)
+            logRuntime("ACTIVE", snapshot, activeRunId)
+            WorkTimeListener.checkWork()
+            WorkTimeListener.tryWork()
+            snapshot
+        }
 
     fun snapshot(): DebugRunLease.Snapshot = lease.snapshot()
 

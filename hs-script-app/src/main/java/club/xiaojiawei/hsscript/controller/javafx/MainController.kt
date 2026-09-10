@@ -98,8 +98,8 @@ class MainController : MainView() {
         resourceBundle: ResourceBundle?,
     ) {
         versionText.text = formatVersionText(VersionListener.currentRelease.tagName, BuildInfo.RELEASE_CHANNEL_LABEL)
-        DebugRunController.resetAfterRestart()
-        debugRunModeCheckBox.isSelected = DebugRunController.isActive()
+        val startupDebugRun = DebugRunController.enableDefaultAfterRestart()
+        debugRunModeCheckBox.isSelected = startupDebugRun.state == DebugRunLease.State.ACTIVE
         updateDebugRunStatus()
         addListener()
         initModeAndDeck()

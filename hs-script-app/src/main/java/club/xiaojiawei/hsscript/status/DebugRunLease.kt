@@ -46,16 +46,7 @@ class DebugRunLease(
             if (state == State.ACTIVE) expired = expireLocked(nowNanos)
 
             val durationMillis = requestedDurationMillis.coerceIn(1L, maxDurationMillis)
-            val nowWallClock = wallClockMillis()
-            generation += 1
-            state = State.ACTIVE
-            deadlineNanos = nowNanos + durationMillis * NANOS_PER_MILLI
-            startEpochMillis = nowWallClock
-            endEpochMillis = nowWallClock + durationMillis
-            expiryFuture?.cancel(false)
-            expiryFuture = null
-            scheduleExpiryLocked(generation, durationMillis * NANOS_PER_MILLI)
-            snapshotLocked(nowNanos)
+            startLocked(nowNanos, durationMillis)
         }
         expired?.let(onExpired)
         return snapshot
@@ -77,8 +68,12 @@ class DebugRunLease(
         return snapshot
     }
 
-    /** Clear all live state without invoking expiry callbacks on process restart. */
-    fun resetForRestart(): Snapshot = synchronized(lock) {
+    /**
+     * Clear live state without invoking expiry callbacks on process restart.
+     * When requested by application startup policy, immediately arms a fresh
+     * default lease instead of restoring the old deadline.
+     */
+    fun resetForRestart(defaultEnabled: Boolean = false): Snapshot = synchronized(lock) {
         generation += 1
         expiryFuture?.cancel(false)
         expiryFuture = null
@@ -86,7 +81,12 @@ class DebugRunLease(
         deadlineNanos = 0L
         startEpochMillis = 0L
         endEpochMillis = 0L
-        snapshotLocked(nanoTime())
+        val nowNanos = nanoTime()
+        if (defaultEnabled) {
+            startLocked(nowNanos, maxDurationMillis)
+        } else {
+            snapshotLocked(nowNanos)
+        }
     }
 
     fun snapshot(): Snapshot {
@@ -142,6 +142,22 @@ class DebugRunLease(
             0L
         }
         return Snapshot(state, startEpochMillis, endEpochMillis, remainingMillis)
+    }
+
+    private fun startLocked(
+        nowNanos: Long,
+        durationMillis: Long,
+    ): Snapshot {
+        val nowWallClock = wallClockMillis()
+        generation += 1
+        state = State.ACTIVE
+        deadlineNanos = nowNanos + durationMillis * NANOS_PER_MILLI
+        startEpochMillis = nowWallClock
+        endEpochMillis = nowWallClock + durationMillis
+        expiryFuture?.cancel(false)
+        expiryFuture = null
+        scheduleExpiryLocked(generation, durationMillis * NANOS_PER_MILLI)
+        return snapshotLocked(nowNanos)
     }
 
     private fun expireLocked(nowNanos: Long): Snapshot {

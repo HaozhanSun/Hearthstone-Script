@@ -81,7 +81,7 @@
                                         contentDisplay="RIGHT" config="DEBUG_RUN_MODE"
                                         onAction="#toggleDebugRun">
                             <tooltip>
-                                <Tooltip text="一次性绕过工作时间段，最多运行30分钟；重启不会恢复租约"/>
+                                <Tooltip text="启动后默认开启一次，最多运行30分钟；到期或手动关闭后恢复正常时间表"/>
                             </tooltip>
                         </ConfigCheckBox>
                         <Label fx:id="debugRunStatus" text="DISABLED" style="-fx-font-size: 10px;"/>
