@@ -23,6 +23,9 @@ import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.DebugRunController
 import club.xiaojiawei.hsscript.status.DebugRunLease
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.RuntimeSelectionSnapshot
+import club.xiaojiawei.hsscript.status.RuntimeSelectionState
+import club.xiaojiawei.hsscript.status.RuntimeSelectionUiContract
 import club.xiaojiawei.hsscript.status.WorkTimeStatus
 import club.xiaojiawei.hsscript.utils.ConfigUtil.getString
 import club.xiaojiawei.hsscript.utils.ConfigUtil.putString
@@ -92,6 +95,7 @@ class MainController : MainView() {
     private val workTimeChangeId = "main-ui"
 
     private var initDate = LocalDate.now()
+    private var applyingRuntimeSnapshot = false
 
     override fun initialize(
         url: URL?,
@@ -171,6 +175,7 @@ class MainController : MainView() {
         runModeBox.selectionModel
             .selectedItemProperty()
             .addListener { observable: ObservableValue<out RunModeEnum?>?, oldValue: RunModeEnum?, newValue: RunModeEnum? ->
+                if (applyingRuntimeSnapshot) return@addListener
                 val deckStrategies = if (newValue == null) null else runModeMap[newValue]
                 deckStrategies?.let {
                     deckStrategyBox.items.setAll(deckStrategies.sortedBy { it.id() })
@@ -185,6 +190,7 @@ class MainController : MainView() {
         deckStrategyBox.selectionModel
             .selectedItemProperty()
             .addListener { observable: ObservableValue<out DeckStrategy?>?, oldValue: DeckStrategy?, newValue: DeckStrategy? ->
+                if (applyingRuntimeSnapshot) return@addListener
                 if (newValue == null) {
                     runModeMap[runModeBox.selectionModel.selectedItem]?.find { it == oldValue }?.let {
                         deckStrategyBox.selectionModel.select(oldValue)
@@ -239,12 +245,51 @@ class MainController : MainView() {
                 deck: DeckStrategy?,
                 t1: DeckStrategy?,
             ->
-            if (t1 != null) {
+            if (t1 != null && DeckStrategyManager.currentRuntimeSelectionSnapshot().state == RuntimeSelectionState.USER_DEFAULT) {
                 t1.runModes
                 runModeBox.value = t1.runModes[0]
                 deckStrategyBox.value = t1
             }
         }
+        DeckStrategyManager.runtimeSelectionSnapshotProperty.addListener { _, _, snapshot ->
+            runUI { applyRuntimeSnapshot(snapshot) }
+        }
+        applyRuntimeSnapshot(DeckStrategyManager.currentRuntimeSelectionSnapshot())
+    }
+
+    private fun applyRuntimeSnapshot(snapshot: RuntimeSelectionSnapshot) {
+        applyingRuntimeSnapshot = true
+        try {
+            runModeBox.styleClass.remove(RuntimeSelectionUiContract.SCHEDULE_COMBO_STYLE)
+            deckStrategyBox.styleClass.remove(RuntimeSelectionUiContract.SCHEDULE_COMBO_STYLE)
+            if (snapshot.fromSchedule) {
+                runModeBox.styleClass.add(RuntimeSelectionUiContract.SCHEDULE_COMBO_STYLE)
+                deckStrategyBox.styleClass.add(RuntimeSelectionUiContract.SCHEDULE_COMBO_STYLE)
+            }
+            val prompt = RuntimeSelectionUiContract.promptText(snapshot)
+            runModeBox.promptText = prompt
+            deckStrategyBox.promptText = prompt
+            val mode = snapshot.runMode
+            if (mode == null) {
+                runModeBox.value = null
+                deckStrategyBox.items.clear()
+                deckStrategyBox.value = null
+                return
+            }
+            if (!runModeBox.items.contains(mode)) {
+                runModeBox.items.add(mode)
+            }
+            runModeBox.value = mode
+            val strategies = runModeMap[mode].orEmpty().sortedBy { it.id() }
+            deckStrategyBox.items.setAll(strategies)
+            deckStrategyBox.value = snapshot.strategyId?.let { strategyId -> strategies.find { it.id() == strategyId } }
+            if (snapshot.strategyId != null && deckStrategyBox.value == null) {
+                deckStrategyBox.promptText = "策略未加载"
+            }
+        } finally {
+            applyingRuntimeSnapshot = false
+        }
+        reloadWorkTime(workTimeChangeId)
     }
 
     fun reloadRunMode() {
@@ -498,8 +543,8 @@ class MainController : MainView() {
             val workTimeRuleSet = WorkTimeStatus.nowWorkTimeRuleSet() ?: return@runUI
             val timeRules = workTimeRuleSet.getTimeRules()
             workTimeRuleSetId.text = workTimeRuleSet.getName()
-            for (rule in timeRules) {
-                workTimePane.children.add(WorkTimeItem(rule, workTimeChangeId))
+            for ((ruleIndex, rule) in timeRules.withIndex()) {
+                workTimePane.children.add(WorkTimeItem(rule, workTimeChangeId, workTimeRuleSet.id, ruleIndex))
             }
         }
     }

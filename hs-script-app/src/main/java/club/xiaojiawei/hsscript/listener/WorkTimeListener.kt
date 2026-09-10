@@ -7,6 +7,7 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.WindowEnum
 import club.xiaojiawei.hsscript.status.DebugRunController
 import club.xiaojiawei.hsscript.status.DebugRunLease
+import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScheduleOverrideInfo
@@ -229,7 +230,8 @@ object WorkTimeListener {
             val ruleSet: WorkTimeRuleSet = ruleSets.find { it.id == ruleSetId } ?: continue
             val scheduleDate = today.plusDays(dayOffset.toLong())
 
-            for ((ruleIndex, rule) in ruleSet.getTimeRules().filter { it.enable }.withIndex()) {
+            for ((ruleIndex, rule) in ruleSet.getTimeRules().withIndex()) {
+                if (!rule.enable) continue
                 val window = jitteredWindow(ruleSetId, ruleIndex, rule, scheduleDate) ?: continue
                 windows += ScheduledRuleWindow(
                     ruleSetId = ruleSetId,
@@ -524,6 +526,7 @@ object WorkTimeListener {
                     "window=${scheduleWindowDescription()}"
             }
         }
+        DeckStrategyManager.refreshRuntimeSelectionSnapshot("schedule-check:$decision")
 
         if (!canWork && overrideInfo != null) {
             suppressionReasons += "outside-hours"

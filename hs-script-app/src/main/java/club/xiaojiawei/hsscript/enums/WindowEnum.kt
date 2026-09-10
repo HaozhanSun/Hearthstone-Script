@@ -77,6 +77,8 @@ enum class WindowEnum(
     TIME_SETTINGS(
         "timeSettings.fxml",
         formatTitle("工作时间设置"),
+        width = 1240.0,
+        height = 600.0,
         alwaysOnTop = true,
         cache = false
     ),
