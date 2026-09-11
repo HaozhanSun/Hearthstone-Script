@@ -29,9 +29,11 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     const val PATCHES_THE_PIRATE = "CFM_637"
     const val PARACHUTE_BRIGAND = "DRG_056"
     const val SHIPS_CANNON = "GVG_075"
+    const val SOUTHSEA_DECKHAND = "CORE_CS2_146"
     const val SOUTHSEA_CAPTAIN = "NEW1_027"
     const val HOZEN_ROUGHHOUSER = "VAC_938"
     const val RAGEWING = "YOD_032"
+    const val JUGGERNAUT = "SW_028t6"
     const val BATTLEFIELD = "AV_661"
 
     const val HOOKFIST = "CORE_NX2_028"
@@ -67,7 +69,9 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             card.cardId.startsWith("CORE_${id}t")
 
     fun isPirate(card: Card): Boolean =
-        card.cardRace === CardRaceEnum.PIRATE || card.cardRace === CardRaceEnum.ALL
+        card.cardRace === CardRaceEnum.PIRATE ||
+            card.cardRace === CardRaceEnum.ALL ||
+            isCard(card, SOUTHSEA_DECKHAND)
 
     override fun canCreateOpaqueAction(card: Card, war: War): Boolean =
         card.entityId.isNotBlank() && !card.isUncertain &&
@@ -222,8 +226,20 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     override fun isLethalAction(action: Action, war: War): Boolean =
         PirateLethalAttackPolicy.isLethalFaceAction(action, war)
 
+    /**
+     * Hookfist-3000 draws a card and grants armor after a hero attack. Keep
+     * its own attack behind a legal hero attack, but leave it available when
+     * the hero cannot legally attack this state.
+     */
+    private fun shouldDeferHookfistAttack(action: Action, war: War): Boolean =
+        action is AttackAction &&
+            action.creator?.let { isCard(it, HOOKFIST) } == true &&
+            hasLegalHeroAttack(war)
+
     /** Keep Warrior's armor power behind all useful Pirate Warrior work. */
     override fun isDeferredAction(action: Action, war: War): Boolean {
+        if (shouldDeferHookfistAttack(action, war)) return true
+
         val creator = action.creator
         if (PirateAttackOrderPolicy.shouldDeferNuLingNagaAttack(action, war)) return true
 
@@ -253,6 +269,9 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     }
 
     override fun actionFilterReason(action: Action, war: War): String? {
+        if (shouldDeferHookfistAttack(action, war)) {
+            return "hookfist-attack-deferred-behind-hero-attack"
+        }
         if (isFrontlineAxeHeroAttack(action, war) &&
             frontlineAxeTarget(action, war) == FrontlineAxeTarget.MINION &&
             !frontlineAxeCanKill(action, war)
@@ -271,6 +290,15 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     /** Do not hide Patches when it is literally the only legal action. */
     override fun shouldDefer(card: Card, war: War): Boolean = false
 
+    /**
+     * The Juggernaut (`SW_028t6`) equips a random Warrior weapon at turn
+     * start. Hearthstone keeps an existing weapon; it must not be modeled as
+     * a replacement. Veto only this card's automatic trigger, leaving other
+     * turn-start effects untouched.
+     */
+    override fun shouldSimulateTurnStart(card: Card, war: War): Boolean =
+        !(isCard(card, JUGGERNAUT) && war.me.playArea.weapon != null)
+
     override fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? =
         when {
             PirateConditionalDamageSpellPolicy.canKill(action, war) ->
@@ -284,8 +312,12 @@ object PirateWarriorMctsModel : MctsDecisionModel {
                 MctsActionOrderPhase.SPELL_PLAY
             action is PowerAction && action.creator?.cardType === CardTypeEnum.LOCATION ->
                 MctsActionOrderPhase.MINION_PLAY
-            action is AttackAction && action.creator?.cardType === CardTypeEnum.MINION ->
+            action is AttackAction && action.creator?.cardType === CardTypeEnum.MINION &&
+                !shouldDeferHookfistAttack(action, war) ->
                 MctsActionOrderPhase.MINION_ATTACK
+            action is AttackAction && action.creator?.cardType === CardTypeEnum.MINION &&
+                shouldDeferHookfistAttack(action, war) ->
+                MctsActionOrderPhase.HERO_ATTACK
             action is PowerAction && action.creator?.cardType === CardTypeEnum.HERO_POWER ->
                 if (allowsTauntEarlyHeroAction(war)) {
                     MctsActionOrderPhase.EARLY_HERO_ACTION
@@ -599,6 +631,15 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         PirateAttackOrderPolicy.hasAttackableEnemyTaunt(war) &&
             PirateAttackOrderPolicy.hasHeroAttackAction(war) &&
             !PirateHeroAttackTargetPolicy.requiresFriendlySetupAttack(war)
+
+    private fun hasLegalHeroAttack(war: War): Boolean {
+        val hero = war.me.playArea.hero ?: return false
+        if (!PirateAttackOrderPolicy.hasHeroAttackAction(war)) return false
+        return runCatching {
+            hero.action.generateAttackActions(war, war.me)
+                .any { isActionLegal(it, war) }
+        }.getOrDefault(false)
+    }
 
     private fun hasOtherUsefulNonAxeAction(war: War): Boolean {
         val me = war.me

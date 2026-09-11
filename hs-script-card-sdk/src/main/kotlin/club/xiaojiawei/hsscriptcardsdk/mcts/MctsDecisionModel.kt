@@ -134,6 +134,9 @@ interface MctsDecisionModel {
     /** Apply deterministic effects that happen before the action resolves. */
     fun beforeSimulatedAction(war: War, action: Action): SimulationResult = SimulationResult()
 
+    /** Allow a deck model to veto a card-specific simulated turn-start trigger. */
+    fun shouldSimulateTurnStart(card: Card, war: War): Boolean = true
+
     /** Apply deterministic effects and expected-only rewards after resolution. */
     fun afterSimulatedAction(before: War, after: War, action: Action): SimulationResult = SimulationResult()
 

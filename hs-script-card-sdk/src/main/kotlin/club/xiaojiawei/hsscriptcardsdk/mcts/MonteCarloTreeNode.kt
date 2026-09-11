@@ -690,7 +690,7 @@ class MonteCarloTreeNode(
                     val cardCopy = playArea.cards.toList()
                     for (card in cardCopy) {
                         if (card.isAlive()) {
-                            card.action.triggerTurnEnd(war)
+                            card.action.triggerTurnEnd(inverseWar)
                         }
                     }
                 }
@@ -712,7 +712,9 @@ class MonteCarloTreeNode(
                     val cardCopy = playArea.cards.toList()
                     for (card in cardCopy) {
                         if (card.isAlive()) {
-                            card.action.triggerTurnStart(war)
+                            if (arg.decisionModel?.shouldSimulateTurnStart(card, inverseWar) != false) {
+                                card.action.triggerTurnStart(inverseWar)
+                            }
                         }
                     }
                 }
