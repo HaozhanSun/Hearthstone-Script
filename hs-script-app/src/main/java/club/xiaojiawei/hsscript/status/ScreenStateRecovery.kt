@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
+import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.strategy.mode.LoginModeStrategy
 import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
@@ -39,6 +40,12 @@ import net.sourceforge.tess4j.Tesseract
  * screen mappings.
  */
 object ScreenStateRecovery {
+
+    enum class InspectionResult {
+        APPLIED,
+        NO_ACTION,
+        DEFERRED_GAME_FOREGROUND,
+    }
 
     private const val MAX_OCR_TEXT_LENGTH = 500
     private const val OCR_MAX_WIDTH = 1280
@@ -124,20 +131,43 @@ object ScreenStateRecovery {
 
     /**
      * Inspect the visible client and, if possible, move the state machine to
-     * the detected screen. Returns true only when a state/action was applied.
+     * the detected screen. The result keeps a foreground deferral separate
+     * from an OCR/capture failure so LifecycleTrace can back off safely.
      */
     fun inspectAndRecover(
         stuckForMs: Long,
         stateFingerprint: String,
         startupProbe: Boolean = false,
         stateStillCurrent: () -> Boolean = { true },
-    ): Boolean {
+    ): InspectionResult {
         if (!WorkTimeListener.working || PauseStatus.isPause || WarEx.inWar) {
             log.info {
                 "SCREEN_RECOVERY_SKIPPED reason=unsafe " +
                     "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} inWar=${WarEx.inWar}"
             }
-            return false
+            return InspectionResult.NO_ACTION
+        }
+
+        // A foreground confirmation is an input-safety condition, not proof
+        // that the Power.log or state machine is ready. Keep the two facts
+        // separate in the trace and defer without pausing the running worker.
+        if (RuntimeSafety.safeNative) {
+            val gameWindow = ScriptStatus.gameHWND
+            val focused = MouseUtil.focusWindowForInput(gameWindow)
+            val powerLog = PowerLogListener.logFile
+            log.info {
+                "SCREEN_RECOVERY_WINDOW_READINESS gameWindow=$gameWindow " +
+                    "handleKnown=${gameWindow != null} foregroundConfirmed=$focused " +
+                    "powerLog=${powerLog?.path() ?: "none"} " +
+                    "powerLogReadable=${(powerLog?.length() ?: 0L) > 0L}"
+            }
+            if (!focused) {
+                log.warn {
+                    "SCREEN_RECOVERY_DEFERRED reason=game-foreground-unconfirmed " +
+                        "gameWindow=$gameWindow"
+                }
+                return InspectionResult.DEFERRED_GAME_FOREGROUND
+            }
         }
 
         val capture = captureScreen()
@@ -146,7 +176,7 @@ object ScreenStateRecovery {
                 "SCREEN_RECOVERY_FAILED reason=capture-null stuckForMs=$stuckForMs " +
                     "state=$stateFingerprint"
             }
-            return false
+            return InspectionResult.NO_ACTION
         }
 
         log.warn {
@@ -160,7 +190,7 @@ object ScreenStateRecovery {
         val ocrText = ocrEvidence.text
         if (!stateStillCurrent()) {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-during-inspection state=$stateFingerprint" }
-            return false
+            return InspectionResult.NO_ACTION
         }
         val detection = detect(ocrEvidence, capture.visual)
         log.info {
@@ -214,14 +244,14 @@ object ScreenStateRecovery {
                     "unknownStateScreenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                     "unknownStateScreenshotLink=${evidence?.link ?: "none"}"
             }
-            return false
+            return InspectionResult.NO_ACTION
         }
 
         if (!stateStillCurrent()) {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-before-apply state=$stateFingerprint" }
-            return false
+            return InspectionResult.NO_ACTION
         }
-        return apply(detection)
+        return if (apply(detection)) InspectionResult.APPLIED else InspectionResult.NO_ACTION
     }
 
     private fun captureScreen(): Capture? = runCatching {
@@ -241,27 +271,6 @@ object ScreenStateRecovery {
         val gameRectKnown = gameRect.right - gameRect.left >= 400 &&
             gameRect.bottom - gameRect.top >= 300
 
-        // Recovery OCR is a desktop Robot capture.  The Beta UI can remain
-        // visible in front of Hearthstone, so without an explicit focus check
-        // the probe can OCR Codex/the script log instead of the game and leave
-        // the lifecycle permanently in mode=NONE.  Use the same bounded focus
-        // primitive as recovery input before taking the observation.  If the
-        // client cannot be made foreground, fail closed rather than treating
-        // unrelated desktop text as a Hearthstone screen.
-        val gameWindow = ScriptStatus.gameHWND
-        if (RuntimeSafety.safeNative && gameWindow != null) {
-            val focused = MouseUtil.focusWindowForInput(gameWindow)
-            log.info {
-                "SCREEN_RECOVERY_FOREGROUND gameWindow=$gameWindow confirmed=$focused"
-            }
-            if (!focused) {
-                log.warn {
-                    "SCREEN_RECOVERY_CAPTURE_SKIPPED reason=game-foreground-unconfirmed " +
-                        "gameWindow=$gameWindow"
-                }
-                return null
-            }
-        }
         val candidate = if (gameRectKnown) {
             Rectangle(
                 gameRect.left,

@@ -208,8 +208,8 @@ class GameStarter : AbstractStarter() {
                     }
                     var applied = false
                     result.onSuccess {
-                        applied = it
-                        LifecycleTrace.mark("startup-screen-probe attempt=$attempt applied=$it")
+                        applied = it == ScreenStateRecovery.InspectionResult.APPLIED
+                        LifecycleTrace.mark("startup-screen-probe attempt=$attempt result=$it applied=$applied")
                     }.onFailure { error ->
                         log.warn(error) { "STARTUP_SCREEN_PROBE_FAILED attempt=$attempt" }
                     }

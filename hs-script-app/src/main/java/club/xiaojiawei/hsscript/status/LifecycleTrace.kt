@@ -9,6 +9,7 @@ import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Low-noise process/window heartbeat used to distinguish a hidden JavaFX
@@ -32,6 +33,9 @@ object LifecycleTrace {
     private var stateRecoverySince = 0L
     private var stateRecoveryFingerprint = ""
     private var stateRecoveryAttemptAt = 0L
+    // The lifecycle poller resets this when state changes while recovery runs
+    // on EXTRA_THREAD_POOL. Keep the bounded retry counter race-free.
+    private val stateRecoveryForegroundDeferrals = AtomicInteger(0)
     private val stateRecoveryInFlight = AtomicBoolean(false)
 
     fun start() {
@@ -135,6 +139,7 @@ object LifecycleTrace {
             stateRecoverySince = 0L
             stateRecoveryFingerprint = ""
             stateRecoveryAttemptAt = 0L
+            stateRecoveryForegroundDeferrals.set(0)
             return
         }
 
@@ -144,6 +149,7 @@ object LifecycleTrace {
             stateRecoveryFingerprint = fingerprint
             stateRecoverySince = now
             stateRecoveryAttemptAt = 0L
+            stateRecoveryForegroundDeferrals.set(0)
             return
         }
         if (stateRecoverySince == 0L) stateRecoverySince = now
@@ -160,7 +166,7 @@ object LifecycleTrace {
         log.info { "SCREEN_RECOVERY_SCHEDULED stuckForMs=$stuckFor state=$fingerprint" }
         EXTRA_THREAD_POOL.execute {
             try {
-                ScreenStateRecovery.inspectAndRecover(
+                val recoveryResult = ScreenStateRecovery.inspectAndRecover(
                     stuckFor,
                     fingerprint,
                 ) {
@@ -168,6 +174,23 @@ object LifecycleTrace {
                         WorkTimeListener.working &&
                         !PauseStatus.isPause &&
                         !WarEx.inWar
+                }
+                when (recoveryResult) {
+                    ScreenStateRecovery.InspectionResult.DEFERRED_GAME_FOREGROUND -> {
+                        val decision = ScreenRecoveryFocusRetryPolicy.afterForegroundFailure(
+                            stateRecoveryForegroundDeferrals.getAndIncrement(),
+                        )
+                        stateRecoverySince = System.currentTimeMillis()
+                        if (decision == ScreenRecoveryFocusRetryPolicy.Decision.STOP_UNTIL_STATE_CHANGE) {
+                            stateRecoveryAttemptAt = Long.MAX_VALUE
+                        }
+                        log.warn {
+                            "SCREEN_RECOVERY_FOREGROUND_BACKOFF decision=$decision " +
+                                "attempts=${stateRecoveryForegroundDeferrals.get()} " +
+                                "state=$fingerprint pause=${PauseStatus.isPause} working=${WorkTimeListener.working}"
+                        }
+                    }
+                    else -> stateRecoveryForegroundDeferrals.set(0)
                 }
             } catch (error: Throwable) {
                 val evidence = UnknownStateScreenshot.capture(

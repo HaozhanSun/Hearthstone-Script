@@ -9,6 +9,7 @@ import club.xiaojiawei.hsscript.enums.MouseControlModeEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
+import club.xiaojiawei.hsscript.status.GameWindowReadiness
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscriptbase.config.log
@@ -21,6 +22,7 @@ import com.sun.jna.platform.win32.WinDef
 import com.sun.jna.platform.win32.WinUser
 import com.sun.jna.platform.win32.WinUser.SW_RESTORE
 import com.sun.jna.platform.win32.Kernel32
+import com.sun.jna.ptr.IntByReference
 import java.awt.Robot
 import java.awt.MouseInfo
 import java.awt.event.InputEvent
@@ -60,7 +62,7 @@ object MouseUtil {
         System.getProperty("hs.script.e2e.native-click") == "true"
 
     private fun hwndIsValid(hwnd: HWND?): Boolean =
-        if (e2eInputEnabled()) hwnd != null else hwnd != null && User32.INSTANCE.IsWindow(hwnd)
+        hwnd != null && User32.INSTANCE.IsWindow(hwnd)
 
     /**
      * AWT Robot crosses into native desktop input.  Creating and using a new
@@ -95,14 +97,26 @@ object MouseUtil {
         hwnd: HWND,
         allowE2EWindowRefresh: Boolean = true,
     ): Boolean = runCatching {
+        // Re-discover immediately before an operation. A valid old HWND is
+        // not proof that it is still the client window that owns game input.
+        if (allowE2EWindowRefresh) {
+            val refreshed = GameUtil.findGameHWND()
+            if (refreshed != null && User32.INSTANCE.IsWindow(refreshed) &&
+                Pointer.nativeValue(refreshed.pointer) != Pointer.nativeValue(hwnd.pointer)
+            ) {
+                ScriptStatus.gameHWND = refreshed
+                log.info {
+                    "E2E_INPUT_WINDOW_REFRESH old=$hwnd refreshed=$refreshed " +
+                        "reason=pre-input-discovery"
+                }
+                return@runCatching focusE2EWindow(refreshed, allowE2EWindowRefresh = false)
+            }
+        }
         if (!User32.INSTANCE.IsWindow(hwnd)) {
-            // E2E deliberately keeps the discovered HWND stable to avoid a
-            // native poll on every action.  That is safe while the client is
-            // alive, but a manual or recovery restart replaces the Unity
-            // window and leaves the old handle unusable.  Refresh only at the
-            // point an input is already being rejected, then retry this one
-            // focus request against the newly discovered live window.
-            if (allowE2EWindowRefresh && e2eInputEnabled()) {
+            // A manual or recovery restart replaces the Unity window and
+            // leaves the old handle unusable. Refresh the one focus request
+            // against the newly discovered live window before failing closed.
+            if (allowE2EWindowRefresh) {
                 val refreshed = GameUtil.findGameHWND()
                 if (refreshed != null &&
                     Pointer.nativeValue(refreshed.pointer) != Pointer.nativeValue(hwnd.pointer) &&
@@ -145,11 +159,24 @@ object MouseUtil {
             val requested = User32.INSTANCE.SetForegroundWindow(hwnd)
             SystemUtil.delay(35)
             val actual = User32.INSTANCE.GetForegroundWindow()
-            val focused = actual != null &&
+            val exact = actual != null &&
                 Pointer.nativeValue(actual.pointer) == Pointer.nativeValue(hwnd.pointer)
+            val focused = isVisibleForegroundOfTarget(hwnd, actual)
+            val targetPid = windowProcessId(hwnd)
+            val foregroundPid = actual?.let(::windowProcessId) ?: 0
             log.info {
                 "E2E_INPUT_ROBOT_FOREGROUND_RESULT hwnd=$hwnd requested=$requested " +
-                    "focused=$focused actual=$actual foregroundThread=$foregroundThread attached=$attached"
+                    "focused=$focused actual=$actual exact=$exact " +
+                    "targetVisible=${User32.INSTANCE.IsWindowVisible(hwnd)} " +
+                    "foregroundVisible=${actual?.let(User32.INSTANCE::IsWindowVisible) ?: false} " +
+                    "targetPid=$targetPid foregroundPid=$foregroundPid " +
+                    "foregroundThread=$foregroundThread attached=$attached"
+            }
+            if (!focused && allowE2EWindowRefresh) {
+                // One bounded retry gives Windows a chance to finish a
+                // foreground transition; callers never send input meanwhile.
+                SystemUtil.delay(75)
+                return@runCatching focusE2EWindow(hwnd, allowE2EWindowRefresh = false)
             }
             focused
         } finally {
@@ -924,6 +951,29 @@ object MouseUtil {
         foregroundConfirmed: Boolean,
         workerInterrupted: Boolean,
     ): Boolean = foregroundConfirmed && !workerInterrupted
+
+    private fun isVisibleForegroundOfTarget(target: HWND, foreground: HWND?): Boolean {
+        if (foreground == null || !User32.INSTANCE.IsWindow(target) || !User32.INSTANCE.IsWindow(foreground)) {
+            return false
+        }
+        if (!User32.INSTANCE.IsWindowVisible(target) || !User32.INSTANCE.IsWindowVisible(foreground)) {
+            return false
+        }
+        val targetPid = windowProcessId(target)
+        val foregroundPid = windowProcessId(foreground)
+        return GameWindowReadiness.sameVisibleGameProcess(
+            targetVisible = true,
+            foregroundVisible = true,
+            targetPid = targetPid,
+            foregroundPid = foregroundPid,
+        )
+    }
+
+    private fun windowProcessId(hwnd: HWND): Int {
+        val pid = IntByReference()
+        User32.INSTANCE.GetWindowThreadProcessId(hwnd, pid)
+        return pid.value
+    }
 
     /**
      * 鼠标移动
