@@ -235,6 +235,9 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         PirateLethalAttackPolicy.isLethalFaceAction(action, war)
 
     override fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? {
+        if (PirateConditionalDamageSpellPolicy.canKill(action, war)) {
+            return MctsActionOrderPhase.TACTICAL_SPELL
+        }
         val tauntEarlyHeroAction = allowsTauntEarlyHeroAction(war)
         val weaponAttackNeedsHeroPower =
             PirateAttackOrderPolicy.shouldUseHeroPowerBeforeWeaponAttack(war)
@@ -457,6 +460,9 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
     override fun actionPrior(action: Action, war: War): Double {
         val card = action.creator ?: return if (action.javaClass.simpleName == "TurnOverAction") -50.0 else 0.0
         val me = war.me
+        if (PirateConditionalDamageSpellPolicy.isAction(action)) {
+            return PirateConditionalDamageSpellPolicy.softPrior(action, war)
+        }
         val otherPirates = me.playArea.cards.count { isPirate(it) && it.entityId != card.entityId }
         val attackablePirates = me.playArea.cards.count { isPirate(it) && it.canAttack() }
         val friendlyMinions = me.playArea.cards.count { it.cardType === CardTypeEnum.MINION }
@@ -612,6 +618,10 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         val creator = action.creator
         var expectedReward = 0.0
         var stopRollout = false
+
+        if (PirateConditionalDamageSpellPolicy.applyConditionalDamage(before, after, action) > 0) {
+            expectedReward += 4.0
+        }
 
         if (action is AttackAction && creator != null) {
             val attackerAfter = after.me.playArea.findByEntityId(creator.entityId)

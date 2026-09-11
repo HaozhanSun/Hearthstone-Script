@@ -78,6 +78,10 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         val card = action.creator ?: return 0.0
         if (isCard(card, PATCHES_THE_PIRATE)) return -1_000.0
 
+        if (PirateConditionalDamageSpellPolicy.isAction(action)) {
+            return PirateConditionalDamageSpellPolicy.softPrior(action, war)
+        }
+
         val otherPirates = otherPirates(war, card)
         val attackablePirates = war.me.playArea.cards.count { isPirate(it) && it.canAttack() }
         val freeSlots = freeSlots(war)
@@ -269,6 +273,8 @@ object PirateWarriorMctsModel : MctsDecisionModel {
 
     override fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? =
         when {
+            PirateConditionalDamageSpellPolicy.canKill(action, war) ->
+                MctsActionOrderPhase.TACTICAL_SPELL
             action is PlayAction &&
                 (action.creator?.cardType === CardTypeEnum.MINION ||
                     action.creator?.cardType === CardTypeEnum.LOCATION ||
@@ -341,6 +347,8 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         after: War,
         action: Action,
     ): MctsDecisionModel.SimulationResult {
+        val conditionalSpellExtra =
+            PirateConditionalDamageSpellPolicy.applyConditionalDamage(before, after, action)
         val creator = action.creator
         if (action is AttackAction && creator != null) {
             after.me.playArea.findByEntityId(creator.entityId)?.let { attacker ->
@@ -368,7 +376,9 @@ object PirateWarriorMctsModel : MctsDecisionModel {
                     it.health += 1
                 }
         }
-        return MctsDecisionModel.SimulationResult()
+        return MctsDecisionModel.SimulationResult(
+            expectedReward = if (conditionalSpellExtra > 0) 4.0 else 0.0,
+        )
     }
 
     /**

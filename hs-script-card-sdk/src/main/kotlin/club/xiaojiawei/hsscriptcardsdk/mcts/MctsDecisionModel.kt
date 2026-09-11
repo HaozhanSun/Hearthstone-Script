@@ -14,6 +14,8 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
  * later phase from winning the current live root.
  */
 enum class MctsActionOrderPhase(val monotonicRank: Int) {
+    /** A generated removal spell that can kill a visible enemy minion. */
+    TACTICAL_SPELL(-1),
     /** Explicit Pirate DH exception after a hero attack. */
     POST_HERO_ATTACK_LOCATION(7),
     /** Explicit Pirate DH exception between two Cliffside activations. */

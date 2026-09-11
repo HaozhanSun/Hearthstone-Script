@@ -371,6 +371,10 @@ class MonteCarloTreeNode(
             val phaseOrder = listOf(
                 MctsActionOrderPhase.POST_HERO_ATTACK_LOCATION,
                 MctsActionOrderPhase.CLIFFSIDE_HERO_ATTACK,
+                // A visible lethal removal is a tactical exception: it must
+                // be considered before ordinary development actions, while
+                // non-lethal copies remain in SPELL_PLAY.
+                MctsActionOrderPhase.TACTICAL_SPELL,
                 MctsActionOrderPhase.MINION_PLAY,
                 MctsActionOrderPhase.SPELL_PLAY,
                 MctsActionOrderPhase.EARLY_HERO_ACTION,
