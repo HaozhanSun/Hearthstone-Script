@@ -137,6 +137,9 @@ interface MctsDecisionModel {
     /** Allow a deck model to veto a card-specific simulated turn-start trigger. */
     fun shouldSimulateTurnStart(card: Card, war: War): Boolean = true
 
+    /** Allow a deck model to keep an illegal/stale action out of simulation. */
+    fun shouldSimulateAction(action: Action, war: War): Boolean = true
+
     /** Apply deterministic effects and expected-only rewards after resolution. */
     fun afterSimulatedAction(before: War, after: War, action: Action): SimulationResult = SimulationResult()
 

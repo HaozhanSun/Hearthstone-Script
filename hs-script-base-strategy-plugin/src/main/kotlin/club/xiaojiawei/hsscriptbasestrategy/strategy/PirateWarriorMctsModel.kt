@@ -30,6 +30,7 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     const val PARACHUTE_BRIGAND = "DRG_056"
     const val SHIPS_CANNON = "GVG_075"
     const val SOUTHSEA_DECKHAND = "CORE_CS2_146"
+    const val NZOTHS_FIRST_MATE = "OG_312"
     const val SOUTHSEA_CAPTAIN = "NEW1_027"
     const val HOZEN_ROUGHHOUSER = "VAC_938"
     const val RAGEWING = "YOD_032"
@@ -84,6 +85,9 @@ object PirateWarriorMctsModel : MctsDecisionModel {
 
         if (PirateConditionalDamageSpellPolicy.isAction(action)) {
             return PirateConditionalDamageSpellPolicy.softPrior(action, war)
+        }
+        if (action is PlayAction && isWeaponEquipCard(card)) {
+            return if (hasEquippedWeapon(war)) -1_000.0 else 22.0
         }
 
         val otherPirates = otherPirates(war, card)
@@ -204,6 +208,8 @@ object PirateWarriorMctsModel : MctsDecisionModel {
 
         if (!PirateHeroAttackTargetPolicy.isLegal(action, war)) return false
 
+        if (isNoBenefitMinionAttack(action, war)) return false
+
         if (isFrontlineAxeHeroAttack(action, war)) {
             return when (frontlineAxeTarget(action, war)) {
                 // Frontline Axe draws only after a minion kill. Do not spend
@@ -216,6 +222,9 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         }
 
         val creator = action.creator
+        if (creator != null && action is PlayAction && isWeaponEquipCard(creator)) {
+            return !hasEquippedWeapon(war)
+        }
         if (creator != null && action is PlayAction && isCard(creator, CAPTAIN_CROWLEY)) {
             return freeSlots(war) >= 3
         }
@@ -241,6 +250,9 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         if (shouldDeferHookfistAttack(action, war)) return true
 
         val creator = action.creator
+        if (action is PlayAction && creator != null && isWeaponEquipCard(creator)) {
+            return hasEquippedWeapon(war)
+        }
         if (PirateAttackOrderPolicy.shouldDeferNuLingNagaAttack(action, war)) return true
 
         if (isHeroPowerAction(action)) {
@@ -269,6 +281,14 @@ object PirateWarriorMctsModel : MctsDecisionModel {
     }
 
     override fun actionFilterReason(action: Action, war: War): String? {
+        if (action is PlayAction && action.creator?.let(::isWeaponEquipCard) == true &&
+            hasEquippedWeapon(war)
+        ) {
+            return "weapon-equip-card-blocked-while-weapon-equipped"
+        }
+        if (isNoBenefitMinionAttack(action, war)) {
+            return "minion-attack-no-lethal-or-tactical-benefit"
+        }
         if (shouldDeferHookfistAttack(action, war)) {
             return "hookfist-attack-deferred-behind-hero-attack"
         }
@@ -287,8 +307,13 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         return null
     }
 
-    /** Do not hide Patches when it is literally the only legal action. */
-    override fun shouldDefer(card: Card, war: War): Boolean = false
+    /**
+     * Do not expose a weapon-equipping hand card while another weapon is
+     * still equipped. This catches Enzo's First Mate even though it is a
+     * MINION rather than a WEAPON card.
+     */
+    override fun shouldDefer(card: Card, war: War): Boolean =
+        isWeaponEquipCard(card) && hasEquippedWeapon(war)
 
     /**
      * The Juggernaut (`SW_028t6`) equips a random Warrior weapon at turn
@@ -298,6 +323,9 @@ object PirateWarriorMctsModel : MctsDecisionModel {
      */
     override fun shouldSimulateTurnStart(card: Card, war: War): Boolean =
         !(isCard(card, JUGGERNAUT) && war.me.playArea.weapon != null)
+
+    override fun shouldSimulateAction(action: Action, war: War): Boolean =
+        isActionLegal(action, war)
 
     override fun actionOrderPhase(action: Action, war: War): MctsActionOrderPhase? =
         when {
@@ -688,6 +716,64 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         war.me.playArea.cards.count { isPirate(it) && it.entityId != card.entityId && it.isAlive() }
 
     private fun hasWeapon(war: War): Boolean = war.me.playArea.weapon?.isAlive() == true
+
+    private fun hasEquippedWeapon(war: War): Boolean = war.me.playArea.weapon != null
+
+    private fun isWeaponEquipCard(card: Card): Boolean =
+        card.cardType === CardTypeEnum.WEAPON || isCard(card, NZOTHS_FIRST_MATE)
+
+    /**
+     * Avoid a visible minion sacrifice that neither removes the target nor
+     * contributes to a legal combined kill. Explicitly dangerous board
+     * signals and Taunt remain valid tactical reasons to trade.
+     */
+    private fun isNoBenefitMinionAttack(action: Action, war: War): Boolean {
+        if (action !is AttackAction || action.creator?.cardType !== CardTypeEnum.MINION) return false
+        val attacker = action.creator ?: return false
+        val targetId = action.targetEntityId ?: return false
+        if (action.targetIsHero || targetId == war.rival.playArea.hero?.entityId) return false
+        val target = war.rival.playArea.cards.firstOrNull { it.entityId == targetId }
+            ?: return false
+        if (target.cardType !== CardTypeEnum.MINION || !target.isAlive() || !target.canBeAttacked()) return false
+        if (target.atc <= 0 && !hasTacticalTargetValue(target)) return false
+        if (hasTacticalTargetValue(target)) return false
+
+        val requiredDamage = (
+            target.bloodLimit() - target.damage + if (target.isDivineShield) 1 else 0
+            ).coerceAtLeast(0)
+        val attackerDamage = attackDamage(attacker, war)
+        if (attackerDamage >= requiredDamage) return false
+
+        val combinedDamage = war.me.playArea.cards
+            .asSequence()
+            .filter { candidate ->
+                candidate.entityId != attacker.entityId &&
+                    candidate.cardType === CardTypeEnum.MINION &&
+                    candidate.isAlive() &&
+                    candidate.canAttack() &&
+                    runCatching {
+                        candidate.action.generateAttackActions(war, war.me)
+                            .any { it.targetEntityId == target.entityId }
+                    }.getOrDefault(false)
+            }
+            .sumOf { attackDamage(it, war) }
+
+        return attackerDamage + combinedDamage < requiredDamage
+    }
+
+    private fun attackDamage(attacker: Card, war: War): Int =
+        if (isPirate(attacker)) effectivePirateAttack(attacker, war) else attacker.atc.coerceAtLeast(0)
+
+    private fun hasTacticalTargetValue(target: Card): Boolean =
+        target.isTaunt ||
+            target.isAura ||
+            target.isAdjacentBuff ||
+            target.isTriggerVisual ||
+            target.isWindFury ||
+            target.isMegaWindfury ||
+            // Preserve the existing fallback for a zero-attack body while
+            // treating a visible 3+ attack minion as a real threat.
+            target.atc >= 3
 
     private fun canPlayWeaponThisTurn(war: War, ignored: Card): Boolean =
         war.me.handArea.cards.any {

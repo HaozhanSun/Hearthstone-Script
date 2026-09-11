@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeNode
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -112,6 +113,125 @@ class PirateWarriorIssues16To18Test {
 
         val root = MonteCarloTreeNode(war, InitAction, testArg())
         assertTrue(root.actions.any { it is AttackAction && it.creator?.entityId == summoned.entityId })
+    }
+
+    @Test
+    fun `enzos first mate is blocked when a weapon is already equipped`() {
+        val war = testWar(mana = 1)
+        val mate = card(
+            PirateWarriorMctsModel.NZOTHS_FIRST_MATE,
+            "first-mate-equipped",
+            CardTypeEnum.MINION,
+            attack = 1,
+        ).apply { cost = 1 }
+        val weapon = card("EQUIPPED_WEAPON", "equipped-weapon", CardTypeEnum.WEAPON, attack = 3)
+        war.addCard(mate, war.me.handArea)
+        war.addCard(weapon, war.me.playArea)
+
+        val action = club.xiaojiawei.hsscriptcardsdk.bean.PlayAction({}, {}, mate)
+        assertFalse(PirateWarriorMctsModel.isActionLegal(action, war))
+        assertTrue(PirateWarriorMctsModel.isDeferredAction(action, war))
+        assertTrue(PirateWarriorMctsModel.shouldDefer(mate, war))
+        assertTrue(PirateWarriorMctsModel.actionPrior(action, war) <= -1_000.0)
+
+        val root = MonteCarloTreeNode(war, InitAction, testArg())
+        assertTrue(root.actions.none { it.creator?.entityId == mate.entityId })
+
+        val replacement = card("GENERATED_RUSTY_HOOK", "generated-rusty-hook", CardTypeEnum.WEAPON, attack = 1)
+        val staleSimulation = club.xiaojiawei.hsscriptcardsdk.bean.PlayAction(
+            {},
+            { simulated -> simulated.me.playArea.weapon = replacement },
+            mate,
+        )
+        val afterStaleSimulation = root.buildNextNode(staleSimulation).state.war
+        assertEquals(weapon.entityId, afterStaleSimulation.me.playArea.weapon?.entityId)
+    }
+
+    @Test
+    fun `enzos first mate remains playable when no weapon is equipped`() {
+        val war = testWar(mana = 1)
+        val mate = card(
+            PirateWarriorMctsModel.NZOTHS_FIRST_MATE,
+            "first-mate-free",
+            CardTypeEnum.MINION,
+            attack = 1,
+        ).apply { cost = 1 }
+        war.addCard(mate, war.me.handArea)
+
+        val action = club.xiaojiawei.hsscriptcardsdk.bean.PlayAction({}, {}, mate)
+        assertTrue(PirateWarriorMctsModel.isActionLegal(action, war))
+        assertFalse(PirateWarriorMctsModel.isDeferredAction(action, war))
+        assertFalse(PirateWarriorMctsModel.shouldDefer(mate, war))
+        assertTrue(PirateWarriorMctsModel.actionPrior(action, war) > 0.0)
+    }
+
+    @Test
+    fun `first mate avoids an unprofitable two-two trade but keeps kill and combo lines`() {
+        val war = testWar(mana = 0)
+        val rivalHero = card("RIVAL_HERO_TRADE", "rival-hero", CardTypeEnum.HERO, attack = 0).apply {
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+        }
+        val mate = card(
+            PirateWarriorMctsModel.NZOTHS_FIRST_MATE,
+            "first-mate-trade",
+            CardTypeEnum.MINION,
+            attack = 1,
+        ).apply { isExhausted = false }
+        val target = card("ENEMY_TWO_TWO", "enemy-two-two", CardTypeEnum.MINION, attack = 2).apply {
+            health = 2
+        }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(mate, war.me.playArea)
+        war.addCard(target, war.rival.playArea)
+
+        val unsafeAttack = mate.action.generateAttackActions(war, war.me)
+            .single { it.targetEntityId == target.entityId }
+        assertFalse(PirateWarriorMctsModel.isActionLegal(unsafeAttack, war))
+        assertTrue(
+            PirateWarriorMctsModel.actionFilterReason(unsafeAttack, war) ==
+                "minion-attack-no-lethal-or-tactical-benefit",
+        )
+
+        target.health = 1
+        val killAttack = mate.action.generateAttackActions(war, war.me)
+            .single { it.targetEntityId == target.entityId }
+        assertTrue(PirateWarriorMctsModel.isActionLegal(killAttack, war))
+
+        target.health = 2
+        val combo = card("COMBO_PIRATE", "combo-pirate", CardTypeEnum.MINION, attack = 1).apply {
+            isExhausted = false
+        }
+        war.addCard(combo, war.me.playArea)
+        val comboAttack = mate.action.generateAttackActions(war, war.me)
+            .single { it.targetEntityId == target.entityId }
+        assertTrue(PirateWarriorMctsModel.isActionLegal(comboAttack, war))
+    }
+
+    @Test
+    fun `unprofitable trade exception keeps taunt target legal`() {
+        val war = testWar(mana = 0)
+        val rivalHero = card("RIVAL_HERO_TAUNT", "rival-hero", CardTypeEnum.HERO, attack = 0).apply {
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+        }
+        val mate = card(
+            PirateWarriorMctsModel.NZOTHS_FIRST_MATE,
+            "first-mate-taunt",
+            CardTypeEnum.MINION,
+            attack = 1,
+        ).apply { isExhausted = false }
+        val taunt = card("ENEMY_TAUNT_TWO_TWO", "enemy-taunt", CardTypeEnum.MINION, attack = 2).apply {
+            health = 2
+            isTaunt = true
+        }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(mate, war.me.playArea)
+        war.addCard(taunt, war.rival.playArea)
+
+        val attack = mate.action.generateAttackActions(war, war.me)
+            .single { it.targetEntityId == taunt.entityId }
+        assertTrue(PirateWarriorMctsModel.isActionLegal(attack, war))
     }
 
     private fun testWar(mana: Int): War {

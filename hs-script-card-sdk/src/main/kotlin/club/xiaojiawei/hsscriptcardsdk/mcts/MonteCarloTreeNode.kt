@@ -537,11 +537,17 @@ class MonteCarloTreeNode(
         val beforeWar = if (cloneWar) state.war else state.war.clone()
         val newWar = if (cloneWar) state.war.clone() else state.war
 //        新战局应用旧动作
-        var result = arg.decisionModel?.beforeSimulatedAction(newWar, action)
-            ?: MctsDecisionModel.SimulationResult()
-        action.simulate.accept(newWar)
+        val shouldSimulate = arg.decisionModel?.shouldSimulateAction(action, beforeWar) != false
+        var result = if (shouldSimulate) {
+            arg.decisionModel?.beforeSimulatedAction(newWar, action)
+                ?: MctsDecisionModel.SimulationResult()
+        } else {
+            MctsDecisionModel.SimulationResult()
+        }
+        if (shouldSimulate) action.simulate.accept(newWar)
 
         val simulatedSummons = if (
+            shouldSimulate &&
             action is PlayAction &&
             action.creator != null &&
             action.creator!!.area is HandArea &&
@@ -551,8 +557,12 @@ class MonteCarloTreeNode(
         } else {
             emptyList()
         }
-        val afterResult = arg.decisionModel?.afterSimulatedAction(beforeWar, newWar, action)
-            ?: MctsDecisionModel.SimulationResult()
+        val afterResult = if (shouldSimulate) {
+            arg.decisionModel?.afterSimulatedAction(beforeWar, newWar, action)
+                ?: MctsDecisionModel.SimulationResult()
+        } else {
+            MctsDecisionModel.SimulationResult()
+        }
         result = MctsDecisionModel.SimulationResult(
             expectedReward = result.expectedReward + afterResult.expectedReward,
             stopRollout = result.stopRollout || afterResult.stopRollout,
