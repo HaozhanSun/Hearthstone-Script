@@ -227,6 +227,11 @@ class PirateWarriorMctsGoldenScenarioTest {
         val nonKill = frontlineAxeWar(heroHealth = 9, rivalHeroHealth = 30, minionHealth = 7)
         val nonKillAction = heroAttackActions(nonKill).first { hitsRivalMinion(it, nonKill) }
         val nonKillAfter = simulate(nonKillAction, nonKill)
+        assertTrue(!PirateWarriorMctsModel.isActionLegal(nonKillAction, nonKill))
+        assertEquals(
+            "frontline-axe-minion-target-not-killable",
+            PirateWarriorMctsModel.actionFilterReason(nonKillAction, nonKill),
+        )
         assertTrue(PirateWarriorMctsModel.actionPrior(nonKillAction, nonKill) < 0.0)
         assertEquals(0.0, PirateWarriorMctsModel.afterSimulatedAction(nonKill, nonKillAfter, nonKillAction).expectedReward)
         assertEquals(1, nonKillAfter.me.playArea.weapon?.damage)

@@ -185,11 +185,11 @@ class PirateWarriorOfflineReplayTest {
         val prior = PirateWarriorMctsModel.actionPrior(axeAction, war)
         val setupRequired = PirateHeroAttackTargetPolicy.requiresFriendlySetupAttack(war)
         return Evaluation(
-            selected = if (legal && deferred && prior > 0.0 && setupRequired) "COMBO_AXE_AFTER_SETUP" else "BUG",
+            selected = if (!legal && deferred && setupRequired) "AXE_MINION_NO_KILL_BLOCKED" else "BUG",
             candidates = listOf(
                 "AXE_MINION_COMBO:legal=$legal:deferred=$deferred:prior=$prior:setupRequired=$setupRequired",
             ),
-            reason = "战斧与场上 Pirate 可形成组合击杀，先完成友方随从攻击再保留战斧收尾",
+            reason = "当前战斧攻击不能击杀随从，先保留武器并完成友方 setup，重规划后再收尾",
         )
     }
 

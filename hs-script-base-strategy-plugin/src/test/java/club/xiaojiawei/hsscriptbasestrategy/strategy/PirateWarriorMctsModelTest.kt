@@ -487,6 +487,32 @@ class PirateWarriorMctsModelTest {
     }
 
     @Test
+    fun `ragewing is deferred behind another playable action but remains a fallback`() {
+        val war = testWar(turn = 2, mana = 4)
+        val ragewing = testCard(PirateWarriorMctsModel.RAGEWING, cost = 4)
+        val cannon = testCard(PirateWarriorMctsModel.SHIPS_CANNON, cost = 2)
+        war.addCard(ragewing, war.me.handArea)
+        war.addCard(cannon, war.me.handArea)
+
+        val ragewingAction = PlayAction({}, {}, ragewing)
+        assertTrue(PirateWarriorMctsModel.isDeferredAction(ragewingAction, war))
+        assertEquals(
+            "ragewing-deferred-behind-other-action",
+            PirateWarriorMctsModel.actionFilterReason(ragewingAction, war),
+        )
+
+        val onlyRagewing = testWar(turn = 2, mana = 4)
+        val onlyCard = testCard(PirateWarriorMctsModel.RAGEWING, cost = 4)
+        onlyRagewing.addCard(onlyCard, onlyRagewing.me.handArea)
+        assertTrue(
+            !PirateWarriorMctsModel.isDeferredAction(
+                PlayAction({}, {}, onlyCard),
+                onlyRagewing,
+            ),
+        )
+    }
+
+    @Test
     fun `pirate warrior action fence keeps spells between board development and attacks`() {
         val war = testWar(turn = 3, mana = 4)
         war.addCard(testCard(PirateAttackOrderPolicy.ADRENALINE_FIEND, cost = 2), war.me.playArea)

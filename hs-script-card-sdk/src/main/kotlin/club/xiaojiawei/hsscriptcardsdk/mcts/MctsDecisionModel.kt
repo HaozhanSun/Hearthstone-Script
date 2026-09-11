@@ -113,6 +113,13 @@ interface MctsDecisionModel {
     fun isDeferredAction(action: Action, war: War): Boolean = false
 
     /**
+     * Optional machine-readable explanation for a model-specific candidate
+     * filter. The MCTS scanner calls this only for actions that the model has
+     * already rejected or deferred, so an explanation cannot change legality.
+     */
+    fun actionFilterReason(action: Action, war: War): String? = null
+
+    /**
      * Hard first-pass lethal gate. When the root contains one or more actions
      * that are part of a currently legal face-lethal route, the tree exposes
      * that route before applying the ordinary phase fence or soft priors.

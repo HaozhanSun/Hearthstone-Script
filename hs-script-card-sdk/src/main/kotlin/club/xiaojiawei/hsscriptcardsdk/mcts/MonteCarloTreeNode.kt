@@ -307,14 +307,17 @@ class MonteCarloTreeNode(
             val illegalActions = result.filterNot { decisionModel.isActionLegal(it, war) }
             if (illegalActions.isNotEmpty()) {
                 result.removeAll(illegalActions.toSet())
-                addScan(
-                    mapOf(
-                        "kind" to "ACTION_FILTER",
-                        "outcome" to "FILTERED",
-                        "reason" to "decision-model-illegal-action",
-                        "actions" to illegalActions.map(::actionDescription),
-                    ),
-                )
+                illegalActions.forEach { action ->
+                    addScan(
+                        mapOf(
+                            "kind" to "ACTION_FILTER",
+                            "outcome" to "FILTERED",
+                            "reason" to (decisionModel.actionFilterReason(action, war)
+                                ?: "decision-model-illegal-action"),
+                            "action" to actionDescription(action),
+                        ),
+                    )
+                }
             }
         }
         // A legal face-lethal route is a root-level hard gate. It must run
@@ -417,7 +420,15 @@ class MonteCarloTreeNode(
             deferredDecisions.filterNot { it.second }.map { it.first }
         } else orderedActions
         deferredDecisions.filter { it.second }.forEach { (action, _) ->
-            addScan(mapOf("kind" to "ACTION_FILTER", "outcome" to "FILTERED", "reason" to "decision-model-deferred-action", "action" to actionDescription(action)))
+            addScan(
+                mapOf(
+                    "kind" to "ACTION_FILTER",
+                    "outcome" to "FILTERED",
+                    "reason" to (arg.decisionModel?.actionFilterReason(action, war)
+                        ?: "decision-model-deferred-action"),
+                    "action" to actionDescription(action),
+                ),
+            )
         }
         val nonEndTurnActions = deferredActions.filterNot { it === TurnOverAction }
         val filteredActions = if (nonEndTurnActions.isNotEmpty()) {

@@ -197,7 +197,10 @@ object PirateWarriorMctsModel : MctsDecisionModel {
 
         if (isFrontlineAxeHeroAttack(action, war)) {
             return when (frontlineAxeTarget(action, war)) {
-                FrontlineAxeTarget.MINION -> true
+                // Frontline Axe draws only after a minion kill. Do not spend
+                // durability on a non-kill; a friendly setup attack gets a
+                // fresh re-plan and can expose the kill route later.
+                FrontlineAxeTarget.MINION -> frontlineAxeCanKill(action, war)
                 FrontlineAxeTarget.HERO -> true
                 FrontlineAxeTarget.UNKNOWN -> false
             }
@@ -216,6 +219,7 @@ object PirateWarriorMctsModel : MctsDecisionModel {
 
     /** Keep Warrior's armor power behind all useful Pirate Warrior work. */
     override fun isDeferredAction(action: Action, war: War): Boolean {
+        val creator = action.creator
         if (PirateAttackOrderPolicy.shouldDeferNuLingNagaAttack(action, war)) return true
 
         if (isHeroPowerAction(action)) {
@@ -228,14 +232,35 @@ object PirateWarriorMctsModel : MctsDecisionModel {
             return hasOtherUsefulNonAxeAction(war)
         }
 
+        // Ragewing is a last-card timing play in this deck. Keep it legal as
+        // a fallback, but do not let it pre-empt a stronger generated action.
+        if (action is PlayAction && creator?.let { isCard(it, RAGEWING) } == true) {
+            return hasOtherPlayableAction(war, creator)
+        }
+
         // Parachute Brigand is intentionally the last card we play. It is
         // still retained by MonteCarloTreeNode when it is the only useful
         // action, so the free-effect minion cannot strand the turn.
-        val creator = action.creator
         if (action is PlayAction && creator?.let { isCard(it, PARACHUTE_BRIGAND) } == true) {
             return hasOtherPlayableAction(war, creator)
         }
         return false
+    }
+
+    override fun actionFilterReason(action: Action, war: War): String? {
+        if (isFrontlineAxeHeroAttack(action, war) &&
+            frontlineAxeTarget(action, war) == FrontlineAxeTarget.MINION &&
+            !frontlineAxeCanKill(action, war)
+        ) {
+            return "frontline-axe-minion-target-not-killable"
+        }
+        val creator = action.creator
+        if (action is PlayAction && creator?.let { isCard(it, RAGEWING) } == true &&
+            hasOtherPlayableAction(war, creator)
+        ) {
+            return "ragewing-deferred-behind-other-action"
+        }
+        return null
     }
 
     /** Do not hide Patches when it is literally the only legal action. */
