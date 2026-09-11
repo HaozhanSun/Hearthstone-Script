@@ -386,19 +386,9 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         val captainBonus = (captains - if (isCard(card, SOUTHSEA_CAPTAIN)) 1 else 0)
             .coerceAtLeast(0)
 
-        val otherPirates = otherPirates(war, card)
-        val hozenCount = war.me.playArea.cards.count {
-            isCard(it, HOZEN_ROUGHHOUSER) && it.isAlive()
-        }
-        val hozenBonus = if (otherPirates > 0) {
-            (hozenCount - if (isCard(card, HOZEN_ROUGHHOUSER)) 1 else 0)
-                .coerceAtLeast(0)
-        } else {
-            0
-        }
         return PirateDamageAuraPolicy.outgoingDamage(
             card,
-            max(0, card.atc) + captainBonus + hozenBonus,
+            max(0, card.atc) + captainBonus,
             war,
         )
     }
