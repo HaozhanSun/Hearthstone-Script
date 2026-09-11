@@ -12,6 +12,7 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 import club.xiaojiawei.hsscriptcardsdk.mcts.defaultMctsActionOrderPhase
+import club.xiaojiawei.hsscriptcardsdk.mcts.PirateDamageAuraPolicy
 import kotlin.math.max
 
 /**
@@ -385,7 +386,21 @@ object PirateWarriorMctsModel : MctsDecisionModel {
         val captainBonus = (captains - if (isCard(card, SOUTHSEA_CAPTAIN)) 1 else 0)
             .coerceAtLeast(0)
 
-        return max(0, card.atc) + captainBonus
+        val otherPirates = otherPirates(war, card)
+        val hozenCount = war.me.playArea.cards.count {
+            isCard(it, HOZEN_ROUGHHOUSER) && it.isAlive()
+        }
+        val hozenBonus = if (otherPirates > 0) {
+            (hozenCount - if (isCard(card, HOZEN_ROUGHHOUSER)) 1 else 0)
+                .coerceAtLeast(0)
+        } else {
+            0
+        }
+        return PirateDamageAuraPolicy.outgoingDamage(
+            card,
+            max(0, card.atc) + captainBonus + hozenBonus,
+            war,
+        )
     }
 
     override fun scoreAdjustment(war: War): Double {

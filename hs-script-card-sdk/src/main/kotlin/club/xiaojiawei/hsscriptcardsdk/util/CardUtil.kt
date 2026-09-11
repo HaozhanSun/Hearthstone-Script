@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.bean.area.PlayArea
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
+import club.xiaojiawei.hsscriptcardsdk.mcts.PirateDamageAuraPolicy
 
 /**
  * @author 肖嘉威
@@ -89,6 +90,8 @@ object CardUtil {
         val myPlayArea = myCard.area
         if (myPlayArea !is PlayArea || rivalCard.area !is PlayArea) return
 
+        val outgoingDamage = PirateDamageAuraPolicy.outgoingDamage(myCard, myCard.atc, war)
+
 //        处理我方情况
         if (myCard.isImmuneWhileAttacking || myCard.isImmune) {
         } else if (myCard.isDivineShield) {
@@ -112,13 +115,13 @@ object CardUtil {
 
 //        处理敌方情况
         if (rivalCard.isDivineShield) {
-            if (myCard.atc > 0) {
+            if (outgoingDamage > 0) {
                 rivalCard.isDivineShield = false
             }
         } else if (myCard.isPoisonous && rivalCard.cardType === CardTypeEnum.MINION) {
             rivalCard.injured(rivalCard.bloodLimit())
         } else {
-            rivalCard.injured(myCard.atc)
+            rivalCard.injured(outgoingDamage)
         }
 
 //        处理我方可攻击次数

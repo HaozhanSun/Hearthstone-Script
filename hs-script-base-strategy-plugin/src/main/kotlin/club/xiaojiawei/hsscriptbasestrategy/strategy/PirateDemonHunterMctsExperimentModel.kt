@@ -19,6 +19,7 @@ import club.xiaojiawei.hsscriptcardsdk.mcts.CardTriggerSimulator
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
+import club.xiaojiawei.hsscriptcardsdk.mcts.PirateDamageAuraPolicy
 import club.xiaojiawei.hsscriptcardsdk.util.CardUtil
 import kotlin.math.max
 
@@ -961,7 +962,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         val hozenCount = war.me.playArea.cards.count {
             isCard(it, HOZEN_ROUGHHOUSER) && it.isAlive() && it.entityId != card.entityId
         }
-        return card.atc + hozenCount
+        return PirateDamageAuraPolicy.outgoingDamage(card, card.atc + hozenCount, war)
     }
 
     private fun canFollowWithHeroPower(war: War, card: Card): Boolean {

@@ -5,6 +5,8 @@ import club.xiaojiawei.hsscriptcardsdk.bean.Action
 import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
+import club.xiaojiawei.hsscriptcardsdk.mcts.PirateDamageAuraPolicy
+import club.xiaojiawei.hsscriptcardsdk.util.CardUtil
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -21,6 +23,9 @@ object PirateLethalAttackPolicy {
 
     fun isLethalFaceAction(action: Action, war: War): Boolean {
         if (action !is AttackAction || !isFaceAction(action, war)) return false
+        // A taunt means a generated face action is not a legal lethal route,
+        // even if the parser has momentarily exposed that target.
+        if (CardUtil.getTauntCards(war.rival.playArea.cards, false).isNotEmpty()) return false
         val rivalHero = war.rival.playArea.hero ?: return false
         val remainingLife = (rivalHero.bloodLimit() - rivalHero.damage).coerceAtLeast(0)
         val totalFaceAttack = legalFaceDamage(war)
@@ -29,7 +34,6 @@ object PirateLethalAttackPolicy {
             lastLoggedLethalState.set(null)
             return false
         }
-
         val stateKey = "${war.me.turn}|$totalFaceAttack|$remainingLife"
         if (lastLoggedLethalState.getAndSet(stateKey) != stateKey) {
             log.info {
@@ -49,7 +53,7 @@ object PirateLethalAttackPolicy {
                     .getOrDefault(emptyList())
                     .any { isFaceAction(it, war) }
             }
-            .sumOf { it.atc.coerceAtLeast(0) }
+            .sumOf { PirateDamageAuraPolicy.outgoingDamage(it, it.atc, war) }
 
         val weaponDamage = me.playArea.hero?.let { hero ->
             val weaponAttack = me.playArea.weapon?.atc?.coerceAtLeast(0) ?: 0
