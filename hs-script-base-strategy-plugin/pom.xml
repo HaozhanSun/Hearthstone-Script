@@ -89,7 +89,12 @@
                 <executions>
                     <execution>
                         <id>compile-generated-version-before-kotlin</id>
-                        <phase>process-sources</phase>
+                        <!-- kapt is bound by the inherited Kotlin plugin to
+                             process-sources.  Compile this generated Java
+                             dependency one lifecycle phase earlier so kapt,
+                             as well as the main Kotlin compiler, can resolve
+                             VersionInfo. -->
+                        <phase>generate-sources</phase>
                         <goals>
                             <goal>compile</goal>
                         </goals>
