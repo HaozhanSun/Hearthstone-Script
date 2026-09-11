@@ -18,6 +18,7 @@ import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.CoinActionPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsReplayTrace
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsLethalTelemetry
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsTurnPhaseFence
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionAvailability
@@ -841,6 +842,16 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 )
                 continue
             }
+
+            // Observe the live attack budget immediately before the common
+            // dispatch boundary.  This is telemetry only: the selected
+            // action and its target remain entirely owned by MCTS.
+            MctsLethalTelemetry.recordBeforeAttackDecision(
+                war,
+                name(),
+                actionCount + 1,
+                action,
+            )
 
             val before = stateFingerprint(war)
             val actionPhase = template.decisionModel?.actionOrderPhase(action, war)
