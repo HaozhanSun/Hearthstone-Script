@@ -102,6 +102,20 @@ class UiLogFormatterTest {
     }
 
     @Test
+    fun `window discovery has a short user-facing state message`() {
+        assertEquals(
+            "端到端 · 已发现游戏窗口 · PID=33552",
+            UiLogFormatter.format(
+                "E2E_WINDOW_DISCOVERY state=FOUND handle=native@0x47e0888 pid=33552 process=Hearthstone.exe"
+            ),
+        )
+        assertEquals(
+            "端到端 · 未发现游戏窗口",
+            UiLogFormatter.format("E2E_WINDOW_DISCOVERY state=MISSING handle=null pid=0"),
+        )
+    }
+
+    @Test
     fun `safe termination audit stays in the file log only even when repeated`() {
         val repeated = List(3) { "E2E_SAFE_TERMINATE target=Hearthstone.exe pid=${1000 + it}" }
 

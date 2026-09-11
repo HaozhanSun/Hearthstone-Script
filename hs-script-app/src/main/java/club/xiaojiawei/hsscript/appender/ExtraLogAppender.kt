@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.UnsynchronizedAppenderBase
 import club.xiaojiawei.hsscript.utils.UiLogFormatter
+import club.xiaojiawei.hsscript.utils.E2EWindowDiscoveryUiGate
 import java.util.concurrent.ArrayBlockingQueue
 
 /**
@@ -21,6 +22,7 @@ class ExtraLogAppender : UnsynchronizedAppenderBase<ILoggingEvent>() {
         private var lastUiMessage = ""
         private var lastUiMessageAt = 0L
         private var lastUiPhaseMessage = ""
+        private val e2eWindowDiscoveryUiGate = E2EWindowDiscoveryUiGate()
 
     }
 
@@ -39,7 +41,9 @@ class ExtraLogAppender : UnsynchronizedAppenderBase<ILoggingEvent>() {
     private fun shouldShowInUi(event: ILoggingEvent): Boolean {
         val message = event.formattedMessage ?: ""
         if (UiLogFormatter.isHiddenFromUi(message)) return false
-        if (message.contains("E2E_INPUT_")) return false
+        // Successful Robot details belong to DEBUG/file evidence. Do not
+        // suppress WARN/ERROR input failures from the operator-facing feed.
+        if (message.contains("E2E_INPUT_") && event.level.levelInt < Level.WARN_INT) return false
         if (message.contains("行为类-解析卡牌") && event.level.levelInt <= Level.WARN_INT) return false
 
         // A phase handler can process many Power.log batches while the game
@@ -58,6 +62,7 @@ class ExtraLogAppender : UnsynchronizedAppenderBase<ILoggingEvent>() {
 
         if (event.level.levelInt >= Level.ERROR_INT) return true
         if (event.level.levelInt >= Level.WARN_INT) return true
+        if (!e2eWindowDiscoveryUiGate.shouldShow(message)) return false
 
         val importantMarkers = arrayOf(
             "当前处于", "当前模式", "开始匹配", "匹配失败", "已完成第", "已重置游戏状态",

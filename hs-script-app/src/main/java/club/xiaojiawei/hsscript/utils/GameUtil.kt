@@ -42,6 +42,7 @@ import com.sun.jna.platform.win32.WinDef
 import com.sun.jna.platform.win32.WinUser
 import com.sun.jna.platform.win32.WinUser.SWP_NOMOVE
 import com.sun.jna.platform.win32.WinUser.SWP_NOZORDER
+import com.sun.jna.ptr.IntByReference
 import java.awt.Point
 import java.io.File
 import java.io.IOException
@@ -60,6 +61,8 @@ import kotlin.math.min
  * @date 2022/11/27 1:42
  */
 object GameUtil {
+
+    private val e2eWindowDiscoveryLogGate = E2EWindowDiscoveryLogGate()
 
     /**
      * Keep the executable path and its arguments as separate values. The
@@ -1103,18 +1106,42 @@ object GameUtil {
             ?: SystemUtil.findHWND(null, GAME_US_NAME) ?: User32.INSTANCE.FindWindow(null, GAME_US_NAME)
             ?: SystemUtil.findHWND("UnityWndClass", GAME_CN_NAME) ?: SystemUtil.findHWND("UnityWndClass", GAME_US_NAME)
             ?: if (isE2ERun()) null else CSystemDll.INSTANCE.findWindowsByProcessName(GAME_PROGRAM_NAME))
-        if (isE2ERun()) {
-            log.info {
-                "E2E_WINDOW_DISCOVERY title=${if (hwnd == null) "none" else "found"} " +
-                    "handle=${hwnd ?: "null"} process=$GAME_PROGRAM_NAME"
-            }
-        }
+        val e2eRun = isE2ERun()
+        val gameAliveWithoutWindow = e2eRun && hwnd == null && isAliveOfGame()
+        if (e2eRun) logE2EWindowDiscovery(hwnd, gameAliveWithoutWindow)
         if (hwnd != null) return hwnd
-        if (isE2ERun() && isAliveOfGame()) {
-            log.info { "SAFE_NATIVE_INPUT_WINDOW fallback=screen-coordinates game=$GAME_PROGRAM_NAME" }
+        if (gameAliveWithoutWindow) {
+            // The discovery state already recorded this fallback once at WARN
+            // and every identical poll at DEBUG. Do not add a second INFO
+            // line for the same condition on every input request.
+            log.debug { "SAFE_NATIVE_INPUT_WINDOW fallback=screen-coordinates game=$GAME_PROGRAM_NAME" }
             return SAFE_INPUT_WINDOW
         }
         return null
+    }
+
+    private fun logE2EWindowDiscovery(hwnd: WinDef.HWND?, gameAliveWithoutWindow: Boolean) {
+        val processId = hwnd?.let(::windowProcessId)
+        val state = when {
+            hwnd != null -> E2EWindowDiscoveryLogGate.State.FOUND
+            gameAliveWithoutWindow -> E2EWindowDiscoveryLogGate.State.FALLBACK_COORDINATES
+            else -> E2EWindowDiscoveryLogGate.State.MISSING
+        }
+        val decision = e2eWindowDiscoveryLogGate.classify(state, hwnd?.toString(), processId)
+        val message =
+            "E2E_WINDOW_DISCOVERY state=$state handle=${hwnd ?: "null"} " +
+                "pid=${processId ?: 0} process=$GAME_PROGRAM_NAME decision=$decision"
+        when (decision) {
+            E2EWindowDiscoveryLogGate.Decision.INFO_STATE_CHANGE -> log.info { message }
+            E2EWindowDiscoveryLogGate.Decision.WARN_FAILURE_CHANGE -> log.warn { message }
+            E2EWindowDiscoveryLogGate.Decision.DEBUG_DUPLICATE -> log.debug { "$message duplicate=true" }
+        }
+    }
+
+    private fun windowProcessId(hwnd: WinDef.HWND): Int {
+        val pid = IntByReference()
+        User32.INSTANCE.GetWindowThreadProcessId(hwnd, pid)
+        return pid.value
     }
 
     fun findPlatformHWND(): WinDef.HWND? = SystemUtil.findHWND("Chrome_WidgetWin_0", PLATFORM_CN_NAME) ?: let {

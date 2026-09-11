@@ -83,6 +83,7 @@ object UiLogFormatter {
             raw.startsWith("SCREEN_RECOVERY") -> formatRecovery(raw)
             raw.startsWith("UNKNOWN_STATE_SCREENSHOT") -> "未知画面截图已保存"
             raw.startsWith("DEBUG_SCREENSHOT") -> "调试截图已保存"
+            raw.startsWith("E2E_WINDOW_DISCOVERY") -> formatE2EWindowDiscovery(raw)
             raw.startsWith("E2E_") -> "端到端诊断 · ${raw.substringBefore(' ')}"
             else -> simplify(raw)
         }
@@ -161,6 +162,14 @@ object UiLogFormatter {
     private fun formatRecovery(raw: String): String {
         val state = value(raw, "state")
         return if (state.isNullOrBlank()) "屏幕恢复 · 已触发" else "屏幕恢复 · 当前状态 $state"
+    }
+
+    private fun formatE2EWindowDiscovery(raw: String): String = when (value(raw, "state")) {
+        "FOUND" -> listOfNotNull("端到端 · 已发现游戏窗口", value(raw, "pid")?.let { "PID=$it" })
+            .joinToString(" · ")
+        "FALLBACK_COORDINATES" -> "端到端 · 未发现游戏窗口，已改用安全坐标输入"
+        "MISSING" -> "端到端 · 未发现游戏窗口"
+        else -> "端到端诊断 · E2E_WINDOW_DISCOVERY"
     }
 
     private fun gameAndStage(raw: String): String {
