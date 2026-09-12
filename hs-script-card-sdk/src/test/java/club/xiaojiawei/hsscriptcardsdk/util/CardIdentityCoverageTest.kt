@@ -51,6 +51,24 @@ class CardIdentityCoverageTest {
         assertTrue(failure.message.orEmpty().contains("火炮长(CAP_107)"))
     }
 
+    @Test
+    fun `pirate warrior profile resolves every card name through database or verified catalog`() {
+        val identities = PIRATE_WARRIOR_PROFILE.map { ref ->
+            CardIdentityCatalog.resolve(ref.cardId, CardDBUtil.queryCardById(ref.cardId).firstOrNull())
+        }
+
+        assertTrue(identities.all { it != null && it.name.isNotBlank() })
+        assertEquals(
+            setOf("CAP_104", "CAP_105", "CAP_106", "CAP_107"),
+            identities.filter { it?.source == CardIdentitySource.VERIFIED_CATALOG }
+                .mapNotNull { it?.cardId }
+                .toSet(),
+        )
+        assertEquals("炸药工程师", CardIdentityCatalog.lookup("CAP_104")?.name)
+        assertEquals("钩手拖曳", CardIdentityCatalog.lookup("CAP_105")?.name)
+        assertEquals("火炮手", CardIdentityCatalog.lookup("CAP_107t")?.name)
+    }
+
     private companion object {
         // Distinct IDs from the current Pirate Warrior deck profile. Copies
         // do not change identity coverage and are intentionally omitted.

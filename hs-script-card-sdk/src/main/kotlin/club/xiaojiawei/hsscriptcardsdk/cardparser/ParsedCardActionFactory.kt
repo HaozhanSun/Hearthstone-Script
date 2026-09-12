@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptcardsdk.CardAction
 import club.xiaojiawei.hsscriptcardsdk.bean.DBCard
 import club.xiaojiawei.hsscriptcardsdk.util.CardDBUtil
+import club.xiaojiawei.hsscriptcardsdk.util.CardIdentityCatalog
 
 /**
  * 基于卡牌文本动态生成 [CardAction] 的兜底工厂。
@@ -27,9 +28,16 @@ object ParsedCardActionFactory {
         }
         val dbCard = CardDBUtil.queryCardById(cardId).firstOrNull()
         if (dbCard == null) {
+            val identity = CardIdentityCatalog.lookup(cardId)
             log.warn {
-                "CARD_ACTION_UNRECOGNIZED cardName=未知卡牌($cardId) cardId=$cardId " +
-                    "reason=card-db-missing action=FAIL_CLOSED"
+                if (identity == null) {
+                    "CARD_ACTION_UNRECOGNIZED cardName=未知卡牌($cardId) cardId=$cardId " +
+                        "reason=card-db-missing action=FAIL_CLOSED"
+                } else {
+                    "CARD_ACTION_UNRECOGNIZED cardName=${identity.name} cardId=$cardId " +
+                        "reason=description-parser-no-interceptor action=FAIL_CLOSED " +
+                        "identitySource=${identity.source.name}"
+                }
             }
         }
         val supplier = dbCard?.let(::createSupplier)
