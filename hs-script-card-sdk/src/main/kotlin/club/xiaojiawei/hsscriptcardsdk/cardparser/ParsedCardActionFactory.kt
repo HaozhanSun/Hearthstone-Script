@@ -25,7 +25,14 @@ object ParsedCardActionFactory {
         if (supplierCache.containsKey(cardId)) {
             return supplierCache[cardId]
         }
-        val supplier = CardDBUtil.queryCardById(cardId).firstOrNull()?.let(::createSupplier)
+        val dbCard = CardDBUtil.queryCardById(cardId).firstOrNull()
+        if (dbCard == null) {
+            log.warn {
+                "CARD_ACTION_UNRECOGNIZED cardName=未知卡牌($cardId) cardId=$cardId " +
+                    "reason=card-db-missing action=FAIL_CLOSED"
+            }
+        }
+        val supplier = dbCard?.let(::createSupplier)
         supplierCache[cardId] = supplier
         return supplier
     }
@@ -52,10 +59,8 @@ object ParsedCardActionFactory {
     private fun createSupplier(dbCard: DBCard): (() -> CardAction)? {
         val interceptor = CardDescriptionParser.parseAsPlayActionInterceptor(dbCard) ?: let {
             log.warn {
-                """
-                    行为类-解析卡牌【${dbCard.name}:${dbCard.cardId}】失败
-                    描述：${dbCard.text.replace("\n", "")}
-                """.trimIndent()
+                "CARD_ACTION_UNRECOGNIZED cardName=${dbCard.name} cardId=${dbCard.cardId} " +
+                    "reason=description-parser-no-interceptor action=FAIL_CLOSED"
             }
             return null
         }
