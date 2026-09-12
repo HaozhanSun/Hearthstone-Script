@@ -1,6 +1,8 @@
 package club.xiaojiawei.hsscriptcardsdk.mcts
 
+import club.xiaojiawei.hsscriptcardsdk.bean.Action
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
+import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 
@@ -17,6 +19,7 @@ object CardTimingPolicy {
     const val PATCHES_THE_PIRATE_ID = "CFM_637"
     const val RAGEWING_ID = "YOD_032"
     const val ZILLIAX_DELUXE_3000_ID_PREFIX = "TOY_330"
+    const val AREDAR_BRUTE_ID = "GDB_320"
 
     private val ragewingNames = setOf(
         "狂暴邪翼蝠",
@@ -48,6 +51,55 @@ object CardTimingPolicy {
 
     fun isEndOfTurnCostReductionCard(card: Card): Boolean =
         isOpponentDamageReductionCard(card) || isZilliaxDeluxe3000(card)
+
+    fun isAredarBrute(card: Card): Boolean = card.cardId == AREDAR_BRUTE_ID
+
+    /**
+     * Shared hard legality for 艾瑞达蛮兵.  A default Card.cost of zero is
+     * not treated as missing: it is a valid effective cost after reductions.
+     * The hand entity and hero health, however, must be observable or the
+     * action is rejected rather than guessed.
+     */
+    fun isActionLegal(action: Action, war: War): Boolean {
+        val card = action.creator ?: return !isAredarPlayAction(action)
+        if (!isAredarPlayAction(action) || !isAredarBrute(card)) return true
+
+        val me = runCatching { war.me }.getOrNull() ?: return false
+        val hand = runCatching { me.handArea.cards.toList() }.getOrNull() ?: return false
+        if (card.entityId.isBlank() || card.cardId.isBlank() || card.isUncertain) return false
+        if (hand.size != 1) return false
+        val handCard = hand.singleOrNull { it.entityId == card.entityId && it.cardId == card.cardId }
+            ?: return false
+        if (handCard.isUncertain || handCard.cost !in 0..4) return false
+
+        val hero = runCatching { me.playArea.hero }.getOrNull() ?: return false
+        if (hero.health <= 0 || hero.damage < 0) return false
+        val currentHealth = hero.health - hero.damage
+        return currentHealth in 0..15
+    }
+
+    fun actionFilterReason(action: Action, war: War): String? {
+        val card = action.creator ?: return null
+        if (!isAredarPlayAction(action) || !isAredarBrute(card)) return null
+        val me = runCatching { war.me }.getOrNull() ?: return "aredar-brute-hero-or-hand-state-unavailable"
+        val hand = runCatching { me.handArea.cards.toList() }.getOrNull()
+            ?: return "aredar-brute-hero-or-hand-state-unavailable"
+        if (card.entityId.isBlank() || card.cardId.isBlank() || card.isUncertain) {
+            return "aredar-brute-card-identity-unavailable"
+        }
+        if (hand.size != 1 || hand.singleOrNull { it.entityId == card.entityId && it.cardId == card.cardId } == null) {
+            return "aredar-brute-not-last-card-in-hand"
+        }
+        val handCard = hand.single()
+        if (handCard.isUncertain) return "aredar-brute-card-identity-unavailable"
+        if (handCard.cost !in 0..4) return "aredar-brute-effective-cost-over-4"
+        val hero = runCatching { me.playArea.hero }.getOrNull()
+            ?: return "aredar-brute-hero-state-unavailable"
+        if (hero.health <= 0 || hero.damage < 0) return "aredar-brute-hero-state-unavailable"
+        return if (hero.health - hero.damage > 15) "aredar-brute-hero-health-over-15" else null
+    }
+
+    private fun isAredarPlayAction(action: Action): Boolean = action is PlayAction
 
     /**
      * Keep a timing card out of the action set while another useful action is

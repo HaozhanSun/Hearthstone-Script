@@ -303,8 +303,11 @@ class MonteCarloTreeNode(
             }
         }
         val decisionModel = arg.decisionModel
-        if (decisionModel != null) {
-            val illegalActions = result.filterNot { decisionModel.isActionLegal(it, war) }
+        if (decisionModel != null || result.isNotEmpty()) {
+            val illegalActions = result.filter {
+                !CardTimingPolicy.isActionLegal(it, war) ||
+                    decisionModel?.isActionLegal(it, war) == false
+            }
             if (illegalActions.isNotEmpty()) {
                 result.removeAll(illegalActions.toSet())
                 illegalActions.forEach { action ->
@@ -312,7 +315,8 @@ class MonteCarloTreeNode(
                         mapOf(
                             "kind" to "ACTION_FILTER",
                             "outcome" to "FILTERED",
-                            "reason" to (decisionModel.actionFilterReason(action, war)
+                            "reason" to (CardTimingPolicy.actionFilterReason(action, war)
+                                ?: decisionModel?.actionFilterReason(action, war)
                                 ?: "decision-model-illegal-action"),
                             "action" to actionDescription(action),
                         ),

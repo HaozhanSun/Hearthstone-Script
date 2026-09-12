@@ -141,7 +141,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             decisions += details
         }
         fun isLiveActionLegal(action: Action): Boolean =
-            model?.isActionLegal(action, war) != false
+            CardTimingPolicy.isActionLegal(action, war) && model?.isActionLegal(action, war) != false
         me.handArea.cards.forEach { card ->
             if (weaponAlreadyPlayedThisTurn && card.cardType === CardTypeEnum.WEAPON) {
                 decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "weapon-already-played-this-turn"))
@@ -439,7 +439,9 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 var continueCurrent = false
                 for (action in bestNodes) {
                     val applyAction = action.applyAction
-                    if (arg.decisionModel?.isActionLegal(applyAction, war) == false) {
+                    if (!CardTimingPolicy.isActionLegal(applyAction, war) ||
+                        arg.decisionModel?.isActionLegal(applyAction, war) == false
+                    ) {
                         log.warn {
                             "MCTS_LEGACY_ACTION_SKIPPED strategy=${name()} " +
                                 "action=${describeAction(applyAction)} phase=${i + 1} " +
@@ -823,7 +825,9 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             // become non-killable or disappear after the root was built. In
             // particular, never dispatch a stale hero attack into a high-health
             // minion when the shared Pirate target policy now rejects it.
-            if (template.decisionModel?.isActionLegal(action, war) == false) {
+            if (!CardTimingPolicy.isActionLegal(action, war) ||
+                template.decisionModel?.isActionLegal(action, war) == false
+            ) {
                 log.warn {
                     "MCTS_EXPERIMENT_ACTION_SKIPPED strategy=${name()} " +
                         "action=${describeAction(action)} step=${actionCount + 1} " +

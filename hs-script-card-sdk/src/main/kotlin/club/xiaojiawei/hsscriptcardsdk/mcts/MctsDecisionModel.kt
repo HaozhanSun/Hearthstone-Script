@@ -99,7 +99,7 @@ interface MctsDecisionModel {
      * action may become a valid last-resort choice, while an action rejected
      * here must never be resurrected when every other candidate is filtered.
      */
-    fun isActionLegal(action: Action, war: War): Boolean = true
+    fun isActionLegal(action: Action, war: War): Boolean = CardTimingPolicy.isActionLegal(action, war)
 
     /**
      * A hard sequencing hook for actions whose timing is part of the card's

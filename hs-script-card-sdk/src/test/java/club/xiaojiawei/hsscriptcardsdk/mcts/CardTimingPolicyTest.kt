@@ -1,10 +1,15 @@
 package club.xiaojiawei.hsscriptcardsdk.mcts
 
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
+import club.xiaojiawei.hsscriptcardsdk.bean.InitAction
+import club.xiaojiawei.hsscriptcardsdk.bean.MCTSArg
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
+import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
+import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -105,9 +110,121 @@ class CardTimingPolicyTest {
         assertEquals(5, afterZilliax.cost)
     }
 
+    @Test
+    fun `aredar brute is legal at the exact last-card cost and health boundaries`() {
+        val war = warWithHero(health = 30, damage = 15)
+        val brute = aredarBrute(cost = 4)
+        war.addCard(brute, war.me.handArea)
+
+        assertTrue(
+            CardTimingPolicy.isActionLegal(PlayAction({}, {}, brute), war),
+        )
+    }
+
+    @Test
+    fun `aredar brute is rejected when another card remains in hand`() {
+        val war = warWithHero(health = 30, damage = 15)
+        val brute = aredarBrute(cost = 4)
+        war.addCard(brute, war.me.handArea)
+        war.addCard(card("OTHER_CARD", "其他牌"), war.me.handArea)
+
+        val action = PlayAction({}, {}, brute)
+        assertFalse(CardTimingPolicy.isActionLegal(action, war))
+        assertEquals("aredar-brute-not-last-card-in-hand", CardTimingPolicy.actionFilterReason(action, war))
+    }
+
+    @Test
+    fun `aredar brute is rejected above effective cost four`() {
+        val war = warWithHero(health = 30, damage = 15)
+        val brute = aredarBrute(cost = 5)
+        war.addCard(brute, war.me.handArea)
+
+        val action = PlayAction({}, {}, brute)
+        assertFalse(CardTimingPolicy.isActionLegal(action, war))
+        assertEquals("aredar-brute-effective-cost-over-4", CardTimingPolicy.actionFilterReason(action, war))
+    }
+
+    @Test
+    fun `aredar brute is rejected above current health fifteen`() {
+        val war = warWithHero(health = 30, damage = 14)
+        val brute = aredarBrute(cost = 4)
+        war.addCard(brute, war.me.handArea)
+
+        val action = PlayAction({}, {}, brute)
+        assertFalse(CardTimingPolicy.isActionLegal(action, war))
+        assertEquals("aredar-brute-hero-health-over-15", CardTimingPolicy.actionFilterReason(action, war))
+    }
+
+    @Test
+    fun `aredar brute fails closed when hero or hand identity is unavailable`() {
+        val noHeroWar = War(false)
+        val noHeroMe = Player(playerId = "me", war = noHeroWar)
+        noHeroWar.me = noHeroMe
+        val noHeroBrute = aredarBrute(cost = 4)
+        noHeroWar.addCard(noHeroBrute, noHeroMe.handArea)
+        assertFalse(CardTimingPolicy.isActionLegal(PlayAction({}, {}, noHeroBrute), noHeroWar))
+
+        val war = warWithHero(health = 30, damage = 15)
+        val handBrute = aredarBrute(cost = 4)
+        war.addCard(handBrute, war.me.handArea)
+        val actionCard = aredarBrute(cost = 4).apply { entityId = "" }
+        assertFalse(CardTimingPolicy.isActionLegal(PlayAction({}, {}, actionCard), war))
+        assertEquals("aredar-brute-card-identity-unavailable", CardTimingPolicy.actionFilterReason(PlayAction({}, {}, actionCard), war))
+    }
+
+    @Test
+    fun `common tree filter cannot be bypassed by a permissive deck model`() {
+        val war = warWithHero(health = 30, damage = 15)
+        war.me.resources = 4
+        val brute = aredarBrute(cost = 4)
+        war.addCard(brute, war.me.handArea)
+        val permissiveModel = object : MctsDecisionModel {
+            override fun isActionLegal(action: club.xiaojiawei.hsscriptcardsdk.bean.Action, war: War): Boolean = true
+        }
+        val node = MonteCarloTreeNode(
+            war,
+            InitAction,
+            MCTSArg(
+                endMillisTime = Long.MAX_VALUE,
+                turnCount = 1,
+                turnFactor = 0.5,
+                countPerTurn = 1,
+                scoreCalculator = { 0.0 },
+                enableMultiThread = false,
+                decisionModel = permissiveModel,
+            ),
+        )
+
+        assertTrue(node.actions.none { it is PlayAction && it.creator?.cardId == CardTimingPolicy.AREDAR_BRUTE_ID })
+    }
+
     private fun card(cardId: String, name: String): Card = Card(TestCardAction()).apply {
         this.cardId = cardId
         entityId = cardId
         entityName = name
+    }
+
+    private fun aredarBrute(cost: Int): Card = card(CardTimingPolicy.AREDAR_BRUTE_ID, "艾瑞达蛮兵").apply {
+        cardType = CardTypeEnum.MINION
+        this.cost = cost
+    }
+
+    private fun warWithHero(health: Int, damage: Int): War {
+        val war = War(false)
+        val me = Player(playerId = "me", war = war)
+        val rival = Player(playerId = "rival", war = war)
+        war.me = me
+        war.rival = rival
+        war.player1 = me
+        war.player2 = rival
+        war.currentPlayer = me
+        war.isMyTurn = true
+        val hero = card("HERO", "英雄").apply {
+            cardType = CardTypeEnum.HERO
+            this.health = health
+            this.damage = damage
+        }
+        war.addCard(hero, me.playArea)
+        return war
     }
 }
