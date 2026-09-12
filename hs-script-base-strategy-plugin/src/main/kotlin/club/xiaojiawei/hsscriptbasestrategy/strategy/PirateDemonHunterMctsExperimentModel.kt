@@ -369,6 +369,21 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             return action is PlayAction && action.creator?.entityId == earlyZilliax.entityId
         }
 
+        // Cliffside is a higher-priority trigger chain than the Adrenaline
+        // Fiend attack shortcut below. If the location is ready, consume it
+        // before any hero-power/attack resource line can compete. This also
+        // covers the opaque PowerAction fallback when the location parser
+        // emits no bespoke action.
+        if (
+            cliffside != null &&
+            cliffside.canPower() &&
+            freeSlots(war) >= cliffsideActivationSlots(war)
+        ) {
+            return action is PowerAction && action.creator?.let { card ->
+                isCard(card, DANGEROUS_CLIFFSIDE) && card.cardType === CardTypeEnum.LOCATION
+            } == true
+        }
+
         // A visible Taunt permits hero-first combat after hand plays. Consume
         // an otherwise usable hero power before the hero's Taunt attack; the
         // next re-plan then exposes friendly minion attacks. Combined-damage
@@ -472,6 +487,26 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         if (PirateAttackOrderPolicy.shouldDeferNuLingNagaAttack(action, war)) return true
         if (PirateAttackOrderPolicy.shouldDeferAdrenalineFiendAttack(action, war)) return true
 
+        // Hozen Roughhouser and equivalent Pirate attack-trigger support
+        // minions should survive until ordinary attackable Pirates have
+        // attacked. Use persistent database markers rather than a single
+        // card-name special case. Two support minions alone must not defer one
+        // another forever, so only an ordinary attackable minion qualifies.
+        if (
+            action is AttackAction &&
+            action.creator?.let(::isPersistentPirateAttackSupport) == true
+        ) {
+            return hasOtherOrdinaryAttackableMinionAction(war, action.creator)
+        }
+
+        // Weapons Attendant only produces its deck weapon when another
+        // friendly Pirate is already on board. If another executable action
+        // exists, wait for it to create that Pirate; allow the Attendant when
+        // it is the only remaining action.
+        if (action is PlayAction && action.creator?.let { isCard(it, WEAPONS_ATTENDANT) } == true) {
+            return !hasFriendlyPirateOnBoard(war) && hasOtherPlayableAction(war, action.creator)
+        }
+
         // Demon Hunter's hero power is a resource sink, not an opening move.
         // Keep it out of the current node while any non-hero-power action is
         // still available. It becomes legal again on the next re-plan after
@@ -539,6 +574,12 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         val attackablePirates = me.playArea.cards.count { isPirate(it) && it.canAttack() }
         val friendlyMinions = me.playArea.cards.count { it.cardType === CardTypeEnum.MINION }
         val futurePirates = futurePirateSummons(war)
+        if (action is AttackAction && isPersistentPirateAttackSupport(card)) {
+            // The deferred-action hook is the hard ordering rule. Keep a
+            // negative prior as a defensive signal for callers that inspect
+            // the model without the normal root filtering.
+            return -14.0
+        }
         if (action is PlayAction && card.cardType === CardTypeEnum.WEAPON) {
             return if (war.me.playArea.weapon != null) -48.0 else 4.0
         }
@@ -557,10 +598,10 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             isCard(card, HOZEN_ROUGHHOUSER) ->
                 if (otherPirates == 0) -24.0 else 6.0 + attackablePirates * 1.5
             isCard(card, WEAPONS_ATTENDANT) -> {
-                val otherPirateOnBoard = me.playArea.cards.any { isPirate(it) }
+                val otherPirateOnBoard = hasFriendlyPirateOnBoard(war)
                 val currentWeapon = me.playArea.weapon
                 when {
-                    !otherPirateOnBoard -> -22.0
+                    !otherPirateOnBoard -> -60.0
                     currentWeapon == null -> 14.0 + attackablePirates
                     // A weapon already on board is filtered as illegal above;
                     // keep this prior defensive for callers that inspect the
@@ -949,6 +990,36 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 runCatching { card.action.generateAttackActions(war, war.me).isNotEmpty() }
                     .getOrDefault(false)
             }
+
+    private fun hasFriendlyPirateOnBoard(war: War): Boolean =
+        war.me.playArea.cards.any {
+            it.cardType === CardTypeEnum.MINION && isPirate(it) && it.isAlive()
+        }
+
+    private fun hasOtherOrdinaryAttackableMinionAction(war: War, excluded: Card?): Boolean =
+        war.me.playArea.cards
+            .filter {
+                it.entityId != excluded?.entityId &&
+                    it.cardType === CardTypeEnum.MINION &&
+                    it.isAlive() &&
+                    !isPersistentPirateAttackSupport(it) &&
+                    it.canAttack()
+            }
+            .any { card ->
+                runCatching { card.action.generateAttackActions(war, war.me).isNotEmpty() }
+                    .getOrDefault(false)
+            }
+
+    /**
+     * Persistent Pirate attack support is identified from database markers:
+     * `isAura` covers explicit aura cards and `isTriggerVisual` covers cards
+     * such as VAC_938 whose trigger is represented visually by Hearthstone.
+     */
+    private fun isPersistentPirateAttackSupport(card: Card): Boolean =
+        card.cardType === CardTypeEnum.MINION &&
+            isPirate(card) &&
+            card.isAlive() &&
+            (card.isAura || card.isTriggerVisual)
 
     private fun allowsTauntEarlyHeroAction(war: War): Boolean =
         PirateAttackOrderPolicy.hasAttackableEnemyTaunt(war) &&

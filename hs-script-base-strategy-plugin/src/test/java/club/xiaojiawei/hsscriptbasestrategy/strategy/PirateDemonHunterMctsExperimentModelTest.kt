@@ -760,6 +760,186 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `persistent pirate attack support is deferred behind ordinary attack`() {
+        val war = testWar()
+        val rivalHero = testCard("RIVAL_HERO_FOR_SUPPORT_ORDER").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+            atc = 0
+        }
+        val hozen = testCard(PirateDemonHunterMctsExperimentModel.HOZEN_ROUGHHOUSER).apply {
+            entityName = "粗暴的猴孙"
+            isTriggerVisual = true
+            isExhausted = false
+        }
+        val ordinary = testCard("ORDINARY_PIRATE_BEFORE_SUPPORT").apply {
+            isExhausted = false
+        }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(hozen, war.me.playArea)
+        war.addCard(ordinary, war.me.playArea)
+
+        val hozenAttack = hozen.action.generateAttackActions(war, war.me).single()
+        assertTrue(PirateDemonHunterMctsExperimentModel.isDeferredAction(hozenAttack, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.actionPrior(hozenAttack, war) < 0.0)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertTrue(node.actions.any { it.creator?.entityId == ordinary.entityId })
+        assertTrue(node.actions.none { it.creator?.entityId == hozen.entityId })
+    }
+
+    @Test
+    fun `persistent pirate support cards do not defer one another`() {
+        val war = testWar()
+        val rivalHero = testCard("RIVAL_HERO_FOR_SUPPORT_CYCLE").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+            atc = 0
+        }
+        val firstSupport = testCard("PERSISTENT_PIRATE_SUPPORT_ONE").apply {
+            isAura = true
+            isExhausted = false
+        }
+        val secondSupport = testCard("PERSISTENT_PIRATE_SUPPORT_TWO").apply {
+            isAura = true
+            isExhausted = false
+        }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(firstSupport, war.me.playArea)
+        war.addCard(secondSupport, war.me.playArea)
+
+        val firstAttack = firstSupport.action.generateAttackActions(war, war.me).single()
+        val secondAttack = secondSupport.action.generateAttackActions(war, war.me).single()
+        assertFalse(PirateDemonHunterMctsExperimentModel.isDeferredAction(firstAttack, war))
+        assertFalse(PirateDemonHunterMctsExperimentModel.isDeferredAction(secondAttack, war))
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertTrue(node.actions.any { it.creator?.entityId == firstSupport.entityId })
+        assertTrue(node.actions.any { it.creator?.entityId == secondSupport.entityId })
+    }
+
+    @Test
+    fun `ready cliffside outranks adrenaline fiend attack shortcut`() {
+        val war = testWar()
+        val cliffside = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {
+            cardType = CardTypeEnum.LOCATION
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 0
+            health = 3
+            isExhausted = false
+            isLocationActionCooldown = false
+        }
+        val fiend = testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND).apply {
+            isExhausted = false
+        }
+        val ordinary = testCard("ORDINARY_PIRATE_BEHIND_CLIFFSIDE").apply {
+            isExhausted = false
+        }
+        war.addCard(cliffside, war.me.playArea)
+        war.addCard(fiend, war.me.playArea)
+        war.addCard(ordinary, war.me.playArea)
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertEquals(1, node.actions.size)
+        assertTrue(node.actions.single() is PowerAction)
+        assertEquals(cliffside.entityId, node.actions.single().creator?.entityId)
+    }
+
+    @Test
+    fun `weapons attendant is normally playable when a friendly pirate is alive`() {
+        val war = testWar()
+        val attendant = testCard(PirateDemonHunterMctsExperimentModel.WEAPONS_ATTENDANT).apply {
+            cost = 6
+        }
+        val friendlyPirate = testCard("FRIENDLY_PIRATE_FOR_ATTENDANT").apply {
+            isExhausted = true
+        }
+        war.addCard(attendant, war.me.handArea)
+        war.addCard(friendlyPirate, war.me.playArea)
+
+        val play = attendant.action.generatePlayActions(war, war.me).single()
+        assertFalse(PirateDemonHunterMctsExperimentModel.isDeferredAction(play, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.actionPrior(play, war) > 0.0)
+    }
+
+    @Test
+    fun `weapons attendant waits when no friendly pirate and another card is executable`() {
+        val war = testWar()
+        val attendant = testCard(PirateDemonHunterMctsExperimentModel.WEAPONS_ATTENDANT).apply {
+            cost = 6
+        }
+        val otherCard = testCard("OTHER_EXECUTABLE_CARD_FOR_ATTENDANT").apply {
+            cost = 1
+        }
+        war.addCard(attendant, war.me.handArea)
+        war.addCard(otherCard, war.me.handArea)
+
+        val play = attendant.action.generatePlayActions(war, war.me).single()
+        assertTrue(PirateDemonHunterMctsExperimentModel.isDeferredAction(play, war))
+
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertTrue(node.actions.any { it.creator?.entityId == otherCard.entityId })
+        assertTrue(node.actions.none { it.creator?.entityId == attendant.entityId })
+    }
+
+    @Test
+    fun `weapons attendant is allowed when it is the only remaining action`() {
+        val war = testWar()
+        val attendant = testCard(PirateDemonHunterMctsExperimentModel.WEAPONS_ATTENDANT).apply {
+            cost = 6
+        }
+        war.addCard(attendant, war.me.handArea)
+
+        val play = attendant.action.generatePlayActions(war, war.me).single()
+        assertFalse(PirateDemonHunterMctsExperimentModel.isDeferredAction(play, war))
+        val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
+        assertTrue(node.actions.any { it.creator?.entityId == attendant.entityId })
+    }
+
+    @Test
+    fun `weapons attendant waits while attack or cliffside action remains`() {
+        val war = testWar()
+        val attendant = testCard(PirateDemonHunterMctsExperimentModel.WEAPONS_ATTENDANT).apply {
+            cost = 6
+        }
+        val attacker = testCard("ATTACKABLE_PIRATE_FOR_ATTENDANT").apply {
+            cardRace = CardRaceEnum.UNKNOWN
+            isExhausted = false
+        }
+        val rivalHero = testCard("RIVAL_HERO_FOR_ATTENDANT").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+            atc = 0
+        }
+        war.addCard(attendant, war.me.handArea)
+        war.addCard(attacker, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+
+        val play = attendant.action.generatePlayActions(war, war.me).single()
+        assertTrue(PirateDemonHunterMctsExperimentModel.isDeferredAction(play, war))
+
+        val withCliffside = testWar()
+        val cliffsideAttendant = testCard(PirateDemonHunterMctsExperimentModel.WEAPONS_ATTENDANT).apply {
+            cost = 6
+        }
+        val cliffside = testCard(PirateDemonHunterMctsExperimentModel.DANGEROUS_CLIFFSIDE).apply {
+            cardType = CardTypeEnum.LOCATION
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 3
+            isExhausted = false
+            isLocationActionCooldown = false
+        }
+        withCliffside.addCard(cliffsideAttendant, withCliffside.me.handArea)
+        withCliffside.addCard(cliffside, withCliffside.me.playArea)
+
+        val cliffsidePlay = cliffsideAttendant.action.generatePlayActions(withCliffside, withCliffside.me).single()
+        assertTrue(PirateDemonHunterMctsExperimentModel.isDeferredAction(cliffsidePlay, withCliffside))
+    }
+
+    @Test
     fun `adrenaline fiend values every pirate attack opportunity as hero attack`() {
         val war = testWar()
         val fiend = testCard(PirateDemonHunterMctsExperimentModel.ADRENALINE_FIEND)
