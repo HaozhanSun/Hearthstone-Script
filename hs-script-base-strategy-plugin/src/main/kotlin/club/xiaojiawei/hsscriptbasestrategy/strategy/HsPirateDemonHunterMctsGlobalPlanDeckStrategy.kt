@@ -21,7 +21,7 @@ class HsPirateDemonHunterMctsGlobalPlanDeckStrategy : MCTSDeckStrategy() {
         "海盗瞎全局规划MCTS：按整回合可达资源评估动作序列，执行时仍逐步重扫描"
 
     override fun getRunMode(): Array<RunModeEnum> =
-        arrayOf(RunModeEnum.CASUAL, RunModeEnum.STANDARD, RunModeEnum.WILD, RunModeEnum.PRACTICE)
+        arrayOf(RunModeEnum.WILD)
 
     override fun deckCode(): String = ""
 

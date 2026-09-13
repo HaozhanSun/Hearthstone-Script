@@ -25,7 +25,7 @@ class HsPirateWarriorMctsDeckStrategy : MCTSDeckStrategy() {
         "海盗战 MCTS ${PirateMctsStrategyVersion.REVISION}：未知卡牌可识别、艾瑞达蛮兵硬限制、前锋战斧只打必杀"
 
     override fun getRunMode(): Array<RunModeEnum> =
-        arrayOf(RunModeEnum.CASUAL, RunModeEnum.STANDARD, RunModeEnum.WILD, RunModeEnum.PRACTICE)
+        arrayOf(RunModeEnum.WILD)
 
     override fun deckCode(): String = ""
 
