@@ -26,7 +26,9 @@ import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.RuntimeSelectionSnapshot
 import club.xiaojiawei.hsscript.status.RuntimeSelectionState
 import club.xiaojiawei.hsscript.status.RuntimeSelectionUiContract
+import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.WorkTimeStatus
+import club.xiaojiawei.hsscript.utils.ConfigExUtil
 import club.xiaojiawei.hsscript.utils.ConfigUtil.getString
 import club.xiaojiawei.hsscript.utils.ConfigUtil.putString
 import club.xiaojiawei.hsscript.utils.FXUtil
@@ -155,6 +157,7 @@ class MainController : MainView() {
      * 初始化模式和卡组
      */
     private fun initModeAndDeck() {
+        defaultDeckSlotBox.items.setAll((StrategyDefaultDeckSlotBindings.MIN_DECK_SLOT..StrategyDefaultDeckSlotBindings.MAX_DECK_SLOT).toList())
         runModeBox.converter =
             object : StringConverter<RunModeEnum?>() {
                 override fun toString(runModeEnum: RunModeEnum?): String? = runModeEnum?.comment ?: ""
@@ -208,6 +211,7 @@ class MainController : MainView() {
                     }
                 }
                 DeckStrategyManager.currentDeckStrategy = newValue
+                updateDefaultDeckSlotView(newValue)
             }
 
         val defaultDeckId = getString(ConfigEnum.DEFAULT_DECK_STRATEGY)
@@ -233,6 +237,7 @@ class MainController : MainView() {
                     defaultRunModeEnum,
                 ) { deckStrategy.runModes[0] }
             deckStrategyBox.value = deckStrategy
+            updateDefaultDeckSlotView(deckStrategy)
             val deckCode = deckStrategy.deckCode()
             if (!deckCode.isEmpty()) {
                 log.info { "当前卡组代码↓" }
@@ -286,10 +291,45 @@ class MainController : MainView() {
             if (snapshot.strategyId != null && deckStrategyBox.value == null) {
                 deckStrategyBox.promptText = "策略未加载"
             }
+            updateDefaultDeckSlotView(deckStrategyBox.value)
         } finally {
             applyingRuntimeSnapshot = false
         }
         reloadWorkTime(workTimeChangeId)
+    }
+
+    private fun updateDefaultDeckSlotView(strategy: DeckStrategy?) {
+        val enabled = strategy != null
+        defaultDeckSlotBox.isDisable = !enabled
+        saveDefaultDeckSlotBtn.isDisable = !enabled
+        if (!enabled) {
+            defaultDeckSlotBox.value = null
+            return
+        }
+        val choice = StrategyDefaultDeckSlotBindings.chooseDeckSlots(
+            rule = null,
+            strategyId = strategy.id(),
+            globalDeckSlots = ConfigExUtil.getChooseDeckPos(),
+        )
+        defaultDeckSlotBox.value = choice.deckSlots.firstOrNull()
+    }
+
+    @FXML
+    protected fun saveDefaultDeckSlotBinding() {
+        val strategy = deckStrategyBox.value
+        if (strategy == null) {
+            notificationManger.showInfo("请先选择策略", 2)
+            return
+        }
+        val deckSlot = defaultDeckSlotBox.value
+        if (deckSlot == null || deckSlot !in StrategyDefaultDeckSlotBindings.MIN_DECK_SLOT..StrategyDefaultDeckSlotBindings.MAX_DECK_SLOT) {
+            notificationManger.showInfo("请选择1-9号卡组槽位", 2)
+            return
+        }
+        StrategyDefaultDeckSlotBindings.storeBinding(strategy.id(), deckSlot)
+        updateDefaultDeckSlotView(strategy)
+        notificationManger.showSuccess("已保存默认槽位：${strategy.name()} -> $deckSlot", 2)
+        log.info { "STRATEGY_DEFAULT_DECK_SLOT_SAVED strategy=${strategy.id()} name=${strategy.name()} deckSlot=$deckSlot" }
     }
 
     fun reloadRunMode() {

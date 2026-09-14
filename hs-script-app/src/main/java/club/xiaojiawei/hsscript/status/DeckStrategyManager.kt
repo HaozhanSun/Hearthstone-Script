@@ -7,6 +7,7 @@ import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.WorkTimeListener.ScheduleRuleSnapshot
 import club.xiaojiawei.hsscript.status.PluginManager.DECK_STRATEGY_PLUGINS
 import club.xiaojiawei.hsscript.status.PluginManager.loadDeckProperty
+import club.xiaojiawei.hsscript.utils.ConfigExUtil
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscriptbase.config.log
@@ -264,8 +265,13 @@ object DeckStrategyManager {
                 currentDeckStrategyProperty.get()?.id(),
                 currentDeckStrategyProperty.get()?.name(),
             )
-        val validSlots = ruleSnapshot.rule.deckPos.filter { it in 1..9 }
-        val slot = validSlots.singleOrNull()
+        val deckSlotChoice = StrategyDefaultDeckSlotBindings.chooseDeckSlots(
+            rule = ruleSnapshot.rule,
+            strategyId = null,
+            globalDeckSlots = ConfigExUtil.getChooseDeckPos(),
+            maxDeckSlots = 9,
+        )
+        val slot = deckSlotChoice.deckSlots.singleOrNull()
         val decision = WorkTimeSlotStrategyBinding.resolve(
             rule = ruleSnapshot.rule,
             deckSlot = slot,

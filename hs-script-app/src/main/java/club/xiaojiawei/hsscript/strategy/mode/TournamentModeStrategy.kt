@@ -8,6 +8,8 @@ import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
+import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
+import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
@@ -121,6 +123,11 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                 SystemUtil.delayShort()
                 changeMode(runMode)
                 SystemUtil.delayShort()
+                val expectedDeckSlot = DeckStrategyManager.currentRuntimeSelectionSnapshot().deckSlot
+                    ?: StrategyDefaultDeckSlotBindings.deckSlotForStrategy(deckStrategy.id())
+                if (!TournamentModeConfirmation.confirmBeforeDeckSelection(runMode, deckStrategy, expectedDeckSlot)) {
+                    return
+                }
                 selectDeck(deckStrategy)
                 SystemUtil.delayShort()
                 startMatching()

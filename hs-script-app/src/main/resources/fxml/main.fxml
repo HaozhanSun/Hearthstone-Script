@@ -68,6 +68,16 @@
                                   HBox.hgrow="ALWAYS" styleClass="combo-box-ui, combo-box-ui-small, combo-box-ui-normal"/>
                     </HBox>
 
+                    <HBox alignment="CENTER_LEFT" spacing="6" maxWidth="Infinity">
+                        <Label text="默认槽位：" minWidth="65"/>
+                        <ComboBox fx:id="defaultDeckSlotBox" prefWidth="64" minWidth="64"
+                                  styleClass="combo-box-ui, combo-box-ui-small, combo-box-ui-normal"/>
+                        <Button fx:id="saveDefaultDeckSlotBtn" text="保存为默认策略-卡组槽位绑定"
+                                onAction="#saveDefaultDeckSlotBinding"
+                                styleClass="btn-ui, btn-ui-small, btn-ui-normal"
+                                HBox.hgrow="ALWAYS" maxWidth="Infinity"/>
+                    </HBox>
+
                     <ConfigCheckBox text="打开时自动开始" styleClass="check-box-ui, check-box-ui-success"
                                     contentDisplay="RIGHT" config="START_ON_OPEN">
                         <graphic>

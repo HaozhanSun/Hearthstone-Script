@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.enums
 
 import ch.qos.logback.classic.Level
 import club.xiaojiawei.hsscript.bean.*
+import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.bean.single.repository.CustomRepository
 import club.xiaojiawei.hsscript.bean.single.repository.GiteeRepository
 import club.xiaojiawei.hsscript.service.*
@@ -468,6 +469,14 @@ enum class ConfigEnum(
      * 默认运行模式
      */
     DEFAULT_RUN_MODE(group = OTHER_CONFIG_GROUP, defaultValueInitializer = { RunModeEnum.STANDARD.name }),
+
+    /**
+     * 策略默认卡组槽位绑定。时间段显式卡组/策略配对仍然优先。
+     */
+    STRATEGY_DEFAULT_DECK_SLOTS(
+        group = STRATEGY_CONFIG_GROUP,
+        defaultValueInitializer = { StrategyDefaultDeckSlotBindings.defaultBindingsJson() },
+    ),
 
     /**
      * 战网密码

@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.ProgramPermissionEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
+import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.RuntimeSafety
 import club.xiaojiawei.hsscript.status.PauseStatus
@@ -19,6 +20,7 @@ import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.ScreenWatchdog
 import club.xiaojiawei.hsscript.status.ScreenWatchdogRecoveryAction
+import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.strategy.phase.GameOverPhaseStrategy
@@ -480,25 +482,52 @@ object GameUtil {
      * 左击套牌位置
      */
     fun lClickDeckPos(count: Int = 1) {
-        val activeScheduleRule = WorkTimeListener
-            .getCurrentWorkTimeRule()
-            ?.takeIf { WorkTimeListener.isInsideConfiguredSchedule() }
-        val globalDeckPositions = ConfigExUtil.getChooseDeckPos()
-        val chooseDeckPos = DeckPositionSelector.resolve(activeScheduleRule, globalDeckPositions)
+        val scheduleSnapshot =
+            if (ConfigUtil.getBoolean(ConfigEnum.WORK_TIME_RULE_HIGH_PRIORITY)) {
+                WorkTimeListener.currentScheduleRuleSnapshot()
+            } else {
+                null
+            }
+        val globalDeckPos = ConfigExUtil.getChooseDeckPos()
+        val deckSlotChoice = StrategyDefaultDeckSlotBindings.chooseDeckSlots(
+            rule = scheduleSnapshot?.rule,
+            strategyId = if (scheduleSnapshot == null) DeckStrategyManager.currentDeckStrategyProperty.get()?.id() else null,
+            globalDeckSlots = globalDeckPos,
+            maxDeckSlots = DECK_POS_RECTS.size,
+        )
+        val chooseDeckPos = deckSlotChoice.deckSlots
 
         if (chooseDeckPos.isEmpty()) {
+            DeckStrategyManager.clearScheduleDeckSlotSelection("no-deck-slot-configured")
+            return
+        }
+        val invalidDeckPos = chooseDeckPos.filter { it !in 1..DECK_POS_RECTS.size }
+        if (invalidDeckPos.isNotEmpty()) {
+            log.warn {
+                "SCHEDULE_SLOT_STRATEGY_FALLBACK reason=invalid-deck-slot " +
+                    "ruleSet=${scheduleSnapshot?.ruleSetId ?: "?"} ruleIndex=${scheduleSnapshot?.ruleIndex ?: "?"} " +
+                    "invalidSlots=${invalidDeckPos.joinToString(",")} maxDeckSlots=${DECK_POS_RECTS.size}"
+            }
+        }
+        val validDeckPos = chooseDeckPos.filter { it in 1..DECK_POS_RECTS.size }
+        if (validDeckPos.isEmpty()) {
+            DeckStrategyManager.clearScheduleDeckSlotSelection("invalid-deck-slot")
+            return
+        }
+        val deckSelectionReason = deckSlotChoice.assignmentReason
+        val deckPos = validDeckPos.randomSelectOrNull() ?: let {
             log.warn { "没有设置可用卡组位" }
             return
         }
-        val deckPos = chooseDeckPos.randomSelectOrNull() ?: let {
-            log.warn { "没有设置可用卡组位" }
-            return
-        }
-        log.info {
-            "DECK_POSITION_SELECTION source=${if (activeScheduleRule != null) "schedule" else "global"} " +
-                "scheduleRule=${activeScheduleRule?.strategyId ?: "none"} " +
-                "candidates=${chooseDeckPos.sorted()} selected=$deckPos " +
-                "highPriority=${ConfigUtil.getBoolean(ConfigEnum.WORK_TIME_RULE_HIGH_PRIORITY)}"
+        if (scheduleSnapshot != null) {
+            DeckStrategyManager.recordScheduleDeckSlotSelection(
+                ruleSnapshot = scheduleSnapshot,
+                deckSlot = deckPos,
+                maxDeckSlots = DECK_POS_RECTS.size,
+                assignmentReason = deckSelectionReason,
+            )
+        } else {
+            DeckStrategyManager.clearScheduleDeckSlotSelection("global-deck-slot")
         }
         DECK_POS_RECTS.getOrNull(deckPos - 1)?.let { rect ->
             repeat(count) {

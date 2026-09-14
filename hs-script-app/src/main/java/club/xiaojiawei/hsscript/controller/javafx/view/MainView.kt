@@ -83,6 +83,12 @@ abstract class MainView : Initializable {
     protected lateinit var deckStrategyBox: ComboBox<DeckStrategy>
 
     @FXML
+    protected lateinit var defaultDeckSlotBox: ComboBox<Int>
+
+    @FXML
+    protected lateinit var saveDefaultDeckSlotBtn: Button
+
+    @FXML
     protected lateinit var downloadProgress: ProgressBar
 
     @FXML
