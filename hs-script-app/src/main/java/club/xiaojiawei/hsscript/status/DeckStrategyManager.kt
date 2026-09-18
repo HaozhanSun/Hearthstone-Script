@@ -26,6 +26,38 @@ import java.util.stream.Stream
  * @date 2024/9/7 15:17
  */
 object DeckStrategyManager {
+
+    private val refreshCoordinator = StrategyRefreshCoordinator { message ->
+        log.info { message }
+    }
+
+    /** A manual/IPC/UI request is queued and never swaps a live turn. */
+    fun requestStrategyRefresh(reason: String = "manual"): Long =
+        refreshCoordinator.request(reason)
+
+    /** Called by the turn-phase boundary before a new OutCardThread starts. */
+    fun applyPendingStrategyRefreshAtTurnBoundary(): StrategyRefreshCoordinator.Outcome<DeckStrategy> {
+        val previous = currentDeckStrategyProperty.get()
+        val outcome = refreshCoordinator.applyAtTurnBoundary(previous) {
+            refreshStrategiesAndResolve(previous)
+        }
+        if (outcome.status == StrategyRefreshCoordinator.Status.APPLIED &&
+            outcome.replacement !== previous
+        ) {
+            currentDeckStrategyProperty.set(outcome.replacement)
+        }
+        if (outcome.status == StrategyRefreshCoordinator.Status.FAILED) {
+            log.warn {
+                "STRATEGY_REFRESH_ROLLBACK requestId=${outcome.requestId} " +
+                    "strategy=${previous?.id() ?: "none"}"
+            }
+        }
+        return outcome
+    }
+
+    fun markStrategyTurnStarted() = refreshCoordinator.markTurnStarted()
+
+    fun markStrategyTurnEnded() = refreshCoordinator.markTurnEnded()
     data class ScheduleDeckSelection(
         val ruleSnapshot: ScheduleRuleSnapshot,
         val deckSlot: Int,
@@ -36,6 +68,7 @@ object DeckStrategyManager {
     private val scheduleSelectionLock = Any()
     private var pendingScheduleDeckSelection: ScheduleDeckSelection? = null
     private var activeGameScheduleDeckSelection: ScheduleDeckSelection? = null
+    private var refreshInProgress = false
 
     /**
      * 当前卡组策略
@@ -51,6 +84,12 @@ object DeckStrategyManager {
             refreshRuntimeSelectionSnapshot("user-strategy-change")
         }
         get():DeckStrategy? {
+            val e2eStrategyId = System.getProperty("hs.script.e2e.strategy-id")
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+            if (e2eStrategyId != null) {
+                deckStrategies.find { it.id() == e2eStrategyId }?.let { return it }
+            }
             return if (isScheduleOverrideActive()) {
                 currentRuntimeSelectionSnapshot().strategyId?.let { strategyId ->
                     deckStrategies.find { it.id() == strategyId }
@@ -172,7 +211,7 @@ object DeckStrategyManager {
         }
 
         loadDeckProperty().addListener { _: ObservableValue<out Boolean>?, _: Boolean?, t1: Boolean ->
-            if (t1) {
+            if (t1 && !refreshInProgress) {
                 reload()
             }
         }
@@ -221,10 +260,62 @@ object DeckStrategyManager {
         userSelection
     }
 
+    /**
+     * A refresh is not applied if the active strategy disappeared from the
+     * freshly loaded catalog. Throwing here lets the coordinator report
+     * FAILED/rollback instead of falsely reporting APPLIED while retaining an
+     * old instance.
+     */
+    internal fun <T> resolveRefreshReplacement(
+        previous: T?,
+        loaded: List<T>,
+        id: (T) -> String,
+    ): T? {
+        val replacement = previous?.let { old -> loaded.find { id(it) == id(old) } }
+        if (previous != null && replacement == null) {
+            throw IllegalStateException("matching-id-not-found strategy=${id(previous)}")
+        }
+        return replacement
+    }
+
     private fun reload() {
         log.info { "刷新策略库" }
-        deckStrategies.clear()
-        deckStrategies.addAll(load())
+        val loaded = load()
+        val previous = deckStrategies.toList()
+        try {
+            deckStrategies.clear()
+            deckStrategies.addAll(loaded)
+        } catch (error: Throwable) {
+            deckStrategies.clear()
+            deckStrategies.addAll(previous)
+            throw error
+        }
+    }
+
+    private fun refreshStrategiesAndResolve(previous: DeckStrategy?): DeckStrategy? {
+        val previousCatalog = deckStrategies.toList()
+        val previousSelected = currentDeckStrategyProperty.get()
+        refreshInProgress = true
+        try {
+            PluginManager.loadAllPlugins()
+            val loaded = load()
+            try {
+                deckStrategies.clear()
+                deckStrategies.addAll(loaded)
+            } catch (error: Throwable) {
+                deckStrategies.clear()
+                deckStrategies.addAll(previousCatalog)
+                throw error
+            }
+            return resolveRefreshReplacement(previous, deckStrategies.toList()) { it.id() }
+        } catch (error: Throwable) {
+            deckStrategies.clear()
+            deckStrategies.addAll(previousCatalog)
+            currentDeckStrategyProperty.set(previousSelected)
+            throw error
+        } finally {
+            refreshInProgress = false
+        }
     }
 
     private fun hasDeckStrategyForRule(
