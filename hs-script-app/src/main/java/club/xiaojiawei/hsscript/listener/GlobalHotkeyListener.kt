@@ -13,6 +13,7 @@ import com.melloware.jintellitype.HotkeyListener
 import com.melloware.jintellitype.JIntellitype
 import com.melloware.jintellitype.JIntellitypeConstants
 import com.sun.jna.Pointer
+import com.sun.jna.platform.win32.Kernel32
 import com.sun.jna.platform.win32.User32
 import com.sun.jna.platform.win32.WinDef
 import com.sun.jna.platform.win32.WinUser
@@ -43,6 +44,7 @@ object GlobalHotkeyListener : HotkeyListener {
     private const val VK_F2 = 0x71
 
     private val fixedHotkeyHookStarted = AtomicBoolean(false)
+    private val fixedHotkeyStatePollerStarted = AtomicBoolean(false)
     @Volatile
     private var fixedHotkeyHook: WinUser.HHOOK? = null
     private val fixedHotkeyHookCallback = object : WinUser.LowLevelKeyboardProc {
@@ -54,7 +56,9 @@ object GlobalHotkeyListener : HotkeyListener {
             if (nCode >= 0) {
                 val keyboardMessage = wParam.toInt()
                 if (keyboardMessage == WM_KEYDOWN || keyboardMessage == WM_SYSKEYDOWN) {
-                    fixedHotkeyEdgeDetector.onKeyDown(keyboardData.vkCode)?.let(::onHotKey)
+                    fixedHotkeyEdgeDetector.onKeyDown(keyboardData.vkCode)?.let {
+                        dispatchFixedHotkey(it, "low-level-hook")
+                    }
                 } else if (keyboardMessage == WM_KEYUP || keyboardMessage == WM_SYSKEYUP) {
                     fixedHotkeyEdgeDetector.onKeyUp(keyboardData.vkCode)
                 }
@@ -135,10 +139,12 @@ object GlobalHotkeyListener : HotkeyListener {
      * a function key is held.
      */
     private fun startFixedHotkeyPoller() {
+        startFixedHotkeyStatePoller()
         if (!fixedHotkeyHookStarted.compareAndSet(false, true)) return
 
         Thread({
             try {
+                log.info { "固定 F1/F2 全局钩子启动：正在注册 WH_KEYBOARD_LL" }
                 fixedHotkeyHook = User32.INSTANCE.SetWindowsHookEx(
                     WinUser.WH_KEYBOARD_LL,
                     fixedHotkeyHookCallback,
@@ -146,9 +152,13 @@ object GlobalHotkeyListener : HotkeyListener {
                     0,
                 )
                 if (fixedHotkeyHook == null) {
-                    throw IllegalStateException("SetWindowsHookEx returned null")
+                    val errorCode = Kernel32.INSTANCE.GetLastError()
+                    throw IllegalStateException("SetWindowsHookEx returned null, win32Error=$errorCode")
                 }
-                log.info { "固定开始/暂停热键已启动全局监听：F1/F2 hook=installed" }
+                log.info {
+                    "固定开始/暂停热键已启动全局监听：F1/F2 hook=installed " +
+                        "thread=${Thread.currentThread().id}"
+                }
 
                 val message = WinUser.MSG()
                 while (User32.INSTANCE.GetMessage(message, null, 0, 0) > 0) {
@@ -163,6 +173,45 @@ object GlobalHotkeyListener : HotkeyListener {
                 fixedHotkeyHook = null
             }
         }, "Global F1/F2 Hotkey Hook").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    /**
+     * A low-level hook is the preferred path, but it can be unavailable when
+     * the JVM is launched in a restricted desktop/input session.  Polling
+     * the physical key state is independent of the foreground window and is
+     * therefore the safety net that makes F1/F2 genuinely global.
+     */
+    private fun startFixedHotkeyStatePoller() {
+        if (!fixedHotkeyStatePollerStarted.compareAndSet(false, true)) return
+
+        Thread({
+            var f1Down = false
+            var f2Down = false
+            try {
+                log.info { "固定 F1/F2 全局状态轮询已启动：source=GetAsyncKeyState intervalMs=25" }
+                while (true) {
+                    val f1Now = (User32.INSTANCE.GetAsyncKeyState(VK_F1).toInt() and 0x8000) != 0
+                    val f2Now = (User32.INSTANCE.GetAsyncKeyState(VK_F2).toInt() and 0x8000) != 0
+                    if (f1Now && !f1Down) {
+                        dispatchFixedHotkey(HOT_KEY_START_F1, "GetAsyncKeyState")
+                    }
+                    if (f2Now && !f2Down) {
+                        dispatchFixedHotkey(HOT_KEY_PAUSE_F2, "GetAsyncKeyState")
+                    }
+                    f1Down = f1Now
+                    f2Down = f2Now
+                    Thread.sleep(25)
+                }
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (error: Throwable) {
+                log.warn(error) { "固定 F1/F2 全局状态轮询失败" }
+                fixedHotkeyStatePollerStarted.set(false)
+            }
+        }, "Global F1/F2 Hotkey State Poller").apply {
             isDaemon = true
             start()
         }
@@ -185,13 +234,13 @@ object GlobalHotkeyListener : HotkeyListener {
         }
     }
 
-    private fun dispatchFixedHotkey(id: Int) {
+    private fun dispatchFixedHotkey(id: Int, source: String) {
         val now = System.nanoTime()
         val previous = lastFixedHotkeyNanos.put(id, now)
         if (previous != null && now - previous < FIXED_HOTKEY_DEDUP_NANOS) return
         when (id) {
-            HOT_KEY_START_F1 -> setPauseState(false, "F1")
-            HOT_KEY_PAUSE_F2 -> setPauseState(true, "F2")
+            HOT_KEY_START_F1 -> setPauseState(false, "F1/$source")
+            HOT_KEY_PAUSE_F2 -> setPauseState(true, "F2/$source")
         }
     }
 
@@ -232,7 +281,7 @@ object GlobalHotkeyListener : HotkeyListener {
             }
         }
         if (paused) WorkTimeListener.working = false
-        PauseStatus.isPause = paused
+        PauseStatus.setManualPause(paused)
         log.info {
             "捕捉到热键[$source]，${if (paused) "暂停脚本" else "开始脚本"}"
         }
@@ -248,9 +297,9 @@ object GlobalHotkeyListener : HotkeyListener {
      */
     override fun onHotKey(i: Int) {
         when (i) {
-            HOT_KEY_START_F1 -> dispatchFixedHotkey(HOT_KEY_START_F1)
+            HOT_KEY_START_F1 -> dispatchFixedHotkey(HOT_KEY_START_F1, "JIntellitype")
 
-            HOT_KEY_PAUSE_F2 -> dispatchFixedHotkey(HOT_KEY_PAUSE_F2)
+            HOT_KEY_PAUSE_F2 -> dispatchFixedHotkey(HOT_KEY_PAUSE_F2, "JIntellitype")
 
             HOT_KEY_EXIT -> {
                 SystemUtil.notice("捕捉到热键，关闭程序")

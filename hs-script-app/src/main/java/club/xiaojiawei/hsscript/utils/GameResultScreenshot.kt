@@ -21,13 +21,30 @@ object GameResultScreenshot {
 
     private val timestampFormat = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.ROOT)
 
-    fun capture(outcome: String, gameNumber: Int): File? {
+    fun captureImage(): java.awt.image.BufferedImage? {
         return runCatching {
             if (GraphicsEnvironment.isHeadless()) {
                 log.warn { "GAME_RESULT_SCREENSHOT_SKIPPED reason=headless" }
                 return null
             }
+            val screenBounds = GraphicsEnvironment
+                .getLocalGraphicsEnvironment()
+                .screenDevices
+                .map { it.defaultConfiguration.bounds }
+                .fold(Rectangle()) { all, next -> all.union(next) }
+            if (screenBounds.width <= 0 || screenBounds.height <= 0) {
+                log.warn { "GAME_RESULT_SCREENSHOT_FAILED reason=invalid-bounds bounds=$screenBounds" }
+                return null
+            }
+            Robot().createScreenCapture(screenBounds)
+        }.getOrElse { error ->
+            log.warn(error) { "GAME_RESULT_SCREENSHOT_FAILED reason=capture-exception" }
+            null
+        }
+    }
 
+    fun save(image: java.awt.image.BufferedImage, outcome: String, gameNumber: Int): File? {
+        return runCatching {
             val screenshotDirectory = File(
                 System.getProperty(
                     "hs.script.result-screenshot.dir",
@@ -38,27 +55,13 @@ object GameResultScreenshot {
                 log.warn { "GAME_RESULT_SCREENSHOT_FAILED reason=mkdir path=${screenshotDirectory.absolutePath}" }
                 return null
             }
-
-            val screenBounds = GraphicsEnvironment
-                .getLocalGraphicsEnvironment()
-                .screenDevices
-                .map { it.defaultConfiguration.bounds }
-                .fold(Rectangle()) { all, next -> all.union(next) }
-
-            if (screenBounds.width <= 0 || screenBounds.height <= 0) {
-                log.warn { "GAME_RESULT_SCREENSHOT_FAILED reason=invalid-bounds bounds=$screenBounds" }
-                return null
-            }
-
-            val stamp = synchronized(timestampFormat) {
-                timestampFormat.format(Date())
-            }
+            val stamp = synchronized(timestampFormat) { timestampFormat.format(Date()) }
             val safeOutcome = outcome.replace(Regex("[^A-Za-z0-9_-]"), "_")
             val file = File(
                 screenshotDirectory,
                 "game-${gameNumber.toString().padStart(4, '0')}-$safeOutcome-$stamp.png",
             )
-            ImageIO.write(Robot().createScreenCapture(screenBounds), "png", file)
+            ImageIO.write(image, "png", file)
             log.info {
                 "GAME_RESULT_SCREENSHOT outcome=$outcome game=$gameNumber path=${file.absolutePath}"
             }
@@ -67,5 +70,9 @@ object GameResultScreenshot {
             log.warn(error) { "GAME_RESULT_SCREENSHOT_FAILED outcome=$outcome game=$gameNumber" }
             null
         }
+    }
+
+    fun capture(outcome: String, gameNumber: Int): File? {
+        return captureImage()?.let { save(it, outcome, gameNumber) }
     }
 }

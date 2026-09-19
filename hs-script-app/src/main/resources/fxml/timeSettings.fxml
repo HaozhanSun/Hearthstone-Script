@@ -102,6 +102,11 @@
                                             <CopyIco scaleX="$icoScale" scaleY="$icoScale" color="black"/>
                                         </graphic>
                                     </Button>
+                                    <Button text="批量" styleClass="btn-ui, btn-ui-small" onAction="#bulkEditRules">
+                                        <graphic>
+                                            <EditIco scaleX="$icoScale" scaleY="$icoScale" color="black"/>
+                                        </graphic>
+                                    </Button>
                                     <Label text="时间抖动 ±秒:"/>
                                     <TextField fx:id="jitterSecondsField" prefWidth="65" maxWidth="65"
                                                styleClass="text-field-ui, text-field-ui-small"

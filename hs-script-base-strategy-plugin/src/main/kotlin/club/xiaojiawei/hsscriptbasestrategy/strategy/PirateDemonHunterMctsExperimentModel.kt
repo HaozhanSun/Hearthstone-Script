@@ -19,6 +19,7 @@ import club.xiaojiawei.hsscriptcardsdk.mcts.CardTriggerSimulator
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsCardDiagnostics
 import club.xiaojiawei.hsscriptcardsdk.mcts.PirateDamageAuraPolicy
 import club.xiaojiawei.hsscriptcardsdk.util.CardUtil
 import kotlin.math.max
@@ -207,16 +208,38 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
 
     override fun isActionLegal(action: Action, war: War): Boolean {
         if (PirateLethalAttackPolicy.isLethalFaceAction(action, war)) return true
+        if (PirateHeroAttackTargetPolicy.shouldBlockHeroPowerAgainstUnkillableTaunt(action, war)) return false
         if (!PirateHeroAttackTargetPolicy.isLegal(action, war)) return false
+        if (PirateAttackOrderPolicy.isUnkillableTauntMinionAttack(action, war, ::effectivePirateAttack)) {
+            return false
+        }
         if (action === TurnOverAction) {
             // EndTurn is never legal while the parser still exposes a
             // hero/weapon attack signal. This deliberately uses the state
             // signal even if one parser pass has not generated target
             // actions yet; the live controller will rescan instead of ending
             // the turn on stale data.
-            return !hasHeroAttackSignal(war)
+            // A parser-level attack signal is not itself a legal action: an
+            // unkillable Taunt can make every generated hero attack illegal.
+            // Permit EndTurn in that terminal case so the root does not go
+            // empty, while still suppressing EndTurn when one legal hero
+            // attack remains.
+            return !hasHeroAttackSignal(war) || !hasLegalHeroAttackAction(war)
         }
         val creator = action.creator ?: return true
+        if (action is PlayAction && isCard(creator, BATTLEFIELD) && friendlyMinionCount(war) < 2) {
+            // AV_661 may be exposed through the opaque fallback when its
+            // parser fails. The two-minion requirement must therefore be hard
+            // legality, not only a negative MCTS prior.
+            return false
+        }
+        if (action is PlayAction && isCard(creator, MAGNIFYING_GLAIVE) &&
+            !shouldPlayMagnifyingGlaive(creator, war)
+        ) {
+            // REV_509 draws only up to three cards. Hold it when playing it
+            // would not draw and it cannot immediately kill an enemy minion.
+            return false
+        }
         if (action is PlayAction && creator.cardType === CardTypeEnum.WEAPON) {
             // Replacing a weapon destroys the remaining attack opportunity.
             // The live executor adds a turn-local legality wrapper as well,
@@ -229,6 +252,30 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 freeSlots(war) >= cliffsideActivationSlots(war)
         }
         return true
+    }
+
+    override fun actionFilterReason(action: Action, war: War): String? {
+        if (PirateAttackOrderPolicy.isUnkillableTauntMinionAttack(action, war, ::effectivePirateAttack)) {
+            return "TAUNT_ATTACK_BLOCKED reason=friendly-minion-cannot-kill-and-would-be-sacrificed"
+        }
+        if (PirateHeroAttackTargetPolicy.isHeroAttackBlockedByUnkillableTaunt(action, war)) {
+            return "TAUNT_BLOCKED reason=hero-cannot-kill-and-face-illegal"
+        }
+        if (PirateHeroAttackTargetPolicy.shouldBlockHeroPowerAgainstUnkillableTaunt(action, war)) {
+            return "HERO_POWER_DEFERRED reason=still-cannot-kill-taunt"
+        }
+        return null
+    }
+
+    override fun allowsActionOrderReopen(action: Action, war: War): Boolean {
+        // Coin adds temporary mana. If the phase fence has just observed the
+        // Coin as SPELL_PLAY, the planned one-cost minion must still be
+        // allowed to follow it; otherwise a valid global plan such as
+        // Treasure Distributor -> Coin -> Pilot Patches is stranded and the
+        // hero power becomes the only remaining action. Keep the exception
+        // limited to board-development actions and actual temporary mana.
+        return actionOrderPhase(action, war) === MctsActionOrderPhase.MINION_PLAY &&
+            war.me.tempResources > 0
     }
 
     override fun isLethalAction(action: Action, war: War): Boolean =
@@ -307,6 +354,11 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         // back into the current node while another minion can still attack.
         if (PirateAttackOrderPolicy.shouldDeferNuLingNagaAttack(action, war)) return false
 
+        // Adrenaline Fiend is the final friendly-minion attacker. Let the
+        // other Pirates attack first so their attacks can build hero attack
+        // while the Fiend remains alive to provide its trigger.
+        if (PirateAttackOrderPolicy.shouldDeferAdrenalineFiendAttack(action, war)) return false
+
         val earlyZilliax = war.me.handArea.cards.firstOrNull {
             isZilliax(it) &&
                 !it.isUncertain &&
@@ -333,6 +385,18 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         // allowing hand plays, hero power, or the hero attack to compete.
         if (hasAdrenalineFiend(war) && hasAttackableMinionAction(war)) {
             return action is AttackAction && action.creator?.cardType === CardTypeEnum.MINION
+        }
+
+        // A direct friendly-minion kill exposed by the fresh re-plan must
+        // beat the face-damage prior.  This keeps the two Pirate MCTS models
+        // consistent after an earlier attack leaves a hostile minion at lethal
+        // health.
+        if (PirateAttackOrderPolicy.hasDirectFriendlyMinionKillAction(war, ::effectivePirateAttack)) {
+            return PirateAttackOrderPolicy.isDirectFriendlyMinionKillAction(
+                action,
+                war,
+                ::effectivePirateAttack,
+            )
         }
 
         // When the hero cannot kill a threat by itself but the hero plus one
@@ -406,6 +470,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
 
     override fun isDeferredAction(action: Action, war: War): Boolean {
         if (PirateAttackOrderPolicy.shouldDeferNuLingNagaAttack(action, war)) return true
+        if (PirateAttackOrderPolicy.shouldDeferAdrenalineFiendAttack(action, war)) return true
 
         // Demon Hunter's hero power is a resource sink, not an opening move.
         // Keep it out of the current node while any non-hero-power action is
@@ -427,6 +492,13 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         // guard, not a score preference: a receding-horizon re-plan must not
         // discard a remaining attack opportunity or replay a stale hand
         // weapon after the first weapon was dispatched.
+        val creator = action.creator
+        if (action is PlayAction && creator?.let { isCard(it, BATTLEFIELD) } == true &&
+            friendlyMinionCount(war) < 2
+        ) return true
+        if (action is PlayAction && creator?.let { isCard(it, MAGNIFYING_GLAIVE) } == true &&
+            !shouldPlayMagnifyingGlaive(creator, war)
+        ) return true
         if (action is PlayAction && action.creator?.cardType === CardTypeEnum.WEAPON) {
             return war.me.playArea.weapon != null
         }
@@ -532,7 +604,11 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             }
             isCard(card, MAGNIFYING_GLAIVE) -> {
                 val handAfterPlay = (me.handArea.cards.size - 1).coerceAtLeast(0)
-                if (handAfterPlay >= 3 && !hasHighThreatEnemy(me)) -18.0 else 5.0
+                when {
+                    canMagnifyingGlaiveDraw(handAfterPlay) -> 5.0
+                    canMagnifyingGlaiveKillMinion(card, war) -> 18.0
+                    else -> -24.0
+                }
             }
             isCard(card, BLINDEYE_JUDGE) ->
                 if (hasOtherPlayableAction(war, card)) -28.0 else -2.0
@@ -744,12 +820,19 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             if (otherPirates <= 0) -7.0 else otherPirates * 2.0
 
         val battlefieldInHand = me.handArea.cards.count { isCard(it, BATTLEFIELD) }
-        if (battlefieldInHand > 0) score += if (minions == 0) -6.0 else minions * 1.2
+        if (battlefieldInHand > 0) score += if (minions < 2) -12.0 else minions * 1.2
 
         val glaiveInHand = me.handArea.cards.count { isCard(it, MAGNIFYING_GLAIVE) }
         if (glaiveInHand > 0) {
             val handAfter = (me.handArea.cards.size - glaiveInHand).coerceAtLeast(0)
-            score += if (handAfter >= 3 && !hasHighThreatEnemy(me)) -6.0 else 3.0
+            val canKill = me.handArea.cards.any {
+                isCard(it, MAGNIFYING_GLAIVE) && canMagnifyingGlaiveKillMinion(it, war)
+            }
+            score += when {
+                canMagnifyingGlaiveDraw(handAfter) -> 3.0
+                canKill -> 3.0
+                else -> -10.0
+            }
         }
 
         if (me.handArea.cards.any { isCard(it, BLINDEYE_JUDGE) } && hasOtherPlayableAction(war, null)) {
@@ -779,7 +862,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
             card.entityId != excluded?.entityId &&
                 !isCard(card, BLINDEYE_JUDGE) &&
                 !isCard(card, PARACHUTE_BRIGAND) &&
-                !card.isUncertain &&
+                (!card.isUncertain || MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)) &&
                 card.cost <= me.usableResource &&
                 (card.cardType !== CardTypeEnum.MINION || !me.playArea.isFull) &&
                 hasPlayableHandAction(card, war)
@@ -807,7 +890,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 !isCard(card, BLINDEYE_JUDGE) &&
                 !isCard(card, PARACHUTE_BRIGAND) &&
                 !isCard(card, PATCHES_THE_PIRATE) &&
-                !card.isUncertain &&
+                (!card.isUncertain || MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)) &&
                 card.cost <= me.usableResource &&
                 (card.cardType !== CardTypeEnum.MINION || !me.playArea.isFull) &&
                 hasPlayableHandAction(card, war)
@@ -825,7 +908,8 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         val generated = runCatching { card.action.generatePlayActions(war, war.me) }
             .getOrDefault(emptyList())
         return generated.any { isActionLegal(it, war) && !isDeferredAction(it, war) } ||
-            (generated.isEmpty() && canCreateOpaqueAction(card, war))
+            (generated.isEmpty() && (canCreateOpaqueAction(card, war) ||
+                MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)))
     }
 
     /** Whether the current state has useful work other than hero power. */
@@ -833,7 +917,7 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         val me = war.me
         val handAction = me.handArea.cards.any { card ->
             !isCard(card, BLINDEYE_JUDGE) &&
-                !card.isUncertain &&
+                (!card.isUncertain || MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)) &&
                 !shouldDefer(card, war) &&
                 card.cost <= me.usableResource &&
                 (card.cardType !== CardTypeEnum.MINION || !me.playArea.isFull) &&
@@ -897,23 +981,36 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         return hero.canAttack() || weaponBacked
     }
 
+    private fun hasLegalHeroAttackAction(war: War): Boolean {
+        val hero = war.me.playArea.hero ?: return false
+        return runCatching {
+            hero.action.generateAttackActions(war, war.me).any { attack ->
+                PirateLethalAttackPolicy.isLethalFaceAction(attack, war) ||
+                    PirateHeroAttackTargetPolicy.isLegal(attack, war)
+            }
+        }.getOrDefault(false)
+    }
+
     private fun hasCoinUnlockingNonHeroPowerCard(war: War): Boolean {
         val me = war.me
-        val coinAvailable = me.handArea.cards.any { it.isCoinCard && !it.isUncertain }
+        val coinAvailable = me.handArea.cards.any {
+            it.isCoinCard && (!it.isUncertain || MctsCardDiagnostics.braveOpaqueFallbackAllowed(it))
+        }
         if (!coinAvailable) return false
 
         val afterCoinMana = me.usableResource + 1
         return me.handArea.cards.any { card ->
             !card.isCoinCard &&
                 !isCard(card, BLINDEYE_JUDGE) &&
-                !card.isUncertain &&
+                (!card.isUncertain || MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)) &&
                 !shouldDefer(card, war) &&
                 card.cost > me.usableResource &&
                 card.cost <= afterCoinMana &&
                 (card.cardType !== CardTypeEnum.MINION || !me.playArea.isFull) &&
                 (
                     card.action.generatePlayActions(war, me).isNotEmpty() ||
-                        canCreateOpaqueAction(card, war)
+                        canCreateOpaqueAction(card, war) ||
+                        MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)
                 )
         }
     }
@@ -1008,6 +1105,26 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
 
     private fun hasHighThreatEnemy(me: Player): Boolean =
         me.war.rival.playArea.cards.any { it.isTaunt || it.atc >= 5 || it.health >= 6 }
+
+    private fun friendlyMinionCount(war: War): Int =
+        war.me.playArea.cards.count { it.cardType === CardTypeEnum.MINION && it.isAlive() }
+
+    private fun canMagnifyingGlaiveDraw(handAfterPlay: Int): Boolean = handAfterPlay < 3
+
+    private fun canMagnifyingGlaiveKillMinion(card: Card, war: War): Boolean {
+        // A weapon play replaces the equipped weapon and therefore its direct
+        // attack window is governed by the weapon card being played. Do not
+        // reuse a stale/current hero attack value from the old weapon.
+        val weaponAttack = card.atc.coerceAtLeast(0)
+        return weaponAttack > 0 && war.rival.playArea.cards.any {
+            it.cardType === CardTypeEnum.MINION && it.isAlive() && it.blood() <= weaponAttack
+        }
+    }
+
+    private fun shouldPlayMagnifyingGlaive(card: Card, war: War): Boolean {
+        val handAfterPlay = (war.me.handArea.cards.size - 1).coerceAtLeast(0)
+        return canMagnifyingGlaiveDraw(handAfterPlay) || canMagnifyingGlaiveKillMinion(card, war)
+    }
 
     private fun confirmedZilliaxAuraCount(war: War): Int =
         war.me.playArea.cards.count { isZilliax(it) && it.isAlive() }

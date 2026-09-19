@@ -16,7 +16,7 @@ object CoinActionPolicy {
         val coinMana = currentMana + 1
         val boardFull = me.playArea.isFull
         return me.handArea.cards.any { card ->
-            !card.isUncertain &&
+            (!card.isUncertain || MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)) &&
                 !card.isCoinCard &&
                 !CardTimingPolicy.shouldDefer(card, war) &&
                 card.cost > currentMana &&

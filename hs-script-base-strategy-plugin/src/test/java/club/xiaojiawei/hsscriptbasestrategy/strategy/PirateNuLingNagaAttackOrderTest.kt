@@ -28,6 +28,18 @@ class PirateNuLingNagaAttackOrderTest {
         assertModelAllowsOnlyNaga(PirateWarriorMctsModel)
     }
 
+    @Test
+    fun `both pirate models defer Adrenaline Fiend behind another friendly minion`() {
+        assertModelDefersAdrenalineFiend(PirateDemonHunterMctsExperimentModel)
+        assertModelDefersAdrenalineFiend(PirateWarriorMctsModel)
+    }
+
+    @Test
+    fun `both pirate models allow Adrenaline Fiend when it is the only remaining minion attacker`() {
+        assertModelAllowsOnlyAdrenalineFiend(PirateDemonHunterMctsExperimentModel)
+        assertModelAllowsOnlyAdrenalineFiend(PirateWarriorMctsModel)
+    }
+
     private fun assertModelDefersNaga(model: MctsDecisionModel) {
         val war = testWar()
         val naga = testMinion(PirateAttackOrderPolicy.NU_LING_NAGA, "naga")
@@ -51,6 +63,31 @@ class PirateNuLingNagaAttackOrderTest {
 
         val node = MonteCarloTreeNode(war, InitAction, mctsArg(model))
         assertTrue(node.actions.any { it.creator?.entityId == naga.entityId })
+    }
+
+    private fun assertModelDefersAdrenalineFiend(model: MctsDecisionModel) {
+        val war = testWar()
+        val fiend = testMinion(PirateAttackOrderPolicy.ADRENALINE_FIEND, "fiend")
+        val other = testMinion("OTHER_PIRATE", "other-pirate")
+        war.addCard(fiend, war.me.playArea)
+        war.addCard(other, war.me.playArea)
+
+        val fiendAttack = fiend.action.generateAttackActions(war, war.me).single()
+        val otherAttack = other.action.generateAttackActions(war, war.me).single()
+        assertTrue(model.isDeferredAction(fiendAttack, war))
+        assertFalse(model.isDeferredAction(otherAttack, war))
+        assertFalse(model.isMandatoryAction(fiendAttack, war))
+    }
+
+    private fun assertModelAllowsOnlyAdrenalineFiend(model: MctsDecisionModel) {
+        val war = testWar()
+        val fiend = testMinion(PirateAttackOrderPolicy.ADRENALINE_FIEND, "only-fiend")
+        val other = testMinion("OTHER_PIRATE", "spent-pirate").apply { isExhausted = true }
+        war.addCard(fiend, war.me.playArea)
+        war.addCard(other, war.me.playArea)
+
+        val fiendAttack = fiend.action.generateAttackActions(war, war.me).single()
+        assertFalse(model.isDeferredAction(fiendAttack, war))
     }
 
     private fun mctsArg(model: MctsDecisionModel): MCTSArg = MCTSArg(

@@ -37,6 +37,26 @@ class MulliganRankPreflightTest {
     }
 
     @Test
+    fun `repeated start does not schedule a second rank lifecycle`() {
+        val scheduler = ManualScheduler()
+        val preflight = MulliganRankPreflight(
+            config = MulliganRankPreflightConfig(initialDelayMs = 7_000, maxAttempts = 1),
+            scheduler = scheduler,
+            isEligible = { true },
+            inspect = { null },
+            provider = { "PADDLEX" },
+            onSurrender = { result -> throw AssertionError("duplicate start must not surrender: $result") },
+            onContinue = {},
+        )
+
+        preflight.start()
+        preflight.start()
+
+        assertEquals(1, scheduler.scheduledCount)
+        assertEquals(MulliganRankPreflightState.WAITING_FOR_RANK, preflight.snapshot().state)
+    }
+
+    @Test
     fun `retries after seven second grace without another Power log line`() {
         val scheduler = ManualScheduler()
         val attempts = mutableListOf<Long>()
@@ -231,11 +251,15 @@ class MulliganRankPreflightTest {
         private enum class Kind { SCHEDULED, WORKER, TIMEOUT }
 
         private val entries = mutableListOf<Entry>()
+        var scheduledCount: Int = 0
+            private set
         var now: Long = 0
             private set
 
-        override fun schedule(delayMs: Long, task: () -> Unit): ScheduledFuture<*> =
-            add(delayMs, if (delayMs == 5_000L) Kind.TIMEOUT else Kind.SCHEDULED, task)
+        override fun schedule(delayMs: Long, task: () -> Unit): ScheduledFuture<*> {
+            scheduledCount++
+            return add(delayMs, if (delayMs == 5_000L) Kind.TIMEOUT else Kind.SCHEDULED, task)
+        }
 
         override fun submit(task: () -> Unit): Future<*> = add(0, Kind.WORKER, task)
 

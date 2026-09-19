@@ -62,13 +62,13 @@ abstract class AbstractLogListener(
                 var latestLogDir = GameUtil.getLatestLogDir()
 
                 while (true) {
-                    latestLogDir?.listFiles()?.let {
-                        for (file in it) {
-                            if (FileUtil.isFileLocked(file.absolutePath)) {
-                                val createLogFile = createLogFile(latestLogDir)
-                                log.info { "已创建游戏【${logFileName}】日志, $createLogFile" }
-                                return DiskLogFile(createLogFile.absolutePath)
+                    latestLogDir?.let { logDirectory ->
+                        resolveDiskLogFile(logDirectory)?.let { resolvedLogFile ->
+                            log.info {
+                                val action = if (resolvedLogFile.length() > 0L) "已复用" else "已创建"
+                                "${action}游戏【${logFileName}】日志, $resolvedLogFile"
                             }
+                            return DiskLogFile(resolvedLogFile.absolutePath)
                         }
                     }
                     if (PauseStatus.isPause) {
@@ -144,7 +144,14 @@ abstract class AbstractLogListener(
                     stopAll()
                 } else {
                     try {
-                        dealNewLog()
+                        // Hearthstone creates a new timestamped log directory
+                        // for a fresh client session. A listener attached to
+                        // the previous session otherwise reaches EOF forever,
+                        // leaving the state machine in FILL_DECK while the
+                        // pixels already show an active game.
+                        if (!rotateToLatestDiskLog()) {
+                            dealNewLog()
+                        }
                     } catch (e: InterruptedException) {
                         log.warn(e) { logFileName + "监听中断" }
                     } catch (e: Throwable) {
@@ -156,12 +163,6 @@ abstract class AbstractLogListener(
         }
     }
 
-    private fun createLogFile(logPath: File): File {
-        val logFile = logPath.resolve(logFileName)
-        logFile.createNewFile()
-        return logFile
-    }
-
     private fun closeLogFile() {
         synchronized(this) {
             logFile?.let {
@@ -170,6 +171,38 @@ abstract class AbstractLogListener(
             }
         }
     }
+
+    /**
+     * Rebind a disk listener when Hearthstone rotates to a new session
+     * directory. The subclass's [dealOldLog] is deliberately reused so each
+     * listener can apply its own replay/reset semantics after the rebind.
+     *
+     * @return true when a new file was attached and replayed this cycle.
+     */
+    private fun rotateToLatestDiskLog(): Boolean {
+        if (ScriptStatus.gameLogMode !== GameLogModeEnum.DISK) return false
+        val current = logFile ?: return false
+        val latest = GameUtil.getLatestLogDir()
+            ?.let { resolveDiskLogFile(it) }
+            ?: return false
+        if (!shouldRotateDiskLog(current.path(), latest.absolutePath)) return false
+
+        val previousPath = current.path()
+        current.close()
+        logFile = DiskLogFile(latest.absolutePath)
+        log.warn {
+            "LOG_SESSION_ROTATED log=$logFileName " +
+                "previous=$previousPath current=${latest.absolutePath}"
+        }
+        dealOldLog()
+        return true
+    }
+
+    internal fun shouldRotateDiskLog(currentPath: String?, candidatePath: String?): Boolean =
+        !currentPath.isNullOrBlank() &&
+            !candidatePath.isNullOrBlank() &&
+            File(currentPath).absoluteFile.normalize().path !=
+            File(candidatePath).absoluteFile.normalize().path
 
     private fun closeLogListener() {
         synchronized(this) {
@@ -183,6 +216,32 @@ abstract class AbstractLogListener(
 
     override fun stopAll() {
         closeLogListener()
+    }
+
+    /**
+     * Resolve the requested log in the current Hearthstone session directory.
+     *
+     * Decks.log is a session-level file and can be completely idle after it
+     * has been written. Treating "some file is currently locked" as proof
+     * that the requested log exists made a healthy existing Decks.log look
+     * missing and paused the whole script after the timeout. Only create the
+     * requested file when the directory is active and the file has not
+     * appeared yet.
+     */
+    internal fun resolveDiskLogFile(logDirectory: File): File? {
+        if (!logDirectory.isDirectory) return null
+
+        val requestedLog = logDirectory.resolve(logFileName)
+        if (requestedLog.isFile) return requestedLog
+
+        val activeLog = logDirectory.listFiles()
+            ?.firstOrNull { it.isFile && FileUtil.isFileLocked(it.absolutePath) }
+            ?: return null
+
+        return runCatching {
+            if (!requestedLog.exists()) requestedLog.createNewFile()
+            requestedLog.takeIf { it.isFile }
+        }.getOrNull()
     }
 
 }

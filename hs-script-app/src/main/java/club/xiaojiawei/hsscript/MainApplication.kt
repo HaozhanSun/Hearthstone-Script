@@ -190,6 +190,15 @@ class MainApplication : Application() {
                 preInit()
                 StartupController.update(0.48, "$PROGRAM_NAME：加载插件与策略…")
                 InitializerConfig.initializer.init()
+                // The schedule poll must start only after PluginInitializer has
+                // published the strategy catalog.  Starting it from
+                // Starting the schedule poll with the other services creates a
+                // short-lived "paired strategy
+                // missing" snapshot while the catalog is still empty; that
+                // can make a recovery path use the wrong deck or refuse a
+                // valid strategy/slot binding.
+                WorkTimeListener.launch
+                log.info { "SCHEDULE_LISTENER_STARTED_AFTER_PLUGIN_INIT" }
                 StartupController.update(0.82, "$PROGRAM_NAME：准备主界面…")
             }.onSuccess {
                 Platform.runLater {
@@ -259,9 +268,9 @@ class MainApplication : Application() {
         stage.showingProperty().addListener(stageShowingListener)
         stage.setOnCloseRequest { event ->
             event.consume()
-            LifecycleTrace.markMainWindow(false, "close-request-consumed-hide")
-            log.warn { "主窗口收到关闭请求：仅隐藏窗口，脚本和托盘继续运行；使用托盘退出或 Alt+P 才会结束进程" }
-            stage.hide()
+            LifecycleTrace.markMainWindow(false, "close-request-shutdown")
+            log.info { "主窗口收到关闭请求：执行完整退出，不最小化到托盘" }
+            shutdownSoft()
         }
         stage.show()
         ExistingInstanceSignal.startWatcher()
@@ -269,7 +278,6 @@ class MainApplication : Application() {
         val configuredAutoStart = ConfigUtil.getBoolean(ConfigEnum.START_ON_OPEN)
         if (explicitAutoStart || configuredAutoStart) {
             go {
-                Thread.sleep(1000)
                 LifecycleTrace.mark("auto-start-requested source=${if (explicitAutoStart) "system-property" else "config"}")
                 PauseStatus.isPause = false
             }
@@ -293,7 +301,7 @@ class MainApplication : Application() {
         isPauseItem.addActionListener(
             object : AbstractAction() {
                 override fun actionPerformed(e: ActionEvent?) {
-                    PauseStatus.asyncSetPause(!PauseStatus.isPause)
+                    PauseStatus.asyncSetManualPause(!PauseStatus.isPause)
                 }
             },
         )
@@ -390,7 +398,7 @@ class MainApplication : Application() {
                 callback =
                     object : CSystemDll.TrayCallback {
                         override fun invoke() {
-                            PauseStatus.asyncSetPause(!PauseStatus.isPause)
+                            PauseStatus.asyncSetManualPause(!PauseStatus.isPause)
                         }
                     }
             }
@@ -495,7 +503,6 @@ class MainApplication : Application() {
             go { GlobalHotkeyListener.launch }
         }
         VersionListener.launch
-        WorkTimeListener.launch
         StatisticsListener.launch
     }
 

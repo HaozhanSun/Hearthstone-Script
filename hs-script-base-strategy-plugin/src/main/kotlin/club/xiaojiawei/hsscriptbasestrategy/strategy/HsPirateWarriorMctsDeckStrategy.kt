@@ -10,10 +10,19 @@ import club.xiaojiawei.hsscriptstrategysdk.deck.MCTSDeckStrategy
 
 /** Released entry point for the isolated Pirate Warrior MCTS model. */
 class HsPirateWarriorMctsDeckStrategy : MCTSDeckStrategy() {
+    private var preMulliganHand: List<Card> = emptyList()
+    private var openingHandRegistered = false
+
+    override fun reset() {
+        super.reset()
+        preMulliganHand = emptyList()
+        openingHandRegistered = false
+    }
+
     override fun name(): String = PirateMctsStrategyVersion.displayName("海盗战")
 
     override fun description(): String =
-        "海盗战 MCTS：船载火炮 P0、首回合任务、宝藏经销商铺场与海盗光环奖励"
+        "海盗战 MCTS ${PirateMctsStrategyVersion.REVISION}：未知卡牌可识别、艾瑞达蛮兵硬限制、前锋战斧只打必杀"
 
     override fun getRunMode(): Array<RunModeEnum> =
         arrayOf(RunModeEnum.CASUAL, RunModeEnum.STANDARD, RunModeEnum.WILD, RunModeEnum.PRACTICE)
@@ -28,6 +37,10 @@ class HsPirateWarriorMctsDeckStrategy : MCTSDeckStrategy() {
     override fun referCardInfo(): Boolean = true
 
     override fun executeChangeCard(cards: HashSet<Card>) {
+        // The actuator removes the Coin before this callback. Preserve the
+        // original non-Coin identities so a mulligan replacement or later
+        // draw with the same card ID cannot activate the opening exception.
+        preMulliganHand = cards.toList()
         val patches = cards.filter { PirateWarriorMctsModel.isCard(it, PirateWarriorMctsModel.PATCHES_THE_PIRATE) }
         cards.removeAll(patches.toSet())
         if (patches.isNotEmpty()) {
@@ -36,17 +49,22 @@ class HsPirateWarriorMctsDeckStrategy : MCTSDeckStrategy() {
     }
 
     override fun executeMCTSOutCard(war: War): List<MCTSArg> {
+        if (!openingHandRegistered) {
+            PirateWarriorMctsModel.registerOpeningHandSnapshot(war, preMulliganHand)
+            openingHandRegistered = true
+        }
         DecisionTrace.record(
             war = war,
             event = "PIRATE_WARRIOR_MCTS_START",
             reason = "isolated model search started",
-            rule = "SHIP_CANNON_P0>QUEST_T1>TREASURE_DISTRIBUTOR;PATCHES_BOTTOM",
+            rule = "COIN>SHIP_CANNON_OPENING_EXCEPTION;QUEST_T1>P0_SHIP_CANNON>TREASURE_DISTRIBUTOR;PATCHES_BOTTOM",
             priority = 0,
         )
         log.info {
             "海盗战 MCTS：开始搜索 turn=${war.me.turn} mana=${war.me.usableResource} " +
                 "hand=${war.me.handArea.cards.joinToString { it.cardId }} " +
-                "rules=SHIP_CANNON_P0>QUEST_T1>TREASURE_DISTRIBUTOR;PATCHES_BOTTOM"
+                "rules=COIN>SHIP_CANNON_OPENING_EXCEPTION;QUEST_REWARD_WAIT>QUEST_T1>P0_SHIP_CANNON>TREASURE_DISTRIBUTOR;PATCHES_BOTTOM;DIRECT_MINION_KILL;SAFE_HERO_ATTACK;TAUNT_SAFETY " +
+                    "openingStep=${PirateWarriorMctsModel.openingCannonCoinStep(war)} version=${PirateMctsStrategyVersion.REVISION}"
         }
         return listOf(
             MCTSArg(

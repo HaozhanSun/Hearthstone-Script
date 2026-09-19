@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.initializer
 
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscript.status.PluginManager.loadAllPlugins
+import club.xiaojiawei.hsscript.status.StrategyRefreshCommandWatcher
 
 /**
  * 开启游戏日志输出
@@ -15,6 +16,8 @@ class PluginInitializer : AbstractInitializer() {
             loadAllPlugins()
         } catch (e: Exception) {
             log.warn(e) { "插件加载失败" }
+        } finally {
+            StrategyRefreshCommandWatcher.start()
         }
     }
 

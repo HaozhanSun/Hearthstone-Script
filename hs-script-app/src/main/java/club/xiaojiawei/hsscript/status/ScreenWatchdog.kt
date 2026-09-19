@@ -40,6 +40,7 @@ enum class ScreenWatchdogRecoveryAction {
     STOP_SURRENDER_AND_RECOVER_MATCHMAKING,
     STOP_SURRENDER_AND_RECOVER_MAIN_MENU,
     STOP_SURRENDER_AND_CONTINUE_UNKNOWN,
+    STOP_SURRENDER_AND_RESUME_GAMEPLAY,
 }
 
 data class ScreenWatchdogObservation(
@@ -104,6 +105,7 @@ object ScreenWatchdog {
         ocrProvider: (BufferedImage) -> String = ::runOCR,
     ): ScreenWatchdogObservation {
         val runId = System.getProperty("hs.script.e2e.run-id", "normal")
+        val activeGameplay = isAuthoritativeActiveGameplay(state)
         // This watchdog only classifies terminal/menu screens. Keep it on the
         // local OCR path so a PaddleX rank request can never block surrender
         // recovery or hold the action executor for a long sidecar timeout.
@@ -117,7 +119,11 @@ object ScreenWatchdog {
         if (image == null) {
             return ScreenWatchdogObservation(
                 kind = ScreenWatchdogKind.CAPTURE_FAILED,
-                action = ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN,
+                action = if (activeGameplay) {
+                    ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RESUME_GAMEPLAY
+                } else {
+                    ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN
+                },
                 ocrText = "",
                 screenshotPath = null,
                 provider = provider,
@@ -140,7 +146,8 @@ object ScreenWatchdog {
         )
         log.warn {
             "SCREEN_WATCHDOG_CAPTURE runId=$runId trigger=$trigger state=$state attempts=$attempts " +
-                "provider=$provider path=${evidence?.file?.absolutePath ?: "not-saved"}"
+                "activeGameplay=$activeGameplay provider=$provider " +
+                "path=${evidence?.file?.absolutePath ?: "not-saved"}"
         }
 
         val ocrText = runCatching { ocrProvider(image).replace(Regex("\\s+"), "") }.getOrElse { error ->
@@ -170,10 +177,11 @@ object ScreenWatchdog {
         }
         val providerUsed = "LEGACY"
         val kind = classify(ocrText)
-        val action = decide(kind)
+        val action = decide(kind, activeGameplay)
         log.warn {
             "SCREEN_WATCHDOG_OCR runId=$runId provider=$providerUsed kind=$kind action=$action " +
-                "chars=${ocrText.length} screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
+                "activeGameplay=$activeGameplay chars=${ocrText.length} " +
+                "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                 "ocr=${sanitize(ocrText).take(240).ifBlank { "<empty>" }}"
         }
         return ScreenWatchdogObservation(
@@ -189,6 +197,9 @@ object ScreenWatchdog {
     internal fun classifyForTest(ocrText: String): ScreenWatchdogKind = classify(ocrText)
 
     internal fun decideForTest(kind: ScreenWatchdogKind): ScreenWatchdogRecoveryAction = decide(kind)
+
+    internal fun isAuthoritativeActiveGameplayForTest(state: String): Boolean =
+        isAuthoritativeActiveGameplay(state)
 
     private fun classify(ocrText: String): ScreenWatchdogKind {
         val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
@@ -234,7 +245,10 @@ object ScreenWatchdog {
         return ScreenWatchdogKind.UNKNOWN
     }
 
-    private fun decide(kind: ScreenWatchdogKind): ScreenWatchdogRecoveryAction = when (kind) {
+    private fun decide(
+        kind: ScreenWatchdogKind,
+        activeGameplay: Boolean = false,
+    ): ScreenWatchdogRecoveryAction = when (kind) {
         ScreenWatchdogKind.WIN -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_WIN
         ScreenWatchdogKind.LOST -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_LOSS
         ScreenWatchdogKind.RESULT -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CLEAR_RESULT
@@ -243,7 +257,22 @@ object ScreenWatchdog {
         ScreenWatchdogKind.GAMEPLAY -> ScreenWatchdogRecoveryAction.CONTINUE_ACTION
         ScreenWatchdogKind.UNKNOWN,
         ScreenWatchdogKind.CAPTURE_FAILED,
-        -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN
+        -> if (activeGameplay) {
+            ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RESUME_GAMEPLAY
+        } else {
+            ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN
+        }
+    }
+
+    private fun isAuthoritativeActiveGameplay(state: String): Boolean {
+        val fields = state.lowercase(Locale.ROOT)
+            .split('|', ';', ' ', ',')
+            .filter { it.isNotBlank() }
+            .toSet()
+        return fields.contains("mode=gameplay") &&
+            fields.contains("inwar=true") &&
+            fields.contains("warphase=game_turn") &&
+            fields.contains("myturn=true")
     }
 
     private fun captureScreen(): BufferedImage? = runCatching {

@@ -77,7 +77,7 @@
                         <Text fx:id="totalCount" style="-fx-font-size: 24px; -fx-font-weight: bold;"/>
                     </VBox>
                     <VBox spacing="4" GridPane.columnIndex="1" GridPane.rowIndex="0">
-                        <Label text="总体胜率"/>
+                        <Label text="实战胜率（排除主动投降）"/>
                         <Text fx:id="avgWR" style="-fx-font-size: 24px; -fx-font-weight: bold;"/>
                     </VBox>
                     <VBox spacing="4" GridPane.columnIndex="2" GridPane.rowIndex="0">

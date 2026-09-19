@@ -43,31 +43,21 @@ object StrategyRefreshCommandWatcher {
             ?.ifBlank { "external-strategy-refresh" }
             ?: "external-strategy-refresh"
 
-    internal fun consumeRequest(
-        path: Path = requestPath(),
-        enqueue: (String) -> Long = { reason ->
-            DeckStrategyManager.requestStrategyRefresh("external:$reason")
-        },
-    ): Long? {
-        if (!Files.isRegularFile(path)) return null
+    private fun poll() {
+        val path = requestPath()
+        if (!Files.isRegularFile(path)) return
         try {
             val content = Files.readString(path, StandardCharsets.UTF_8)
             Files.deleteIfExists(path)
             val reason = parseReason(content)
-            val requestId = enqueue(reason)
+            val requestId = DeckStrategyManager.requestStrategyRefresh("external:$reason")
             log.info {
                 "STRATEGY_REFRESH_COMMAND_CONSUMED requestId=$requestId path=$path reason=$reason"
             }
-            return requestId
         } catch (error: Throwable) {
             log.warn(error) {
                 "STRATEGY_REFRESH_COMMAND_FAILED path=$path error=${error.javaClass.simpleName}"
             }
-            return null
         }
-    }
-
-    private fun poll() {
-        consumeRequest()
     }
 }

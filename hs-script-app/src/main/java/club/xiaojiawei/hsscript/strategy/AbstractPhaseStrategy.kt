@@ -70,36 +70,43 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
                     }
                     if (l.contains(TAG_CHANGE)) {
                         val phaseTransitionDetected = dealTagChangeThenIsOver(l, dealTagChange(l))
+                        if (surrenderImmediatelyForPlayedOpponentCard()) return true
                         if (surrenderImmediatelyForResolvedOpponentHero()) return true
                         if (surrenderImmediatelyForCurrentRank()) return true
                         if (phaseTransitionDetected || war.currentTurnStep == StepEnum.FINAL_GAMEOVER) return true
                     } else if (l.contains(SHOW_ENTITY)) {
                         val phaseTransitionDetected = dealShowEntityThenIsOver(l, dealShowEntity(l, logFile))
+                        if (surrenderImmediatelyForPlayedOpponentCard()) return true
                         if (surrenderImmediatelyForResolvedOpponentHero()) return true
                         if (surrenderImmediatelyForCurrentRank()) return true
                         if (phaseTransitionDetected) return true
                     } else if (l.contains(FULL_ENTITY)) {
                         val phaseTransitionDetected = dealFullEntityThenIsOver(l, dealFullEntity(l, logFile))
+                        if (surrenderImmediatelyForPlayedOpponentCard()) return true
                         if (surrenderImmediatelyForResolvedOpponentHero()) return true
                         if (surrenderImmediatelyForCurrentRank()) return true
                         if (phaseTransitionDetected) return true
                     } else if (l.contains(CHANGE_ENTITY)) {
                         val phaseTransitionDetected = dealChangeEntityThenIsOver(l, dealChangeEntity(l, logFile))
+                        if (surrenderImmediatelyForPlayedOpponentCard()) return true
                         if (surrenderImmediatelyForResolvedOpponentHero()) return true
                         if (surrenderImmediatelyForCurrentRank()) return true
                         if (phaseTransitionDetected) return true
                     } else if (l.contains(BLOCK_TYPE) || l.contains(BLOCK_START_NULL)) {
                         val phaseTransitionDetected = dealBlockIsOver(l, PowerLogUtil.dealBlock(l))
+                        if (surrenderImmediatelyForPlayedOpponentCard()) return true
                         if (surrenderImmediatelyForResolvedOpponentHero()) return true
                         if (surrenderImmediatelyForCurrentRank()) return true
                         if (phaseTransitionDetected) return true
                     } else if (l.contains(BLOCK_END) || l.contains(BLOCK_END_NULL)) {
                         val phaseTransitionDetected = dealBlockEndIsOver(l, PowerLogUtil.dealBlockEnd(l))
+                        if (surrenderImmediatelyForPlayedOpponentCard()) return true
                         if (surrenderImmediatelyForResolvedOpponentHero()) return true
                         if (surrenderImmediatelyForCurrentRank()) return true
                         if (phaseTransitionDetected) return true
                     } else {
                         val phaseTransitionDetected = dealOtherThenIsOver(l)
+                        if (surrenderImmediatelyForPlayedOpponentCard()) return true
                         if (surrenderImmediatelyForResolvedOpponentHero()) return true
                         if (surrenderImmediatelyForCurrentRank()) return true
                         if (phaseTransitionDetected) return true
@@ -107,10 +114,35 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
                 }
                 l = logFile.readLine()
             } catch (e: IOException) {
-                throw RuntimeException(e)
+                log.warn(e) {
+                    "POWER_LOG_PHASE_READ_FAILED phase=${WarPhaseEnum.find(this@AbstractPhaseStrategy)?.name ?: "UNKNOWN"} " +
+                        "action=yield-and-rescan"
+                }
+                return false
             }
         }
         return false
+    }
+
+    /**
+     * A live Power.log event can reveal a registered opponent card before the
+     * next turn-start callback. Dispatch it immediately through the same
+     * surrender executor as the hero/rank policies. Historical replay is
+     * state-only and must never generate a live surrender click.
+     */
+    private fun surrenderImmediatelyForPlayedOpponentCard(): Boolean {
+        if (PowerLogListener.replayingExistingLog ||
+            SurrenderPolicy.opponentCardSurrenderWasTriggered()
+        ) {
+            return false
+        }
+        val result = SurrenderPolicy.evaluateOpponentPlayedCard(war) ?: return false
+        SurrenderPolicy.markOpponentCardSurrenderTriggered()
+        log.warn {
+            "立即投降：检测到对手已打出的注册卡牌 " +
+                "rule=${result.ruleId} reason=${result.reason ?: "none"}"
+        }
+        return dispatchSurrenderDecision(result, source = "opponent-card-played")
     }
 
     /**

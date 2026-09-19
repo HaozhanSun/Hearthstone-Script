@@ -18,6 +18,73 @@ import kotlin.test.assertTrue
 /** Offline regressions for Pirate Warrior issues #16, #17 and #18. */
 class PirateWarriorIssues16To18Test {
     @Test
+    fun `frontline axe minion kill is deferred behind a ready friendly minion`() {
+        val war = testWar(mana = 0)
+        val hero = card("WARRIOR_HERO_AXE_ORDER", "hero-axe-order", CardTypeEnum.HERO, attack = 3).apply {
+            cardRace = CardRaceEnum.UNKNOWN
+            isExhausted = false
+        }
+        val rivalHero = card("RIVAL_HERO_AXE_ORDER", "rival-hero-axe-order", CardTypeEnum.HERO, attack = 0).apply {
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+        }
+        val axe = card("BAR_844", "axe-order-weapon", CardTypeEnum.WEAPON, attack = 3).apply {
+            durability = 2
+        }
+        val readyMinion = card("READY_MINION_AXE_ORDER", "ready-minion-axe-order", CardTypeEnum.MINION, attack = 2).apply {
+            isExhausted = false
+        }
+        val target = card("AXE_ORDER_TARGET", "axe-order-target", CardTypeEnum.MINION, attack = 1).apply {
+            health = 3
+            cardRace = CardRaceEnum.UNKNOWN
+        }
+        war.addCard(hero, war.me.playArea)
+        war.me.playArea.weapon = axe
+        war.addCard(readyMinion, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(target, war.rival.playArea)
+
+        val axeAttack = hero.action.generateAttackActions(war, war.me)
+            .single { it.targetEntityId == target.entityId }
+
+        assertTrue(PirateWarriorMctsModel.isActionLegal(axeAttack, war))
+        assertTrue(PirateWarriorMctsModel.isDeferredAction(axeAttack, war))
+        assertEquals(
+            "frontline-axe-attack-deferred-behind-other-action",
+            PirateWarriorMctsModel.actionFilterReason(axeAttack, war),
+        )
+    }
+
+    @Test
+    fun `hozen roughhouser attack is deferred while another minion can attack`() {
+        val war = testWar(mana = 0)
+        val hozen = card(
+            PirateWarriorMctsModel.HOZEN_ROUGHHOUSER,
+            "hozen-order",
+            CardTypeEnum.MINION,
+            attack = 2,
+        ).apply { isExhausted = false }
+        val otherPirate = card("OTHER_READY_PIRATE_HOZEN_ORDER", "other-hozen-order", CardTypeEnum.MINION, attack = 2).apply {
+            isExhausted = false
+        }
+        val rivalHero = card("RIVAL_HERO_HOZEN_ORDER", "rival-hero-hozen-order", CardTypeEnum.HERO, attack = 0).apply {
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+        }
+        war.addCard(hozen, war.me.playArea)
+        war.addCard(otherPirate, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+
+        val hozenAttack = hozen.action.generateAttackActions(war, war.me).first()
+        assertTrue(PirateAttackOrderPolicy.shouldDeferHozenRoughhouserAttack(hozenAttack, war))
+        assertTrue(PirateWarriorMctsModel.isDeferredAction(hozenAttack, war))
+        assertEquals(
+            "hozen-roughhouser-attack-deferred-behind-other-pirates",
+            PirateWarriorMctsModel.actionFilterReason(hozenAttack, war),
+        )
+    }
+
+    @Test
     fun `hookfist attack is deferred behind a legal hero attack`() {
         val war = testWar(mana = 0)
         val hero = card("WARRIOR_HERO", "hero", CardTypeEnum.HERO, attack = 3).apply {
@@ -209,7 +276,7 @@ class PirateWarriorIssues16To18Test {
     }
 
     @Test
-    fun `unprofitable trade exception keeps taunt target legal`() {
+    fun `unprofitable taunt trade is blocked`() {
         val war = testWar(mana = 0)
         val rivalHero = card("RIVAL_HERO_TAUNT", "rival-hero", CardTypeEnum.HERO, attack = 0).apply {
             cardRace = CardRaceEnum.UNKNOWN
@@ -231,7 +298,7 @@ class PirateWarriorIssues16To18Test {
 
         val attack = mate.action.generateAttackActions(war, war.me)
             .single { it.targetEntityId == taunt.entityId }
-        assertTrue(PirateWarriorMctsModel.isActionLegal(attack, war))
+        assertFalse(PirateWarriorMctsModel.isActionLegal(attack, war))
     }
 
     private fun testWar(mana: Int): War {

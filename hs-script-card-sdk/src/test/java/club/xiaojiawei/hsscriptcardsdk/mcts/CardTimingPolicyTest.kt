@@ -134,6 +134,18 @@ class CardTimingPolicyTest {
     }
 
     @Test
+    fun `zero-cost aredar brute is legal even when another card remains in hand`() {
+        val war = warWithHero(health = 30, damage = 15)
+        val brute = aredarBrute(cost = 0)
+        war.addCard(brute, war.me.handArea)
+        war.addCard(card("OTHER_CARD", "其他牌"), war.me.handArea)
+
+        val action = PlayAction({}, {}, brute)
+        assertTrue(CardTimingPolicy.isActionLegal(action, war))
+        assertEquals(null, CardTimingPolicy.actionFilterReason(action, war))
+    }
+
+    @Test
     fun `aredar brute is rejected above effective cost four`() {
         val war = warWithHero(health = 30, damage = 15)
         val brute = aredarBrute(cost = 5)

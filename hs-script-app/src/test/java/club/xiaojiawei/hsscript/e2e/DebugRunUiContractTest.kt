@@ -12,8 +12,18 @@ import kotlin.test.assertTrue
 class DebugRunUiContractTest {
     @Test
     fun `debug run UI is wired to the non-persistent thirty minute lease`() {
-        val moduleRoot = moduleRoot()
-        val projectRoot = if (moduleRoot == Path.of(".")) Path.of("..") else Path.of(".")
+        // Surefire normally runs with hs-script-app as user.dir, while an
+        // IDE and a root Maven invocation can use the repository root.
+        // Resolve both layouts so this contract test checks the packaged
+        // resources instead of failing on a relative-path accident.
+        val workingDirectory = Path.of("").toAbsolutePath().normalize()
+        val moduleRoot = sequenceOf(
+            workingDirectory,
+            workingDirectory.resolve("hs-script-app"),
+            workingDirectory.parent?.resolve("hs-script-app"),
+        ).filterNotNull().firstOrNull { Files.isDirectory(it.resolve("src")) }
+            ?: error("hs-script-app module root was not found from $workingDirectory")
+        val repositoryRoot = moduleRoot.parent
         val fxml = moduleRoot.resolve(Path.of("src", "main", "resources", "fxml", "main.fxml"))
         assertTrue(Files.isRegularFile(fxml), "main.fxml must remain checked in")
         val fxmlText = Files.readString(fxml)
@@ -44,6 +54,11 @@ class DebugRunUiContractTest {
         )))
         assertTrue(appText.contains("prearmBeforeScheduleChecks()"))
         assertTrue(appText.indexOf("prearmBeforeScheduleChecks()") < appText.indexOf("launchService()"))
+        assertTrue(
+            appText.indexOf("InitializerConfig.initializer.init()") <
+                appText.indexOf("SCHEDULE_LISTENER_STARTED_AFTER_PLUGIN_INIT"),
+            "schedule polling must start after plugin/strategy initialization",
+        )
 
         val mainControllerText = Files.readString(moduleRoot.resolve(Path.of(
             "src", "main", "java", "club", "xiaojiawei", "hsscript", "controller", "javafx", "MainController.kt",
@@ -68,8 +83,19 @@ class DebugRunUiContractTest {
         assertTrue(runnerText.contains("manifest.appJarSha256"))
         assertTrue(runnerText.contains("Get-FileHash"))
         assertTrue(!runnerText.contains("\$jar = Get-ChildItem"))
+        assertTrue(runnerText.contains("e71234fa-8-pirate-warrior-mcts-9b1f-4d29-8f4f"))
+        assertTrue(runnerText.contains("HS_E2E_STRATEGY_ID"))
+        assertTrue(runnerText.contains("HS_E2E_DECK_POSITION"))
+        assertTrue(runnerText.contains("-Dhs.script.e2e.strategy-id=\$e2eStrategyId"))
+        assertTrue(runnerText.contains("-Dhs.script.e2e.deck-position=\$e2eDeckPosition"))
+        assertTrue(runnerText.contains("Get-PowerLogTerminalLinesAfter"))
+        assertTrue(runnerText.contains("E2E_ROUND_RESULT"))
+        assertTrue(runnerText.contains("E2E_GAME_RESULT_LOSS"))
+        assertTrue(runnerText.contains("E2E_GAME_RESULT_CONCEDED"))
+        assertTrue(runnerText.contains("\$roundsRequired = 3"))
+        assertTrue(runnerText.contains("-Dhs.script.e2e.win-required=false"))
 
-        val deploy = Files.readString(projectRoot.resolve("build-and-deploy.ps1"))
+        val deploy = Files.readString(repositoryRoot.resolve("build-and-deploy.ps1"))
         assertTrue(deploy.contains("run-debug.ps1"))
         assertTrue(deploy.contains("debugRunnerSource"))
 
@@ -118,7 +144,4 @@ class DebugRunUiContractTest {
         assertTrue(Files.isRegularFile(override), "ScheduleOverride.kt must remain checked in")
     }
 
-    private fun moduleRoot(): Path =
-        listOf(Path.of("."), Path.of("hs-script-app"))
-            .first { Files.isRegularFile(it.resolve(Path.of("src", "main", "resources", "fxml", "main.fxml"))) }
 }

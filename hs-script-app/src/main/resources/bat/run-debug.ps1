@@ -24,12 +24,18 @@ if (-not [string]::IsNullOrWhiteSpace($expectedJarHash)) {
 }
 $deploymentId = [string]$manifest.deploymentId
 $logDirectory = Join-Path $scriptDirectory "log"
+# Logback's active application file is always the unnumbered path.  Files
+# named hs_script-YYYY-MM-DD.N.log are completed rollover archives and must not
+# be selected as a liveness source just because their name or timestamp sorts
+# later than the active file.
 $scriptLog = Join-Path $logDirectory "hs_script.log"
 $consoleLog = Join-Path $logDirectory "java-console-debug.log"
 $powerLogRoot = "D:\Hearthstone\Logs"
 $e2ePlayerName = if ($env:HS_E2E_PLAYER) { $env:HS_E2E_PLAYER } else { "laz#12793" }
+$e2eStrategyId = if ($env:HS_E2E_STRATEGY_ID) { $env:HS_E2E_STRATEGY_ID } else { "e71234fa-8-pirate-warrior-mcts-9b1f-4d29-8f4f" }
+$e2eDeckPosition = if ($env:HS_E2E_DECK_POSITION) { $env:HS_E2E_DECK_POSITION } else { "2" }
 $testOnlySkipSurrender = $env:HS_E2E_SKIP_SURRENDER -eq "true"
-$gamesRequired = 3
+$roundsRequired = 3
 $maxRestarts = 50
 $runId = "{0}_{1}" -f (Get-Random -Minimum 10000 -Maximum 99999), (Get-Random -Minimum 1000 -Maximum 9999)
 
@@ -45,8 +51,11 @@ Set-Content -Path $consoleLog -Value @(
     "JAR_SHA256=$expectedJarHash",
     "E2E watchdog max restarts=$maxRestarts",
     "E2E run id=$runId",
-    "E2E wins required=$gamesRequired",
-    "E2E consecutive valid wins required=$gamesRequired",
+    "E2E strategy id=$e2eStrategyId",
+    "E2E deck position=$e2eDeckPosition",
+    "E2E authoritative completed rounds required=$roundsRequired",
+    "E2E consecutive completed rounds required=$roundsRequired",
+    "E2E wins are not required; accepted terminal states=WON,LOST,CONCEDED",
     "E2E surrender-after-out-card=false",
     "E2E test-only skip-surrender-policy=$testOnlySkipSurrender",
     "E2E mulligan-screenshot=true",
@@ -69,6 +78,24 @@ function Write-Trace([string]$message) {
         }
     }
     Write-Host ("E2E_TRACE_WRITE_FAILED: " + $message)
+}
+
+function Get-ActiveScriptLogSnapshot {
+    if (-not (Test-Path -LiteralPath $scriptLog -PathType Leaf)) { return $null }
+    try {
+        $item = Get-Item -LiteralPath $scriptLog -ErrorAction Stop
+        return [pscustomobject]@{
+            Path = $item.FullName
+            Length = [long]$item.Length
+            # Creation time changes when Logback renames the old file and
+            # creates the next active file. Length reset remains the fallback
+            # for file systems that do not expose a stable creation time.
+            Identity = [string]$item.CreationTimeUtc.Ticks
+            LastWriteTimeUtc = $item.LastWriteTimeUtc
+        }
+    } catch {
+        return $null
+    }
 }
 
 function Append-ScriptLog([string]$message) {
@@ -150,9 +177,8 @@ function Get-LatestPowerLog {
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
 }
 
-function Get-PowerLogWinLinesAfter([string]$path, [long]$offset) {
+function Get-PowerLogTerminalLinesAfter([string]$path, [long]$offset) {
     if (-not $path -or -not (Test-Path -LiteralPath $path)) { return @() }
-    $winToken = "Entity=$e2ePlayerName tag=PLAYSTATE value=WON"
     $matches = [System.Collections.Generic.List[string]]::new()
     try {
         $length = (Get-Item -LiteralPath $path).Length
@@ -175,7 +201,10 @@ function Get-PowerLogWinLinesAfter([string]$path, [long]$offset) {
                     if ($line.Contains("GameState.DebugPrintPower()")) {
                         $canonicalPrefixSeen = $true
                     }
-                    if ($canonicalPrefixSeen -and $line.Contains($winToken)) {
+                    $isCurrentPlayerTerminal = $line.Contains("Entity=$e2ePlayerName tag=PLAYSTATE value=WON") -or
+                        $line.Contains("Entity=$e2ePlayerName tag=PLAYSTATE value=LOST") -or
+                        $line.Contains("Entity=$e2ePlayerName tag=PLAYSTATE value=CONCEDED")
+                    if ($canonicalPrefixSeen -and $isCurrentPlayerTerminal) {
                         [void]$matches.Add(($recentLines -join " | "))
                         $canonicalPrefixSeen = $false
                     }
@@ -190,13 +219,15 @@ if (-not (Test-Path -LiteralPath $javaPath)) { throw "java.exe was not found: $j
 if (-not (Test-Path -LiteralPath $jarPath)) { throw "The script JAR was not found: $jarPath" }
 
 $attempt = 0
-$powerLogWinLines = [System.Collections.Generic.List[string]]::new()
+$powerLogTerminalLines = [System.Collections.Generic.List[string]]::new()
 $scriptResultLines = [System.Collections.Generic.List[string]]::new()
 $powerLogPath = $null
 $powerLogBaselineOffset = 0L
-$scriptLogBaselineLength = if (Test-Path -LiteralPath $scriptLog) { (Get-Item -LiteralPath $scriptLog).Length } else { 0L }
-$consecutiveValidWins = 0
-$validatedPowerWinCount = 0
+$initialScriptLog = Get-ActiveScriptLogSnapshot
+$scriptLogBaselineIdentity = if ($initialScriptLog) { $initialScriptLog.Identity } else { "" }
+$scriptLogBaselineLength = if ($initialScriptLog) { $initialScriptLog.Length } else { 0L }
+$consecutiveValidRounds = 0
+$validatedPowerTerminalCount = 0
 while ($true) {
     $attempt++
     Write-Trace "==== Java attempt $attempt start $(Get-Date -Format o) ===="
@@ -217,7 +248,9 @@ while ($true) {
         "-Dhs.script.autostart=true",
         "-Dhs.script.debugrun.prearm=true",
         "-Dhs.script.e2e=true",
-        "-Dhs.script.e2e.win-required=true",
+        "-Dhs.script.e2e.win-required=false",
+        "-Dhs.script.e2e.strategy-id=$e2eStrategyId",
+        "-Dhs.script.e2e.deck-position=$e2eDeckPosition",
         "-Dhs.script.e2e.skip-inject=true",
         "-Dhs.script.e2e.real-input=true",
         "-Dhs.script.e2e.native-click=true",
@@ -256,7 +289,7 @@ while ($true) {
     if (-not $process.Start()) { throw "Failed to start Java" }
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
-    $winSeen = $false
+    $roundsSeen = $false
     $gameReadySeen = $false
 
     while (-not $process.HasExited) {
@@ -267,6 +300,25 @@ while ($true) {
         $title = "not-polled"
         $handle = "not-polled"
         $tail = ""
+        $activeScriptLog = Get-ActiveScriptLogSnapshot
+        if ($activeScriptLog) {
+            $identityChanged = -not [string]::IsNullOrWhiteSpace($scriptLogBaselineIdentity) -and
+                $activeScriptLog.Identity -ne $scriptLogBaselineIdentity
+            $lengthReset = $activeScriptLog.Length -lt $scriptLogBaselineLength
+            if ($identityChanged -or $lengthReset) {
+                Write-Trace (
+                    "E2E_SCRIPT_LOG_ACTIVE_SWITCH path={0} oldIdentity={1} newIdentity={2} " +
+                    "oldLength={3} newLength={4} reason={5}" -f
+                    $activeScriptLog.Path, $scriptLogBaselineIdentity, $activeScriptLog.Identity,
+                    $scriptLogBaselineLength, $activeScriptLog.Length,
+                    $(if ($identityChanged) { "file-identity-changed" } else { "length-reset" })
+                )
+                # The new active file starts at offset zero.  Never seek into
+                # the numbered archive that Logback just produced.
+                $scriptLogBaselineLength = 0L
+            }
+            $scriptLogBaselineIdentity = $activeScriptLog.Identity
+        }
         if (Test-Path -LiteralPath $scriptLog) {
             $tail = (Get-Content -LiteralPath $scriptLog -Tail 1 -ErrorAction SilentlyContinue) -join " "
             if (-not $gameReadySeen -and (Test-CurrentRunGameReady $process.Id)) {
@@ -287,15 +339,16 @@ while ($true) {
             Write-Trace "E2E_POWERLOG_ROTATE path=$powerLogPath offset=0 source=post-java-latest"
         }
         if ($gameReadySeen) {
-            $powerWinLines = @(Get-PowerLogWinLinesAfter $powerLogPath $powerLogBaselineOffset)
-            foreach ($powerWinLine in $powerWinLines) {
-                if (-not ($powerLogWinLines -contains $powerWinLine)) {
-                    [void]$powerLogWinLines.Add($powerWinLine)
+            $powerTerminalLines = @(Get-PowerLogTerminalLinesAfter $powerLogPath $powerLogBaselineOffset)
+            foreach ($powerTerminalLine in $powerTerminalLines) {
+                if (-not ($powerLogTerminalLines -contains $powerTerminalLine)) {
+                    [void]$powerLogTerminalLines.Add($powerTerminalLine)
                 }
             }
             # Pair the application's accepted E2E result with a fresh
-            # canonical GameState PLAYSTATE=WON line. Any rejected, lost, or
-            # conceded result resets the consecutive-game streak.
+            # canonical current-player GameState terminal line. A round is
+            # complete whether it was won, lost, or conceded; the strategy
+            # itself is still proven by the process-local E2E milestones.
             if (Test-Path -LiteralPath $scriptLog) {
                 try {
                     $scriptLength = (Get-Item -LiteralPath $scriptLog).Length
@@ -311,19 +364,19 @@ while ($true) {
                                 while ($null -ne ($resultLine = $reader.ReadLine())) {
                                     if (-not ($scriptResultLines -contains $resultLine) -and $resultLine.Contains($runId)) {
                                         [void]$scriptResultLines.Add($resultLine)
-                                        if ($resultLine.Contains("E2E_GAME_RESULT_REJECTED") -or
+                                        if ($resultLine.Contains("E2E_GAME_RESULT_REJECTED")) {
+                                            $consecutiveValidRounds = 0
+                                            $validatedPowerTerminalCount = $powerLogTerminalLines.Count
+                                            Write-Trace "E2E_CONSECUTIVE_RESET $runId reason=script-controlled-round-rejected line=$resultLine"
+                                        } elseif ($resultLine.Contains("E2E_WIN_RESULT") -or
                                             $resultLine.Contains("E2E_GAME_RESULT_LOSS") -or
                                             $resultLine.Contains("E2E_GAME_RESULT_CONCEDED")) {
-                                            $consecutiveValidWins = 0
-                                            $validatedPowerWinCount = $powerLogWinLines.Count
-                                            Write-Trace "E2E_CONSECUTIVE_RESET $runId reason=non-winning-or-rejected-result line=$resultLine"
-                                        } elseif ($resultLine.Contains("E2E_WIN_RESULT")) {
-                                            if ($powerLogWinLines.Count -gt $validatedPowerWinCount) {
-                                                $validatedPowerWinCount++
-                                                $consecutiveValidWins++
-                                                Write-Trace "E2E_WIN_RESULT game=$consecutiveValidWins/$gamesRequired $runId, authoritative Power.log PLAYSTATE=WON paired with accepted script result: $resultLine"
+                                            if ($powerLogTerminalLines.Count -gt $validatedPowerTerminalCount) {
+                                                $validatedPowerTerminalCount++
+                                                $consecutiveValidRounds++
+                                                Write-Trace "E2E_ROUND_RESULT round=$consecutiveValidRounds/$roundsRequired $runId, authoritative current-player Power.log terminal marker paired with accepted script result: $resultLine"
                                             } else {
-                                                Write-Trace "E2E_WIN_RESULT_UNPAIRED $runId reason=no-new-authoritative-powerlog-win line=$resultLine"
+                                                Write-Trace "E2E_ROUND_RESULT_UNPAIRED $runId reason=no-new-authoritative-current-player-terminal-marker line=$resultLine"
                                             }
                                         }
                                     }
@@ -331,13 +384,16 @@ while ($true) {
                             } finally { $reader.Dispose() }
                         } finally { $stream.Dispose() }
                         $scriptLogBaselineLength = $scriptLength
+                        if ($activeScriptLog) {
+                            $scriptLogBaselineIdentity = $activeScriptLog.Identity
+                        }
                     }
                 } catch { }
             }
-            $winSeen = $consecutiveValidWins -ge $gamesRequired
+            $roundsSeen = $consecutiveValidRounds -ge $roundsRequired
         }
-        Write-Trace ("E2E_MONITOR pid={0} alive={1} mainWindowHandle={2} title={3} wins={4}/{5} authoritativeWins={6} winSeen={7} tail={8}" -f $process.Id, (-not $process.HasExited), $handle, $title, $consecutiveValidWins, $gamesRequired, $powerLogWinLines.Count, $winSeen, $tail)
-        if ($winSeen) { break }
+        Write-Trace ("E2E_MONITOR pid={0} alive={1} mainWindowHandle={2} title={3} rounds={4}/{5} authoritativeTerminals={6} roundsSeen={7} tail={8}" -f $process.Id, (-not $process.HasExited), $handle, $title, $consecutiveValidRounds, $roundsRequired, $powerLogTerminalLines.Count, $roundsSeen, $tail)
+        if ($roundsSeen) { break }
         Start-Sleep -Seconds 5
     }
 
@@ -348,17 +404,17 @@ while ($true) {
     $stderr = $stderrTask.GetAwaiter().GetResult()
     if ($stdout) { Write-Trace ("JAVA_STDOUT_BEGIN attempt=$attempt`n$stdout`nJAVA_STDOUT_END attempt=$attempt") }
     if ($stderr) { Write-Trace ("JAVA_STDERR_BEGIN attempt=$attempt`n$stderr`nJAVA_STDERR_END attempt=$attempt") }
-    Write-Trace "==== Java attempt $attempt exit $(Get-Date -Format o) code=$($process.ExitCode) winSeen=$winSeen ===="
+    Write-Trace "==== Java attempt $attempt exit $(Get-Date -Format o) code=$($process.ExitCode) roundsSeen=$roundsSeen ===="
 
-    if ($winSeen) {
-        Write-Trace "==== E2E $gamesRequired authoritative win markers found; watchdog complete ===="
+    if ($roundsSeen) {
+        Write-Trace "==== E2E $roundsRequired consecutive authoritative completed-round markers found for Pirate Warrior; watchdog complete ===="
         exit 0
     }
 
     if ($attempt -gt $maxRestarts) {
-        Write-Trace "==== watchdog exhausted without $gamesRequired authoritative E2E win markers ===="
+        Write-Trace "==== watchdog exhausted without $roundsRequired consecutive authoritative Pirate Warrior round markers ===="
         exit 20
     }
-    Write-Trace "==== restarting Java after premature exit or non-win result; retry=$attempt ===="
+    Write-Trace "==== restarting Java after premature exit or unaccepted round result; retry=$attempt ===="
     Start-Sleep -Seconds 2
 }

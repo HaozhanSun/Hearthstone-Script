@@ -1,5 +1,6 @@
 package club.xiaojiawei.hsscript.utils
 
+import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscript.bean.CommonCardAction
 import club.xiaojiawei.hsscript.bean.CommonCardAction.Companion.DEFAULT
 import club.xiaojiawei.hsscript.bean.log.ExtraEntity
@@ -11,8 +12,8 @@ import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscriptcardsdk.CardAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.War
-import club.xiaojiawei.hsscriptcardsdk.cardparser.ParsedCardActionFactory
 import club.xiaojiawei.hsscriptcardsdk.data.COIN_CARD_ID
+import club.xiaojiawei.hsscriptcardsdk.diagnostics.UnknownCardCollector
 import club.xiaojiawei.hsscriptcardsdk.enums.ZoneEnum
 import club.xiaojiawei.hsscriptcardsdk.mapper.BaseCardMapper
 import club.xiaojiawei.hsscriptcardsdk.mapper.EntityMapper
@@ -63,7 +64,30 @@ object CardUtil {
         val supplier: (()->CardAction)? = CARD_ACTION_MAP[deckStrategy.pluginId]?.get(card.cardId)
             ?: CARD_ACTION_MAP[""]?.get(card.cardId)
 
-        val cardAction = supplier?.invoke() ?: if (card.action === DEFAULT) CommonCardAction() else card.action
+        val cardAction = supplier?.invoke() ?: if (card.action === DEFAULT) {
+            // Entity discovery happens before the card is placed into its final
+            // zone.  At that point a missing plugin is normal for opponent
+            // cards, discover choices, heroes, and cards whose generic action
+            // is resolved later by HandArea.  Do not report that provisional
+            // state as an unrecognized-card failure; the hand resolver emits
+            // the actionable diagnostic if it still cannot resolve the card.
+            UnknownCardCollector.record(
+                cardId = card.cardId,
+                cardName = card.getFormatEntityName(),
+                reason = "plugin-action-missing",
+                action = "DEFAULT",
+                sourceZone = UnknownCardCollector.sourceZone(card.area),
+                phase = "entity-discovery",
+                route = "ENTITY_DISCOVERY_DEFERRED",
+                safeAction = "DEFER_ENTITY_DISCOVERY",
+            )
+            log.debug {
+                "CARD_ACTION_DEFAULT_DEFERRED cardName=${card.getFormatEntityName()} " +
+                    "cardId=${card.cardId} reason=plugin-action-missing phase=entity-discovery " +
+                    "route=ENTITY_DISCOVERY_DEFERRED safeAction=DEFER_ENTITY_DISCOVERY"
+            }
+            CommonCardAction()
+        } else card.action
         cardAction.belongCard = card
         card.action = cardAction
     }

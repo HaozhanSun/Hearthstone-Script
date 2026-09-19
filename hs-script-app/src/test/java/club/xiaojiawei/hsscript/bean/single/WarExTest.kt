@@ -42,6 +42,20 @@ class WarExTest {
         assertEquals(1, WarEx.winCount)
         assertEquals(1, WarEx.winStreak)
         assertEquals(1, WarEx.warCount)
+        assertEquals(1, WarEx.playedCount)
+        assertEquals(1, WarEx.playedWinCount)
+    }
+
+    @Test
+    fun `proactive surrender is excluded from live played count and win rate`() {
+        WarEx.surrenderRequested = true
+        WarEx.isWin = true
+
+        WarEx.endWar(resultOverride = false)
+
+        assertEquals(1, WarEx.warCount)
+        assertEquals(0, WarEx.playedCount)
+        assertEquals(0, WarEx.playedWinCount)
     }
 
     @Test

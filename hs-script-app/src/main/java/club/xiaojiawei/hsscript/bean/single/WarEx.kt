@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.bean.single
 
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
+import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.utils.getBoolean
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
@@ -81,6 +82,20 @@ object WarEx {
         get() = winCountProperty.get()
         set(value) = winCountProperty.set(value)
 
+    /** Number of games completed without a surrender requested by us. */
+    val playedCountProperty: IntegerProperty = SimpleIntegerProperty(0)
+
+    var playedCount
+        get() = playedCountProperty.get()
+        set(value) = playedCountProperty.set(value)
+
+    /** Wins among games that were actually played rather than locally conceded. */
+    val playedWinCountProperty: IntegerProperty = SimpleIntegerProperty(0)
+
+    var playedWinCount
+        get() = playedWinCountProperty.get()
+        set(value) = playedWinCountProperty.set(value)
+
     /**
      * 当前连胜
      */
@@ -113,6 +128,8 @@ object WarEx {
     fun resetStatistics() {
         warCount = 0
         winCount = 0
+        playedCount = 0
+        playedWinCount = 0
         winStreak = 0
         hangingTime = 0
         hangingEXP = 0
@@ -202,6 +219,15 @@ object WarEx {
             }
         }
         isWin = finalResult
+        // The live panel is intended to describe actual played games.  A
+        // proactive surrender is still a completed record for audit/history,
+        // but it must not inflate the displayed game denominator or turn the
+        // displayed win rate into a surrender-rate proxy.
+        val surrenderedByUs = surrenderRequested || E2ETrace.surrenderRequested
+        if (!surrenderedByUs) {
+            playedCount++
+            if (finalResult) playedWinCount++
+        }
         war.run {
             me.safeRun {
                 if (resultOverride != null) {

@@ -22,6 +22,7 @@ import club.xiaojiawei.hsscriptcardsdk.mcts.MctsLethalTelemetry
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsTurnPhaseFence
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionAvailability
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsCardDiagnostics
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 
@@ -151,8 +152,17 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "suppressed-after-unconfirmed-dispatch"))
                 return@forEach
             }
-            if (card.isUncertain) {
-                decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "uncertain-card"))
+            val snapshotStatus = MctsCardDiagnostics.snapshotStatus(card)
+            if (MctsCardDiagnostics.isFatalSnapshot(snapshotStatus)) {
+                decision(
+                    mapOf(
+                        "kind" to "HAND_CARD",
+                        "cardId" to card.cardId,
+                        "entityId" to card.entityId,
+                        "outcome" to "FILTERED",
+                        "reason" to "invalid-entity-snapshot:${snapshotStatus.name}",
+                    ),
+                )
                 return@forEach
             }
             if (!MctsActionAvailability.isCostPayable(card.cost, me.usableResource)) {
@@ -182,13 +192,33 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 emptyList()
             }
             if (parsedResult.isFailure) return@forEach
-            val parsed = parsedActions.any {
+            val requiresDescriptionAction = MctsCardDiagnostics.requiresDescriptionAction(card)
+            val parserSensitiveGenericAction = card.action.common && requiresDescriptionAction &&
+                (model != null || card.isUncertain)
+            val braveOpaqueFallback = MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)
+            val opaqueAllowed = (model?.canCreateOpaqueAction(card, war) == true || braveOpaqueFallback) &&
+                (parsedActions.isEmpty() || parserSensitiveGenericAction)
+            val actionRoute = MctsCardDiagnostics.actionRoute(
+                snapshotStatus = snapshotStatus,
+                requiresDescriptionAction = requiresDescriptionAction,
+                actionIsCommon = card.action.common,
+                parsedActionCount = parsedActions.size,
+                opaqueFallbackAllowed = opaqueAllowed,
+                decisionModelInstalled = model != null,
+                opaqueFallbackBlockReason = if (opaqueAllowed) null else MctsCardDiagnostics.opaqueFallbackBlockReason(card),
+            )
+            val hasLegalParsedAction = parsedActions.any {
                 isLiveActionLegal(it) && model?.isDeferredAction(it, war) != true
             }
+            val routeIsLiveActionable = MctsCardDiagnostics.isLiveActionableRoute(
+                actionRoute,
+                hasLegalParsedAction,
+            )
+            val parsed = routeIsLiveActionable && actionRoute != "OPAQUE_FALLBACK"
             val deferredParsed = parsedActions.count {
                 !isLiveActionLegal(it) || model?.isDeferredAction(it, war) == true
             }
-            val opaque = parsedActions.isEmpty() && model?.canCreateOpaqueAction(card, war) == true
+            val opaque = routeIsLiveActionable && actionRoute == "OPAQUE_FALLBACK"
             // Match MonteCarloTreeNode exactly: an opaque action is only a
             // fallback when the parser produced no action at all.  A parsed
             // action that the model deliberately deferred (for example
@@ -200,15 +230,21 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 mapOf(
                     "kind" to "HAND_CARD",
                     "cardId" to card.cardId,
+                    "name" to MctsCardDiagnostics.displayName(card),
                     "entityId" to card.entityId,
+                    "sourceZone" to "HAND",
+                    "snapshotStatus" to snapshotStatus.name,
                     "cost" to card.cost,
                     "mana" to me.usableResource,
                     "rawPlayActions" to parsedActions.size,
                     "modelDeferredActions" to deferredParsed,
                     "opaqueFallback" to opaque,
+                    "route" to actionRoute,
+                    "safeAction" to MctsCardDiagnostics.safeAction(actionRoute),
                     "outcome" to if (parsed || opaque) "ACTIONABLE" else "FILTERED",
                     "reason" to when {
                         parsed -> "parsed-play-action"
+                        opaque && braveOpaqueFallback -> "brave-opaque-fallback"
                         opaque -> "opaque-fallback"
                         else -> "no-live-play-action"
                     },
@@ -475,6 +511,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                             "stateBefore" to before,
                         ),
                     )
+                    waitForPreDispatchAnimation(arg.decisionModel, applyAction, war, "legacy")
                     applyAction.exec.accept(war)
                     MctsReplayTrace.record(
                         war,
@@ -523,12 +560,23 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
         val turnDeadline = System.currentTimeMillis() + template.experimentalTurnBudgetMillis
         val search = MonteCarloTreeSearch()
         var actionCount = 0
+        val unconfirmedRetryCounts = mutableMapOf<String, Int>()
         var emptySearchRescans = 0
         var immediateLocationRetries = 0
         val immediateLocationFence = ImmediateLocationFenceState()
         val blockedCreatorIds = suppressedExperimentalCreatorIds().toMutableSet()
         while (war.isMyTurn && System.currentTimeMillis() < turnDeadline && actionCount < 16) {
             val searchStart = System.currentTimeMillis()
+            // Record the lethal snapshot before searching for an action as
+            // well as at the dispatch boundary.  A search may return an
+            // empty/EndTurn result, and that must not hide a state in which
+            // the visible friendly attack already reaches the enemy hero.
+            MctsLethalTelemetry.recordBeforeAttackDecision(
+                war,
+                name(),
+                actionCount + 1,
+                null,
+            )
             val actionDeadline = minOf(
                 turnDeadline,
                 searchStart + template.experimentalActionBudgetMillis,
@@ -905,6 +953,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 )
                 break
             }
+            waitForPreDispatchAnimation(template.decisionModel, action, war, "experimental")
             try {
                 action.exec.accept(war)
                 phaseFence.observe(actionPhase)
@@ -984,6 +1033,28 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 )
                 val creatorId = action.creator?.entityId?.takeIf { it.isNotBlank() }
                 if (creatorId != null) {
+                    val retryAttempt = unconfirmedRetryCounts[creatorId] ?: 0
+                    if (template.decisionModel?.shouldRetryAfterUnconfirmedDispatch(action, war, retryAttempt) == true) {
+                        unconfirmedRetryCounts[creatorId] = retryAttempt + 1
+                        log.info {
+                            "MCTS_EXPERIMENT_ACTION_RETRYABLE strategy=${name()} " +
+                                "creator=${describeActionCard(action.creator!!)} step=$actionCount " +
+                                "attempt=${retryAttempt + 1} reason=animation-settlement-window"
+                        }
+                        MctsReplayTrace.record(
+                            war,
+                            "controller_branch",
+                            "action-unconfirmed-retryable-during-animation-settlement",
+                            mapOf(
+                                "strategy" to name(),
+                                "step" to actionCount,
+                                "creatorId" to creatorId,
+                                "action" to describeAction(action),
+                                "attempt" to retryAttempt + 1,
+                            ),
+                        )
+                        continue
+                    }
                     // A stale parser snapshot can expose an action that the
                     // live Hearthstone client has already rejected (for
                     // example a minion whose attack was spent in the prior
@@ -1216,6 +1287,32 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
         log.info { "盲眼法官动画等待结束" }
     }
 
+    private fun waitForPreDispatchAnimation(
+        decisionModel: MctsDecisionModel?,
+        action: Action,
+        war: War,
+        path: String,
+    ) {
+        val waitMillis = decisionModel?.preDispatchWaitMillis(action, war)?.coerceAtLeast(0L) ?: 0L
+        if (waitMillis <= 0L) return
+        log.info {
+            "MCTS_PRE_DISPATCH_ANIMATION_WAIT strategy=${name()} path=$path " +
+                "action=${describeAction(action)} waitMs=$waitMillis"
+        }
+        MctsReplayTrace.record(
+            war,
+            "controller_branch",
+            "pre-dispatch card animation wait",
+            mapOf(
+                "strategy" to name(),
+                "path" to path,
+                "action" to describeAction(action),
+                "waitMs" to waitMillis,
+            ),
+        )
+        Thread.sleep(waitMillis)
+    }
+
     /**
      * Temporarily removes a creator whose last live dispatch produced no
      * observable state change.  Delegation preserves every deck-specific
@@ -1260,11 +1357,13 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
 
         override fun isActionLegal(action: Action, war: War): Boolean =
             !isBlocked(action) && withBlockedCreatorsMasked(war) {
-                delegate.isActionLegal(action, war) &&
+                val delegateLegal = delegate.isActionLegal(action, war)
+                delegateLegal &&
                     (phaseFence?.allows(
                         delegate.actionOrderPhase(action, war),
                         action === TurnOverAction,
-                        delegate.isActionLegal(action, war),
+                        delegateLegal,
+                        delegate.allowsActionOrderReopen(action, war),
                     ) ?: true)
             }
 

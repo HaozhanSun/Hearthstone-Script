@@ -48,7 +48,27 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
 
 ## Operational feedback
 
+- Number user-raised topics by date and sequence: use `YYYY-MM-DD · #N`, restarting at 1 each day; keep that identifier in status reports.
+- When the user steers the conversation to a new task, preserve the interrupted
+  task as pending unless the user explicitly replaces, abandons, or cancels it.
+  Complete the steered task, then return to the pending task automatically and
+  continue from its last verified phase; do not wait for the user to remind you.
+- Maintain a compact pending-task checkpoint containing the original objective,
+  completed work, next action, blockers, and any task-specific acceptance
+  criteria or evidence requirements. A steering turn may change the active
+  focus, but it must not erase that checkpoint.
+- If a turn or tool call is interrupted, re-observe the current runtime,
+  worktree, and logs before acting, then resume from the checkpoint. Do not
+  restart completed work or report the interrupted task as complete merely
+  because the steering task finished.
+- Only discard the pending task when the user clearly asks to stop or replace
+  it; otherwise leave the conversation with the original task either resumed,
+  completed with evidence, or explicitly blocked.
 - Workers report to the current secretary session; only that session deploys.
+- Secretary implementation boundary: the current secretary only performs read-only
+  investigation, evidence collection, worker routing, review, and deployment
+  coordination. It must not implement code, strategy, or configuration fixes
+  directly; all implementation work must be performed by a worker session.
 - Route workers to the current session ID, never an archived secretary; do not
   wait on workers when a completion notification is available.
 - Before diagnosis, capture the exact runtime version, PID, channel, log file,

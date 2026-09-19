@@ -7,6 +7,7 @@ import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
+import club.xiaojiawei.hsscript.strategy.mode.HubModeStrategy
 import club.xiaojiawei.hsscript.strategy.mode.LoginModeStrategy
 import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil
@@ -16,6 +17,7 @@ import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import com.sun.jna.platform.win32.User32
 import com.sun.jna.platform.win32.WinDef
+import com.sun.jna.ptr.IntByReference
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
@@ -52,6 +54,7 @@ object ScreenStateRecovery {
     private const val RESULT_CONTINUE_GRAY_LIGHT_MIN = 0.025
     private const val RESULT_BANNER_LOW_SATURATION_MIN = 0.30
     private const val RECONNECT_RETRY_INTERVAL_MS = 60_000L
+    private const val RECONNECT_SPINNER_CHECK_DELAY_MS = 10_000L
     /**
      * The client displays a distinct slow-connection warning only after a
      * reconnect attempt. A fresh script can attach after that click, so its
@@ -61,7 +64,15 @@ object ScreenStateRecovery {
     private const val STALLED_RECONNECT_LOADING_RESTART_MS = 120_000L
     private val reconnectAttemptAt = AtomicLong(0L)
     private val reconnectAcceptedAt = AtomicLong(0L)
+    private val reconnectProbeGeneration = AtomicLong(0L)
+    private val offlineReconnectRecovery = OfflineReconnectRecovery()
     private val slowReconnectWarningObservedAt = AtomicLong(0L)
+    /**
+     * A visual loading signal can be the offline/reconnect dialog even when
+     * OCR misses the dialog text.  Keep an independent anchor for that generic
+     * branch so a stale client cannot wait forever on WAIT_FOR_CLIENT.
+     */
+    private val loadingObservedAt = AtomicLong(0L)
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
@@ -71,10 +82,12 @@ object ScreenStateRecovery {
         RESULT("RESULT"),
         RECONNECT("RECONNECT"),
         RECONNECT_FAILURE("RECONNECT_FAILURE"),
+        RECONNECT_SPINNER("RECONNECT_SPINNER"),
         LOGIN("LOGIN"),
         GAME_MODE("GAME_MODE"),
         COLLECTION("COLLECTION"),
         PACK_OPENING("PACK_OPENING"),
+        SHOP_OVERLAY("SHOP_OVERLAY"),
         LOADING("LOADING"),
     }
 
@@ -140,37 +153,61 @@ object ScreenStateRecovery {
         startupProbe: Boolean = false,
         stateStillCurrent: () -> Boolean = { true },
     ): InspectionResult {
-        if (!WorkTimeListener.working || PauseStatus.isPause || WarEx.inWar) {
+        if ((!WorkTimeListener.working && !PauseStatus.isAutomaticPause) ||
+            !PauseStatus.canRunAutomaticRecovery() ||
+            WarEx.inWar
+        ) {
             log.info {
                 "SCREEN_RECOVERY_SKIPPED reason=unsafe " +
-                    "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} inWar=${WarEx.inWar}"
+                    "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} " +
+                    "automaticPause=${PauseStatus.isAutomaticPause} inWar=${WarEx.inWar}"
             }
             return InspectionResult.NO_ACTION
         }
 
-        // A foreground confirmation is an input-safety condition, not proof
-        // that the Power.log or state machine is ready. Keep the two facts
-        // separate in the trace and defer without pausing the running worker.
-        if (RuntimeSafety.safeNative) {
-            val gameWindow = ScriptStatus.gameHWND
-            val focused = MouseUtil.focusWindowForInput(gameWindow)
-            val powerLog = PowerLogListener.logFile
-            log.info {
-                "SCREEN_RECOVERY_WINDOW_READINESS gameWindow=$gameWindow " +
-                    "handleKnown=${gameWindow != null} foregroundConfirmed=$focused " +
-                    "powerLog=${powerLog?.path() ?: "none"} " +
-                    "powerLogReadable=${(powerLog?.length() ?: 0L) > 0L}"
+        // Never trust a cached HWND after a game restart.  In particular, the
+        // E2E coordinate sentinel and a dead Unity HWND can otherwise make the
+        // foreground helper report a retry while Robot captures Codex/Kodi.
+        val gameWindow = resolveLiveGameWindow()
+        if (gameWindow == null) {
+            log.warn {
+                "SCREEN_RECOVERY_SKIPPED reason=hearthstone-window-missing " +
+                    "processAlive=${GameUtil.isAliveOfGame()} state=$stateFingerprint"
             }
-            if (!focused) {
-                log.warn {
-                    "SCREEN_RECOVERY_DEFERRED reason=game-foreground-unconfirmed " +
-                        "gameWindow=$gameWindow"
-                }
-                return InspectionResult.DEFERRED_GAME_FOREGROUND
-            }
+            return InspectionResult.NO_ACTION
         }
 
-        val capture = captureScreen()
+        // Foreground confirmation and capture must be one atomic recovery
+        // operation. Releasing z-order between those steps was the cause of
+        // screenshots containing Kodi/Codex while the log claimed that
+        // Hearthstone was foreground.
+        val captureResult = if (RuntimeSafety.safeNative) {
+            MouseUtil.withRecoveryForeground(gameWindow) {
+                // The focus helper can refresh ScriptStatus.gameHWND while
+                // replacing the startup coordinate sentinel. Resolve it
+                // again inside the foreground lease so capture and focus use
+                // the same live window.
+                captureScreen(ScriptStatus.gameHWND ?: gameWindow, allowCachedGameRect = false)
+            }
+        } else {
+            MouseUtil.RecoveryForegroundResult(true, captureScreen(gameWindow, allowCachedGameRect = false))
+        }
+        val powerLog = PowerLogListener.logFile
+        log.info {
+            "SCREEN_RECOVERY_WINDOW_READINESS gameWindow=$gameWindow " +
+                "handleKnown=${gameWindow != null} foregroundConfirmed=${captureResult.foregroundConfirmed} " +
+                "captureReturned=${captureResult.value != null} " +
+                "powerLog=${powerLog?.path() ?: "none"} " +
+                "powerLogReadable=${(powerLog?.length() ?: 0L) > 0L}"
+        }
+        if (!captureResult.foregroundConfirmed) {
+            log.warn {
+                "SCREEN_RECOVERY_DEFERRED reason=game-foreground-unconfirmed " +
+                    "gameWindow=$gameWindow"
+            }
+            return InspectionResult.DEFERRED_GAME_FOREGROUND
+        }
+        val capture = captureResult.value
         if (capture == null) {
             log.warn {
                 "SCREEN_RECOVERY_FAILED reason=capture-null stuckForMs=$stuckForMs " +
@@ -197,6 +234,7 @@ object ScreenStateRecovery {
             "SCREEN_RECOVERY_OBSERVATION " +
                 "provider=LEGACY " +
                 "ocr=${ocrText.ifBlank { "<empty>" }.take(MAX_OCR_TEXT_LENGTH)} " +
+                "roiEvidence=${formatRoiEvidence(ocrEvidence.targeted)} " +
                 "detected=${detection?.kind?.code ?: "UNKNOWN"} " +
                 "confidence=${detection?.confidence ?: 0} " +
                 "evidence=${detection?.evidence ?: "none"}"
@@ -211,24 +249,43 @@ object ScreenStateRecovery {
         } else {
             UnknownStateScreenshot.CATEGORY_STUCK_STATE
         }
+        val roiRegions = ScreenStateRoiSelector
+            .select(capture.image.width, capture.image.height)
+            .map { roi ->
+                val value = ocrEvidence.targeted[roi.name].orEmpty()
+                UnknownStateScreenshot.UnknownRegion(
+                    roi.bounds,
+                    "${roi.name.removePrefix("screen-state-")}=${value.ifBlank { "<empty>" }}",
+                )
+            }
+        val annotationLines = buildList {
+            add("screen-recovery detected=${detection?.kind?.code ?: "UNKNOWN"}")
+            add("confidence=${detection?.confidence ?: 0} evidence=${detection?.evidence ?: "none"}")
+            ocrEvidence.targeted.forEach { (name, value) ->
+                add("$name=${value.ifBlank { "<empty>" }}")
+            }
+        }
         val evidence = UnknownStateScreenshot.save(
             image = capture.image,
-            regions = listOf(
-                UnknownStateScreenshot.UnknownRegion(
-                    Rectangle(0, 0, capture.image.width, capture.image.height),
-                    if (evidenceCategory == UnknownStateScreenshot.CATEGORY_STUCK_STATE) {
-                        "stuck-state-observation"
-                    } else {
-                        "unidentified-screen"
-                    },
-                ),
-            ),
+            regions = roiRegions.ifEmpty {
+                listOf(
+                    UnknownStateScreenshot.UnknownRegion(
+                        Rectangle(0, 0, capture.image.width, capture.image.height),
+                        if (evidenceCategory == UnknownStateScreenshot.CATEGORY_STUCK_STATE) {
+                            "stuck-state-observation"
+                        } else {
+                            "unidentified-screen"
+                        },
+                    ),
+                )
+            },
             category = evidenceCategory,
             trigger = "screen-recovery-observation",
             state = stateFingerprint,
             phase = "stuck-screen-recovery",
             ocrText = ocrText,
             visual = capture.visual.toString(),
+            annotationLines = annotationLines,
         )
         log.warn {
             "SCREEN_RECOVERY_EVIDENCE category=$evidenceCategory " +
@@ -254,7 +311,10 @@ object ScreenStateRecovery {
         return if (apply(detection)) InspectionResult.APPLIED else InspectionResult.NO_ACTION
     }
 
-    private fun captureScreen(): Capture? = runCatching {
+    private fun captureScreen(
+        hwnd: WinDef.HWND? = ScriptStatus.gameHWND,
+        allowCachedGameRect: Boolean = true,
+    ): Capture? = runCatching {
         if (GraphicsEnvironment.isHeadless()) return null
         val allScreens = GraphicsEnvironment
             .getLocalGraphicsEnvironment()
@@ -271,23 +331,79 @@ object ScreenStateRecovery {
         val gameRectKnown = gameRect.right - gameRect.left >= 400 &&
             gameRect.bottom - gameRect.top >= 300
 
-        val candidate = if (gameRectKnown) {
+        // Prefer the live HWND rectangle over the cached GAME_RECT. The
+        // cached rectangle can describe a previous fullscreen client while a
+        // launcher/restart has already produced a new window elsewhere.
+        val liveWindowRect = gameWindowBounds(hwnd)
+        val candidate = if (liveWindowRect != null) {
+            liveWindowRect
+        } else if (allowCachedGameRect && gameRectKnown) {
             Rectangle(
                 gameRect.left,
                 gameRect.top,
                 gameRect.right - gameRect.left,
                 gameRect.bottom - gameRect.top,
             )
-        } else {
+        } else if (allowCachedGameRect) {
             gameWindowBounds(ScriptStatus.gameHWND)
                 ?: run {
                     log.info { "SCREEN_RECOVERY_CAPTURE_SKIPPED reason=game-bounds-unknown" }
                     return null
                 }
+        } else {
+            log.warn { "SCREEN_RECOVERY_CAPTURE_SKIPPED reason=live-window-bounds-unknown hwnd=$hwnd" }
+            return null
         }
         val bounds = candidate.intersection(allScreens)
         if (bounds.width < 400 || bounds.height < 300) return null
+
+        val foregroundBefore = User32.INSTANCE.GetForegroundWindow()
+        val targetPid = hwnd?.let(::windowProcessId) ?: 0
+        val foregroundPidBefore = foregroundBefore?.let(::windowProcessId) ?: 0
+        val foregroundBeforeOk = hwnd != null &&
+            GameWindowReadiness.sameVisibleGameProcess(
+                targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
+                foregroundVisible = foregroundBefore?.let(User32.INSTANCE::IsWindowVisible) ?: false,
+                targetPid = targetPid,
+                foregroundPid = foregroundPidBefore,
+            )
+        log.info {
+            "SCREEN_RECOVERY_CAPTURE_GATE phase=before hwnd=$hwnd " +
+                "foreground=$foregroundBefore targetPid=$targetPid foregroundPid=$foregroundPidBefore " +
+                "accepted=$foregroundBeforeOk bounds=$bounds"
+        }
+        if (RuntimeSafety.safeNative && !foregroundBeforeOk) {
+            log.warn { "SCREEN_RECOVERY_CAPTURE_REJECTED phase=before reason=foreground-mismatch hwnd=$hwnd" }
+            return null
+        }
         val image = Robot().createScreenCapture(bounds)
+        val foregroundAfter = User32.INSTANCE.GetForegroundWindow()
+        val foregroundPidAfter = foregroundAfter?.let(::windowProcessId) ?: 0
+        val foregroundAfterOk = hwnd != null &&
+            GameWindowReadiness.sameVisibleGameProcess(
+                targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
+                foregroundVisible = foregroundAfter?.let(User32.INSTANCE::IsWindowVisible) ?: false,
+                targetPid = targetPid,
+                foregroundPid = foregroundPidAfter,
+            )
+        val captureAccepted = !RuntimeSafety.safeNative ||
+            GameWindowReadiness.captureRemainsOnGame(
+                targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
+                foregroundVisibleBefore = foregroundBefore?.let(User32.INSTANCE::IsWindowVisible) ?: false,
+                foregroundVisibleAfter = foregroundAfter?.let(User32.INSTANCE::IsWindowVisible) ?: false,
+                targetPid = targetPid,
+                foregroundPidBefore = foregroundPidBefore,
+                foregroundPidAfter = foregroundPidAfter,
+            )
+        log.info {
+            "SCREEN_RECOVERY_CAPTURE_GATE phase=after hwnd=$hwnd " +
+                "foreground=$foregroundAfter targetPid=$targetPid foregroundPid=$foregroundPidAfter " +
+                "accepted=$captureAccepted beforeAccepted=$foregroundBeforeOk bounds=$bounds"
+        }
+        if (!captureAccepted) {
+            log.warn { "SCREEN_RECOVERY_CAPTURE_REJECTED phase=after reason=foreground-changed hwnd=$hwnd" }
+            return null
+        }
         val saved = DebugScreenshotRing.save(image, "screen-recovery", "stale-screen")
         val file = saved?.file
         Capture(
@@ -314,11 +430,10 @@ object ScreenStateRecovery {
             return OcrEvidence("", emptyMap())
         }
         return runCatching {
-            // Probe the two screen-specific labels first. These are small,
+            // Probe the screen-specific labels first. These are small,
             // explicit crops and are sufficient to identify the special
             // screens without OCR-ing the full client. Only when neither
-            // target matches do we use the existing bounded center fallback
-            // for all other recovery screens.
+            // target matches do we use the smaller secondary bands below.
             val targeted = ScreenStateRoiSelector
                 .selectTargeted(capture.image.width, capture.image.height)
                 .associate { roi ->
@@ -333,24 +448,21 @@ object ScreenStateRecovery {
                 return@runCatching OcrEvidence(targeted.values.joinToString(separator = ""), targeted)
             }
 
-            // A full-screen client often has the script log window over the
-            // right edge. The center menu crop contains the home/deck labels,
-            // avoids OCR-ing our own UI, and is sufficient for this recovery
-            // path. This is deliberately local OCR: PaddleX is reserved for
-            // rank detection and must never stall menu recovery.
-            val center = ScreenStateRoiSelector
-                .select(capture.image.width, capture.image.height)
-                .firstOrNull { it.name == "screen-state-center" }
-                ?.let { roi ->
+            // Do not fall back to OCR-ing most of the client. These smaller
+            // secondary bands preserve compatibility for screens without a
+            // dedicated anchor while keeping the recovery path bounded and
+            // excluding the script window on the right.
+            val secondary = ScreenStateRoiSelector
+                .selectSecondary(capture.image.width, capture.image.height)
+                .associate { roi ->
                     log.info {
                         "SCREEN_RECOVERY_OCR_ROI name=${roi.name} " +
                             "x=${roi.bounds.x} y=${roi.bounds.y} " +
                             "w=${roi.bounds.width} h=${roi.bounds.height} space=capture-local"
                     }
-                    ocrScreenRoi(crop(capture.image, roi.bounds), tessData, targeted = false)
+                    roi.name to ocrScreenRoi(crop(capture.image, roi.bounds), tessData, targeted = false)
                 }
-                .orEmpty()
-            OcrEvidence(center, targeted)
+            OcrEvidence(secondary.values.joinToString(separator = ""), targeted + secondary)
         }.getOrElse { error ->
             log.warn(error) { "SCREEN_RECOVERY_OCR_FAILED" }
             OcrEvidence("", emptyMap())
@@ -366,6 +478,11 @@ object ScreenStateRecovery {
             setVariable("user_defined_dpi", "180")
         }.doOCR(ocrImage).replace(Regex("\\s+"), "")
     }
+
+    private fun formatRoiEvidence(values: Map<String, String>): String =
+        values.entries.joinToString(separator = ";") { (name, value) ->
+            "$name=${value.ifBlank { "<empty>" }.take(MAX_OCR_TEXT_LENGTH)}"
+        }.ifBlank { "<none>" }
 
     private fun enlargeTargetedOcr(image: BufferedImage): BufferedImage {
         val scale = 4
@@ -518,6 +635,17 @@ object ScreenStateRecovery {
         fun has(vararg terms: String): Boolean = terms.all { text.contains(it) }
 
         // More specific screens must win before generic home/login words.
+        // A reconnect/error dialog can leave the deck-selection title visible
+        // behind it. The dialog must therefore win before DECK_SELECTION.
+        if (looksLikeReconnectFailureText(text)) {
+            return Detection(ScreenKind.RECONNECT_FAILURE, ModeEnum.LOGIN, 97, "reconnect-failure-text")
+        }
+        if (looksLikeReconnectText(text)) {
+            return Detection(ScreenKind.RECONNECT, ModeEnum.LOGIN, 96, "reconnect-disconnected-text")
+        }
+        if (looksLikeReconnectSpinnerText(text)) {
+            return Detection(ScreenKind.RECONNECT_SPINNER, ModeEnum.STARTUP, 96, "reconnect-spinner-text")
+        }
         if (text.contains("选择套牌") || has("套牌", "狂野对战")) {
             return Detection(ScreenKind.DECK_SELECTION, ModeEnum.TOURNAMENT, 100, "deck-selection-title")
         }
@@ -526,6 +654,9 @@ object ScreenStateRecovery {
         }
         if (looksLikeResultVisual(visual.resultContinueGrayLightRatio, visual.resultBannerLowSaturationRatio)) {
             return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
+        }
+        if (looksLikeShopOverlayText(text) && looksLikeShopOverlayVisual(visual)) {
+            return Detection(ScreenKind.SHOP_OVERLAY, ModeEnum.HUB, 94, "shop-overlay-text-and-visual")
         }
         // The live client uses "搜寻对手" while some localized/client builds
         // use "寻找对手". OCR also commonly separates the cancel label, so
@@ -556,13 +687,8 @@ object ScreenStateRecovery {
         if (looksLikePackOpeningText(text)) {
             return Detection(ScreenKind.PACK_OPENING, ModeEnum.PACKOPENING, 95, "pack-opening-text")
         }
-        // This must precede the generic login/reconnect matcher. The failure
-        // dialog asks for a game restart and does not expose a login action.
-        if (looksLikeReconnectFailureText(text)) {
-            return Detection(ScreenKind.RECONNECT_FAILURE, ModeEnum.LOGIN, 97, "reconnect-failure-text")
-        }
-        if (looksLikeReconnectText(text)) {
-            return Detection(ScreenKind.RECONNECT, ModeEnum.LOGIN, 96, "reconnect-disconnected-text")
+        if (looksLikeBlackMarketText(text)) {
+            return Detection(ScreenKind.HOME, ModeEnum.HUB, 96, "black-market-text")
         }
         if (looksLikeStalledReconnectLoadingText(text)) {
             return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 95, "reconnect-slow-loading-text")
@@ -570,14 +696,12 @@ object ScreenStateRecovery {
         if (looksLikeLoadingText(text)) {
             return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 88, "loading-text")
         }
-        if (looksLikeLoadingVisual(
-                centralDarkRatio = visual.loadingCentralDarkRatio,
-                warmRatio = visual.warmRatio,
-                blueRatio = visual.blueRatio,
-            )
-        ) {
-            return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 87, "loading-card-back-visual")
-        }
+        // A dark/warm Hearthstone overlay is not positive loading evidence:
+        // shop, reward, collection, and other modal pages can share the same
+        // palette. Keep the visual signature in the diagnostic trail, but
+        // never change authoritative state to LOADING from visual ratios
+        // alone. Loading requires loading/reconnect OCR or an explicit phase
+        // event.
         if (text.contains("登录") || text.contains("重新连接")) {
             return Detection(ScreenKind.LOGIN, ModeEnum.LOGIN, 90, "login-text")
         }
@@ -600,6 +724,18 @@ object ScreenStateRecovery {
     }
 
     private fun targetedScreenDetection(targeted: Map<String, String>): Detection? {
+        val reconnectDialogText = listOf(
+            targeted[ScreenStateRoiSelector.RECONNECT_DIALOG_TITLE_ROI].orEmpty(),
+            targeted[ScreenStateRoiSelector.RECONNECT_DIALOG_STATUS_ROI].orEmpty(),
+            targeted[ScreenStateRoiSelector.RECONNECT_DIALOG_MESSAGE_ROI].orEmpty(),
+        ).joinToString(separator = "")
+        if (looksLikeReconnectFailureDialogRoiText(reconnectDialogText)) {
+            return Detection(ScreenKind.RECONNECT_FAILURE, ModeEnum.LOGIN, 100, "reconnect-failure-dialog-roi")
+        }
+        if (looksLikeReconnectDialogRoiText(reconnectDialogText)) {
+            return Detection(ScreenKind.RECONNECT, ModeEnum.LOGIN, 100, "reconnect-dialog-roi")
+        }
+
         // A label is only authoritative when it came from its own ROI. This
         // prevents an OCR spill from the deck title into the traditional-mode
         // branch (or vice versa) from changing the recovery state.
@@ -627,12 +763,66 @@ object ScreenStateRecovery {
         return null
     }
 
+    private fun windowProcessId(hwnd: WinDef.HWND): Int {
+        val pid = IntByReference()
+        User32.INSTANCE.GetWindowThreadProcessId(hwnd, pid)
+        return pid.value
+    }
+
+    internal fun looksLikeReconnectDialogRoiText(ocrText: String): Boolean {
+        val text = normalizedScreenText(ocrText)
+        return text.contains("离线状态") ||
+            text.contains("离线太久") ||
+            text.contains("游戏连接中断") ||
+            text.contains("连接中断") ||
+            text.contains("对手无法连接") ||
+            text.contains("游戏无法继续") ||
+            text.contains("请再试") ||
+            text.contains("请重试")
+    }
+
+    /**
+     * The seasonal Black Market is rendered as a hub overlay. It has a
+     * dedicated bottom-right "前往传统对战" action, which is already handled
+     * by HubModeStrategy's promo/back click. Require a second market-specific
+     * label so a stray OCR read of "黑市" cannot redirect an unrelated page.
+     */
+    internal fun looksLikeBlackMarketText(ocrText: String): Boolean {
+        val text = normalizedScreenText(ocrText)
+        val market = text.contains("黑市") || text.contains("blackmarket")
+        val detail = text.contains("价格更新") ||
+            text.contains("活动剩余时间") ||
+            text.contains("库存") ||
+            text.contains("流浪者")
+        return market && detail
+    }
+
+    internal fun looksLikeReconnectFailureDialogRoiText(ocrText: String): Boolean {
+        val text = normalizedScreenText(ocrText)
+        return text.contains("发生错误") ||
+            text.contains("对手无法连接") ||
+            text.contains("游戏无法继续") ||
+            text.contains("重新连接失败") ||
+            text.contains("请再试") ||
+            text.contains("请重试")
+    }
+
     private fun normalizedScreenText(ocrText: String): String =
         ocrText.lowercase(Locale.ROOT).replace(Regex("[\\s，。、“”‘’：:！!？?]"), "")
 
     internal fun looksLikeTraditionalBattleText(ocrText: String): Boolean {
         val text = normalizedScreenText(ocrText)
-        return text.contains("传统对战") || text.contains("传统對戰")
+        if (text.contains("传统对战") || text.contains("传统對戰")) return true
+
+        // This is a dedicated 传统对战 ROI, not whole-screen OCR. PaddleX/Tesseract
+        // can preserve the first two glyphs while misreading the latter two (the
+        // live home screenshot produced "传统X寺虐"). Treat that short, anchored
+        // prefix as the same home-screen label so the generic loading visual does
+        // not steal the transition. Keep the tolerance scoped to this ROI and
+        // require a plausible trailing label glyph to avoid broad OCR guesses.
+        return text.startsWith("传统") &&
+            text.length in 4..10 &&
+            text.any { it in "对對战戰虐寺" }
     }
 
     internal fun looksLikeDeckSelectionTitleText(ocrText: String): Boolean {
@@ -662,6 +852,21 @@ object ScreenStateRecovery {
 
     internal fun looksLikeCollectionText(ocrText: String): Boolean = collectionPageLabels(ocrText).isNotEmpty()
 
+    /**
+     * The hero-skin shop overlay is drawn over the Hub. OCR commonly keeps
+     * only the stable word "皮肤" while the title and price are garbled; the
+     * visual gate prevents ordinary mentions from becoming an overlay signal.
+     */
+    internal fun looksLikeShopOverlayText(ocrText: String): Boolean {
+        val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+        return text.contains("皮肤")
+    }
+
+    private fun looksLikeShopOverlayVisual(visual: VisualSignature): Boolean =
+        visual.loadingCentralDarkRatio >= 0.45 &&
+            visual.warmRatio >= 0.15 &&
+            visual.blueRatio <= 0.05
+
     internal fun looksLikeMatchmakingText(ocrText: String): Boolean {
         val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
         return text.contains("寻找对手") ||
@@ -690,7 +895,14 @@ object ScreenStateRecovery {
         return text.contains("重新连接失败") ||
             text.contains("无法重新连接") ||
             text.contains("请重新启动炉石传说") ||
-            text.contains("重新启动《炉石传说》")
+            text.contains("重新启动《炉石传说》") ||
+            text.contains("无法通过暴雪战网服务进行登录") ||
+            text.contains("无法通过暴雪战网服务进行登入") ||
+            text.contains("unabletologintobattlenetservice") ||
+            text.contains("unabletologintoblizzardbattle.netservice") ||
+            text.contains("unabletoconnecttoblizzardbattlenet") ||
+            text.contains("cannotlogintobattlenetservice") ||
+            text.contains("cannotlogintoblizzardbattle.netservice")
     }
 
     internal fun looksLikeLoadingText(ocrText: String): Boolean {
@@ -714,6 +926,9 @@ object ScreenStateRecovery {
     internal fun shouldRestartStalledReconnectForTest(reconnectStartedAt: Long, now: Long): Boolean =
         shouldRestartStalledReconnect(reconnectStartedAt, now)
 
+    internal fun shouldRestartStalledLoadingForTest(loadingStartedAt: Long, now: Long): Boolean =
+        shouldRestartStalledLoading(loadingStartedAt, now)
+
     internal fun stalledReconnectAnchorForTest(
         acceptedReconnectAt: Long,
         observedWarningAt: Long,
@@ -723,6 +938,10 @@ object ScreenStateRecovery {
     private fun shouldRestartStalledReconnect(reconnectStartedAt: Long, now: Long): Boolean =
         reconnectStartedAt > 0L && now >= reconnectStartedAt &&
             now - reconnectStartedAt >= STALLED_RECONNECT_LOADING_RESTART_MS
+
+    private fun shouldRestartStalledLoading(loadingStartedAt: Long, now: Long): Boolean =
+        loadingStartedAt > 0L && now >= loadingStartedAt &&
+            now - loadingStartedAt >= STALLED_RECONNECT_LOADING_RESTART_MS
 
     private fun stalledReconnectAnchor(
         acceptedReconnectAt: Long,
@@ -738,12 +957,41 @@ object ScreenStateRecovery {
         }
     }
 
+    private fun firstLoadingObservedAt(now: Long): Long {
+        while (true) {
+            val previous = loadingObservedAt.get()
+            if (previous > 0L) return previous
+            if (loadingObservedAt.compareAndSet(0L, now)) return now
+        }
+    }
+
+    private fun consumeStalledLoadingAnchor(startedAt: Long): Boolean =
+        loadingObservedAt.compareAndSet(startedAt, 0L)
+
     private fun consumeStalledReconnectAnchor(acceptedReconnectAt: Long, startedAt: Long): Boolean {
         return if (acceptedReconnectAt > 0L) {
             reconnectAcceptedAt.compareAndSet(acceptedReconnectAt, 0L)
         } else {
             slowReconnectWarningObservedAt.compareAndSet(startedAt, 0L)
         }
+    }
+
+    /** Re-inspect after reconnect so the offline prompt and spinner are not conflated. */
+    private fun scheduleReconnectSpinnerProbe() {
+        val generation = reconnectProbeGeneration.incrementAndGet()
+        EXTRA_THREAD_POOL.schedule({
+            if (generation != reconnectProbeGeneration.get() || !WorkTimeListener.working ||
+                PauseStatus.isPause || WarEx.inWar
+            ) {
+                log.info { "SCREEN_RECOVERY_RECONNECT_PROBE_SKIPPED reason=state-changed generation=$generation" }
+                return@schedule
+            }
+            log.info { "SCREEN_RECOVERY_RECONNECT_PROBE_STARTED waitMs=$RECONNECT_SPINNER_CHECK_DELAY_MS" }
+            inspectAndRecover(
+                stuckForMs = RECONNECT_SPINNER_CHECK_DELAY_MS,
+                stateFingerprint = "reconnect-spinner-probe",
+            )
+        }, RECONNECT_SPINNER_CHECK_DELAY_MS, TimeUnit.MILLISECONDS)
     }
 
     internal fun looksLikeLoadingVisual(
@@ -760,6 +1008,23 @@ object ScreenStateRecovery {
             warmRatio = 0.0,
             blueRatio = 0.0,
             loadingCentralDarkRatio = 0.0,
+            resultContinueGrayLightRatio = 0.0,
+            resultBannerLowSaturationRatio = 0.0,
+        ),
+    )?.kind?.code
+
+    internal fun classifyWithVisualForTest(
+        ocrText: String,
+        centralDarkRatio: Double,
+        warmRatio: Double,
+        blueRatio: Double,
+    ): String? = detect(
+        ocrText,
+        VisualSignature(
+            sampleHash = 0L,
+            warmRatio = warmRatio,
+            blueRatio = blueRatio,
+            loadingCentralDarkRatio = centralDarkRatio,
             resultContinueGrayLightRatio = 0.0,
             resultBannerLowSaturationRatio = 0.0,
         ),
@@ -799,6 +1064,7 @@ object ScreenStateRecovery {
                 detection.kind != ScreenKind.MATCHMAKING &&
                 detection.kind != ScreenKind.RECONNECT &&
                 detection.kind != ScreenKind.RECONNECT_FAILURE &&
+                detection.kind != ScreenKind.RECONNECT_SPINNER &&
                 detection.kind != ScreenKind.LOADING,
             action = when (detection.kind) {
                 ScreenKind.DECK_SELECTION -> "START_MATCHING"
@@ -807,12 +1073,14 @@ object ScreenStateRecovery {
                 ScreenKind.GAME_MODE,
                 ScreenKind.COLLECTION,
                 ScreenKind.PACK_OPENING,
+                ScreenKind.SHOP_OVERLAY,
                 ScreenKind.LOGIN,
                 -> "ENTER_MODE_STRATEGY"
                 ScreenKind.RESULT -> "DISMISS_STALE_RESULT"
                 ScreenKind.MATCHMAKING -> "WAIT_FOR_GAMEPLAY"
                 ScreenKind.RECONNECT -> "CLICK_RECONNECT"
                 ScreenKind.RECONNECT_FAILURE -> "DISMISS_RECOVERY_DIALOG"
+                ScreenKind.RECONNECT_SPINNER -> "WAIT_OR_CANCEL_RECONNECT"
                 ScreenKind.LOADING -> "WAIT_FOR_CLIENT"
             },
         )
@@ -857,7 +1125,8 @@ object ScreenStateRecovery {
      * treated as proof that the result was dismissed.
      */
     internal fun isResultVisibleForRecovery(): Boolean? = runCatching {
-        val capture = captureScreen() ?: return@runCatching null
+        val liveWindow = resolveLiveGameWindow() ?: return@runCatching null
+        val capture = captureScreen(liveWindow, allowCachedGameRect = false) ?: return@runCatching null
         val detection = detect(runOCR(capture), capture.visual)
         when {
             detection == null || detection.confidence < 85 -> null
@@ -867,6 +1136,40 @@ object ScreenStateRecovery {
     }.getOrElse { error ->
         log.warn(error) { "SCREEN_RECOVERY_RESULT_POSTCHECK_FAILED" }
         null
+    }
+
+    /**
+     * Resolve a real, visible Hearthstone window for recovery.  The E2E
+     * discovery path may return a coordinate-only sentinel while the process
+     * exists but has no window; that sentinel is never safe for OCR or Robot.
+     */
+    private fun resolveLiveGameWindow(): WinDef.HWND? {
+        val cached = ScriptStatus.gameHWND
+        if (!GameUtil.isAliveOfGame()) {
+            if (cached != null) {
+                log.warn { "SCREEN_RECOVERY_STALE_WINDOW cleared=$cached reason=game-process-missing" }
+            }
+            ScriptStatus.gameHWND = null
+            return null
+        }
+        val discovered = GameUtil.findGameHWND()
+        val live = discovered?.takeIf {
+            User32.INSTANCE.IsWindow(it) && User32.INSTANCE.IsWindowVisible(it)
+        }
+        if (live == null) {
+            log.warn {
+                "SCREEN_RECOVERY_WINDOW_UNAVAILABLE cached=${cached ?: "none"} " +
+                    "discovered=${discovered ?: "none"} reason=no-visible-game-window"
+            }
+            ScriptStatus.gameHWND = null
+            return null
+        }
+        if (cached == null || cached.toString() != live.toString()) {
+            log.info { "SCREEN_RECOVERY_WINDOW_REDISCOVERED old=${cached ?: "none"} new=$live" }
+        }
+        ScriptStatus.gameHWND = live
+        GameUtil.updateGameRect(live)
+        return live
     }
 
     /**
@@ -880,11 +1183,30 @@ object ScreenStateRecovery {
         val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
         val disconnected = text.contains("连接中断") ||
             text.contains("连接断开") ||
-            text.contains("离线状态")
+            text.contains("离线状态") ||
+            text.contains("离线太久") ||
+            text.contains("offlinefortoolong") ||
+            text.contains("youhavebeenoffline")
         val recoveryHint = text.contains("重新连接") ||
             text.contains("重新接") ||
-            text.contains("离线")
-        return disconnected && recoveryHint
+            text.contains("离线") ||
+            text.contains("reconnect") ||
+            text.contains("needtoreconnect")
+        val offlineTooLong = text.contains("离线太久") ||
+            text.contains("offlinefortoolong") ||
+            text.contains("youhavebeenofflinetoolong")
+        return (disconnected && recoveryHint) || offlineTooLong
+    }
+
+    /** Loading screen shown after the offline dialog accepts reconnect. */
+    internal fun looksLikeReconnectSpinnerText(ocrText: String): Boolean {
+        val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+        return text.contains("正在重新连接") ||
+            text.contains("重新连接中") ||
+            text.contains("正在连接服务器") ||
+            text.contains("连接服务器中") ||
+            text.contains("reconnecting") ||
+            text.contains("connectingtoserver")
     }
 
     private fun shouldAttemptReconnect(now: Long): Boolean {
@@ -902,6 +1224,7 @@ object ScreenStateRecovery {
         }
         if (detection.kind != ScreenKind.LOADING) {
             slowReconnectWarningObservedAt.set(0L)
+            loadingObservedAt.set(0L)
         }
 
         when (detection.kind) {
@@ -915,11 +1238,24 @@ object ScreenStateRecovery {
                 Mode.recover(ModeEnum.TOURNAMENT, "visible-deck-selection", enterStrategy = false)
                 log.warn {
                     "SCREEN_RECOVERY_APPLIED screen=DECK_SELECTION next=START_MATCHING " +
-                        "deck=${DeckStrategyManager.currentDeckStrategy?.name()}"
+                        "deck=${DeckStrategyManager.currentDeckStrategy?.name()} " +
+                        "deckSlot=${DeckStrategyManager.currentDeckStrategy?.let(TournamentModeStrategy::expectedDeckSlot)}"
                 }
                 EXTRA_THREAD_POOL.schedule({
-                    if (WorkTimeListener.working && !PauseStatus.isPause && !WarEx.inWar) {
-                        TournamentModeStrategy.startMatching()
+                        if (LifecycleTrace.recoveryCascadeSuppressed()) {
+                            log.info { "SCREEN_RECOVERY_DECK_SELECTION_SKIPPED reason=terminal-pause-fence" }
+                        } else if ((WorkTimeListener.working || PauseStatus.isAutomaticPause) &&
+                            PauseStatus.canRunAutomaticRecovery() && !WarEx.inWar
+                    ) {
+                        // A known deck-selection screen is an actionable recovery
+                        // result.  An earlier automatic safety pause (for example,
+                        // a transient mode-title OCR miss) must not leave the
+                        // recovery clicks behind ActionDispatchGate.  Never clear
+                        // a manual F2/UI pause here.
+                        if (PauseStatus.resumeAutomaticPause("deck-selection-recovery")) {
+                            log.warn { "SCREEN_RECOVERY_AUTO_RESUME reason=deck-selection-recovery" }
+                        }
+                        TournamentModeStrategy.recoverDeckSelectionAndStart()
                     }
                 }, 300, TimeUnit.MILLISECONDS)
             }
@@ -935,9 +1271,57 @@ object ScreenStateRecovery {
                 log.info { "SCREEN_RECOVERY_APPLIED screen=MATCHMAKING action=WAIT_FOR_GAMEPLAY" }
             }
 
+            ScreenKind.SHOP_OVERLAY -> {
+                if (Mode.currMode != ModeEnum.HUB) {
+                    log.warn {
+                        "SCREEN_RECOVERY_SHOP_OVERLAY_SKIPPED reason=mode-not-hub " +
+                            "mode=${Mode.currMode?.name ?: "NONE"}"
+                    }
+                    return false
+                }
+                // The overlay obscures the tournament entry button, so stop
+                // Hub polling before sending the close click.
+                Mode.recover(ModeEnum.HUB, "visible-shop-overlay", enterStrategy = false)
+                EXTRA_THREAD_POOL.schedule({
+                    if (WorkTimeListener.working && !PauseStatus.isPause && !WarEx.inWar &&
+                        Mode.currMode == ModeEnum.HUB
+                    ) {
+                        val accepted = HubModeStrategy.closeShopOverlayForRecovery()
+                        log.warn {
+                            "SCREEN_RECOVERY_APPLIED screen=SHOP_OVERLAY " +
+                                "action=CLOSE_OVERLAY accepted=$accepted"
+                        }
+                        if (accepted) {
+                            EXTRA_THREAD_POOL.schedule({
+                                if (WorkTimeListener.working && !PauseStatus.isPause &&
+                                    !WarEx.inWar && Mode.currMode == ModeEnum.HUB
+                                ) {
+                                    Mode.recover(
+                                        ModeEnum.HUB,
+                                        "shop-overlay-close-dispatched",
+                                        enterStrategy = true,
+                                    )
+                                }
+                            }, 800, TimeUnit.MILLISECONDS)
+                        }
+                    } else {
+                        log.info { "SCREEN_RECOVERY_SHOP_OVERLAY_CLOSE_SKIPPED reason=state-changed" }
+                    }
+                }, 300, TimeUnit.MILLISECONDS)
+            }
+
             ScreenKind.RECONNECT -> {
                 Mode.recover(ModeEnum.LOGIN, "visible-reconnect-screen", enterStrategy = false)
                 val now = System.currentTimeMillis()
+                val reconnectDecision = offlineReconnectRecovery.observe(
+                    OfflineReconnectRecovery.Screen.OFFLINE_PROMPT,
+                    now,
+                )
+                log.warn {
+                    "SCREEN_RECOVERY_RECONNECT_STATE state=${reconnectDecision.state} " +
+                        "action=${reconnectDecision.action} attempt=${reconnectDecision.attempt} " +
+                        "reason=${reconnectDecision.reason} result=prompt-detected"
+                }
                 val acceptedReconnectAt = reconnectAcceptedAt.get()
                 if (acceptedReconnectAt > 0L &&
                     shouldRestartStalledReconnect(acceptedReconnectAt, now) &&
@@ -954,27 +1338,44 @@ object ScreenStateRecovery {
                     // confirmed reconnect attempt has been stuck for the
                     // recovery threshold, restart the client directly.
                     Core.restart()
-                } else if (acceptedReconnectAt <= 0L && shouldAttemptReconnect(now)) {
+                } else if (acceptedReconnectAt <= 0L &&
+                    reconnectDecision.action == OfflineReconnectRecovery.Action.FOCUS_AND_CLICK_RECONNECT &&
+                    shouldAttemptReconnect(now)
+                ) {
                     log.warn {
                         "SCREEN_RECOVERY_APPLIED screen=RECONNECT mode=LOGIN " +
                             "action=CLICK_RECONNECT retryIntervalMs=$RECONNECT_RETRY_INTERVAL_MS"
                     }
                     EXTRA_THREAD_POOL.schedule({
-                        if (WorkTimeListener.working && !PauseStatus.isPause &&
+                        if (LifecycleTrace.recoveryCascadeSuppressed()) {
+                            log.info { "SCREEN_RECOVERY_RECONNECT_SKIPPED reason=terminal-pause-fence" }
+                        } else if ((WorkTimeListener.working || PauseStatus.isAutomaticPause) &&
+                            PauseStatus.canRunAutomaticRecovery() &&
                             !WarEx.inWar && Mode.currMode == ModeEnum.LOGIN
                         ) {
                             // This is the upstream reconnect input primitive;
                             // skip the pre-click right-click because the
                             // offline page is not a card/targeting state.
+                            ScriptStatus.gameHWND?.let(MouseUtil::focusWindowForInput)
                             val accepted = MouseUtil.leftButtonClickForRecovery(
                                 GameUtil.RECONNECT_RECT.getCenterClickPos(),
                             )
+                            val result = offlineReconnectRecovery.reportReconnectDispatched(
+                                System.currentTimeMillis(),
+                                accepted,
+                            )
                             log.info {
                                 "SCREEN_RECOVERY_RECONNECT_DISPATCHED input=recovery-sendinput " +
-                                    "accepted=$accepted"
+                                    "accepted=$accepted state=${result.state} action=${result.action}"
                             }
                             if (accepted) {
                                 reconnectAcceptedAt.set(System.currentTimeMillis())
+                                scheduleReconnectSpinnerProbe()
+                                if (PauseStatus.resumeAutomaticPause("reconnect-click-accepted")) {
+                                    log.warn {
+                                        "SCREEN_RECOVERY_AUTO_RESUME reason=reconnect-click-accepted"
+                                    }
+                                }
                             }
                         } else {
                             log.info { "SCREEN_RECOVERY_RECONNECT_SKIPPED reason=state-changed" }
@@ -993,7 +1394,11 @@ object ScreenStateRecovery {
                 // reconnect click and do not enter any credential/login flow.
                 Mode.recover(ModeEnum.LOGIN, "visible-reconnect-failure", enterStrategy = false)
                 EXTRA_THREAD_POOL.schedule({
-                    if (WorkTimeListener.working && !PauseStatus.isPause && !WarEx.inWar) {
+                        if (LifecycleTrace.recoveryCascadeSuppressed()) {
+                            log.info { "SCREEN_RECOVERY_RECONNECT_FAILURE_SKIPPED reason=terminal-pause-fence" }
+                        } else if ((WorkTimeListener.working || PauseStatus.isAutomaticPause) &&
+                            PauseStatus.canRunAutomaticRecovery() && !WarEx.inWar
+                    ) {
                         LoginModeStrategy.RECONNECT_RECOVERY_EXIT_RECT.lClick(false)
                         log.warn { "SCREEN_RECOVERY_APPLIED screen=RECONNECT_FAILURE action=DISMISS_RECOVERY_DIALOG" }
                     } else {
@@ -1002,9 +1407,61 @@ object ScreenStateRecovery {
                 }, 300, TimeUnit.MILLISECONDS)
             }
 
+            ScreenKind.RECONNECT_SPINNER -> {
+                Mode.recover(ModeEnum.STARTUP, "visible-reconnect-spinner", enterStrategy = false)
+                val now = System.currentTimeMillis()
+                val decision = offlineReconnectRecovery.observe(
+                    OfflineReconnectRecovery.Screen.RECONNECT_SPINNER,
+                    now,
+                )
+                log.warn {
+                    "SCREEN_RECOVERY_RECONNECT_STATE state=${decision.state} action=${decision.action} " +
+                        "attempt=${decision.attempt} reason=${decision.reason} result=spinner-detected"
+                }
+                when (decision.action) {
+                    OfflineReconnectRecovery.Action.FOCUS_AND_CLICK_CANCEL -> EXTRA_THREAD_POOL.schedule({
+                        if (LifecycleTrace.recoveryCascadeSuppressed()) {
+                            log.info { "SCREEN_RECOVERY_RECONNECT_CANCEL_SKIPPED reason=terminal-pause-fence" }
+                        } else if ((WorkTimeListener.working || PauseStatus.isAutomaticPause) &&
+                            PauseStatus.canRunAutomaticRecovery() && !WarEx.inWar
+                        ) {
+                            ScriptStatus.gameHWND?.let(MouseUtil::focusWindowForInput)
+                            val accepted = MouseUtil.leftButtonClickForRecovery(
+                                GameUtil.CANCEL_CONNECT_RECT.getCenterClickPos(),
+                            )
+                            val result = offlineReconnectRecovery.reportCancelDispatched(
+                                System.currentTimeMillis(),
+                                accepted,
+                            )
+                            log.warn {
+                                "SCREEN_RECOVERY_RECONNECT_CANCEL_DISPATCHED accepted=$accepted " +
+                                    "state=${result.state} action=${result.action}"
+                            }
+                            if (accepted) scheduleReconnectSpinnerProbe()
+                            if (result.action == OfflineReconnectRecovery.Action.ESCALATE) {
+                                PauseStatus.isPause = true
+                            }
+                        } else {
+                            log.info { "SCREEN_RECOVERY_RECONNECT_CANCEL_SKIPPED reason=state-changed" }
+                        }
+                    }, 300, TimeUnit.MILLISECONDS)
+
+                    OfflineReconnectRecovery.Action.ESCALATE -> {
+                        log.error {
+                            "SCREEN_RECOVERY_RECONNECT_ESCALATED state=${decision.state} " +
+                                "reason=${decision.reason} result=spinner-still-visible"
+                        }
+                        PauseStatus.isPause = true
+                    }
+
+                    else -> Unit
+                }
+            }
+
             ScreenKind.LOADING -> {
                 Mode.recover(ModeEnum.STARTUP, "visible-loading-screen", enterStrategy = false)
                 val now = System.currentTimeMillis()
+                val loadingStartedAt = firstLoadingObservedAt(now)
                 val acceptedReconnectAt = reconnectAcceptedAt.get()
                 val observedWarningAt = if (acceptedReconnectAt <= 0L &&
                     detection.evidence == "reconnect-slow-loading-text"
@@ -1016,26 +1473,51 @@ object ScreenStateRecovery {
                     observedWarningAt,
                     now,
                 )
-                if (detection.evidence == "reconnect-slow-loading-text" &&
+                val slowReconnectStalled = detection.evidence == "reconnect-slow-loading-text" &&
                     shouldRestartStalledReconnect(reconnectStartedAt, now) &&
                     consumeStalledReconnectAnchor(acceptedReconnectAt, reconnectStartedAt)
-                ) {
+                val genericLoadingStalled = !slowReconnectStalled &&
+                    shouldRestartStalledLoading(loadingStartedAt, now) &&
+                    consumeStalledLoadingAnchor(loadingStartedAt)
+                if (slowReconnectStalled || genericLoadingStalled) {
                     log.warn {
                         "SCREEN_RECOVERY_APPLIED screen=LOADING action=RESTART_CLIENT " +
-                            "reason=stalled-reconnect-loading elapsedMs=${now - reconnectStartedAt} " +
+                            "reason=${if (slowReconnectStalled) "stalled-reconnect-loading" else "stale-loading"} " +
+                            "elapsedMs=${now - if (slowReconnectStalled) reconnectStartedAt else loadingStartedAt} " +
                             "thresholdMs=$STALLED_RECONNECT_LOADING_RESTART_MS"
                     }
                     // Reuse the fatal-error recovery primitive. It pauses
                     // input, launches a fresh client, then lets the starter
-                    // rediscover that window. Generic loading never reaches
-                    // this path.
+                    // rediscover that window. This also covers a reconnect
+                    // dialog whose text OCR was missed and was classified
+                    // only by the loading visual.
                     Core.restart()
                 } else {
-                    log.info { "SCREEN_RECOVERY_APPLIED screen=LOADING action=WAIT_FOR_CLIENT" }
+                    log.info {
+                        "SCREEN_RECOVERY_APPLIED screen=LOADING action=WAIT_FOR_CLIENT " +
+                            "loadingObservedForMs=${now - loadingStartedAt} " +
+                            "restartThresholdMs=$STALLED_RECONNECT_LOADING_RESTART_MS"
+                    }
                 }
             }
 
             else -> {
+                if (detection.kind == ScreenKind.HOME ||
+                    detection.kind == ScreenKind.TOURNAMENT ||
+                    detection.kind == ScreenKind.DECK_SELECTION
+                ) {
+                    val reconnectState = offlineReconnectRecovery.observe(
+                        OfflineReconnectRecovery.Screen.CONNECTED,
+                        System.currentTimeMillis(),
+                    )
+                    if (reconnectState.action == OfflineReconnectRecovery.Action.MARK_RECONNECTED) {
+                        reconnectAcceptedAt.set(0L)
+                        log.info {
+                            "SCREEN_RECOVERY_RECONNECT_STATE state=${reconnectState.state} " +
+                                "action=${reconnectState.action} reason=${reconnectState.reason} result=connected"
+                        }
+                    }
+                }
                 Mode.recover(detection.mode, "visible-${detection.kind.code.lowercase(Locale.ROOT)}", enterStrategy = true)
                 log.warn {
                     "SCREEN_RECOVERY_APPLIED screen=${detection.kind.code} mode=${detection.mode.name} " +

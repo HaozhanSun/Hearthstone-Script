@@ -31,6 +31,7 @@ class MctsTurnPhaseFence(initialCycle: Int = 1) {
         phase: MctsActionOrderPhase?,
         isEndTurn: Boolean,
         endTurnLegal: Boolean,
+        allowPhaseReopen: Boolean = false,
     ): Boolean {
         if (isEndTurn) return endTurnLegal
         phase ?: return false
@@ -39,7 +40,7 @@ class MctsTurnPhaseFence(initialCycle: Int = 1) {
                 phase === MctsActionOrderPhase.POST_HERO_ATTACK_LOCATION
         }
         val highest = highestCompletedPhase ?: return true
-        return phase.monotonicRank >= highest.monotonicRank
+        return allowPhaseReopen || phase.monotonicRank >= highest.monotonicRank
     }
 
     fun observe(phase: MctsActionOrderPhase?) {

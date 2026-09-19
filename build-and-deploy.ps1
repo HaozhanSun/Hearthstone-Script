@@ -214,7 +214,7 @@ if (-not [string]::IsNullOrWhiteSpace($deployedVersion) -and $currentVersion -eq
 
 $mavenBaseArgs = @('-f', $pomPath, '-pl', 'hs-script-app', '-am', '-Pjvm', '-Djava.version=24', '-Dproject.build.outputTimestamp=0', "-Dbuild-channel=$Channel")
 if (-not $SkipTests) {
-    $testArgs = $mavenBaseArgs + @('-DforkCount=0', '-Dtest=CardTimingPolicyTest,MctsReplayTraceTest,MctsRoundScreenshotTest,SurrenderPolicyTest,GameUtilSurrenderGuardTest,ScreenStateRecoveryTest,UnknownStateScreenshotTest,TurnEndActionGuardTest,PirateDemonHunterMctsExperimentModelTest,DebugRunLeaseTest,DebugRunUiContractTest,ScheduleOverrideLogGateTest,StartupRunWindowTest,WorkTimeJitterTest,WorkTimeRuleSetTest,WorkTimeRuleTest,GlobalHotkeyListenerTest,UiLogFormatterTest', '-Dsurefire.failIfNoSpecifiedTests=false', 'test')
+    $testArgs = $mavenBaseArgs + @('-DforkCount=0', '-Dtest=AbstractLogListenerTest,CardTimingPolicyTest,CardIdentityCoverageTest,ParsedCardActionFactoryTest,MonteCarloTreeNodeDeferredActionTest,MctsReplayTraceTest,MctsRoundScreenshotTest,SurrenderPolicyTest,GameUtilSurrenderGuardTest,ScreenStateRecoveryTest,ScreenStateRoiSelectorTest,ScreenRecoveryFocusRetryPolicyTest,UnknownStateScreenshotTest,TurnEndActionGuardTest,PirateDemonHunterMctsExperimentModelTest,PirateWarriorMctsGoldenScenarioTest,PirateWarriorMctsModelTest,PirateWarriorOfflineReplayTest,ElementalMageMctsStrategyTest,DebugRunLeaseTest,DebugRunUiContractTest,ScheduleOverrideLogGateTest,StartupRunWindowTest,WorkTimeJitterTest,WorkTimeRuleSetTest,WorkTimeRuleTest,GlobalHotkeyListenerTest,UiLogFormatterTest', '-Dsurefire.failIfNoSpecifiedTests=false', 'test')
     Write-Output 'TARGETED_TESTS=enabled'
     & $mavenWrapper @testArgs
     if ($LASTEXITCODE -ne 0) { throw "Targeted regression tests failed with exit code $LASTEXITCODE" }
@@ -289,6 +289,15 @@ try {
         foreach ($pluginJar in Get-ChildItem -LiteralPath $stagedPlugins -Filter '*.jar' -File) {
             Copy-Item -LiteralPath $pluginJar.FullName -Destination (Join-Path $runtimeRoot "plugin\$($pluginJar.Name)") -Force
         }
+    }
+    # Keep only the current versioned strategy plugin in lib. The launcher
+    # assembles its classpath from this directory; leaving an older numbered
+    # copy beside the current one lets classpath order select stale strategy
+    # code even when the manifest and plugin/ copy are correct.
+    if (Test-Path -LiteralPath $runtimeLib -PathType Container) {
+        Get-ChildItem -LiteralPath $runtimeLib -Filter 'hs-script-base-strategy-plugin-*.jar' -File |
+            Where-Object { $_.Name -ne "hs-script-base-strategy-plugin-$strategyPluginVersion.jar" } |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
     }
     Copy-Item -LiteralPath $strategyTarget -Destination (Join-Path $runtimeLib "hs-script-base-strategy-plugin-$strategyPluginVersion.jar") -Force
     Copy-Item -LiteralPath $cardPluginTarget -Destination (Join-Path $runtimeLib 'hs-script-base-card-plugin-1.1.4.jar') -Force

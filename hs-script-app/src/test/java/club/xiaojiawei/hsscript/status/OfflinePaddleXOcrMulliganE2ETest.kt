@@ -168,7 +168,11 @@ class OfflinePaddleXOcrMulliganE2ETest {
             )
 
             assertEquals(expected, observation.action, frameId)
-            assertEquals(OcrProviderKind.PADDLEX.name, observation.provider, frameId)
+            // The watchdog intentionally uses its bounded local OCR path for
+            // terminal/result classification, even when rank detection uses
+            // PaddleX. This keeps a sidecar timeout from blocking surrender
+            // recovery and is part of the provider boundary contract.
+            assertEquals(OcrProviderKind.LEGACY.name, observation.provider, frameId)
             assertTrue(
                 observation.screenshotPath == null || Files.isRegularFile(Path.of(observation.screenshotPath)),
                 frameId,
@@ -194,7 +198,9 @@ class OfflinePaddleXOcrMulliganE2ETest {
         )
         assertEquals(ScreenWatchdogKind.UNKNOWN, unknown.kind)
         assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN, unknown.action)
-        assertEquals(OcrProviderKind.PADDLEX.name, unknown.provider)
+        // ScreenWatchdog is deliberately local-legacy OCR; PaddleX remains
+        // the provider for the rank probe itself.
+        assertEquals(OcrProviderKind.LEGACY.name, unknown.provider)
         assertFalse(PauseStatus.isPause)
         assertTrue(unknown.reason.isNotBlank(), "the bounded recovery reason must be auditable")
         assertTrue(Files.isRegularFile(Path.of(fixture.frame("unknown").screenshotPath)))

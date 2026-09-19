@@ -177,7 +177,10 @@ class PirateWarriorOfflineReplayTest {
     }
 
     private fun frontlineAxeNoKill(): Evaluation {
-        val war = frontlineAxeWar(heroHealth = 10, rivalHeroHealth = 30, minionHealth = 7)
+        // The entity attack already includes the equipped weapon.  Use a
+        // six-attack live hero here so the one ready pirate is genuinely the
+        // extra point required for the seven-health target.
+        val war = frontlineAxeWar(heroHealth = 10, rivalHeroHealth = 30, minionHealth = 7, heroAttack = 6)
         war.addCard(testCard("READY_PIRATE", 1), war.me.playArea)
         val axeAction = heroAttackActions(war).first { hitsRivalMinion(it, war) }
         val legal = PirateWarriorMctsModel.isActionLegal(axeAction, war)
@@ -432,9 +435,14 @@ class PirateWarriorOfflineReplayTest {
         experimentalSearch = true,
     )
 
-    private fun frontlineAxeWar(heroHealth: Int, rivalHeroHealth: Int, minionHealth: Int): War {
+    private fun frontlineAxeWar(
+        heroHealth: Int,
+        rivalHeroHealth: Int,
+        minionHealth: Int,
+        heroAttack: Int = 3,
+    ): War {
         val war = testWar(turn = 2, mana = 4)
-        war.addCard(testHero("MY_HERO", heroHealth, attack = 3), war.me.playArea)
+        war.addCard(testHero("MY_HERO", heroHealth, attack = heroAttack), war.me.playArea)
         war.addCard(testCard(PirateWarriorMctsModel.FRONTLINE_AXE, 4, attack = 3).apply {
             cardType = CardTypeEnum.WEAPON
             cardRace = CardRaceEnum.UNKNOWN

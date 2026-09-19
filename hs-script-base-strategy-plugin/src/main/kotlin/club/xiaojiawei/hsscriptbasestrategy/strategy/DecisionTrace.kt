@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.util.CardDBUtil
+import club.xiaojiawei.hsscriptcardsdk.util.CardIdentityCatalog
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -117,6 +118,8 @@ internal object DecisionTrace {
         knownDisplayNames.entries.firstOrNull { (id, _) ->
             card.cardId == id || card.cardId.contains(id)
         }?.let { return it.value }
+
+        CardIdentityCatalog.lookup(card.cardId)?.let { return it.name }
 
         card.getFormatEntityName().takeIf { it.isNotBlank() }?.let { return it }
 

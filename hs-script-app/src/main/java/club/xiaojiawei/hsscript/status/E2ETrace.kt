@@ -11,6 +11,11 @@ import java.io.RandomAccessFile
  * game. These flags make the result marker require the normal-game path.
  */
 object E2ETrace {
+    enum class PowerLogTerminal {
+        WON,
+        LOST,
+        CONCEDED,
+    }
     private val enabled = System.getProperty("hs.script.e2e") == "true"
     private val stateFile: File? = if (enabled) {
         File("log", "e2e-milestones-${System.getProperty("hs.script.e2e.run-id", "unknown")}.state")
@@ -127,6 +132,20 @@ object E2ETrace {
      * reached the in-memory model, especially after a watchdog replay.
      */
     fun readPowerLogResult(logPath: String?, playerGameId: String): Boolean? {
+        return when (readPowerLogTerminal(logPath, playerGameId)) {
+            PowerLogTerminal.WON -> true
+            PowerLogTerminal.LOST, PowerLogTerminal.CONCEDED -> false
+            null -> null
+        }
+    }
+
+    /**
+     * Reads the latest terminal marker without discarding whether the player
+     * conceded.  The result handler needs that distinction for the visible
+     * result label: a valid Power.log CONCEDED/LOST marker must never be
+     * rendered as draw-or-unknown just because the Java model raced the log.
+     */
+    fun readPowerLogTerminal(logPath: String?, playerGameId: String): PowerLogTerminal? {
         // This parser is also used by the normal result handler.  E2E mode
         // controls milestone persistence, not whether Power.log is the
         // authoritative source of the terminal result.
@@ -146,15 +165,11 @@ object E2ETrace {
                 // in a fixed order lets an older WON marker override a newer
                 // CONCEDED/LOST marker, which mislabeled surrender results.
                 val latestResult = listOf(
-                    "WON" to text.lastIndexOf(playerWon),
-                    "LOST" to text.lastIndexOf(playerLost),
-                    "CONCEDED" to text.lastIndexOf(playerConceded),
+                    PowerLogTerminal.WON to text.lastIndexOf(playerWon),
+                    PowerLogTerminal.LOST to text.lastIndexOf(playerLost),
+                    PowerLogTerminal.CONCEDED to text.lastIndexOf(playerConceded),
                 ).filter { it.second >= 0 }.maxByOrNull { it.second }?.first
-                when (latestResult) {
-                    "WON" -> true
-                    "LOST", "CONCEDED" -> false
-                    else -> null
-                }
+                latestResult
             }
         }.getOrNull()
     }

@@ -20,9 +20,17 @@ abstract class AbstractStarter : ScheduledCloser{
     protected var scheduledFuture: ScheduledFuture<*>? = null
 
     fun start() {
-        log.info { "执行【${javaClass.simpleName}】" }
+        val starterName = javaClass.simpleName
+        val startedAt = System.currentTimeMillis()
+        log.info { "STARTUP_STARTER_BEGIN name=$starterName" }
         stopTask()
-        execStart()
+        try {
+            execStart()
+        } finally {
+            log.info {
+                "STARTUP_STARTER_DISPATCHED name=$starterName elapsedMs=${System.currentTimeMillis() - startedAt}"
+            }
+        }
     }
 
     fun setNextStarter(nextStarter: AbstractStarter?): AbstractStarter {

@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.MctsDeckProfileTelemetry
 import club.xiaojiawei.hsscript.status.Mode
+import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
@@ -489,6 +490,7 @@ object DeckStrategyActuator {
                         "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                         "screenshotLink=${evidence?.link ?: "none"}"
                 }
+                LifecycleTrace.requestActionRecovery("mcts-turn-end-replan-exhausted")
                 if (replanDecision.allowEndTurnWhenExhausted) {
                     MctsReplayTrace.record(
                         war,

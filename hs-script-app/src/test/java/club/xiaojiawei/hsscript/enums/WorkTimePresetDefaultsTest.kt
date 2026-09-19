@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.enums
 
 import club.xiaojiawei.hsscript.bean.WorkTimeRule
 import club.xiaojiawei.hsscript.bean.WorkTimeRuleSet
+import club.xiaojiawei.hsscript.status.WorkTimeRuleSlotStrategyNormalizer
 import club.xiaojiawei.hsscript.utils.WorkTimeWindow
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import java.time.LocalTime
@@ -42,7 +43,7 @@ class WorkTimePresetDefaultsTest {
         assertEquals(13, rules.size)
         assertTrue(rules.all { it.enable })
         assertTrue(rules.any { it.start() > it.end() })
-        assertDefaultRuleFields(rules)
+            assertDefaultRuleFields(preset, rules)
 
         val durations = rules.map { WorkTimeWindow.durationMinutes(it.start(), it.end()) }
         val gaps =
@@ -74,12 +75,22 @@ class WorkTimePresetDefaultsTest {
         assertTrue(startHours.any { it == 23 })
     }
 
-    private fun assertDefaultRuleFields(rules: List<WorkTimeRule>) {
-        rules.forEach {
-            assertEquals(DEFAULT_OPERATIONS, it.operates)
-            assertEquals(DEFAULT_RUN_MODE_ENUM, it.runMode)
-            assertEquals(DEFAULT_DECK_STRATEGY_ID, it.strategyId)
-            assertEquals(DEFAULT_DECK_POS.toSet(), it.deckPos)
+    private fun assertDefaultRuleFields(preset: WorkTimeRuleSet, rules: List<WorkTimeRule>) {
+        rules.forEachIndexed { index, rule ->
+            assertEquals(DEFAULT_OPERATIONS, rule.operates)
+            assertEquals(DEFAULT_RUN_MODE_ENUM, rule.runMode)
+            assertEquals(DEFAULT_DECK_STRATEGY_ID, rule.strategyId)
+            assertEquals(1, rule.deckPos.size)
+            val slot = rule.deckPos.single()
+            assertEquals(
+                WorkTimeRuleSlotStrategyNormalizer.pairedStrategyId(slot)?.let { mapOf(slot to it) } ?: emptyMap(),
+                rule.pairedStrategyIds,
+            )
+            if (preset.id == WorkTimeRuleSlotStrategyNormalizer.DEFAULT_PRESET_ONE_ID) {
+                assertEquals(WorkTimeRuleSlotStrategyNormalizer.assignmentFor(preset)[index], slot)
+            } else {
+                assertEquals(DEFAULT_DECK_POS.toSet(), rule.deckPos)
+            }
         }
     }
 

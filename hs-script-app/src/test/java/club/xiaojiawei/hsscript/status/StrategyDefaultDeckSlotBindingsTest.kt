@@ -16,13 +16,15 @@ import kotlin.test.assertTrue
 
 class StrategyDefaultDeckSlotBindingsTest {
     @Test
-    fun `built-in defaults bind pirate demon hunter to slot one and pirate warrior to slot two`() {
+    fun `built-in defaults bind wild strategies to their configured slots`() {
         val defaults = StrategyDefaultDeckSlotBindings.deserialize(StrategyDefaultDeckSlotBindings.defaultBindingsJson())
 
         assertEquals(1, defaults[PIRATE_DEMON_HUNTER])
         assertEquals(2, defaults[PIRATE_WARRIOR])
+        assertEquals(3, defaults[ELEMENTAL_MAGE])
         assertEquals(1, StrategyDefaultDeckSlotBindings.deckSlotForStrategy(PIRATE_DEMON_HUNTER, bindings = defaults))
         assertEquals(2, StrategyDefaultDeckSlotBindings.deckSlotForStrategy(PIRATE_WARRIOR, bindings = defaults))
+        assertEquals(3, StrategyDefaultDeckSlotBindings.deckSlotForStrategy(ELEMENTAL_MAGE, bindings = defaults))
     }
 
     @Test
@@ -127,6 +129,7 @@ class StrategyDefaultDeckSlotBindingsTest {
         )))
 
         assertTrue(ConfigEnum.STRATEGY_DEFAULT_DECK_SLOTS.defaultValue.contains(PIRATE_DEMON_HUNTER))
+        assertTrue(ConfigEnum.STRATEGY_DEFAULT_DECK_SLOTS.defaultValue.contains(ELEMENTAL_MAGE))
         assertTrue(fxml.contains("fx:id=\"defaultDeckSlotBox\""))
         assertTrue(fxml.contains("保存为默认策略-卡组槽位绑定"))
         assertTrue(controller.contains("saveDefaultDeckSlotBinding"))
@@ -170,6 +173,7 @@ class StrategyDefaultDeckSlotBindingsTest {
     companion object {
         private const val PIRATE_DEMON_HUNTER = DEFAULT_PIRATE_DEMON_HUNTER_STRATEGY_ID
         private const val PIRATE_WARRIOR = DEFAULT_PIRATE_WARRIOR_STRATEGY_ID
+        private const val ELEMENTAL_MAGE = DEFAULT_ELEMENTAL_MAGE_STRATEGY_ID
         private const val CANNON_WARRIOR = "e71234fa-9-standard-cannon-warrior-v1-0-9b1f-4d29-8f4f"
     }
 }

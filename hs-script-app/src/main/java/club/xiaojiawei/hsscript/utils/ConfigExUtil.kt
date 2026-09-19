@@ -24,6 +24,9 @@ import club.xiaojiawei.hsscript.starter.InjectGameStarter
 import club.xiaojiawei.hsscript.starter.InjectedAfterStarter
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
+import club.xiaojiawei.hsscript.status.WorkTimeRuleSlotStrategyNormalizationEvent
+import club.xiaojiawei.hsscript.status.WorkTimeRuleSlotStrategyNormalizer
+import club.xiaojiawei.hsscriptbase.config.log
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -182,13 +185,38 @@ object ConfigExUtil {
     }
 
     fun getWorkTimeRuleSet(): MutableList<WorkTimeRuleSet> =
-        ConfigUtil.getArray(
-            ConfigEnum.WORK_TIME_RULE_SET,
-            WorkTimeRuleSet::class.java,
-        ) ?: mutableListOf()
+        (
+            ConfigUtil.getArray(
+                ConfigEnum.WORK_TIME_RULE_SET,
+                WorkTimeRuleSet::class.java,
+            ) ?: mutableListOf()
+        ).also { ruleSets ->
+            logWorkTimeSlotStrategyNormalization(
+                WorkTimeRuleSlotStrategyNormalizer.normalize(ruleSets).events,
+                "config-load",
+            )
+        }
 
     fun storeWorkTimeRuleSet(workTimeRuleSets: List<WorkTimeRuleSet>) {
+        logWorkTimeSlotStrategyNormalization(
+            WorkTimeRuleSlotStrategyNormalizer.normalize(workTimeRuleSets).events,
+            "config-store",
+        )
         ConfigUtil.putString(ConfigEnum.WORK_TIME_RULE_SET, objectMapper.writeValueAsString(workTimeRuleSets))
+    }
+
+    private fun logWorkTimeSlotStrategyNormalization(
+        events: List<WorkTimeRuleSlotStrategyNormalizationEvent>,
+        source: String,
+    ) {
+        events.forEach { event ->
+            log.warn {
+                "SCHEDULE_SLOT_ASSIGNMENT_NORMALIZED source=$source ruleSet=${event.ruleSetId} " +
+                    "ruleSetName=${event.ruleSetName} ruleIndex=${event.ruleIndex} " +
+                    "beforeDeckPos=${event.beforeDeckPos.sorted()} afterDeckSlot=${event.afterDeckSlot ?: "n/a"} " +
+                    "pairedStrategy=${event.pairedStrategyId ?: "n/a"} assignmentReason=${event.assignmentReason}"
+            }
+        }
     }
 
     /**

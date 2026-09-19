@@ -66,6 +66,14 @@ object WorkTimeListener {
         val occurrence: WorkTimeWindow.Occurrence,
     )
 
+    data class ScheduleRuleSnapshot(
+        val ruleSetId: String?,
+        val ruleIndex: Int?,
+        val rule: WorkTimeRule,
+        val scheduleDate: LocalDate?,
+        val effectiveWindow: String,
+    )
+
     private val jitterCacheLock = Any()
     private val jitterCache = mutableMapOf<JitterKey, WorkTimeJitter.Window>()
     private var jitterCacheObservedToday: LocalDate? = null
@@ -430,6 +438,20 @@ object WorkTimeListener {
     }
 
     fun isInsideConfiguredSchedule(): Boolean = scheduledDuringWorkDate
+
+    @Synchronized
+    fun currentScheduleRuleSnapshot(): ScheduleRuleSnapshot? {
+        if (!scheduledDuringWorkDate) return null
+        val rule = currentWorkTimeRule ?: return null
+        val window = currentScheduleWindow
+        return ScheduleRuleSnapshot(
+            ruleSetId = currentScheduleRuleSetId,
+            ruleIndex = currentScheduleRuleIndex,
+            rule = rule.clone(),
+            scheduleDate = currentScheduleDate,
+            effectiveWindow = if (window == null) "unknown" else "${window.start}-${window.end}",
+        )
+    }
 
     /** Called by DebugRunController after its monotonic lease expires. */
     fun onDebugRunExpired() {

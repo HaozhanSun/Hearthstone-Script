@@ -8,6 +8,8 @@ package club.xiaojiawei.hsscript.enums
 enum class SpecialCardEnum(val cardId: String, val comment: String) {
 
     PRINCE_RENATHAL("REV_018", "雷纳索尔王子"),
+    THE_DEMON_SEED("SW_091", "恶魔之种"),
+    DARKBISHOP_BENEDICTUS("SW_448", "黑暗主教本尼迪塔斯"),
     C_THUN_THE_SHATTERED("DMF_254", "克苏恩，破碎之劫"),
     BAKU_THE_MOONEATER("GIL_826", "噬月者巴库"),
     GENN_GREYMANE("GIL_692", "吉恩·格雷迈恩"),

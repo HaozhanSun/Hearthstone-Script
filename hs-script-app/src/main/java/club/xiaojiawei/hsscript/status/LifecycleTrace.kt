@@ -1,12 +1,17 @@
 package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscript.bean.single.WarEx
+import club.xiaojiawei.hsscript.config.StarterConfig
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
+import club.xiaojiawei.hsscript.ocr.OcrProviderKind
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
+import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
+import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -19,6 +24,7 @@ object LifecycleTrace {
     private const val GAME_OVER_STUCK_TIMEOUT_MS = 30_000L
     private const val STATE_RECOVERY_TIMEOUT_MS = 30_000L
     private const val STATE_RECOVERY_RETRY_INTERVAL_MS = 30_000L
+    private const val STARTUP_RECOVERY_GRACE_MS = 3_000L
 
     @Volatile
     private var mainWindowShowing = false
@@ -32,11 +38,24 @@ object LifecycleTrace {
 
     private var stateRecoverySince = 0L
     private var stateRecoveryFingerprint = ""
+    private var stateRecoveryPowerLogPosition = Long.MIN_VALUE
     private var stateRecoveryAttemptAt = 0L
     // The lifecycle poller resets this when state changes while recovery runs
     // on EXTRA_THREAD_POOL. Keep the bounded retry counter race-free.
     private val stateRecoveryForegroundDeferrals = AtomicInteger(0)
     private val stateRecoveryInFlight = AtomicBoolean(false)
+
+    private val noProgressWatchdog = NoProgressWatchdog()
+    private val recoveryCascadeGuard = RecoveryCascadeGuard()
+    private val foregroundFailureCount = AtomicInteger(0)
+    private val foregroundRecoveryPending = AtomicBoolean(false)
+    @Volatile
+    private var noProgressBoundPid: Long? = null
+    @Volatile
+    private var noProgressBoundPowerLogPath: String? = null
+
+    @Volatile
+    private var startupRecoveryGraceUntil = 0L
 
     fun start() {
         if (running) return
@@ -46,6 +65,7 @@ object LifecycleTrace {
             while (running) {
                 detectStuckGameOver()
                 detectStuckStateRecovery()
+                detectNoProgress()
                 val state = snapshot()
                 if (state != lastState) {
                     log.info { "LIFECYCLE_STATE $state" }
@@ -78,8 +98,87 @@ object LifecycleTrace {
         mark("main-window showing=$showing reason=$reason")
     }
 
+    /**
+     * Starting the client is intentionally asynchronous: the ordinary starter
+     * chain must attach the log listeners and discover the first mode before a
+     * screen-recovery OCR pass is allowed to intervene.  Recovery remains a
+     * fallback when this grace period expires without a state transition.
+     */
+    fun markStartupRequested(reason: String, now: Long = System.currentTimeMillis()) {
+        startupRecoveryGraceUntil = now + STARTUP_RECOVERY_GRACE_MS
+        mark("startup-recovery-grace reason=$reason until=$startupRecoveryGraceUntil")
+    }
+
+    internal fun startupRecoveryGraceRemainingMs(now: Long): Long =
+        (startupRecoveryGraceUntil - now).coerceAtLeast(0L)
+
     fun mark(reason: String) {
         log.info { "LIFECYCLE_EVENT pid=${ProcessHandle.current().pid()} reason=$reason" }
+    }
+
+    /** Fence recovery after a terminal startup/no-progress pause. */
+    internal fun stopRecoveryCascade(rootCause: String) {
+        if (recoveryCascadeGuard.trip(rootCause)) {
+            log.error {
+                "RECOVERY_CASCADE_STOP rootCause=$rootCause " +
+                    "followOn=screen-recovery,unknown-state-screenshot,platform-close-skipped " +
+                    "action=SUPPRESS_UNTIL_RESUME"
+            }
+        }
+    }
+
+    /**
+     * Admission check for delayed recovery callbacks. A callback queued just
+     * before a terminal pause must not clear that pause and dispatch input.
+     */
+    internal fun recoveryCascadeSuppressed(): Boolean =
+        recoveryCascadeGuard.suppressWhilePaused(PauseStatus.isPause)
+
+    internal fun shouldObserveNoProgress(
+        working: Boolean,
+        automaticPause: Boolean,
+        replaying: Boolean,
+        paused: Boolean,
+        recoveryPending: Boolean,
+    ): Boolean = (working || automaticPause) && !replaying &&
+        (!paused || automaticPause || recoveryPending)
+
+    /**
+     * Called by guarded desktop input when Windows repeatedly leaves another
+     * top-level window foreground.  A live JVM and a growing diagnostic log
+     * are not enough in this case: no click was actually dispatched.
+     */
+    fun recordForegroundFailure(target: String, actual: String? = null) {
+        val count = foregroundFailureCount.incrementAndGet()
+        log.warn {
+            "NO_PROGRESS_FOREGROUND_FAILURE count=$count target=$target " +
+                "actual=${actual ?: "unknown"} dispatch=false"
+        }
+        if (count >= NoProgressWatchdog.DEFAULT_FOREGROUND_FAILURE_THRESHOLD &&
+            foregroundRecoveryPending.compareAndSet(false, true)
+        ) {
+            log.error {
+                "NO_PROGRESS_FOREGROUND_RECOVERY_PENDING count=$count " +
+                    "reason=foreground-mismatch-persistent action=PAUSE_AND_RECOVER"
+            }
+            AbstractModeStrategy.cancelAllTask()
+            PauseStatus.isPause = true
+        }
+    }
+
+    fun recordForegroundRecovered() {
+        if (foregroundFailureCount.getAndSet(0) > 0) {
+            log.info { "NO_PROGRESS_FOREGROUND_RECOVERED dispatch=false" }
+        }
+    }
+
+    /** Used when a turn-end replan exhausted without a confirmed dispatch. */
+    fun requestActionRecovery(reason: String) {
+        log.error { "NO_PROGRESS_ACTION_RECOVERY_REQUESTED reason=$reason dispatch=false" }
+        if (foregroundRecoveryPending.compareAndSet(false, true)) {
+            AbstractModeStrategy.cancelAllTask()
+            PauseStatus.isPause = true
+        }
     }
 
     /**
@@ -133,11 +232,17 @@ object LifecycleTrace {
      * interrupted by this fallback.
      */
     private fun detectStuckStateRecovery() {
-        if (!WorkTimeListener.working || PauseStatus.isPause || WarEx.inWar ||
+        if (recoveryCascadeGuard.suppressWhilePaused(PauseStatus.isPause)) {
+            return
+        }
+        if ((!WorkTimeListener.working && !PauseStatus.isAutomaticPause) ||
+            (!PauseStatus.canRunAutomaticRecovery()) ||
+            WarEx.inWar ||
             PowerLogListener.replayingExistingLog
         ) {
             stateRecoverySince = 0L
             stateRecoveryFingerprint = ""
+            stateRecoveryPowerLogPosition = Long.MIN_VALUE
             stateRecoveryAttemptAt = 0L
             stateRecoveryForegroundDeferrals.set(0)
             return
@@ -145,14 +250,31 @@ object LifecycleTrace {
 
         val fingerprint = stateFingerprint()
         val now = System.currentTimeMillis()
-        if (fingerprint != stateRecoveryFingerprint) {
+        val powerLogPosition = PowerLogListener.logFile?.getPosition() ?: Long.MIN_VALUE
+        if (fingerprint != stateRecoveryFingerprint ||
+            (powerLogPosition != Long.MIN_VALUE && powerLogPosition != stateRecoveryPowerLogPosition)
+        ) {
             stateRecoveryFingerprint = fingerprint
+            stateRecoveryPowerLogPosition = powerLogPosition
             stateRecoverySince = now
             stateRecoveryAttemptAt = 0L
             stateRecoveryForegroundDeferrals.set(0)
             return
         }
         if (stateRecoverySince == 0L) stateRecoverySince = now
+
+        val startupHandshake = !WarEx.inWar &&
+            Mode.currMode == null &&
+            PowerLogListener.logFile?.let { it.length() <= 1L } != false &&
+            WarEx.war.currentPhase == WarPhaseEnum.FILL_DECK
+        val startupGraceRemaining = startupRecoveryGraceRemainingMs(now)
+        if (startupHandshake && startupGraceRemaining > 0L) {
+            log.info {
+                "SCREEN_RECOVERY_DEFERRED reason=startup-grace " +
+                    "remainingMs=$startupGraceRemaining state=$fingerprint"
+            }
+            return
+        }
 
         val stuckFor = now - stateRecoverySince
         if (stuckFor < STATE_RECOVERY_TIMEOUT_MS ||
@@ -163,7 +285,10 @@ object LifecycleTrace {
         }
 
         stateRecoveryAttemptAt = now
-        log.info { "SCREEN_RECOVERY_SCHEDULED stuckForMs=$stuckFor state=$fingerprint" }
+        log.info {
+            "SCREEN_RECOVERY_SCHEDULED stuckForMs=$stuckFor state=$fingerprint " +
+                "powerLogPosition=$powerLogPosition reason=no-power-log-progress"
+        }
         EXTRA_THREAD_POOL.execute {
             try {
                 val recoveryResult = ScreenStateRecovery.inspectAndRecover(
@@ -171,8 +296,8 @@ object LifecycleTrace {
                     fingerprint,
                 ) {
                     stateFingerprint() == fingerprint &&
-                        WorkTimeListener.working &&
-                        !PauseStatus.isPause &&
+                        (WorkTimeListener.working || PauseStatus.isAutomaticPause) &&
+                        PauseStatus.canRunAutomaticRecovery() &&
                         !WarEx.inWar
                 }
                 when (recoveryResult) {
@@ -181,9 +306,6 @@ object LifecycleTrace {
                             stateRecoveryForegroundDeferrals.getAndIncrement(),
                         )
                         stateRecoverySince = System.currentTimeMillis()
-                        if (decision == ScreenRecoveryFocusRetryPolicy.Decision.STOP_UNTIL_STATE_CHANGE) {
-                            stateRecoveryAttemptAt = Long.MAX_VALUE
-                        }
                         log.warn {
                             "SCREEN_RECOVERY_FOREGROUND_BACKOFF decision=$decision " +
                                 "attempts=${stateRecoveryForegroundDeferrals.get()} " +
@@ -212,12 +334,167 @@ object LifecycleTrace {
         }
     }
 
+    /**
+     * Observe authoritative Power.log progress independently of strategy
+     * workers.  This catches the failure mode where retry/error logging keeps
+     * growing while the game window is not receiving input.
+     */
+    private fun detectNoProgress() {
+        if (recoveryCascadeGuard.suppressWhilePaused(PauseStatus.isPause)) {
+            noProgressWatchdog.reset()
+            noProgressBoundPid = null
+            noProgressBoundPowerLogPath = null
+            return
+        }
+        val recoveryPending = foregroundRecoveryPending.get()
+        if (!shouldObserveNoProgress(
+                working = WorkTimeListener.working,
+                automaticPause = PauseStatus.isAutomaticPause,
+                replaying = PowerLogListener.replayingExistingLog,
+                paused = PauseStatus.isPause,
+                recoveryPending = recoveryPending,
+            )
+        ) {
+            noProgressWatchdog.reset()
+            noProgressBoundPid = null
+            noProgressBoundPowerLogPath = null
+            return
+        }
+
+        val now = System.currentTimeMillis()
+        val powerLog = PowerLogListener.logFile
+        val powerLogPath = powerLog?.path()
+        val powerLogPosition = powerLog?.getPosition() ?: Long.MIN_VALUE
+        val powerLogLength = powerLog?.length() ?: 0L
+        val powerLogAge = powerLogPath?.let { path ->
+            runCatching { (now - java.io.File(path).lastModified()).coerceAtLeast(0L) }
+                .getOrNull()
+        } ?: Long.MAX_VALUE
+        val currentPid = GameUtil.findGameProcessIdForDiagnostics()
+        if (noProgressBoundPid == null && currentPid != null) noProgressBoundPid = currentPid
+        if (noProgressBoundPowerLogPath == null && powerLogPath != null) {
+            noProgressBoundPowerLogPath = powerLogPath
+        }
+        val screen = when {
+            WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState() ->
+                NoProgressWatchdog.ScreenExpectation.RESULT
+            Mode.nextMode == ModeEnum.STARTUP || powerLog == null ->
+                NoProgressWatchdog.ScreenExpectation.STARTUP
+            recoveryPending && WarEx.inWar -> NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY
+            WarEx.inWar && !WarEx.war.isMyTurn -> NoProgressWatchdog.ScreenExpectation.OPPONENT_TURN
+            WarEx.inWar && AbstractPhaseStrategy.dealing -> NoProgressWatchdog.ScreenExpectation.ANIMATION
+            WarEx.inWar -> NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY
+            else -> NoProgressWatchdog.ScreenExpectation.MENU_OR_MATCHING
+        }
+        val decision = noProgressWatchdog.observe(
+            NoProgressWatchdog.Snapshot(
+                nowMs = now,
+                mode = Mode.currMode?.name ?: "NONE",
+                expectedMode = Mode.nextMode?.name ?: Mode.currMode?.name ?: "NONE",
+                screen = screen,
+                processAlive = currentPid != null,
+                currentPid = currentPid,
+                boundPid = noProgressBoundPid,
+                windowPresent = ScriptStatus.gameHWND != null,
+                foregroundMatches = foregroundFailureCount.get() == 0,
+                foregroundFailureCount = foregroundFailureCount.get(),
+                powerLogPath = powerLogPath,
+                boundPowerLogPath = noProgressBoundPowerLogPath,
+                powerLogPosition = powerLogPosition,
+                powerLogLength = powerLogLength,
+                powerLogAgeMs = powerLogAge,
+                paddlexInitializing = runCatching {
+                    OcrRuntime.currentProvider() == OcrProviderKind.PADDLEX &&
+                        !PowerLogListener.replayingExistingLog && powerLogLength == 0L
+                }.getOrDefault(false),
+            ),
+        )
+        if (decision.action != NoProgressWatchdog.RecoveryAction.WAIT) {
+            log.warn {
+                "NO_PROGRESS_OBSERVED elapsedMs=${decision.elapsedNoProgressMs} " +
+                    "expectedMode=${Mode.nextMode?.name ?: Mode.currMode?.name ?: "NONE"} " +
+                    "mode=${Mode.currMode?.name ?: "NONE"} pid=${currentPid ?: "none"} " +
+                    "boundPid=${noProgressBoundPid ?: "none"} window=${ScriptStatus.gameHWND ?: "none"} " +
+                    "powerLog=${powerLogPath ?: "none"} position=$powerLogPosition length=$powerLogLength " +
+                    "ageMs=$powerLogAge screen=$screen action=${decision.action} reason=${decision.reason}"
+            }
+        }
+        applyNoProgressDecision(decision, currentPid, powerLogPath)
+    }
+
+    private fun applyNoProgressDecision(
+        decision: NoProgressWatchdog.Decision,
+        currentPid: Long?,
+        powerLogPath: String?,
+    ) {
+        when (decision.action) {
+            NoProgressWatchdog.RecoveryAction.WAIT,
+            NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED,
+            NoProgressWatchdog.RecoveryAction.NOOP_RESULT,
+            -> {
+                if (decision.reason.contains("progress") || decision.reason.contains("after-recovery")) {
+                    noProgressBoundPid = currentPid ?: noProgressBoundPid
+                    noProgressBoundPowerLogPath = powerLogPath ?: noProgressBoundPowerLogPath
+                    if (foregroundRecoveryPending.get() && decision.reason.contains("after-recovery")) {
+                        foregroundRecoveryPending.set(false)
+                        foregroundFailureCount.set(0)
+                        if (PauseStatus.isPause) PauseStatus.isPause = false
+                        log.info { "NO_PROGRESS_RECOVERY_CONFIRMED reason=${decision.reason} dispatch=false" }
+                    }
+                }
+            }
+            NoProgressWatchdog.RecoveryAction.DISMISS_EXTERNAL_MODAL -> {
+                log.warn {
+                    "NO_PROGRESS_RECOVERY attempt=${decision.recoveryAttempt} " +
+                        "decision=DISMISS_EXTERNAL_MODAL reason=${decision.reason} dispatch=false"
+                }
+            }
+            NoProgressWatchdog.RecoveryAction.REBIND -> {
+                log.warn {
+                    "NO_PROGRESS_RECOVERY attempt=${decision.recoveryAttempt} " +
+                        "decision=REBIND reason=${decision.reason} dispatch=false"
+                }
+                val rebound = runCatching { GameUtil.findGameHWND() }.getOrNull()
+                if (rebound != null) {
+                    ScriptStatus.gameHWND = rebound
+                    log.info {
+                        "NO_PROGRESS_REBOUND pid=${currentPid ?: "none"} hwnd=$rebound " +
+                            "powerLog=${powerLogPath ?: "none"} dispatch=false"
+                    }
+                }
+            }
+            NoProgressWatchdog.RecoveryAction.RESTART -> {
+                log.error {
+                    "NO_PROGRESS_RECOVERY attempt=${decision.recoveryAttempt} " +
+                        "decision=RESTART reason=${decision.reason} dispatch=false"
+                }
+                Mode.recover(ModeEnum.STARTUP, "no-progress-${decision.reason}", enterStrategy = false)
+                StarterConfig.starter.start()
+            }
+            NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE -> {
+                log.error {
+                    "NO_PROGRESS_ESCALATED attempt=${decision.recoveryAttempt} " +
+                        "reason=${decision.reason} dispatch=false terminal=PAUSE"
+                }
+                stopRecoveryCascade(decision.reason)
+                AbstractModeStrategy.cancelAllTask()
+                foregroundRecoveryPending.set(false)
+                PauseStatus.isPause = true
+            }
+        }
+    }
+
+    /**
+     * This value is emitted in screen-recovery logs and used to detect that
+     * the lifecycle is stuck. Keep it deterministic, but name every field so
+     * operators do not have to remember the old positional format.
+     */
     private fun stateFingerprint(): String = listOf(
-            Mode.currMode?.name ?: "NONE",
-            Mode.nextMode?.name ?: "NONE",
-            WarEx.war.currentPhase.name,
-            WarEx.war.currentTurnStep?.name ?: "NONE",
-            WarEx.warCount.toString(),
+            "currMode=${Mode.currMode?.name ?: "NONE"}",
+            "nextMode=${Mode.nextMode?.name ?: "NONE"}",
+            "warPhase=${WarEx.war.currentPhase.name}",
+            "turnStep=${WarEx.war.currentTurnStep?.name ?: "NONE"}",
+            "warCount=${WarEx.warCount}",
         ).joinToString("|")
 
     private fun snapshot(): String = runCatching {
@@ -227,8 +504,9 @@ object LifecycleTrace {
         } else {
             "logFile=${powerLog.path()} logPos=${powerLog.getPosition()} logLen=${powerLog.length()}"
         }
-        "pid=${ProcessHandle.current().pid()} " +
+            "pid=${ProcessHandle.current().pid()} " +
             "pause=${PauseStatus.isPause} " +
+            "pauseOrigin=${PauseStatus.pauseOrigin.name} " +
             "working=${WorkTimeListener.working} " +
             "mainWindowShowing=$mainWindowShowing " +
             "mode=${Mode.currMode?.name ?: "NONE"} " +

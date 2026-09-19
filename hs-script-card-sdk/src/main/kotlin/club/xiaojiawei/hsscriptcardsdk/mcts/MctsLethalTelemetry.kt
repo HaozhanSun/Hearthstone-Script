@@ -35,6 +35,14 @@ object MctsLethalTelemetry {
             size > MAX_DEDUP_KEYS
     }
 
+    /** Shared root-gate contract using the exact attack set written to telemetry. */
+    fun isLethalFaceAction(action: Action, war: War): Boolean {
+        if (action !is AttackAction) return false
+        val rivalHeroId = war.rival.playArea.hero?.entityId
+        if (!(action.targetIsHero || action.targetEntityId == rivalHeroId)) return false
+        return assess(war, action).canLethal
+    }
+
     /**
      * Calculate only currently legal face-damage opportunities.  A minion or
      * hero that can attack only a taunt is still attackable, but contributes
@@ -142,6 +150,13 @@ object MctsLethalTelemetry {
                     "enemyHeroHealth=${assessment.enemyHeroHealth} " +
                     "canLethal=${assessment.canLethal} decision=${assessment.decision} " +
                     "reason=${assessment.reason}"
+            }
+            if (assessment.canLethal) {
+                log.info {
+                    "已经可以斩杀 totalAttack=${assessment.totalAttack} " +
+                        "enemyHeroHealth=${assessment.enemyHeroHealth} " +
+                        "strategy=$strategy step=$step"
+                }
             }
         }
         return assessment

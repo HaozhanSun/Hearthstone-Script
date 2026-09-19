@@ -3,7 +3,9 @@ param(
     [string]$RuntimeRoot = "C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script",
     [string]$ShortcutName = "Hearthstone Script.lnk",
     [string]$Description = "",
-    [string]$IconPath = ""
+    [string]$IconPath = "",
+    [string]$LegacyShortcutName = "Hearthstone.lnk",
+    [string]$LegacyRuntimeRoot = "C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script"
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,6 +39,29 @@ foreach ($directory in $shortcutDirectories) {
     $shortcut.WindowStyle = 1
     $shortcut.Save()
     $updated.Add($shortcutPath)
+}
+
+# Repair the pre-channel generic Desktop shortcut when it still exists. Older
+# installers left this shortcut pointing at the removed `outputs\Hearthstone`
+# directory, which makes Windows Script Host try to execute a path with no
+# extension. Keep the channel shortcuts isolated; this legacy entry always
+# resolves to the stable launcher and is only repaired, never created.
+$legacyShortcutPath = Join-Path ([Environment]::GetFolderPath("Desktop")) $LegacyShortcutName
+$legacyRoot = [System.IO.Path]::GetFullPath($LegacyRuntimeRoot).TrimEnd('\')
+$legacyLauncher = Join-Path $legacyRoot "launch-as-admin.vbs"
+$legacyIcon = Join-Path $legacyRoot "hs-script.exe"
+if ((Test-Path -LiteralPath $legacyShortcutPath -PathType Leaf) -and
+    (Test-Path -LiteralPath $legacyLauncher -PathType Leaf) -and
+    (Test-Path -LiteralPath $legacyIcon -PathType Leaf)) {
+    $legacyShortcut = $shell.CreateShortcut($legacyShortcutPath)
+    $legacyShortcut.TargetPath = $target
+    $legacyShortcut.Arguments = '"' + $legacyLauncher + '"'
+    $legacyShortcut.WorkingDirectory = $legacyRoot
+    $legacyShortcut.IconLocation = "$legacyIcon,0"
+    $legacyShortcut.Description = "Hearthstone Script（管理员启动，自动使用最新稳定构建）"
+    $legacyShortcut.WindowStyle = 1
+    $legacyShortcut.Save()
+    Write-Output "REPAIRED_LEGACY_SHORTCUT=$legacyShortcutPath"
 }
 
 $iconCacheRefresh = Join-Path $env:SystemRoot "System32\ie4uinit.exe"

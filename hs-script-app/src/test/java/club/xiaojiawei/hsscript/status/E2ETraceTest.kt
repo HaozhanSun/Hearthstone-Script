@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.status
 
 import java.nio.file.Files
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -21,6 +22,41 @@ class E2ETraceTest {
             )
 
             assertFalse(E2ETrace.readPowerLogResult(log.toString(), "KennethSun#5122")!!)
+            assertEquals(E2ETrace.PowerLogTerminal.LOST, E2ETrace.readPowerLogTerminal(log.toString(), "KennethSun#5122"))
+        } finally {
+            Files.deleteIfExists(log)
+        }
+    }
+
+    @Test
+    fun `preserves conceded marker when it is the latest current-player terminal state`() {
+        val log = Files.createTempFile("power", ".log")
+        try {
+            Files.writeString(
+                log,
+                "TAG_CHANGE Entity=KennethSun#5122 tag=PLAYSTATE value=LOST\n" +
+                    "TAG_CHANGE Entity=KennethSun#5122 tag=PLAYSTATE value=CONCEDED\n",
+            )
+            assertFalse(E2ETrace.readPowerLogResult(log.toString(), "KennethSun#5122")!!)
+            assertEquals(E2ETrace.PowerLogTerminal.CONCEDED, E2ETrace.readPowerLogTerminal(log.toString(), "KennethSun#5122"))
+        } finally {
+            Files.deleteIfExists(log)
+        }
+    }
+
+    @Test
+    fun `preserves an authoritative current-player win over an unknown model state`() {
+        val log = Files.createTempFile("power", ".log")
+        try {
+            Files.writeString(
+                log,
+                "GameState.DebugPrintPower() Entity=KennethSun#5122 tag=PLAYSTATE value=WON\n",
+            )
+            assertTrue(E2ETrace.readPowerLogResult(log.toString(), "KennethSun#5122")!!)
+            assertEquals(
+                E2ETrace.PowerLogTerminal.WON,
+                E2ETrace.readPowerLogTerminal(log.toString(), "KennethSun#5122"),
+            )
         } finally {
             Files.deleteIfExists(log)
         }

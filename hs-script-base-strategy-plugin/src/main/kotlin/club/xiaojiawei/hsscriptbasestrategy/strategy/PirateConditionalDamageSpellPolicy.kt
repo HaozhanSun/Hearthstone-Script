@@ -80,7 +80,17 @@ object PirateConditionalDamageSpellPolicy {
         val effectiveHealth = target.blood() + if (target.isDivineShield) 1 else 0
         val killBonus = if (effectiveHealth <= damage) 72.0 else 0.0
         val pirateBonus = if (damage == PIRATE_DAMAGE) 5.0 else 0.0
-        return 6.0 + pirateBonus + killBonus + target.atc.coerceAtLeast(0) * 0.5
+        // Do not spend the conditional five-damage shot on a disposable 1/1
+        // while a visible high-attack threat is still on board.  The old
+        // kill bonus was unconditional in practice: 1/1 received +72 and a
+        // 6/9 threat received only +3 from attack, so MCTS greedily killed
+        // the small minion and lost the removal window.  Preserve lethal
+        // priority, but reserve the spell for a non-lethal threat when its
+        // attack is materially dangerous.
+        val highThreatReserve = if (effectiveHealth > damage && target.atc >= 5) 96.0 else 0.0
+        val threatScore = target.atc.coerceAtLeast(0) * 1.5 +
+            if (target.isTaunt) 8.0 else 0.0
+        return 6.0 + pirateBonus + killBonus + highThreatReserve + threatScore
     }
 
     private fun isPirate(card: Card): Boolean =

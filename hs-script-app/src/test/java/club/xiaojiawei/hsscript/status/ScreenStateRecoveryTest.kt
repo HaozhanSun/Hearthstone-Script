@@ -32,9 +32,39 @@ class ScreenStateRecoveryTest {
     fun `recognizes the offline reconnect page without confusing login or reconnecting states`() {
         assertTrue(ScreenStateRecovery.looksLikeReconnectText("游戏连接中断。重新接..."))
         assertTrue(ScreenStateRecovery.looksLikeReconnectText("当前处于离线状态，请重新连接"))
+        assertTrue(ScreenStateRecovery.looksLikeReconnectText("你已离线太久，需要重新连接"))
+        assertTrue(ScreenStateRecovery.looksLikeReconnectText("You have been offline too long. You need to reconnect."))
+        assertEquals("RECONNECT", ScreenStateRecovery.classifyForTest("你已离线太久，需要重新连接"))
         assertFalse(ScreenStateRecovery.looksLikeReconnectText("登录 Battle.net"))
         assertFalse(ScreenStateRecovery.looksLikeReconnectText("正在重新连接"))
         assertFalse(ScreenStateRecovery.looksLikeReconnectText("选择套牌 狂野对战"))
+    }
+
+    @Test
+    fun `classifies reconnect spinner separately from offline prompt and ordinary loading`() {
+        assertTrue(ScreenStateRecovery.looksLikeReconnectSpinnerText("正在重新连接"))
+        assertTrue(ScreenStateRecovery.looksLikeReconnectSpinnerText("Reconnecting to server"))
+        assertEquals("RECONNECT_SPINNER", ScreenStateRecovery.classifyForTest("正在重新连接"))
+        assertFalse(ScreenStateRecovery.looksLikeReconnectSpinnerText("正在加载，请稍候"))
+    }
+
+    @Test
+    fun `automatic safety pause can be recovered but manual pause remains blocked`() {
+        val wasPaused = PauseStatus.isPause
+        try {
+            PauseStatus.setManualPause(true)
+            assertFalse(PauseStatus.canRunAutomaticRecovery())
+
+            PauseStatus.setAutomaticPause(true)
+            assertTrue(PauseStatus.canRunAutomaticRecovery())
+            assertTrue(PauseStatus.isAutomaticPause)
+            assertFalse(ActionDispatchGate.allowedForState(paused = true, working = true))
+            assertTrue(PauseStatus.resumeAutomaticPause("offline-reconnect-test"))
+            assertFalse(PauseStatus.isPause)
+            assertTrue(ActionDispatchGate.allowedForState(paused = false, working = true))
+        } finally {
+            PauseStatus.setAutomaticPause(wasPaused)
+        }
     }
 
     @Test
@@ -70,6 +100,41 @@ class ScreenStateRecoveryTest {
         assertNull(ScreenStateRecovery.classifyForTest(""))
         assertTrue(ScreenStateRecovery.looksLikeLoadingVisual(0.499, 0.195, 0.01))
         assertFalse(ScreenStateRecovery.looksLikeLoadingVisual(0.069, 0.127, 0.54))
+    }
+
+    @Test
+    fun `shop overlay visual signature is classified for recovery without becoming loading`() {
+        // Extracted from the live Beta v4.16.375 false-positive run:
+        // debug-20260917-014446-006-screen-recovery-90a1da5a-84cc-4c87-8a4d-18b1cb641286.png
+        // The page is 英雄皮肤光格-拉面 with a 1168 price, not a loading screen.
+        val shopOcr = "英雄皮肤光格-拉面 价格更新剩余时间 1168"
+        assertTrue(ScreenStateRecovery.looksLikeLoadingVisual(0.618, 0.238, 0.017))
+        assertEquals(
+            "SHOP_OVERLAY",
+            ScreenStateRecovery.classifyWithVisualForTest(
+                ocrText = shopOcr,
+                centralDarkRatio = 0.618,
+                warmRatio = 0.238,
+                blueRatio = 0.017,
+            ),
+        )
+        assertNull(
+            ScreenStateRecovery.classifyWithVisualForTest(
+                ocrText = shopOcr,
+                centralDarkRatio = 0.10,
+                warmRatio = 0.04,
+                blueRatio = 0.20,
+            ),
+        )
+    }
+
+    @Test
+    fun `recognizes black market overlay as hub and rejects a bare market word`() {
+        val blackMarket = "流浪者的店 黑市 价格更新剩余时间 活动剩余时间 库存"
+        assertTrue(ScreenStateRecovery.looksLikeBlackMarketText(blackMarket))
+        assertEquals("HOME", ScreenStateRecovery.classifyForTest(blackMarket))
+        assertFalse(ScreenStateRecovery.looksLikeBlackMarketText("黑市"))
+        assertNull(ScreenStateRecovery.classifyForTest("黑市"))
     }
 
     @Test
@@ -109,6 +174,19 @@ class ScreenStateRecoveryTest {
         assertEquals(Rectangle(652, 107, 201, 65), deckSelectionRoi)
         assertTrue(traditionalRoi.contains(958, 329))
         assertTrue(deckSelectionRoi.contains(750, 135))
+    }
+
+    @Test
+    fun `recovery has no broad center OCR fallback`() {
+        val secondaryNames = ScreenStateRoiSelector
+            .selectSecondary(1920, 1080)
+            .map { it.name }
+
+        assertFalse(secondaryNames.contains("screen-state-center"))
+        assertEquals(
+            listOf("screen-state-header", "screen-state-footer"),
+            secondaryNames,
+        )
     }
 
     @Test
@@ -154,6 +232,22 @@ class ScreenStateRecoveryTest {
     }
 
     @Test
+    fun `tolerates localized OCR noise in the dedicated traditional battle ROI`() {
+        assertTrue(ScreenStateRecovery.looksLikeTraditionalBattleText("传统X寺虐"))
+        assertEquals(
+            "HOME",
+            ScreenStateRecovery.recoveryTransitionForTest(
+                ocrText = "",
+                targeted = mapOf(
+                    ScreenStateRoiSelector.TRADITIONAL_BATTLE_ROI to "传统X寺虐",
+                ),
+            )?.screen,
+        )
+        assertFalse(ScreenStateRecovery.looksLikeTraditionalBattleText("选择套牌"))
+        assertFalse(ScreenStateRecovery.looksLikeTraditionalBattleText("传统"))
+    }
+
+    @Test
     fun `persistent collection navigation label alone is not an opened collection page`() {
         assertFalse(ScreenStateRecovery.looksLikeHubText("我的收藏"))
         assertFalse(ScreenStateRecovery.looksLikeCollectionText("我的收藏"))
@@ -171,12 +265,62 @@ class ScreenStateRecoveryTest {
         assertFalse(ScreenStateRecovery.shouldRestartStalledReconnectForTest(reconnectAt, 129_999L))
         assertTrue(ScreenStateRecovery.shouldRestartStalledReconnectForTest(reconnectAt, 130_000L))
         assertFalse(ScreenStateRecovery.shouldRestartStalledReconnectForTest(0L, 999_999L))
+        assertFalse(ScreenStateRecovery.shouldRestartStalledLoadingForTest(reconnectAt, 129_999L))
+        assertTrue(ScreenStateRecovery.shouldRestartStalledLoadingForTest(reconnectAt, 130_000L))
+        assertFalse(ScreenStateRecovery.shouldRestartStalledLoadingForTest(0L, 999_999L))
 
         // A script that attaches after the previous process clicked reconnect
         // must arm the timer from its first explicit slow-reconnect warning.
         assertEquals(10_000L, ScreenStateRecovery.stalledReconnectAnchorForTest(10_000L, 20_000L, 30_000L))
         assertEquals(20_000L, ScreenStateRecovery.stalledReconnectAnchorForTest(0L, 20_000L, 30_000L))
         assertEquals(30_000L, ScreenStateRecovery.stalledReconnectAnchorForTest(0L, 0L, 30_000L))
+    }
+
+    @Test
+    fun `recognizes Battle net service login failure instead of generic loading`() {
+        val chinese = "无法通过暴雪战网服务进行登录。请等待几分钟并再次尝试。"
+        val english = "Unable to log in to Blizzard Battle.net service. Please wait a few minutes and try again."
+
+        assertTrue(ScreenStateRecovery.looksLikeReconnectFailureText(chinese))
+        assertTrue(ScreenStateRecovery.looksLikeReconnectFailureText(english))
+        assertEquals("RECONNECT_FAILURE", ScreenStateRecovery.classifyForTest(chinese))
+        assertEquals("RECONNECT_FAILURE", ScreenStateRecovery.classifyForTest(english))
+    }
+
+    @Test
+    fun `recognizes offline dialog from its bounded status and message ROIs`() {
+        assertTrue(
+            ScreenStateRecovery.looksLikeReconnectDialogRoiText(
+                "当前处于离线状态距离你的上一次操作已经过了很长时间游戏连接中断",
+            ),
+        )
+        assertEquals(
+            "RECONNECT",
+            ScreenStateRecovery.recoveryTransitionForTest(
+                ocrText = "",
+                targeted = mapOf(
+                    ScreenStateRoiSelector.RECONNECT_DIALOG_STATUS_ROI to "当前处于离线状态",
+                    ScreenStateRoiSelector.RECONNECT_DIALOG_MESSAGE_ROI to "游戏连接中断",
+                ),
+        )?.screen,
+        )
+    }
+
+    @Test
+    fun `reconnect failure dialog wins over the deck selection title`() {
+        val dialogText = "发生错误由于你的对手无法连接游戏无法继续请再试"
+        assertTrue(ScreenStateRecovery.looksLikeReconnectFailureDialogRoiText(dialogText))
+        assertEquals(
+            "RECONNECT_FAILURE",
+            ScreenStateRecovery.recoveryTransitionForTest(
+                ocrText = "",
+                targeted = mapOf(
+                    ScreenStateRoiSelector.RECONNECT_DIALOG_TITLE_ROI to "发生错误",
+                    ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI to "选择套牌",
+                    ScreenStateRoiSelector.RECONNECT_DIALOG_MESSAGE_ROI to dialogText,
+                ),
+            )?.screen,
+        )
     }
 
     private fun loadFixture(name: String) = ImageIO.read(

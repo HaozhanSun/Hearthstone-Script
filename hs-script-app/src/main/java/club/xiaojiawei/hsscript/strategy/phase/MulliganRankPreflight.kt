@@ -78,6 +78,13 @@ internal class MulliganRankPreflight(
 
     fun start() {
         synchronized(lock) {
+            if (state != MulliganRankPreflightState.IDLE) {
+                log.debug {
+                    "MULLIGAN_RANK_PREFLIGHT_START_IGNORED state=$state attempt=$attempt " +
+                        "reason=already-started action=NO_DUPLICATE_SCHEDULE"
+                }
+                return
+            }
             cancelLocked()
             generation++
             attempt = 0

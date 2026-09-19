@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscriptcardsdk.CardAction
+import club.xiaojiawei.hsscriptcardsdk.cardparser.ParsedCardActionFactory
 import club.xiaojiawei.hsscriptbase.bean.LikeTrie
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscript.status.PluginManager.CARD_ACTION_PLUGINS
@@ -54,6 +55,10 @@ object CardActionManager {
 
     private fun reload() {
         log.info { "刷新卡牌库" }
+        // A plugin reload may make a previously unresolved card executable.
+        // Drop both successful and negative dynamic-parser cache entries so a
+        // live run can retry without requiring a full application restart.
+        ParsedCardActionFactory.clear()
         CARD_ACTION_MAP.clear()
         CARD_ACTION_MAP.putAll(load())
     }

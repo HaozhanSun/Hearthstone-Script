@@ -25,6 +25,7 @@ object CardTimingPolicy {
         "狂暴邪翼蝠",
         "狂暴血义斧",
         "狂暴血翼斧",
+        "狂暴血液服",
     )
 
     fun isPatchesThePirate(card: Card): Boolean =
@@ -67,10 +68,15 @@ object CardTimingPolicy {
         val me = runCatching { war.me }.getOrNull() ?: return false
         val hand = runCatching { me.handArea.cards.toList() }.getOrNull() ?: return false
         if (card.entityId.isBlank() || card.cardId.isBlank() || card.isUncertain) return false
-        if (hand.size != 1) return false
         val handCard = hand.singleOrNull { it.entityId == card.entityId && it.cardId == card.cardId }
+            ?: hand.firstOrNull { it.entityId == card.entityId && it.cardId == card.cardId }
             ?: return false
         if (handCard.isUncertain || handCard.cost !in 0..4) return false
+        // A zero-cost Aredar Brute is the payoff for a full enemy board. It
+        // must be played before another action can remove an opposing body
+        // and increase its cost again. Preserve the old last-card rule for
+        // costs 1-4, but explicitly allow the zero-cost exception.
+        if (handCard.cost > 0 && hand.size != 1) return false
 
         val hero = runCatching { me.playArea.hero }.getOrNull() ?: return false
         if (hero.health <= 0 || hero.damage < 0) return false
@@ -87,12 +93,13 @@ object CardTimingPolicy {
         if (card.entityId.isBlank() || card.cardId.isBlank() || card.isUncertain) {
             return "aredar-brute-card-identity-unavailable"
         }
-        if (hand.size != 1 || hand.singleOrNull { it.entityId == card.entityId && it.cardId == card.cardId } == null) {
+        val handCard = hand.firstOrNull { it.entityId == card.entityId && it.cardId == card.cardId }
+        if (handCard == null) {
             return "aredar-brute-not-last-card-in-hand"
         }
-        val handCard = hand.single()
         if (handCard.isUncertain) return "aredar-brute-card-identity-unavailable"
         if (handCard.cost !in 0..4) return "aredar-brute-effective-cost-over-4"
+        if (handCard.cost > 0 && hand.size != 1) return "aredar-brute-not-last-card-in-hand"
         val hero = runCatching { me.playArea.hero }.getOrNull()
             ?: return "aredar-brute-hero-state-unavailable"
         if (hero.health <= 0 || hero.damage < 0) return "aredar-brute-hero-state-unavailable"
@@ -112,7 +119,6 @@ object CardTimingPolicy {
         val me = war.me
         val hasPlayableOtherHandCard = me.handArea.cards.any { other ->
             other.entityId != card.entityId &&
-                !other.isUncertain &&
                 !isEndOfTurnCostReductionCard(other) &&
                 isHandCardPlayable(other, me.usableResource, me.playArea.isFull, war)
         }
@@ -160,11 +166,13 @@ object CardTimingPolicy {
     private fun isHandCardPlayable(card: Card, usableMana: Int, boardFull: Boolean, war: War): Boolean {
         if (card.cost > usableMana) return false
         if (card.cardType === CardTypeEnum.MINION && boardFull) return false
+        if (MctsCardDiagnostics.isFatalSnapshot(MctsCardDiagnostics.snapshotStatus(card))) return false
         // Match the upstream MCTS action contract: a card is only a useful
         // competing action when its CardAction actually produced an action.
         // A collectible card with an empty parser result is not a reason to
         // defer a playable timing card; the turn-end guard may still attempt
         // the live direct-play fallback after MCTS has exhausted parsed moves.
-        return card.action.generatePlayActions(war, war.me).isNotEmpty()
+        return card.action.generatePlayActions(war, war.me).isNotEmpty() ||
+            MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)
     }
 }

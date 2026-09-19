@@ -116,6 +116,17 @@ class UiLogFormatterTest {
     }
 
     @Test
+    fun `unrecognized card diagnostics show the Mandarin name and card id`() {
+        val message = UiLogFormatter.format(
+            "CARD_ACTION_UNRECOGNIZED cardName=钩手拖曳 cardId=CAP_105 " +
+                "reason=card-db-missing action=FAIL_CLOSED"
+        )
+
+        assertEquals("未识别卡牌 · 钩手拖曳 · ID=CAP_105 · 原因=card-db-missing", message)
+        assertFalse(UiLogFormatter.isHiddenFromUi("CARD_ACTION_UNRECOGNIZED cardName=钩手拖曳 cardId=CAP_105"))
+    }
+
+    @Test
     fun `safe termination audit stays in the file log only even when repeated`() {
         val repeated = List(3) { "E2E_SAFE_TERMINATE target=Hearthstone.exe pid=${1000 + it}" }
 
@@ -127,6 +138,19 @@ class UiLogFormatterTest {
     fun `rank ROI evidence is retained in file logs but hidden from compact feed`() {
         assertTrue(UiLogFormatter.isHiddenFromUi("RANK_OCR_ROI provider=PADDLEX screenshot=rank.png"))
         assertFalse(UiLogFormatter.isHiddenFromUi("RANK_OCR_EVIDENCE provider=PADDLEX path=rank.png"))
+    }
+
+    @Test
+    fun `rank probe diagnostics do not masquerade as an unresolved rank`() {
+        val resolved = UiLogFormatter.format(
+            "RANK_OCR provider=PADDLEX selectedRank=878 tier=LEGEND rank=878"
+        )
+        val probe =
+            "RANK_OCR_PROBE provider=PADDLEX roi=smallRoi attempted=false " +
+                "raw=<not-run> normalized=<not-run> parsedRank=UNKNOWN"
+
+        assertEquals("等级识别 · 传说878级", resolved)
+        assertTrue(UiLogFormatter.isHiddenFromUi(probe))
     }
 
     @Test

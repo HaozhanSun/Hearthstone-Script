@@ -38,25 +38,6 @@ object ParsedCardActionFactory {
     private const val INITIAL_FIRE_DAMAGE = 2
 
     /**
-     * These Elemental Mage cards are present in the local database, but their
-     * conditional/summon/delayed text is intentionally outside the generic
-     * description parser.  The safe action below models only the legal card
-     * play (or the fact that a drawn spell is not playable from hand); the
-     * live client remains authoritative for the omitted card effect.
-     */
-    private val elementalMageOpaqueMinionFallbackNames = mapOf(
-        "CORE_UNG_809" to "火羽精灵",
-        "DMF_100" to "甜点飓风",
-        "DEEP_034" to "页岩蛛",
-        "GDB_302" to "吸积炽焰",
-        "GDB_303" to "爆炎流星",
-        "TTN_095" to "流水档案管理员",
-    )
-
-    private const val DRAWN_CAST_ACORN_ID = "SW_439t"
-    private const val FLAME_WARD_ID = "ULD_239"
-
-    /**
      * These cards are present in the Pirate Warrior deck or are its verified
      * generated cards. Their battlecry/quest resolution is handled by the
      * game after the click; the MCTS simulator only needs a safe play
@@ -122,6 +103,8 @@ object ParsedCardActionFactory {
                     action = "FAIL_CLOSED",
                     sourceZone = sourceZone,
                     phase = "hand-action-resolution",
+                    route = "FAIL_CLOSED_PARSER_UNAVAILABLE",
+                    safeAction = "SKIP_UNRECOGNIZED",
                 )
             }
             return supplierCache[cardId]
@@ -265,27 +248,6 @@ object ParsedCardActionFactory {
             }
             return { OpaqueMinionPlayCardAction(OVERFLOWING_LAVA_ID, "溢流熔岩") }
         }
-        elementalMageOpaqueMinionFallbackNames[cardId]?.let { name ->
-            log.info {
-                "CARD_ACTION_KNOWN_FALLBACK cardName=${readableDisplayName ?: name} " +
-                    "cardId=$cardId effect=opaque-minion-play-live-effect-authoritative"
-            }
-            return { OpaqueMinionPlayCardAction(cardId, name) }
-        }
-        if (cardId == DRAWN_CAST_ACORN_ID) {
-            log.info {
-                "CARD_ACTION_KNOWN_FALLBACK cardName=${readableDisplayName ?: "橡果"} " +
-                    "cardId=$DRAWN_CAST_ACORN_ID effect=drawn-cast-only-no-hand-play"
-            }
-            return { DrawnCastOnlySpellCardAction() }
-        }
-        if (cardId == FLAME_WARD_ID) {
-            log.info {
-                "CARD_ACTION_KNOWN_FALLBACK cardName=${readableDisplayName ?: "火焰结界"} " +
-                    "cardId=$FLAME_WARD_ID effect=opaque-secret-play-live-effect-authoritative"
-            }
-            return { OpaqueSpellPlayCardAction(FLAME_WARD_ID, "火焰结界") }
-        }
         opaqueMinionFallbackNames[cardId]?.let { name ->
             log.info {
                 "CARD_ACTION_KNOWN_FALLBACK cardName=${readableDisplayName ?: name} " +
@@ -386,24 +348,6 @@ object ParsedCardActionFactory {
         override fun getCardId(): Array<String> = arrayOf(opaqueCardId)
 
         override fun name(): String = displayName
-    }
-
-    /**
-     * SW_439t is a "cast when drawn" spell.  Returning a non-null action keeps
-     * the identity recognized, while exposing no hand-play action prevents
-     * the MCTS/executor from inventing an illegal manual cast.
-     */
-    private class DrawnCastOnlySpellCardAction : CardAction.DefaultCardAction() {
-        override fun generatePlayActions(
-            war: War,
-            player: club.xiaojiawei.hsscriptcardsdk.bean.Player,
-        ): List<PlayAction> = emptyList()
-
-        override fun createNewInstance(): CardAction = DrawnCastOnlySpellCardAction()
-
-        override fun getCardId(): Array<String> = arrayOf(DRAWN_CAST_ACORN_ID)
-
-        override fun name(): String = "橡果"
     }
 
     /**
@@ -559,7 +503,8 @@ object ParsedCardActionFactory {
         log.warn {
             "CARD_ACTION_UNRECOGNIZED cardName=$readableName cardId=$cardId " +
                 "reason=$reason sourceZone=${sourceZone.name} " +
-                "identitySource=${identitySource ?: "UNKNOWN"} safeAction=FAIL_CLOSED"
+                "identitySource=${identitySource ?: "UNKNOWN"} " +
+                "route=FAIL_CLOSED_PARSER_UNAVAILABLE safeAction=SKIP_UNRECOGNIZED"
         }
         UnknownCardCollector.record(
             cardId = cardId,
@@ -569,6 +514,8 @@ object ParsedCardActionFactory {
             sourceZone = sourceZone,
             phase = "hand-action-resolution",
             identitySource = identitySource,
+            route = "FAIL_CLOSED_PARSER_UNAVAILABLE",
+            safeAction = "SKIP_UNRECOGNIZED",
         )
     }
 

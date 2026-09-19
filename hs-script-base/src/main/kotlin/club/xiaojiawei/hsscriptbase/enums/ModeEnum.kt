@@ -33,7 +33,17 @@ enum class ModeEnum(val comment: String) {
     companion object {
         fun fromString(string: String): ModeEnum? {
             return try {
-                valueOf(string.trim().uppercase())
+                val normalized = string.trim().uppercase()
+                // The seasonal Black Market is a hub overlay, not a separate
+                // playable mode. Treating it as HUB lets the normal hub entry
+                // strategy click the visible "前往传统对战" control instead
+                // of leaving the state machine at NONE.
+                if (normalized == "BLACK_MARKET") {
+                    log.info { "兼容LoadingScreen模式 BLACK_MARKET -> HUB" }
+                    ModeEnum.HUB
+                } else {
+                    valueOf(normalized)
+                }
             } catch (_: Exception) {
                 log.warn { "未适配${string}" }
                 null

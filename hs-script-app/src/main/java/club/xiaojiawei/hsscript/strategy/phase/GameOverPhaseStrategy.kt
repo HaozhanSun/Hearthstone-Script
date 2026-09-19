@@ -11,9 +11,9 @@ import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil.addGameEndTask
 import club.xiaojiawei.hsscript.utils.GameResultScreenshot
+import club.xiaojiawei.hsscript.utils.GameResultOutcomeDetector
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
-import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -152,7 +152,13 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
             return
         }
         if (e2eResultWaitStartedAt != 0L) {
+            // GAME_OVER can be delivered more than once while the final
+            // PLAYSTATE is still being flushed.  A second callback must not
+            // run the cleanup/classification path with a different snapshot;
+            // it would race the first callback and can publish UNKNOWN even
+            // when the first callback later obtains the authoritative result.
             recordDuplicateCallback()
+            return
         }
 
         // A watchdog restart replays the whole Power.log so the in-memory
@@ -191,7 +197,8 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         // line reaches the parser.  This is not E2E-only: the normal app used
         // to capture the last attack frame as draw-or-unknown and let the
         // MCTS worker submit one stale action during that same race.
-        val authoritativeOutcome = readAuthoritativeOutcome()
+        val authoritativeTerminal = readAuthoritativeTerminal()
+        val authoritativeOutcome = terminalToWinOverride(authoritativeTerminal)
         if (war.me.gameId.isNotBlank() && authoritativeOutcome == null) {
             val now = System.currentTimeMillis()
             val waitStartedAt = e2eResultWaitStartedAt
@@ -215,25 +222,70 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
             return
         }
 
-        WarEx.endWar(authoritativeOutcome)
+        if (!resultScreenshotCaptured.compareAndSet(false, true)) {
+            recordDuplicateCallback()
+            return
+        }
 
-        val resultOutcome = if (resultScreenshotCaptured.compareAndSet(false, true)) {
-            // In E2E mode a terminal PLAYSTATE is not enough to call the
-            // result a successful bot game. If the script milestones were
-            // missing, keep the evidence explicitly non-winning even when
-            // stale WarEx state still says win after a fast disconnect.
-            if (e2eEnabled && !scriptControlledGame) {
-                "draw-or-unknown"
-            } else {
+        val modelResultOutcome = if (e2eEnabled && !scriptControlledGame && authoritativeTerminal == null) {
+            "draw-or-unknown"
+        } else {
             classifyResultOutcome(
                 isWin = WarEx.isWin,
                 wonId = war.won,
                 lostId = war.lost,
                 concededId = war.conceded,
                 ourId = war.me.gameId,
-                localSurrenderRequested = currentPlayerConceded,
+                localSurrenderRequested = currentPlayerConceded ||
+                    authoritativeTerminal == E2ETrace.PowerLogTerminal.CONCEDED,
+                authoritativeTerminal = authoritativeTerminal,
             )
-            }
+        }
+
+        var capturedResultImage: java.awt.image.BufferedImage? = null
+        var screenshotOutcome = modelResultOutcome
+        val screenshotDelayMs = RandomUtil.getActionInterval(RESULT_SCREENSHOT_DELAY_BASE_MS.toInt())
+        club.xiaojiawei.hsscriptbase.config.log.info {
+            "GAME_RESULT_SCREENSHOT_WAIT delayMs=$screenshotDelayMs outcome=$modelResultOutcome game=${WarEx.warCount}"
+        }
+        SystemUtil.delay(screenshotDelayMs)
+        capturedResultImage = GameResultScreenshot.captureImage()
+
+        // A fast disconnect/surrender can leave the current player's ID
+        // unresolved even though the result banner is unambiguous. Use the
+        // central result-banner ROI as a bounded visual fallback; authoritative
+        // Power.log and a local surrender always take precedence.
+        val visualOutcome = if (authoritativeOutcome == null &&
+            !currentPlayerConceded &&
+            capturedResultImage != null
+        ) {
+            GameResultOutcomeDetector.classifyImage(capturedResultImage!!)
+        } else null
+        val visualResultOverride = when (visualOutcome) {
+            "win" -> true
+            "loss" -> false
+            else -> null
+        }
+        val finalResultOverride = authoritativeOutcome ?:
+            if (currentPlayerConceded) false else visualResultOverride
+        WarEx.endWar(finalResultOverride)
+        screenshotOutcome = when {
+            currentPlayerConceded -> "conceded"
+            finalResultOverride == true -> "win"
+            finalResultOverride == false -> "loss"
+            else -> modelResultOutcome
+        }
+        club.xiaojiawei.hsscriptbase.config.log.info {
+            "TERMINAL_RESULT_EVIDENCE model=$modelResultOutcome visual=${visualOutcome ?: "UNKNOWN"} " +
+                "final=${screenshotOutcome ?: "none"} override=${finalResultOverride ?: "UNKNOWN"}"
+        }
+
+        val resultOutcome = if (screenshotOutcome.isNotBlank()) {
+            // In E2E mode a terminal PLAYSTATE is not enough to call the
+            // result a successful bot game. If the script milestones were
+            // missing, keep the evidence explicitly non-winning even when
+            // stale WarEx state still says win after a fast disconnect.
+            screenshotOutcome
         } else null
 
         club.xiaojiawei.hsscriptbase.config.log.info {
@@ -271,23 +323,14 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
                 }
             }
         }
-        try {
-            val screenshotDelayMs = RandomUtil.getActionInterval(RESULT_SCREENSHOT_DELAY_BASE_MS.toInt())
-            club.xiaojiawei.hsscriptbase.config.log.info {
-                "GAME_RESULT_SCREENSHOT_WAIT delayMs=$screenshotDelayMs outcome=$resultOutcome game=${WarEx.warCount}"
-            }
-            SystemUtil.delay(screenshotDelayMs)
-            // Hearthstone publishes the authoritative PLAYSTATE before the
-            // result animation is fully painted. Capture after this short
-            // natural transition, but before addGameEndTask's first cleanup
-            // click, so the file is an actual result-page snapshot whenever
-            // the client exposes one.
-            resultOutcome?.let { GameResultScreenshot.capture(it, WarEx.warCount) }
-            val accessFile = PowerLogListener.logFile
-            accessFile?.seek(accessFile.length())
-        } catch (e: IOException) {
-            throw RuntimeException(e)
+        // Hearthstone publishes PLAYSTATE before the result animation is
+        // fully painted. The image above was captured after that transition;
+        // save it under the evidence-backed outcome before cleanup clicks.
+        capturedResultImage?.let { image ->
+            resultOutcome?.let { GameResultScreenshot.save(image, it, WarEx.warCount) }
         }
+        val accessFile = PowerLogListener.logFile
+        accessFile?.seek(accessFile.length())
         addGameEndTask()
         WarEx.reset()
         if (System.getProperty("hs.script.e2e") == "true" &&
@@ -321,19 +364,37 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         )
     }
 
-    private fun readAuthoritativeOutcome(): Boolean? {
-        val modelOutcome = when {
-            war.won.isNotBlank() -> war.won == war.me.gameId
-            war.lost.isNotBlank() -> war.lost != war.me.gameId
-            war.conceded.isNotBlank() ->
-                if (war.me.gameId.isBlank()) false else war.conceded != war.me.gameId
+    private fun readAuthoritativeTerminal(): E2ETrace.PowerLogTerminal? {
+        val modelTerminal = when {
+            war.won.isNotBlank() -> E2ETrace.PowerLogTerminal.WON
+            war.conceded.isNotBlank() -> E2ETrace.PowerLogTerminal.CONCEDED
+            war.lost.isNotBlank() -> E2ETrace.PowerLogTerminal.LOST
             else -> null
         }
-        val powerLogOutcome = E2ETrace.readPowerLogResult(
+        val powerLogTerminal = E2ETrace.readPowerLogTerminal(
             PowerLogListener.logFile?.path(),
             war.me.gameId,
         )
-        return powerLogOutcome ?: if (WarEx.surrenderRequested || E2ETrace.surrenderRequested) {
+        if (powerLogTerminal != null) return powerLogTerminal
+
+        // During the terminal callback the model can already contain the
+        // opponent's LOST/CONCEDED id while the final Power.log marker is
+        // still being flushed.  This can happen even after war.me has been
+        // resolved.  Treating that model value as authoritative mislabels a
+        // real current-player WON result as a loss/draw, so every non-local
+        // terminal result must wait for the typed Power.log marker.
+        if (modelTerminal != null && !WarEx.surrenderRequested &&
+            !E2ETrace.surrenderRequested
+        ) {
+            club.xiaojiawei.hsscriptbase.config.log.info {
+                "TERMINAL_RESULT_WAIT reason=power-log-terminal-unavailable modelTerminal=$modelTerminal " +
+                    "ourId=${war.me.gameId.ifBlank { "<blank>" }} " +
+                    "powerLogOutcome=UNKNOWN"
+            }
+            return null
+        }
+
+        return modelTerminal ?: if (WarEx.surrenderRequested || E2ETrace.surrenderRequested) {
             // Fast surrender can reach GAME_OVER before the player ID is
             // copied into war.me. Do not let unresolved IDs become UNKNOWN or
             // leak the previous game's result; the local surrender request is
@@ -345,7 +406,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
                     "powerLogOutcome=UNKNOWN " +
                     "ourId=${war.me.gameId.ifBlank { "<blank>" }}"
             }
-            false
+            E2ETrace.PowerLogTerminal.CONCEDED
         } else null
     }
 }
@@ -357,11 +418,26 @@ internal fun classifyResultOutcome(
     concededId: String,
     ourId: String,
     localSurrenderRequested: Boolean,
+    authoritativeTerminal: E2ETrace.PowerLogTerminal? = null,
 ): String = when {
+    authoritativeTerminal == E2ETrace.PowerLogTerminal.CONCEDED -> "conceded"
+    authoritativeTerminal == E2ETrace.PowerLogTerminal.LOST -> "loss"
+    authoritativeTerminal == E2ETrace.PowerLogTerminal.WON -> "win"
     isWin -> "win"
     wonId.isNotBlank() -> "opponent-win"
     lostId.isNotBlank() && lostId == ourId -> "loss"
     concededId.isNotBlank() && concededId == ourId -> "conceded"
     localSurrenderRequested -> "conceded"
     else -> "draw-or-unknown"
+}
+
+/** Maps the current player's terminal PLAYSTATE to the boolean expected by WarEx.endWar. */
+internal fun terminalToWinOverride(
+    terminal: E2ETrace.PowerLogTerminal?,
+): Boolean? = when (terminal) {
+    E2ETrace.PowerLogTerminal.WON -> true
+    E2ETrace.PowerLogTerminal.LOST,
+    E2ETrace.PowerLogTerminal.CONCEDED,
+    -> false
+    null -> null
 }

@@ -300,11 +300,12 @@ class StatisticsController : Initializable, StageHook {
 
     private fun initWRPane(records: List<Record>) {
         val rates = records.groupBy { it.strategyId to it.strategyName }.map { (strategy, games) ->
-            // Historical rows may contain a stale true result when we
-            // conceded during pre-mulligan. Keep the statistics view aligned
-            // with SurrenderPolicy: an explicit local concession is a loss.
-            val wins = games.count { it.result == true && it.surrendered != true }
-            (strategy.second ?: "未知") to if (games.isEmpty()) 0.0 else wins * 100.0 / games.size
+            // Win rate describes games actually played. Explicit local
+            // concessions remain visible in the surrender counter, but must
+            // not lower the played-game denominator.
+            val played = games.filter { it.surrendered == false }
+            val wins = played.count { it.result == true }
+            (strategy.second ?: "未知") to if (played.isEmpty()) 0.0 else wins * 100.0 / played.size
         }
         val xAxis = CategoryAxis().apply { label = "策略" }
         val yAxis = NumberAxis(0.0, 100.0, 10.0).apply { label = "胜率 (%)"; isAutoRanging = false }
@@ -323,12 +324,11 @@ class StatisticsController : Initializable, StageHook {
         val totalSeconds = durations.sum()
         val played = records.filter { it.surrendered == false }
         val totalExperience = records.sumOf { it.experience ?: 0 }
-        val overallWins = records.count { it.result == true && it.surrendered != true }
         val playedWins = played.count { it.result == true }
         val xpPerMinute = if (totalSeconds > 0) totalExperience * 60.0 / totalSeconds else null
 
         totalCount.text = records.size.toString()
-        avgWR.text = percentage(overallWins, records.size)
+        avgWR.text = percentage(playedWins, played.size)
         playedCount.text = played.size.toString()
         playedWR.text = percentage(playedWins, played.size)
         surrenderedCount.text = records.count { it.surrendered == true }.toString()

@@ -5,11 +5,13 @@ import club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME
 import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.RuntimeFaultBackoff
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.utils.PowerLogUtil
+import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.StepEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
@@ -27,6 +29,9 @@ object PowerLogListener :
     AbstractLogListener(GAME_WAR_LOG_NAME, 0, 50L, TimeUnit.MILLISECONDS) {
 
     private val war = WAR
+
+    /** Bounds transient parser faults so one malformed Power.log line cannot kill the listener. */
+    private val resolveFaultBackoff = RuntimeFaultBackoff()
 
     /** True while an E2E watchdog restart is rebuilding the live game model. */
     @Volatile
@@ -59,7 +64,7 @@ object PowerLogListener :
                     "replayExistingGame=$replayExistingGame " +
                     "unfinishedGameStart=${unfinishedGameStart ?: "none"}"
             }
-            if (replayExistingGame || System.getProperty("hs.script.e2e") == "true") {
+            if (replayExistingGame) {
                 // A restart or late attach must reconstruct an already active
                 // game before consuming new lines; otherwise the phase machine
                 // starts at FILL_DECK with no player mapping and the bot can
@@ -70,8 +75,7 @@ object PowerLogListener :
                 try {
                     log.info {
                         "Power.log恢复：从未结束对局起点回放 " +
-                            "offset=${unfinishedGameStart ?: 0} " +
-                            "reason=${if (replayExistingGame) "active-game-detected" else "e2e-watchdog"}"
+                            "offset=${unfinishedGameStart ?: 0} reason=active-game-detected"
                     }
                     // Power.log is append-only across multiple games. Replaying
                     // from byte zero makes startup latency proportional to the
@@ -93,6 +97,10 @@ object PowerLogListener :
                     }
                 }
             } else {
+                log.info {
+                    "POWER_LOG_REPLAY_SKIPPED path=${it.path()} replayExistingGame=false " +
+                        "reason=terminal-or-no-create e2e=${System.getProperty("hs.script.e2e") == "true"}"
+                }
                 it.seek(it.length())
             }
         }
@@ -193,7 +201,40 @@ object PowerLogListener :
                 if (line == null) {
                     return@dealNewLog
                 } else if (PowerLogUtil.isRelevance(line)) {
-                    resolveLog(line)
+                    try {
+                        resolveLog(line)
+                        resolveFaultBackoff.onSuccess()
+                    } catch (interrupted: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        log.info { "POWER_LOG_RESOLVE_INTERRUPTED" }
+                        return@dealNewLog
+                    } catch (fault: Throwable) {
+                        val decision = resolveFaultBackoff.onFailure()
+                        log.error(fault) {
+                            "POWER_LOG_RESOLVE_FAILED " +
+                                "failureCount=${decision.failureCount} " +
+                                "retryAfterMs=${decision.delayMs} " +
+                                "circuitOpened=${decision.circuitOpened} " +
+                                "phase=${war.currentPhase.name} " +
+                                "step=${war.currentTurnStep?.name ?: "NONE"} " +
+                                "line=${line.take(240)}"
+                        }
+                        if (decision.circuitOpened) {
+                            log.warn {
+                                "POWER_LOG_RESOLVE_CIRCUIT_OPEN " +
+                                    "retryAfterMs=${decision.delayMs} " +
+                                    "failureCount=${decision.failureCount} " +
+                                    "action=skip-faulty-line-and-yield"
+                            }
+                        }
+                        try {
+                            SystemUtil.delay(decision.delayMs.toInt())
+                        } catch (backoffInterrupted: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            log.info { "POWER_LOG_RESOLVE_BACKOFF_INTERRUPTED" }
+                            return@dealNewLog
+                        }
+                    }
                 }
             } ?: return
         }

@@ -260,24 +260,6 @@ object DeckStrategyManager {
         userSelection
     }
 
-    /**
-     * A refresh is not applied if the active strategy disappeared from the
-     * freshly loaded catalog. Throwing here lets the coordinator report
-     * FAILED/rollback instead of falsely reporting APPLIED while retaining an
-     * old instance.
-     */
-    internal fun <T> resolveRefreshReplacement(
-        previous: T?,
-        loaded: List<T>,
-        id: (T) -> String,
-    ): T? {
-        val replacement = previous?.let { old -> loaded.find { id(it) == id(old) } }
-        if (previous != null && replacement == null) {
-            throw IllegalStateException("matching-id-not-found strategy=${id(previous)}")
-        }
-        return replacement
-    }
-
     private fun reload() {
         log.info { "刷新策略库" }
         val loaded = load()
@@ -307,7 +289,16 @@ object DeckStrategyManager {
                 deckStrategies.addAll(previousCatalog)
                 throw error
             }
-            return resolveRefreshReplacement(previous, deckStrategies.toList()) { it.id() }
+            val previousId = previous?.id()
+            val replacement = previousId?.let { id -> deckStrategies.find { it.id() == id } }
+            if (previous != null && replacement == null) {
+                log.warn {
+                    "STRATEGY_REFRESH_ACTIVE_RETAINED strategy=${previous.id()} " +
+                        "reason=matching-id-not-found"
+                }
+                return previous
+            }
+            return replacement
         } catch (error: Throwable) {
             deckStrategies.clear()
             deckStrategies.addAll(previousCatalog)

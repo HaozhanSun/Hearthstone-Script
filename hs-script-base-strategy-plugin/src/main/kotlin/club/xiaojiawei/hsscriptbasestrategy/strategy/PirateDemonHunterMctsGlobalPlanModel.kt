@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsCardDiagnostics
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 
 /**
@@ -79,7 +80,7 @@ object PirateDemonHunterMctsGlobalPlanModel : MctsDecisionModel by PirateDemonHu
     }
 
     private fun isPlayableHandCard(card: Card, war: War, mana: Int, freeSlots: Int): Boolean {
-        if (card.isUncertain || card.cost !in 1..mana) return false
+        if ((!card.isUncertain && card.cardId.isBlank()) || card.cost !in 1..mana) return false
         if (usesBoardSlot(card) && freeSlots == 0) return false
         if (shouldDefer(card, war)) return false
 
@@ -87,7 +88,8 @@ object PirateDemonHunterMctsGlobalPlanModel : MctsDecisionModel by PirateDemonHu
         if (result.isFailure) return false
         val actions = result.getOrDefault(emptyList())
         return actions.any { !isDeferredAction(it, war) } ||
-            (actions.isEmpty() && canCreateOpaqueAction(card, war))
+            (actions.isEmpty() && (canCreateOpaqueAction(card, war) ||
+                MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)))
     }
 
     private fun usesBoardSlot(card: Card): Boolean =

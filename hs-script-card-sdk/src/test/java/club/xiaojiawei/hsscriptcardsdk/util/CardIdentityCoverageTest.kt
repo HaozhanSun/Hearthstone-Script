@@ -7,21 +7,33 @@ import kotlin.test.assertTrue
 
 class CardIdentityCoverageTest {
     @Test
-    fun `pirate warrior profile reports database gaps with Mandarin names`() {
+    fun `database contains Captain Crowley identity and card facts`() {
+        val card = CardDBUtil.queryCardById("CAP_106").firstOrNull()
+
+        assertTrue(card != null)
+        assertEquals("克罗雷船长", card?.name)
+        assertEquals(127019, card?.dbfId)
+        assertEquals(5, card?.cost)
+        assertEquals(4, card?.attack)
+        assertEquals(5, card?.health)
+    }
+
+    @Test
+    fun `pirate warrior profile reports remaining database gaps with Mandarin names`() {
         val result = CardIdentityCoverage.inspect(
             PIRATE_WARRIOR_PROFILE,
             resolver = { cardId -> CardDBUtil.queryCardById(cardId).firstOrNull() },
         )
 
         assertEquals(
-            setOf("CAP_104", "CAP_105", "CAP_106", "CAP_107"),
+            setOf("CAP_104", "CAP_105", "CAP_107"),
             result.missing.map { it.cardId }.toSet(),
         )
-        assertEquals(22, result.resolved.size)
+        assertEquals(23, result.resolved.size)
         assertTrue(result.diagnosticMessage().contains("炸药工程师(CAP_104)"))
         assertTrue(result.diagnosticMessage().contains("钩手拖曳(CAP_105)"))
-        assertTrue(result.diagnosticMessage().contains("克罗雷船长(CAP_106)"))
         assertTrue(result.diagnosticMessage().contains("火炮长(CAP_107)"))
+        assertTrue(result.resolved.any { it.cardId == "CAP_106" && it.expectedName == "克罗雷船长" })
     }
 
     @Test
@@ -59,7 +71,7 @@ class CardIdentityCoverageTest {
 
         assertTrue(identities.all { it != null && it.name.isNotBlank() })
         assertEquals(
-            setOf("CAP_104", "CAP_105", "CAP_106", "CAP_107"),
+            setOf("CAP_104", "CAP_105", "CAP_107"),
             identities.filter { it?.source == CardIdentitySource.VERIFIED_CATALOG }
                 .mapNotNull { it?.cardId }
                 .toSet(),

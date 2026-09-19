@@ -489,13 +489,18 @@ object GameUtil {
                 null
             }
         val globalDeckPos = ConfigExUtil.getChooseDeckPos()
+        val activeScheduleRule = scheduleSnapshot?.rule
+        val e2eDeckPosition = System.getProperty("hs.script.e2e.deck-position")
+            ?.trim()
+            ?.toIntOrNull()
+            ?.takeIf { it > 0 }
         val deckSlotChoice = StrategyDefaultDeckSlotBindings.chooseDeckSlots(
             rule = scheduleSnapshot?.rule,
             strategyId = if (scheduleSnapshot == null) DeckStrategyManager.currentDeckStrategyProperty.get()?.id() else null,
             globalDeckSlots = globalDeckPos,
             maxDeckSlots = DECK_POS_RECTS.size,
         )
-        val chooseDeckPos = deckSlotChoice.deckSlots
+        val chooseDeckPos = e2eDeckPosition?.let { listOf(it) } ?: deckSlotChoice.deckSlots
 
         if (chooseDeckPos.isEmpty()) {
             DeckStrategyManager.clearScheduleDeckSlotSelection("no-deck-slot-configured")
@@ -514,7 +519,7 @@ object GameUtil {
             DeckStrategyManager.clearScheduleDeckSlotSelection("invalid-deck-slot")
             return
         }
-        val deckSelectionReason = deckSlotChoice.assignmentReason
+        val deckSelectionReason = e2eDeckPosition?.let { "e2e-override" } ?: deckSlotChoice.assignmentReason
         val deckPos = validDeckPos.randomSelectOrNull() ?: let {
             log.warn { "没有设置可用卡组位" }
             return
@@ -529,12 +534,41 @@ object GameUtil {
         } else {
             DeckStrategyManager.clearScheduleDeckSlotSelection("global-deck-slot")
         }
+        log.info {
+            "DECK_POSITION_SELECTION source=${when {
+                e2eDeckPosition != null -> "e2e-override"
+                activeScheduleRule != null -> "schedule"
+                else -> "global"
+            }} " +
+                "scheduleRule=${activeScheduleRule?.strategyId ?: "none"} " +
+                "candidates=${chooseDeckPos.sorted()} selected=$deckPos " +
+                "highPriority=${ConfigUtil.getBoolean(ConfigEnum.WORK_TIME_RULE_HIGH_PRIORITY)}"
+        }
         DECK_POS_RECTS.getOrNull(deckPos - 1)?.let { rect ->
             repeat(count) {
                 rect.lClick()
                 SystemUtil.delayTiny()
             }
         }
+    }
+
+    /**
+     * Click one explicitly resolved deck slot.
+     *
+     * This is intentionally separate from [lClickDeckPos].  The latter's
+     * argument is the number of clicks and its slot is selected from the
+     * active schedule/global candidates.  Recovery and strategy entry already
+     * have a strategy-scoped slot and must not recalculate or randomize it.
+     */
+    fun lClickDeckSlot(deckSlot: Int) {
+        val rect = DECK_POS_RECTS.getOrNull(deckSlot - 1)
+        if (rect == null) {
+            log.warn { "DECK_POSITION_SELECTION_SKIPPED source=explicit-strategy-slot invalidSlot=$deckSlot" }
+            return
+        }
+        log.info { "DECK_POSITION_SELECTION source=explicit-strategy-slot selected=$deckSlot" }
+        rect.lClick()
+        SystemUtil.delayTiny()
     }
 
     fun getMyHandCardRect(
@@ -773,7 +807,8 @@ object GameUtil {
                         )
                         if (watchdogTiming.shouldInspect) {
                             val state = "mode=${Mode.currMode?.name ?: "NONE"}|inWar=${WarEx.inWar}|" +
-                                "warPhase=${WarEx.war.currentPhase.name}|warCount=${WarEx.warCount}"
+                                "warPhase=${WarEx.war.currentPhase.name}|myTurn=${WarEx.war.isMyTurn}|" +
+                                "warCount=${WarEx.warCount}"
                             val observation = ScreenWatchdog.inspectForSurrender(
                                 state = state,
                                 attempts = surrenderAttempts,
@@ -817,6 +852,16 @@ object GameUtil {
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MAIN_MENU -> {
                                     stopSurrenderTask()
                                     Mode.recover(ModeEnum.HUB, "screen-watchdog-main-menu", enterStrategy = true)
+                                    return@scheduleWithFixedDelay
+                                }
+                                ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RESUME_GAMEPLAY -> {
+                                    stopSurrenderTask()
+                                    log.warn {
+                                        "SCREEN_WATCHDOG_ACTIVE_GAME_RESUME " +
+                                            "reason=${observation.reason} kind=${observation.kind} " +
+                                            "state=$state action=RESUME_NORMAL_GAMEPLAY " +
+                                            "dispatch=false retry=false replan=false"
+                                    }
                                     return@scheduleWithFixedDelay
                                 }
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN -> {
@@ -1111,6 +1156,21 @@ object GameUtil {
     } else {
         CSystemDll.INSTANCE.isProcessRunning(PLATFORM_PROGRAM_NAME)
     }
+
+    /** Read-only process lineage used by the bounded lifecycle watchdog. */
+    fun findGameProcessIdForDiagnostics(): Long? = runCatching {
+        ProcessHandle.allProcesses().use { processes ->
+            processes
+                .filter { handle ->
+                    handle.info().command().map { command ->
+                        File(command).name.equals(GAME_PROGRAM_NAME, ignoreCase = true)
+                    }.orElse(false)
+                }
+                .findFirst()
+                .orElse(null)
+                ?.pid()
+        }
+    }.getOrNull()
 
 
     fun getGameProgramPermission(): ProgramPermissionEnum {

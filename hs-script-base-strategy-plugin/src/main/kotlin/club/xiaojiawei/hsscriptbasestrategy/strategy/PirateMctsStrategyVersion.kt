@@ -10,7 +10,7 @@ import club.xiaojiawei.hsscriptbasestrategy.VersionInfo
  * strategy cannot remain indistinguishable in the dropdown after a rebuild.
  */
 object PirateMctsStrategyVersion {
-    const val REVISION = "1.4"
+    const val REVISION = "2.6"
 
     private val buildVersion: String
         get() = VersionInfo.VERSION.removePrefix("v").substringBefore('-')

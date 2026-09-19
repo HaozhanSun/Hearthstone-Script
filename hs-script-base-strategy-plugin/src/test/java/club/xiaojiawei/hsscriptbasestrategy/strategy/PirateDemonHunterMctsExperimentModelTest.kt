@@ -26,6 +26,79 @@ import kotlin.test.assertTrue
 class PirateDemonHunterMctsExperimentModelTest {
 
     @Test
+    fun `battlefield is illegal until two friendly minions are established`() {
+        val war = testWar().apply { me.resources = 4 }
+        val battlefield = testCard(PirateDemonHunterMctsExperimentModel.BATTLEFIELD).apply {
+            cardType = CardTypeEnum.SPELL
+            cost = 2
+        }
+        val action = PlayAction({}, {}, battlefield)
+
+        assertFalse(PirateDemonHunterMctsExperimentModel.isActionLegal(action, war))
+
+        repeat(2) {
+            war.addCard(testCard("BATTLEFIELD_MINION_$it"), war.me.playArea)
+        }
+        assertTrue(PirateDemonHunterMctsExperimentModel.isActionLegal(action, war))
+    }
+
+    @Test
+    fun `magnifying glaive is held when it neither draws nor kills`() {
+        val war = testWar().apply { me.resources = 3 }
+        val glaive = testCard(PirateDemonHunterMctsExperimentModel.MAGNIFYING_GLAIVE).apply {
+            cardType = CardTypeEnum.WEAPON
+            cost = 3
+            atc = 3
+        }
+        repeat(5) {
+            war.addCard(testCard("GLAIVE_HAND_$it"), war.me.handArea)
+        }
+        val action = PlayAction({}, {}, glaive)
+
+        assertFalse(PirateDemonHunterMctsExperimentModel.isActionLegal(action, war))
+
+        val enemy = testCard("GLAIVE_TARGET").apply {
+            cardType = CardTypeEnum.MINION
+            health = 3
+            damage = 0
+        }
+        war.addCard(enemy, war.rival.playArea)
+        assertTrue(PirateDemonHunterMctsExperimentModel.isActionLegal(action, war))
+    }
+
+    @Test
+    fun `magnifying glaive does not borrow stale hero attack to claim a kill`() {
+        val war = testWar().apply { me.resources = 3 }
+        val hero = testCard("STALE_ATTACK_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            atc = 6
+            health = 30
+        }
+        val rivalMinion = testCard("TOO_HEALTHY_FOR_GLAIVE").apply {
+            cardType = CardTypeEnum.MINION
+            health = 5
+            damage = 0
+        }
+        val glaive = testCard(PirateDemonHunterMctsExperimentModel.MAGNIFYING_GLAIVE).apply {
+            cardType = CardTypeEnum.WEAPON
+            cost = 3
+            atc = 3
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(rivalMinion, war.rival.playArea)
+        repeat(5) {
+            war.addCard(testCard("STALE_ATTACK_HAND_$it"), war.me.handArea)
+        }
+
+        assertFalse(
+            PirateDemonHunterMctsExperimentModel.isActionLegal(
+                PlayAction({}, {}, glaive),
+                war,
+            ),
+        )
+    }
+
+    @Test
     fun `hero attack suppresses nonlethal face and keeps the first deterministic kill target`() {
         val war = testWar()
         val hero = testCard("DH_HERO").apply {
@@ -183,6 +256,49 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `hero attack prefers the healthier equal-attack killable minion over a ready one`() {
+        val war = testWar()
+        val hero = testCard("WEAPON_TRADE_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            // Card.atc is the live attack total after the weapon is equipped;
+            // the weapon entity is kept separately for durability/metadata.
+            atc = 3
+            health = 30
+            isExhausted = false
+        }
+        val weapon = testCard("TLC_833").apply {
+            cardType = CardTypeEnum.WEAPON
+            atc = 2
+            health = 2
+        }
+        val rivalHero = testCard("WEAPON_TRADE_RIVAL_HERO").apply {
+            cardType = CardTypeEnum.HERO
+            health = 20
+        }
+        val healthier = testCard("REV_246").apply {
+            atc = 2
+            health = 3
+            isExhausted = true
+        }
+        val ready = testCard("TLC_903t").apply {
+            atc = 2
+            health = 1
+            isExhausted = false
+        }
+        war.addCard(hero, war.me.playArea)
+        war.me.playArea.weapon = weapon
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(healthier, war.rival.playArea)
+        war.addCard(ready, war.rival.playArea)
+
+        val healthierAttack = AttackAction({}, {}, hero, targetEntityId = healthier.entityId)
+        val readyAttack = AttackAction({}, {}, hero, targetEntityId = ready.entityId)
+
+        assertTrue(PirateDemonHunterMctsExperimentModel.isActionLegal(healthierAttack, war))
+        assertFalse(PirateDemonHunterMctsExperimentModel.isActionLegal(readyAttack, war))
+    }
+
+    @Test
     fun `hero cannot attack a seven-health minion when four attack cannot kill it`() {
         val war = testWar()
         val hero = testCard("FOUR_ATTACK_HERO").apply {
@@ -211,6 +327,87 @@ class PirateDemonHunterMctsExperimentModelTest {
         assertTrue(PirateDemonHunterMctsExperimentModel.isActionLegal(killableAttack, war))
         assertTrue(!PirateDemonHunterMctsExperimentModel.isActionLegal(tooHealthyAttack, war))
         assertTrue(!PirateDemonHunterMctsExperimentModel.isActionLegal(face, war))
+    }
+
+    @Test
+    fun `hero weapon is not double counted when deciding whether an enemy can be killed`() {
+        val war = testWar()
+        val hero = testCard("THREE_ATTACK_HERO_WITH_WEAPON").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 3
+            health = 30
+            isExhausted = false
+        }
+        val weapon = testCard("THREE_ATTACK_WEAPON_ALREADY_MERGED").apply {
+            cardType = CardTypeEnum.WEAPON
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 3
+            durability = 2
+            health = 0
+        }
+        val rivalHero = testCard("RIVAL_HERO_FOR_NO_DOUBLE_COUNT").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 20
+        }
+        val eightAttackFourHealth = testCard("EIGHT_ATTACK_FOUR_HEALTH").apply {
+            cardType = CardTypeEnum.MINION
+            atc = 8
+            health = 4
+            isExhausted = true
+        }
+        war.addCard(hero, war.me.playArea)
+        war.me.playArea.weapon = weapon
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(eightAttackFourHealth, war.rival.playArea)
+
+        val heroAttack = AttackAction(
+            {},
+            {},
+            hero,
+            targetEntityId = eightAttackFourHealth.entityId,
+        )
+
+        assertEquals(3, PirateHeroAttackTargetPolicy.effectiveHeroAttack(hero, war))
+        assertFalse(PirateDemonHunterMctsExperimentModel.isActionLegal(heroAttack, war))
+    }
+
+    @Test
+    fun `exhausted friendly minion cannot be counted for a combined hero kill`() {
+        val war = testWar()
+        val hero = testCard("THREE_ATTACK_HERO_EXHAUSTED_HELPER").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            atc = 3
+            health = 30
+            isExhausted = false
+        }
+        val rivalHero = testCard("RIVAL_HERO_FOR_EXHAUSTED_HELPER").apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 20
+        }
+        val target = testCard("FOUR_HEALTH_TARGET_WITH_NO_READY_HELPER").apply {
+            cardType = CardTypeEnum.MINION
+            atc = 8
+            health = 4
+            isExhausted = true
+        }
+        val exhaustedHelper = testCard("EXHAUSTED_ONE_ATTACK_HELPER").apply {
+            cardType = CardTypeEnum.MINION
+            atc = 1
+            health = 3
+            isExhausted = true
+        }
+        war.addCard(hero, war.me.playArea)
+        war.addCard(exhaustedHelper, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(target, war.rival.playArea)
+
+        val heroAttack = AttackAction({}, {}, hero, targetEntityId = target.entityId)
+
+        assertFalse(PirateDemonHunterMctsExperimentModel.isActionLegal(heroAttack, war))
     }
 
     @Test
@@ -835,7 +1032,12 @@ class PirateDemonHunterMctsExperimentModelTest {
         })
 
         var afterMinionAttacks = afterSpellPlay
-        repeat(afterSpellPlay.actions.size) {
+        while (
+            afterMinionAttacks.actions.isNotEmpty() &&
+            afterMinionAttacks.actions.all {
+                it is AttackAction && it.creator?.cardType === CardTypeEnum.MINION
+            }
+        ) {
             assertTrue(afterMinionAttacks.actions.isNotEmpty())
             assertTrue(afterMinionAttacks.actions.all {
                 it is AttackAction && it.creator?.cardType === CardTypeEnum.MINION
@@ -982,13 +1184,9 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         val afterPower = root.buildNextNode(root.actions.single())
         assertTrue(afterPower.actions.isNotEmpty())
-        assertTrue(afterPower.actions.all {
-            it is AttackAction && it.creator?.entityId == hero.entityId && it.targetEntityId == taunt.entityId
+        assertTrue(afterPower.actions.none {
+            it is AttackAction && it.creator?.entityId == hero.entityId
         })
-
-        val afterHero = afterPower.buildNextNode(afterPower.actions.single())
-        assertTrue(afterHero.actions.isNotEmpty())
-        assertTrue(afterHero.actions.all { it is AttackAction && it.creator?.entityId == minion.entityId })
     }
 
     @Test
@@ -1982,6 +2180,36 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `coin bridge keeps pilot patches legal after the spell phase`() {
+        val war = testWar().apply {
+            me.resources = 1
+            me.tempResources = 1
+        }
+        val pilotPatches = testCard(PirateDemonHunterMctsExperimentModel.PATCHES_THE_PILOT).apply {
+            cost = 1
+        }
+        val heroPower = testCard("HERO_POWER_AFTER_COIN").apply {
+            cardType = CardTypeEnum.HERO_POWER
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 1
+            isExhausted = false
+        }
+        war.addCard(pilotPatches, war.me.handArea)
+        war.addCard(heroPower, war.me.playArea)
+
+        val action = PlayAction({}, {}, pilotPatches)
+
+        assertTrue(PirateDemonHunterMctsExperimentModel.isActionLegal(action, war))
+        assertTrue(PirateDemonHunterMctsExperimentModel.allowsActionOrderReopen(action, war))
+        assertFalse(
+            PirateDemonHunterMctsExperimentModel.allowsActionOrderReopen(
+                PowerAction({}, {}, heroPower),
+                war,
+            ),
+        )
+    }
+
+    @Test
     fun `parachute brigand is not resurrected when the board is full`() {
         val war = testWar()
         repeat(war.me.playArea.maxSize) { index ->
@@ -2035,7 +2263,7 @@ class PirateDemonHunterMctsExperimentModelTest {
 
         val node = MonteCarloTreeNode(war, InitAction, testMctsArg(experimentalSearch = true))
 
-        assertTrue(node.actions.any { it is AttackAction && it.targetEntityId == taunt.entityId })
+        assertTrue(node.actions.none { it is AttackAction && it.targetEntityId == taunt.entityId })
         assertTrue(node.actions.none { it is AttackAction && it.targetIsHero })
     }
 

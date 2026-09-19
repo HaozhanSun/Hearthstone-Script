@@ -1,9 +1,8 @@
 package club.xiaojiawei.hsscript.status
 
-import club.xiaojiawei.hsscript.bean.TesseractEx
+import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
-import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
 import club.xiaojiawei.hsscriptstrategysdk.DeckStrategy
@@ -14,6 +13,7 @@ import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.File
 import java.util.Locale
+import net.sourceforge.tess4j.Tesseract
 
 enum class ObservedTournamentMode {
     STANDARD,
@@ -53,7 +53,6 @@ data class TournamentModeConfirmationResult(
 
 object TournamentModeConfirmation {
     private const val OCR_MAX_WIDTH = 960
-
     fun classifyModeTitle(ocrText: String): ObservedTournamentMode {
         val text = ocrText.lowercase(Locale.ROOT)
             .replace(Regex("\\s+"), "")
@@ -122,10 +121,25 @@ object TournamentModeConfirmation {
         attempts: Int = 3,
         observer: () -> TournamentModeObservation = ::observeCurrentMode,
         sleeper: (Long) -> Unit = { millis -> Thread.sleep(millis) },
+        shouldContinue: () -> Boolean = { true },
     ): Boolean {
         var lastResult: TournamentModeConfirmationResult? = null
         repeat(attempts.coerceAtLeast(1)) { attempt ->
+            if (!shouldContinue()) {
+                log.info {
+                    "TOURNAMENT_MODE_CONFIRMATION_ABORTED reason=state-changed-before-observation " +
+                        "expectedMode=${expectedMode.name} strategy=${deckStrategy.id()} deckSlot=${deckSlot ?: "n/a"}"
+                }
+                return false
+            }
             val observation = observer()
+            if (!shouldContinue()) {
+                log.info {
+                    "TOURNAMENT_MODE_CONFIRMATION_ABORTED reason=state-changed-during-observation " +
+                        "expectedMode=${expectedMode.name} strategy=${deckStrategy.id()} deckSlot=${deckSlot ?: "n/a"}"
+                }
+                return false
+            }
             val result = evaluate(
                 expectedMode = expectedMode,
                 observation = observation,
@@ -147,7 +161,7 @@ object TournamentModeConfirmation {
                 -> return true
 
                 TournamentModeConfirmationState.MISMATCH -> {
-                    pauseForUnsafeMode(result)
+                    if (shouldContinue()) pauseForUnsafeMode(result) else logStateChanged(result)
                     return false
                 }
 
@@ -156,7 +170,25 @@ object TournamentModeConfirmation {
                 -> sleeper(450)
             }
         }
-        pauseForUnsafeMode(lastResult)
+        // The mode click immediately before this check is deterministic, and
+        // the upstream entry path does not put OCR on the critical path.  A
+        // narrow ornate title can still produce an unusable OCR string even
+        // when the selected mode is correct.  Do not turn that recognition
+        // miss into an automatic pause: retain the evidence, continue with
+        // the already-selected mode, and let the normal deck-selection and
+        // screen-recovery guards validate the next state.  A positive
+        // mismatch or an actively-open mode selector remains fail-safe.
+        if (lastResult?.state == TournamentModeConfirmationState.UNRECOGNIZED) {
+            log.warn {
+                "TOURNAMENT_MODE_CONFIRMATION_FALLBACK action=CONTINUE_DETERMINISTIC_MODE " +
+                    "expectedMode=${lastResult?.expectedMode?.name ?: "n/a"} " +
+                    "strategy=${lastResult?.strategyId ?: "n/a"} deckSlot=${lastResult?.deckSlot ?: "n/a"} " +
+                    "reason=${lastResult?.reason ?: "mode-title-unrecognized"} " +
+                    "ocr=${lastResult?.ocrText?.ifBlank { "<empty>" }?.take(160) ?: "<empty>"}"
+            }
+            return true
+        }
+        if (shouldContinue()) pauseForUnsafeMode(lastResult) else logStateChanged(lastResult)
         return false
     }
 
@@ -168,27 +200,54 @@ object TournamentModeConfirmation {
         )
         val titleRegion = cropTitleRegion(screen)
         val titleText = runOCR(titleRegion, "tournament-mode-title")
-        val observed = classifyModeTitle(titleText)
-        if (observed != ObservedTournamentMode.UNKNOWN) {
-            return TournamentModeObservation(observed, titleText, "title-roi-ocr")
-        }
-        val fullText = runOCR(screen, "tournament-mode-fullscreen")
         return TournamentModeObservation(
-            observedMode = classifyModeTitle(fullText),
-            ocrText = listOf(titleText, fullText).filter { it.isNotBlank() }.joinToString("|"),
-            evidence = "title-roi-then-fullscreen-ocr",
+            observedMode = classifyModeTitle(titleText),
+            ocrText = titleText,
+            evidence = "title-roi-ocr",
         )
     }
 
     private fun pauseForUnsafeMode(result: TournamentModeConfirmationResult?) {
-        PauseStatus.isPause = true
+        if (WarEx.inWar) {
+            logStateChanged(result)
+            return
+        }
+        val evidence = UnknownStateScreenshot.capture(
+            category = UnknownStateScreenshot.CATEGORY_SCREEN_RECOVERY_UNRESOLVED,
+            trigger = "tournament-mode-confirmation-exhausted",
+            state = "expected=${result?.expectedMode?.name ?: "UNKNOWN"}" +
+                "|observed=${result?.observedMode?.name ?: "UNKNOWN"}" +
+                "|strategy=${result?.strategyId ?: "UNKNOWN"}" +
+                "|deckSlot=${result?.deckSlot ?: "UNKNOWN"}",
+            phase = "tournament-mode-confirmation",
+            label = "mode-title-confirmation-failed",
+            ocrText = result?.ocrText.orEmpty(),
+            visual = result?.reason.orEmpty(),
+        )
+        PauseStatus.setAutomaticPause(true)
         log.warn {
-            "TOURNAMENT_MODE_CONFIRMATION_FAILED action=PAUSE_BEFORE_DECK_SELECTION " +
+            // Unknown mode text is not a user/manual pause. It is a bounded,
+            // recoverable safety stop: ScreenStateRecovery is allowed to
+            // inspect the active window and either re-enter the mode strategy
+            // or restart a genuinely stale client. Keep the selected strategy
+            // and slot in the evidence so recovery cannot silently switch
+            // decks after an OCR miss.
+            "TOURNAMENT_MODE_CONFIRMATION_FAILED action=PAUSE_FOR_AUTOMATIC_RECOVERY " +
                 "expectedMode=${result?.expectedMode?.name ?: "n/a"} " +
                 "observedMode=${result?.observedMode?.name ?: "UNKNOWN"} " +
                 "strategy=${result?.strategyId ?: "n/a"} strategyName=${result?.strategyName ?: "n/a"} " +
                 "deckSlot=${result?.deckSlot ?: "n/a"} reason=${result?.reason ?: "no-observation"} " +
-                "ocr=${result?.ocrText?.ifBlank { "<empty>" }?.take(160) ?: "<empty>"}"
+                "ocr=${result?.ocrText?.ifBlank { "<empty>" }?.take(160) ?: "<empty>"} " +
+                "boundedAttempts=true screenshot=${evidence?.file?.absolutePath ?: "not-saved"}"
+        }
+    }
+
+    private fun logStateChanged(result: TournamentModeConfirmationResult?) {
+        log.info {
+            "TOURNAMENT_MODE_CONFIRMATION_ABORTED reason=game-started-or-state-changed " +
+                "expectedMode=${result?.expectedMode?.name ?: "n/a"} " +
+                "observedMode=${result?.observedMode?.name ?: "UNKNOWN"} " +
+                "strategy=${result?.strategyId ?: "n/a"} deckSlot=${result?.deckSlot ?: "n/a"}"
         }
     }
 
@@ -222,10 +281,16 @@ object TournamentModeConfirmation {
     }
 
     private fun cropTitleRegion(image: BufferedImage): BufferedImage {
-        val x = (image.width * 0.15).toInt().coerceIn(0, image.width - 1)
+        // The mode title is the single line in the top centre of the deck
+        // selection page (for example, 狂野对战 or 标准对战).  The previous
+        // 70% x 26% crop also included the deck grid and reward panel, which
+        // made Tesseract spend seconds parsing unrelated text and frequently
+        // return a long, unusable string.  Keep this ROI tied to the stable
+        // title geometry and leave the rest of the screen to recovery OCR.
+        val x = (image.width * 0.30).toInt().coerceIn(0, image.width - 1)
         val y = 0
-        val width = (image.width * 0.70).toInt().coerceAtLeast(1).coerceAtMost(image.width - x)
-        val height = (image.height * 0.26).toInt().coerceAtLeast(1).coerceAtMost(image.height)
+        val width = (image.width * 0.40).toInt().coerceAtLeast(1).coerceAtMost(image.width - x)
+        val height = (image.height * 0.09).toInt().coerceAtLeast(1).coerceAtMost(image.height)
         return image.getSubimage(x, y, width, height)
     }
 
@@ -235,8 +300,17 @@ object TournamentModeConfirmation {
     ): String =
         runCatching {
             val ocrImage = resizeForOcr(image)
-            OcrRuntime.recognize(ocrImage, desc, allowEmptyProbeResult = true) {
-                legacyOCR(ocrImage, desc)
+            // Mode confirmation is part of the normal entry path, not
+            // recovery.  A PaddleX cold start can take tens of seconds and
+            // would make Start/F1 feel blocked even though no game action is
+            // waiting on it.  The existing local OCR is sufficient for this
+            // narrow title ROI; PaddleX remains available to the bounded
+            // screen-recovery and rank-diagnostic paths.
+            legacyOCR(ocrImage, desc).also {
+                log.info {
+                    "TOURNAMENT_MODE_CONFIRMATION_OCR provider=LEGACY_FAST " +
+                        "desc=$desc chars=${it.length}"
+                }
             }.replace(Regex("\\s+"), "")
         }.getOrElse { error ->
             log.warn(error) { "TOURNAMENT_MODE_CONFIRMATION_OCR_FAILED desc=$desc" }
@@ -247,12 +321,20 @@ object TournamentModeConfirmation {
         image: BufferedImage,
         desc: String,
     ): String =
-        TesseractEx().apply {
+        // This path is deliberately local and bounded.  TesseractEx is the
+        // application's provider-aware wrapper and routes through PaddleX;
+        // using it here silently turned a small title-ROI check back into a
+        // slow sidecar request.  Mode confirmation is on the F1/Start
+        // critical path, so use the direct legacy engine for this crop.
+        Tesseract().apply {
             setDatapath(File(TESS_DATA_PATH).absolutePath)
             setLanguage(CHI_SIM_DATA)
-            setPageSegMode(11)
+            // The ROI is intentionally one line, so single-line segmentation
+            // is both faster and less prone to borrowing glyphs from the
+            // deck-selection grid.
+            setPageSegMode(7)
             setVariable("user_defined_dpi", "160")
-        }.doOCR(image, desc)
+        }.doOCR(image)
 
     private fun resizeForOcr(image: BufferedImage): BufferedImage {
         if (image.width <= OCR_MAX_WIDTH) return image

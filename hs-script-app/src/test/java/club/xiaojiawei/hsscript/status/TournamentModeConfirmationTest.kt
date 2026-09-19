@@ -1,9 +1,12 @@
 package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
+import club.xiaojiawei.hsscriptcardsdk.bean.Card
+import club.xiaojiawei.hsscriptstrategysdk.DeckStrategy
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.util.HashSet
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -115,11 +118,91 @@ class TournamentModeConfirmationTest {
         )))
 
         assertTrue(tournament.contains("confirmBeforeDeckSelection"))
-        assertTrue(tournament.indexOf("confirmBeforeDeckSelection") < tournament.indexOf("selectDeck(deckStrategy)"))
+        assertTrue(tournament.indexOf("confirmBeforeDeckSelection") < tournament.indexOf("selectDeck(deckStrategy, expectedDeckSlot)"))
+        assertTrue(tournament.contains("DECK_SLOT_RESOLVED"))
+        assertTrue(tournament.contains("recoverDeckSelectionAndStart"))
+        assertTrue(tournament.contains("GameUtil.lClickDeckSlot(deckSlot)"))
+        assertFalse(tournament.contains("GameUtil.lClickDeckPos(deckSlot)"))
+        assertTrue(tournament.contains("MATCHMAKING_INPUT_DISPATCH mode=normal"))
+        assertTrue(tournament.contains("MouseUtil.leftButtonClick(pos, ScriptStatus.gameHWND)"))
+        assertFalse(tournament.contains("leftButtonClickForRecovery(rect.getCenterClickPos())"))
+        assertTrue(tournament.contains("MATCHMAKING_POPUP_WATCHDOG_SKIPPED reason=no-positive-dialog-evidence"))
+        assertFalse(tournament.contains("scheduleMatchmakingDialogRecovery(traceId)"))
         assertTrue(confirmation.contains("title-roi-ocr"))
+        assertTrue(confirmation.contains("TOURNAMENT_MODE_CONFIRMATION_OCR provider=LEGACY_FAST"))
+        assertFalse(confirmation.contains("tournament-mode-fullscreen"))
+        assertTrue(confirmation.contains("image.width * 0.30"))
+        assertTrue(confirmation.contains("image.width * 0.40"))
+        assertTrue(confirmation.contains("image.height * 0.09"))
+        assertTrue(confirmation.contains("setPageSegMode(7)"))
         assertTrue(confirmation.contains("TOURNAMENT_MODE_CONFIRMATION_FAILED"))
         assertTrue(confirmation.contains("expectedMode="))
         assertTrue(confirmation.contains("observedMode="))
+        assertTrue(confirmation.contains("TOURNAMENT_MODE_CONFIRMATION_ABORTED"))
+    }
+
+    @Test
+    fun `slow mode observation cannot pause after gameplay starts`() {
+        var inWar = false
+        var observations = 0
+        val result = TournamentModeConfirmation.confirmBeforeDeckSelection(
+            expectedMode = RunModeEnum.WILD,
+            deckStrategy = object : DeckStrategy() {
+                override fun id(): String = PIRATE_WARRIOR
+                override fun name(): String = "海盗战 V2.5"
+                override fun deckCode(): String = ""
+                override fun getRunMode(): Array<RunModeEnum> = arrayOf(RunModeEnum.WILD)
+                override fun executeChangeCard(cards: HashSet<Card>) = Unit
+                override fun executeOutCard() = Unit
+                override fun executeDiscoverChooseCard(vararg cards: Card): Int = 0
+            },
+            deckSlot = 2,
+            attempts = 3,
+            observer = {
+                observations++
+                inWar = true
+                observation("未知游戏画面")
+            },
+            sleeper = {},
+            shouldContinue = { !inWar },
+        )
+
+        assertFalse(result)
+        assertEquals(1, observations)
+    }
+
+    @Test
+    fun `three unknown mode observations fall back to deterministic selection`() {
+        var observations = 0
+        try {
+            PauseStatus.setAutomaticPause(false)
+            val result = TournamentModeConfirmation.confirmBeforeDeckSelection(
+                expectedMode = RunModeEnum.WILD,
+                deckStrategy = object : DeckStrategy() {
+                    override fun id(): String = PIRATE_WARRIOR
+                    override fun name(): String = "海盗战 V2.5"
+                    override fun deckCode(): String = ""
+                    override fun getRunMode(): Array<RunModeEnum> = arrayOf(RunModeEnum.WILD)
+                    override fun executeChangeCard(cards: HashSet<Card>) = Unit
+                    override fun executeOutCard() = Unit
+                    override fun executeDiscoverChooseCard(vararg cards: Card): Int = 0
+                },
+                deckSlot = 3,
+                attempts = 3,
+                observer = {
+                    observations++
+                    observation("RBEH")
+                },
+                sleeper = {},
+                shouldContinue = { true },
+            )
+
+            assertTrue(result)
+            assertEquals(3, observations)
+            assertFalse(PauseStatus.isAutomaticPause)
+        } finally {
+            PauseStatus.setAutomaticPause(false)
+        }
     }
 
     private fun observation(text: String): TournamentModeObservation =

@@ -86,6 +86,20 @@ interface MctsDecisionModel {
     fun shouldRetryAfterEmptySearch(war: War): Boolean = false
 
     /**
+     * Some cards are created by a long game animation (for example a quest
+     * reward).  The live executor may need to wait before sending the click,
+     * even though the parser has already published the card in hand.
+     */
+    fun preDispatchWaitMillis(action: Action, war: War): Long = 0L
+
+    /**
+     * A dispatch can be valid but temporarily unconfirmed while that card's
+     * creation animation is still settling.  Return true for one bounded
+     * retry instead of quarantining the creator immediately.
+     */
+    fun shouldRetryAfterUnconfirmedDispatch(action: Action, war: War, attempt: Int): Boolean = false
+
+    /**
      * Classify an action for the live/receding-horizon phase fence. The
      * default is deliberately opt-in: only a deck model that understands the
      * semantics of its cards should install a hard action-order fence.
@@ -100,6 +114,14 @@ interface MctsDecisionModel {
      * here must never be resurrected when every other candidate is filtered.
      */
     fun isActionLegal(action: Action, war: War): Boolean = CardTimingPolicy.isActionLegal(action, war)
+
+    /**
+     * Allow a deck model to reopen an earlier action-order phase when a
+     * resource-bridge action (for example Coin) has made that action newly
+     * payable. The normal phase fence remains monotonic unless a model opts
+     * into this narrow, state-backed exception.
+     */
+    fun allowsActionOrderReopen(action: Action, war: War): Boolean = false
 
     /**
      * A hard sequencing hook for actions whose timing is part of the card's

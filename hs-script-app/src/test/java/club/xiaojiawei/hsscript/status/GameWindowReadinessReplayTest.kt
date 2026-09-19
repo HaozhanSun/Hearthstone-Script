@@ -40,4 +40,32 @@ class GameWindowReadinessReplayTest {
         assertFalse(GameWindowReadiness.sameVisibleGameProcess(true, false, 35_276, 35_276))
         assertFalse(GameWindowReadiness.sameVisibleGameProcess(true, true, 0, 35_276))
     }
+
+    @Test
+    fun `capture is rejected when foreground changes to another app`() {
+        assertFalse(
+            GameWindowReadiness.captureRemainsOnGame(
+                targetVisible = true,
+                foregroundVisibleBefore = true,
+                foregroundVisibleAfter = true,
+                targetPid = 35_276,
+                foregroundPidBefore = 35_276,
+                foregroundPidAfter = 18_104,
+            ),
+        )
+    }
+
+    @Test
+    fun `capture is accepted only when both edges remain game foreground`() {
+        assertTrue(
+            GameWindowReadiness.captureRemainsOnGame(
+                targetVisible = true,
+                foregroundVisibleBefore = true,
+                foregroundVisibleAfter = true,
+                targetPid = 35_276,
+                foregroundPidBefore = 35_276,
+                foregroundPidAfter = 35_276,
+            ),
+        )
+    }
 }

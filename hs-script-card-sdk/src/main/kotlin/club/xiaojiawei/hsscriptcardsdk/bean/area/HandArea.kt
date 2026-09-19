@@ -7,6 +7,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.cardparser.ParsedCardActionFactory
 import club.xiaojiawei.hsscriptcardsdk.data.CardInfoData
+import club.xiaojiawei.hsscriptcardsdk.diagnostics.UnknownCardSourceZone
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
 
@@ -55,7 +56,11 @@ class HandArea(allowLog: Boolean = false, player: Player, var parseCard: Boolean
                             log.warn { "native版软件不支持解析卡牌描述以生成CardAction类" }
                         }
                     } else if (card.action.common) {
-                        ParsedCardActionFactory.getOrCreate(card.cardId)?.invoke()?.let {
+                        ParsedCardActionFactory.getOrCreate(
+                            card.cardId,
+                            card.getFormatEntityName(),
+                            UnknownCardSourceZone.HAND,
+                        )?.invoke()?.let {
                             it.belongCard = card
                             card.action = it
                         }

@@ -12,6 +12,11 @@ import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.bean.area.HandArea
 import club.xiaojiawei.hsscriptcardsdk.util.CardUtil
+import club.xiaojiawei.hsscriptcardsdk.util.CardDBUtil
+import club.xiaojiawei.hsscriptcardsdk.util.CardIdentity
+import club.xiaojiawei.hsscriptcardsdk.util.CardIdentityCatalog
+import club.xiaojiawei.hsscriptcardsdk.diagnostics.UnknownCardCollector
+import club.xiaojiawei.hsscriptcardsdk.diagnostics.UnknownCardSourceZone
 import java.util.*
 import kotlin.math.ln
 import kotlin.math.max
@@ -85,7 +90,7 @@ class MonteCarloTreeNode(
         }
 
         fun cardDescription(card: Card): String =
-            "${card.cardId.ifBlank { "NO_ID" }}:${card.entityName.ifBlank { "UNKNOWN" }}"
+            "${card.cardId.ifBlank { "NO_ID" }}:${MctsCardDiagnostics.displayName(card)}"
 
         fun actionDescription(action: Action): String {
             if (action === TurnOverAction) return "结束回合"
@@ -99,6 +104,19 @@ class MonteCarloTreeNode(
             return "$kind($card,entity=${action.creator?.entityId ?: ""})"
         }
 
+        val identityCache = mutableMapOf<String, CardIdentity?>()
+        fun identityFor(card: Card): CardIdentity? =
+            if (card.cardId.isBlank()) {
+                null
+            } else {
+                identityCache.getOrPut(card.cardId) {
+                    CardIdentityCatalog.resolve(
+                        card.cardId,
+                        runCatching { CardDBUtil.queryCardById(card.cardId).firstOrNull() }.getOrNull(),
+                    )
+                }
+            }
+
         fun scanCard(
             card: Card,
             outcome: String,
@@ -106,22 +124,33 @@ class MonteCarloTreeNode(
             rawPlayActions: Int? = null,
             addedActions: Int = 0,
             opaqueFallback: Boolean = false,
+            actionRoute: String = "POLICY_FILTER",
+            safeAction: String = "SKIP_POLICY",
         ) {
+            val snapshotStatus = MctsCardDiagnostics.snapshotStatus(card)
+            val identity = identityFor(card)
             addScan(
                 linkedMapOf(
                     "kind" to "HAND_CARD",
                     "cardId" to card.cardId,
-                    "name" to card.entityName,
+                    "name" to MctsCardDiagnostics.displayName(card),
+                    "identityName" to identity?.name,
+                    "identitySource" to identity?.source?.name,
                     "entityId" to card.entityId,
                     "type" to card.cardType.name,
+                    "snapshotStatus" to snapshotStatus.name,
                     "cost" to card.cost,
                     "mana" to war.me.usableResource,
                     "uncertain" to card.isUncertain,
+                    "sourceZone" to "HAND",
                     "outcome" to outcome,
                     "reason" to reason,
                     "rawPlayActions" to rawPlayActions,
                     "addedActions" to addedActions,
                     "opaqueFallback" to opaqueFallback,
+                    "route" to actionRoute,
+                    "actionRoute" to actionRoute,
+                    "safeAction" to safeAction,
                 ),
             )
         }
@@ -132,6 +161,29 @@ class MonteCarloTreeNode(
             val playArea = me.playArea
             result.add(TurnOverAction)
             for (card in handArea.cards) {
+                val snapshotStatus = MctsCardDiagnostics.snapshotStatus(card)
+                if (MctsCardDiagnostics.isFatalSnapshot(snapshotStatus)) {
+                    val identity = identityFor(card)
+                    scanCard(
+                        card,
+                        "FILTERED",
+                        "invalid-entity-snapshot:${snapshotStatus.name}",
+                        actionRoute = "FAIL_CLOSED_INVALID_SNAPSHOT",
+                        safeAction = "SKIP_UNRECOGNIZED",
+                    )
+                    UnknownCardCollector.record(
+                        cardId = card.cardId,
+                        cardName = identity?.name ?: card.getFormatEntityName(),
+                        reason = "invalid-entity-snapshot:${snapshotStatus.name}",
+                        action = "SKIP_UNRECOGNIZED",
+                        sourceZone = UnknownCardSourceZone.HAND,
+                        phase = "mcts-action-scan",
+                        identitySource = identity?.source?.name,
+                        route = "FAIL_CLOSED_INVALID_SNAPSHOT",
+                        safeAction = "SKIP_UNRECOGNIZED",
+                    )
+                    continue
+                }
                 val shouldDefer = arg.decisionModel?.shouldDefer(card, war)
                     ?: CardTimingPolicy.shouldDefer(card, war)
                 if (shouldDefer) {
@@ -141,7 +193,7 @@ class MonteCarloTreeNode(
                     // doing so makes the controller believe that progress is
                     // available and can cause repeated stale replans.
                     val timingCardCurrentlyPlayable =
-                        !card.isUncertain &&
+                        (!card.isUncertain || MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)) &&
                             MctsActionAvailability.isCostPayable(card.cost, me.usableResource) &&
                             !MctsActionAvailability.isPermanentPlayBlockedByFullBoard(card.cardType, playArea.isFull)
                     if (CardTimingPolicy.isEndOfTurnCostReductionCard(card) && timingCardCurrentlyPlayable) {
@@ -188,10 +240,6 @@ class MonteCarloTreeNode(
                     }
                     continue
                 }
-                if (card.isUncertain) {
-                    scanCard(card, "FILTERED", "uncertain-card")
-                    continue
-                }
                 if (!MctsActionAvailability.isCostPayable(card.cost, me.usableResource)) {
                     scanCard(card, "FILTERED", "insufficient-mana")
                     continue
@@ -206,22 +254,52 @@ class MonteCarloTreeNode(
                     emptyList()
                 }
                 if (playActionsResult.isFailure) continue
-                result.addAll(playActions)
-                val opaqueAllowed = playActions.isEmpty() && arg.decisionModel?.canCreateOpaqueAction(card, war) == true
+                val parserSensitiveGenericAction =
+                    card.action.common &&
+                        MctsCardDiagnostics.requiresDescriptionAction(card) &&
+                        (arg.decisionModel != null || card.isUncertain)
+                val braveOpaqueFallback = MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)
+                val opaqueAllowed = (arg.decisionModel?.canCreateOpaqueAction(card, war) == true || braveOpaqueFallback) &&
+                    (playActions.isEmpty() || parserSensitiveGenericAction)
+                val route = MctsCardDiagnostics.actionRoute(
+                    snapshotStatus = snapshotStatus,
+                    requiresDescriptionAction = MctsCardDiagnostics.requiresDescriptionAction(card),
+                    actionIsCommon = card.action.common,
+                    parsedActionCount = playActions.size,
+                    opaqueFallbackAllowed = opaqueAllowed,
+                    decisionModelInstalled = arg.decisionModel != null,
+                    opaqueFallbackBlockReason = if (opaqueAllowed) null else MctsCardDiagnostics.opaqueFallbackBlockReason(card),
+                )
+                val actionsToAdd = when {
+                    parserSensitiveGenericAction && opaqueAllowed -> listOf(createOpaquePlayAction(card))
+                    parserSensitiveGenericAction -> emptyList()
+                    else -> playActions
+                }
+                result.addAll(actionsToAdd)
                 if (opaqueAllowed) {
-                    result.add(createOpaquePlayAction(card))
+                    if (parserSensitiveGenericAction) {
+                        // The explicit opaque action was already selected in
+                        // actionsToAdd; do not duplicate it.
+                    } else if (playActions.isEmpty()) {
+                        result.add(createOpaquePlayAction(card))
+                    }
                 }
                 scanCard(
                     card,
-                    if (playActions.isNotEmpty() || opaqueAllowed) "ADDED" else "FILTERED",
+                    if (actionsToAdd.isNotEmpty() || (!parserSensitiveGenericAction && opaqueAllowed)) "ADDED" else "FILTERED",
                     when {
+                        braveOpaqueFallback -> "brave-opaque-fallback"
+                        parserSensitiveGenericAction && opaqueAllowed -> "parser-unavailable-opaque-fallback"
+                        parserSensitiveGenericAction -> "parser-unavailable-fail-closed"
                         playActions.isNotEmpty() -> "parsed-play-actions"
                         opaqueAllowed -> "opaque-fallback"
                         else -> "no-play-action-and-no-opaque-fallback"
                     },
                     rawPlayActions = playActions.size,
-                    addedActions = playActions.size + if (opaqueAllowed) 1 else 0,
+                    addedActions = actionsToAdd.size + if (!parserSensitiveGenericAction && opaqueAllowed && playActions.isEmpty()) 1 else 0,
                     opaqueFallback = opaqueAllowed,
+                    actionRoute = route,
+                    safeAction = MctsCardDiagnostics.safeAction(route),
                 )
             }
             for (card in playArea.cards) {

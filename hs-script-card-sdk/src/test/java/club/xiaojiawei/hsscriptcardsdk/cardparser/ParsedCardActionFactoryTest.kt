@@ -7,6 +7,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.TEST_CARD_ACTION
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
+import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -42,6 +43,206 @@ class ParsedCardActionFactoryTest {
         val secondSupplier = requireNotNull(second)
         assertSame(firstSupplier, secondSupplier)
         assertEquals("CORE_CS2_029", firstSupplier().getCardId().single())
+    }
+
+    @Test
+    fun testHookNHeaveHasBuiltInActionWhenCardDbIsMissing() {
+        ParsedCardActionFactory.clear()
+
+        val action = requireNotNull(
+            ParsedCardActionFactory.getOrCreate("CAP_105", "钩手拖拽")
+        )()
+        val card = Card(action).apply {
+            entityId = "hook_n_heave_test"
+            cardId = "CAP_105"
+            cardType = CardTypeEnum.SPELL
+            cost = 2
+        }
+        action.belongCard = card
+        val war = createWar()
+        war.me.resources = 2
+        war.addCard(card, war.me.handArea)
+
+        val playActions = action.generatePlayActions(war, war.me)
+        assertEquals(1, playActions.size)
+        playActions.single().simulate.accept(war)
+        assertTrue(war.me.handArea.cards.none { it.cardId == "CAP_105" })
+        assertEquals(2, war.me.usedResources)
+    }
+
+    @Test
+    fun testQuestRewardHasNamedOpaqueMinionPlayFallback() {
+        ParsedCardActionFactory.clear()
+
+        val action = requireNotNull(
+            ParsedCardActionFactory.getOrCreate("SW_028t5", "船长洛卡拉")
+        )()
+        val card = Card(action).apply {
+            entityId = "quest_reward_test"
+            cardId = "SW_028t5"
+            cardType = CardTypeEnum.MINION
+            cost = 5
+        }
+        action.belongCard = card
+        val war = createWar()
+        war.me.resources = 5
+        war.addCard(card, war.me.handArea)
+
+        val playActions = action.generatePlayActions(war, war.me)
+        assertEquals(1, playActions.size)
+        assertEquals("船长洛卡拉", action.name())
+        playActions.single().simulate.accept(war)
+        assertTrue(war.me.handArea.cards.none { it.cardId == "SW_028t5" })
+        assertEquals(5, war.me.usedResources)
+    }
+
+    @Test
+    fun testApplauseThunderHasVerifiedNoTargetSpellFallback() {
+        ParsedCardActionFactory.clear()
+
+        val action = requireNotNull(
+            ParsedCardActionFactory.getOrCreate("ETC_372", "掌声雷动")
+        )()
+        val card = Card(action).apply {
+            entityId = "applause_thunder_test"
+            cardId = "ETC_372"
+            cardType = CardTypeEnum.SPELL
+            cost = 2
+        }
+        action.belongCard = card
+        val war = createWar()
+        war.me.resources = 2
+        war.addCard(card, war.me.handArea)
+
+        val playActions = action.generatePlayActions(war, war.me)
+        assertEquals(1, playActions.size)
+        assertEquals("掌声雷动", action.name())
+        playActions.single().simulate.accept(war)
+        assertTrue(war.me.handArea.cards.none { it.cardId == "ETC_372" })
+        assertEquals(2, war.me.usedResources)
+    }
+
+    @Test
+    fun testDeepSeaFusionRequiresKnownFriendlyMinionTypeAndGeneratesTargetedActions() {
+        ParsedCardActionFactory.clear()
+
+        val action = requireNotNull(
+            ParsedCardActionFactory.getOrCreate("TSC_069", "深海融合怪")
+        )()
+        val card = Card(action).apply {
+            entityId = "deep-sea-fusion-test"
+            cardId = "TSC_069"
+            cardType = CardTypeEnum.MINION
+            cost = 2
+        }
+        action.belongCard = card
+        val war = createWar()
+        war.me.resources = 2
+        war.addCard(card, war.me.handArea)
+
+        assertTrue(
+            action.generatePlayActions(war, war.me).isEmpty(),
+            "没有已知种族的友方随从时不能生成无目标动作",
+        )
+
+        val elemental = createPlayCard(war.me, war, "friendly-elemental", CardTypeEnum.MINION).apply {
+            cardRace = CardRaceEnum.ELEMENTAL
+            health = 3
+        }
+        val playActions = action.generatePlayActions(war, war.me)
+        assertEquals(1, playActions.size)
+
+        playActions.single().simulate.accept(war)
+        assertTrue(war.me.handArea.cards.none { it.cardId == "TSC_069" })
+        assertTrue(war.me.playArea.cards.any { it.cardId == "TSC_069" })
+        assertTrue(war.me.playArea.cards.any { it.entityId == elemental.entityId })
+        assertEquals(2, war.me.usedResources)
+    }
+
+    @Test
+    fun testDeepSeaFusionKeepsFriendlyMinionTargetAndInitialFireUsesKillableEnemy() {
+        ParsedCardActionFactory.clear()
+
+        val deepSeaAction = requireNotNull(
+            ParsedCardActionFactory.getOrCreate("TSC_069", "深海融合怪")
+        )()
+        val deepSea = Card(deepSeaAction).apply {
+            entityId = "deep-sea-target-test"
+            cardId = "TSC_069"
+            cardType = CardTypeEnum.MINION
+            cost = 2
+        }
+        deepSeaAction.belongCard = deepSea
+
+        val war = createWar()
+        war.me.resources = 2
+        war.addCard(deepSea, war.me.handArea)
+        val friendlyElemental = createPlayCard(war.me, war, "friendly-elemental-target", CardTypeEnum.MINION).apply {
+            cardRace = CardRaceEnum.ELEMENTAL
+            health = 3
+        }
+        val deepSeaPlayActions = deepSeaAction.generatePlayActions(war, war.me)
+        assertEquals(1, deepSeaPlayActions.size)
+        deepSeaPlayActions.single().simulate.accept(war)
+        assertTrue(war.me.playArea.cards.any { it.entityId == friendlyElemental.entityId })
+
+        val initialFireAction = requireNotNull(
+            ParsedCardActionFactory.getOrCreate("CORE_SW_108", "初始之火")
+        )()
+        val initialFire = Card(initialFireAction).apply {
+            entityId = "initial-fire-target-test"
+            cardId = "CORE_SW_108"
+            cardType = CardTypeEnum.SPELL
+            cost = 1
+        }
+        initialFireAction.belongCard = initialFire
+        war.me.resources = 1
+        war.me.usedResources = 0
+        war.addCard(initialFire, war.me.handArea)
+
+        val highThreat = createPlayCard(war.rival, war, "enemy-high-threat", CardTypeEnum.MINION).apply {
+            atc = 8
+            health = 4
+        }
+        val killable = createPlayCard(war.rival, war, "enemy-killable", CardTypeEnum.MINION).apply {
+            atc = 3
+            health = 2
+        }
+        val firePlayActions = initialFireAction.generatePlayActions(war, war.me)
+        assertEquals(1, firePlayActions.size, "初始之火必须只暴露一个确定的敌方目标")
+        firePlayActions.single().simulate.accept(war)
+        assertEquals(2, killable.damage, "可击杀敌方随从应优先成为初始之火目标")
+        assertEquals(0, highThreat.damage, "不应把初始之火浪费在不可击杀的高威胁随从上")
+        assertEquals(0, friendlyElemental.damage, "初始之火及其衍生牌不得选择友方随从")
+    }
+
+    @Test
+    fun testPirateWarriorAuditCardsHaveNamedFallbacks() {
+        ParsedCardActionFactory.clear()
+
+        listOf(
+            "CORE_NX2_028" to "勾拳-3000型",
+            "AV_661" to "征战平原",
+            "WW_424" to "溢流熔岩",
+            "TTN_475" to "破链角斗士",
+        ).forEach { (cardId, expectedName) ->
+            val action = requireNotNull(
+                ParsedCardActionFactory.getOrCreate(cardId, expectedName)
+            )()
+            val card = Card(action).apply {
+                entityId = "$cardId-test"
+                this.cardId = cardId
+                cardType = if (cardId == "AV_661") CardTypeEnum.SPELL else CardTypeEnum.MINION
+                cost = if (cardId == "WW_424") 4 else 3
+            }
+            action.belongCard = card
+            val war = createWar()
+            war.me.resources = 3
+            war.addCard(card, war.me.handArea)
+
+            assertEquals(expectedName, action.name())
+            assertEquals(1, action.generatePlayActions(war, war.me).size)
+        }
     }
 
     @Test

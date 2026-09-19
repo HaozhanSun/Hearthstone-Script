@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.strategy.mode
 
 import club.xiaojiawei.hsscript.bean.GameRect
+import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
@@ -13,8 +14,10 @@ import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
+import club.xiaojiawei.hsscript.utils.ConfigExUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.GameUtil.reconnectAction
+import club.xiaojiawei.hsscript.utils.MouseUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscriptbase.bean.LRunnable
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
@@ -123,12 +126,21 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                 SystemUtil.delayShort()
                 changeMode(runMode)
                 SystemUtil.delayShort()
-                val expectedDeckSlot = DeckStrategyManager.currentRuntimeSelectionSnapshot().deckSlot
-                    ?: StrategyDefaultDeckSlotBindings.deckSlotForStrategy(deckStrategy.id())
-                if (!TournamentModeConfirmation.confirmBeforeDeckSelection(runMode, deckStrategy, expectedDeckSlot)) {
+                val expectedDeckSlot = expectedDeckSlot(deckStrategy)
+                if (!TournamentModeConfirmation.confirmBeforeDeckSelection(
+                        expectedMode = runMode,
+                        deckStrategy = deckStrategy,
+                        deckSlot = expectedDeckSlot,
+                        shouldContinue = {
+                            !WarEx.inWar &&
+                                Mode.currMode == ModeEnum.TOURNAMENT &&
+                                !PauseStatus.isPause
+                        },
+                    )
+                ) {
                     return
                 }
-                selectDeck(deckStrategy)
+                selectDeck(deckStrategy, expectedDeckSlot)
                 SystemUtil.delayShort()
                 startMatching()
             } else {
@@ -167,7 +179,46 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         }
     }
 
-    fun selectDeck(deckStrategy: DeckStrategy) {
+    /** Resolve a slot only from a snapshot that belongs to this strategy. */
+    fun expectedDeckSlot(deckStrategy: DeckStrategy): Int {
+        val snapshot = DeckStrategyManager.currentRuntimeSelectionSnapshot()
+        val snapshotSlot = snapshot.deckSlot
+            ?.takeIf { it in StrategyDefaultDeckSlotBindings.MIN_DECK_SLOT..StrategyDefaultDeckSlotBindings.MAX_DECK_SLOT }
+            ?.takeIf { snapshot.strategyId == deckStrategy.id() }
+        val resolved = snapshotSlot
+            ?: StrategyDefaultDeckSlotBindings.chooseDeckSlots(
+                rule = null,
+                strategyId = deckStrategy.id(),
+                globalDeckSlots = ConfigExUtil.getChooseDeckPos(),
+            ).deckSlots.firstOrNull()
+            ?: StrategyDefaultDeckSlotBindings.MIN_DECK_SLOT
+        log.info {
+            "DECK_SLOT_RESOLVED strategy=${deckStrategy.id()} name=${deckStrategy.name()} " +
+                "slot=$resolved snapshotStrategy=${snapshot.strategyId ?: "none"} " +
+                "snapshotSlot=${snapshot.deckSlot ?: "none"}"
+        }
+        return resolved
+    }
+
+    /** Used by screen recovery after it has positively identified deck selection. */
+    fun recoverDeckSelectionAndStart() {
+        val deckStrategy = DeckStrategyManager.currentDeckStrategy
+        val runMode = DeckStrategyManager.currentRunMode
+        if (deckStrategy == null || runMode == null) {
+            log.warn { "DECK_SELECTION_RECOVERY_SKIPPED reason=missing-runtime-selection" }
+            return
+        }
+        val slot = expectedDeckSlot(deckStrategy)
+        log.warn {
+            "DECK_SELECTION_RECOVERY_APPLY mode=${runMode.name} strategy=${deckStrategy.id()} " +
+                "deckSlot=$slot"
+        }
+        selectDeck(deckStrategy, slot)
+        SystemUtil.delayShort()
+        startMatching()
+    }
+
+    fun selectDeck(deckStrategy: DeckStrategy, deckSlot: Int = expectedDeckSlot(deckStrategy)) {
 //        val decks: List<Deck> = DECKS
 //        for (i in decks.indices.reversed()) {
 //            val d = decks[i]
@@ -180,7 +231,8 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
 
         PREV_DECK_PAGE.lClick()
         SystemUtil.delayTiny()
-        GameUtil.lClickDeckPos(3)
+        log.info { "选择套牌槽位 strategy=${deckStrategy.id()} name=${deckStrategy.name()} deckSlot=$deckSlot" }
+        GameUtil.lClickDeckSlot(deckSlot)
     }
 
     private fun changeModeToClassic() {
@@ -207,30 +259,66 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         val traceId = matchmakingTraceSequence.incrementAndGet()
         log.info { "开始匹配 trace=$traceId" }
         logMatchmakingCheckpoint(traceId, "before-start")
+        if (abortMatchmakingIfGameStarted(traceId, "before-start-click")) return
         // Keep the upstream entry sequence: Hearthstone may first display the
         // automatic deck-completion dialog.  A single start click can leave
         // the client on the deck-selection page while the script has already
         // logged START_MATCHING, which is not a real state transition.
-        START_RECT.lClick()
+        clickMatchmakingControl(START_RECT)
         logMatchmakingCheckpoint(traceId, "after-start-click")
         SystemUtil.delayLong()
+        if (abortMatchmakingIfGameStarted(traceId, "after-start-click")) return
         log.info { "尝试确认自动补全套牌弹窗" }
         logMatchmakingCheckpoint(traceId, "before-complete-deck-click-1")
-        COMPLETE_DECK_CONFIRM_RECT.lClick()
+        clickMatchmakingControl(COMPLETE_DECK_CONFIRM_RECT)
         logMatchmakingCheckpoint(traceId, "after-complete-deck-click-1")
         SystemUtil.delayShortMedium()
+        if (abortMatchmakingIfGameStarted(traceId, "after-complete-deck-click-1")) return
         log.info { "重试确认自动补全套牌弹窗" }
         logMatchmakingCheckpoint(traceId, "before-complete-deck-click-2")
-        COMPLETE_DECK_CONFIRM_RECT.lClick()
+        clickMatchmakingControl(COMPLETE_DECK_CONFIRM_RECT)
         logMatchmakingCheckpoint(traceId, "after-complete-deck-click-2")
         SystemUtil.delayShortMedium()
+        if (abortMatchmakingIfGameStarted(traceId, "after-complete-deck-click-2")) return
         log.info { "确认补全后再次点击开始" }
         logMatchmakingCheckpoint(traceId, "before-final-start-click")
-        START_RECT.lClick()
+        clickMatchmakingControl(START_RECT)
         logMatchmakingCheckpoint(traceId, "after-final-start-click")
         captureMatchmakingCheckpoint(traceId, "after-final-start-click")
-        generateTimer()
-        scheduleMatchmakingDialogRecovery(traceId)
+        if (abortMatchmakingIfGameStarted(traceId, "after-final-start-click")) return
+        generateTimer(traceId)
+        log.info {
+            "MATCHMAKING_POPUP_WATCHDOG_SKIPPED reason=no-positive-dialog-evidence " +
+                "fallback=bounded-match-timeout trace=$traceId"
+        }
+    }
+
+    private fun abortMatchmakingIfGameStarted(traceId: Long, stage: String): Boolean {
+        val evidence = liveGameEvidence()
+        if (MatchmakingGuardPolicy.decide(evidence) != MatchmakingGuardPolicy.Decision.ABORT_GAME_STARTED) {
+            return false
+        }
+        cancelAllEnteredTasks()
+        log.warn {
+            "MATCHMAKING_ABORTED trace=$traceId reason=game-started stage=$stage " +
+                "mode=${Mode.currMode?.name ?: "NONE"} inWar=${evidence.inWar} " +
+                "warPhase=${evidence.warPhase.name} gameId=${evidence.gameId.ifBlank { "NONE" }} " +
+                "powerLogPosition=${evidence.powerLogPosition}"
+        }
+        return true
+    }
+
+    private fun liveGameEvidence(): MatchmakingGuardPolicy.LiveGameEvidence {
+        val war = WarEx.war
+        val gameId = listOf(war.firstPlayerGameId, war.me.gameId, war.rival.gameId)
+            .firstOrNull { it.isNotBlank() }
+            .orEmpty()
+        return MatchmakingGuardPolicy.LiveGameEvidence(
+            inWar = WarEx.inWar,
+            warPhase = war.currentPhase,
+            gameId = gameId,
+            powerLogPosition = PowerLogListener.logFile?.getPosition() ?: -1L,
+        )
     }
 
     private fun logMatchmakingCheckpoint(traceId: Long, stage: String) {
@@ -244,6 +332,26 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                 "powerPos=${powerLog?.getPosition() ?: -1} " +
                 "powerLen=${powerLog?.length() ?: -1}"
         }
+    }
+
+    /**
+     * Matchmaking controls belong to the normal event-driven path. The old
+     * implementation routed every start/confirm/error click through the
+     * recovery input path, forcing an eight-attempt foreground recovery even
+     * when Hearthstone was already focused.
+     *
+     * The normal click path still verifies the target window before sending
+     * input. The bounded matchmaking popup watchdog remains the fallback when
+     * the client genuinely stops progressing.
+     */
+    private fun clickMatchmakingControl(rect: GameRect): Boolean {
+        val pos = rect.getCenterClickPos()
+        log.info {
+            "MATCHMAKING_INPUT_DISPATCH mode=normal pos=(${pos.x},${pos.y}) " +
+                "gameHwnd=${ScriptStatus.gameHWND}"
+        }
+        MouseUtil.leftButtonClick(pos, ScriptStatus.gameHWND)
+        return true
     }
 
     private fun captureMatchmakingCheckpoint(traceId: Long, stage: String) {
@@ -277,6 +385,10 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                     recoveryTask.cancel(false)
                     return@LRunnable
                 }
+                if (abortMatchmakingIfGameStarted(traceId, "popup-recovery")) {
+                    recoveryTask.cancel(false)
+                    return@LRunnable
+                }
                 attempts++
                 if (attempts > 20) {
                     val evidence = UnknownStateScreenshot.capture(
@@ -294,10 +406,17 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                     recoveryTask.cancel(false)
                     return@LRunnable
                 }
-                log.info { "匹配入口弹窗恢复尝试 #$attempts trace=$traceId" }
-                logMatchmakingCheckpoint(traceId, "before-popup-recovery-$attempts")
-                ERROR_RECT.lClickCenter(false)
-                logMatchmakingCheckpoint(traceId, "after-popup-recovery-$attempts")
+                if (abortMatchmakingIfGameStarted(traceId, "popup-recovery-before-error-click")) {
+                    recoveryTask.cancel(false)
+                    return@LRunnable
+                }
+                val accepted = clickMatchmakingControl(ERROR_RECT)
+                if (accepted || attempts == 1 || attempts % 5 == 0) {
+                    log.info {
+                        "MATCHMAKING_POPUP_RECOVERY trace=$traceId attempt=$attempts " +
+                            "accepted=$accepted"
+                    }
+                }
             },
             800,
             1_000,
@@ -308,7 +427,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
     /**
      * 生成匹配失败时兜底的定时器
      */
-    private fun generateTimer() {
+    private fun generateTimer(traceId: Long) {
         cancelAllEnteredTasks()
         val matchMaximumTime = if (System.getProperty("hs.script.e2e") == "true") {
             minOf(ConfigUtil.getLong(ConfigEnum.MATCH_MAXIMUM_TIME), 45L)
@@ -320,15 +439,20 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                 LRunnable {
                     if (PauseStatus.isPause || Thread.currentThread().isInterrupted || Mode.currMode === ModeEnum.GAMEPLAY) {
                         cancelAllEnteredTasks()
+                    } else if (abortMatchmakingIfGameStarted(traceId, "match-timeout")) {
+                        cancelAllEnteredTasks()
                     } else {
                         log.info { "匹配失败，再次匹配中" }
                         SystemUtil.notice("匹配失败，再次匹配中")
 //                点击取消匹配按钮
+                        if (abortMatchmakingIfGameStarted(traceId, "match-timeout-before-cancel")) return@LRunnable
                         CANCEL_RECT.lClick()
                         SystemUtil.delayLong()
 //                点击错误按钮
+                        if (abortMatchmakingIfGameStarted(traceId, "match-timeout-before-error")) return@LRunnable
                         ERROR_RECT.lClick()
                         SystemUtil.delayShort()
+                        if (abortMatchmakingIfGameStarted(traceId, "match-timeout-before-reconnect")) return@LRunnable
                         reconnectAction()
                         val seed = RandomUtil.rerollSeed()
                         log.info { "重新匹配，共享随机种子：$seed" }

@@ -12,6 +12,7 @@ import club.xiaojiawei.hsscriptcardsdk.data.CARD_DATA_TRIE
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionAvailability
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsCardDiagnostics
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsReplayTrace
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import java.awt.Color
@@ -117,7 +118,7 @@ object TurnEndActionGuard {
         val liveFreeSlots = (WAR.me.playArea.maxSize - WAR.me.playArea.cards.size).coerceAtLeast(0)
         val playableMinions = WAR.me.handArea.cards
             .filter { card ->
-                !card.isUncertain &&
+                (!card.isUncertain || MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)) &&
                     card.cardType === CardTypeEnum.MINION &&
                     card.cost <= liveMana &&
                     liveFreeSlots > 0
@@ -362,6 +363,12 @@ object TurnEndActionGuard {
                 if (!isMctsActionableCreator(card.entityId, mctsActionableCreatorIds, ignoredCreatorIds)) {
                     return@count false
                 }
+                if (MctsCardDiagnostics.isFatalSnapshot(MctsCardDiagnostics.snapshotStatus(card))) {
+                    return@count false
+                }
+                if (card.isUncertain && !MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)) {
+                    return@count false
+                }
                 isHandCardPlayable(
                     cardType = card.cardType,
                     cost = card.cost,
@@ -446,7 +453,9 @@ object TurnEndActionGuard {
         // up, and the old implementation could jump straight here with a
         // newly playable two-mana minion still in hand.
         val playableNonCoin = WAR.me.handArea.cards.firstOrNull { card ->
-            !card.isCoinCard && isHandCardPlayable(
+            !card.isCoinCard &&
+                (!card.isUncertain || MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)) &&
+                isHandCardPlayable(
                 cardType = card.cardType,
                 cost = card.cost,
                 usableMana = mana,
@@ -606,7 +615,7 @@ object TurnEndActionGuard {
             if (!WAR.isMyTurn || PauseStatus.isPause) return dispatched
             val me = WAR.me
             val playableCards = me.handArea.cards.filter { card ->
-                !card.isUncertain && isHandCardPlayable(
+                ( !card.isUncertain || MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)) && isHandCardPlayable(
                     cardType = card.cardType,
                     cost = card.cost,
                     usableMana = me.usableResource,
@@ -676,6 +685,7 @@ object TurnEndActionGuard {
         val coinMana = currentMana + 1
         return player.handArea.cards.any { card ->
             !card.isCoinCard &&
+                (!card.isUncertain || MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)) &&
                 !CardTimingPolicy.shouldDefer(card, player.war) &&
                 !isHandCardPlayable(
                     cardType = card.cardType,

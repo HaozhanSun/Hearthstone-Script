@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.Action
 import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
+import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.util.CardUtil
@@ -16,16 +17,20 @@ import club.xiaojiawei.hsscriptcardsdk.bean.DEFAULT_WAR_SCORE_CALCULATOR
  * minion. If it can kill one, keep exactly one deterministic minion target:
  * the highest-threat killable target. If the hero needs friendly minion
  * damage first, the same target remains selected and the models expose the
- * setup attacks before the hero attack. Taunt remains a mandatory target even
- * when it cannot be killed. Unknown target metadata is rejected rather than
- * bypassing the rule.
+ * setup attacks before the hero attack. An unkillable Taunt blocks both face
+ * and hero collision; it is not permission to throw the hero into it. Unknown
+ * target metadata is rejected rather than bypassing the rule.
  */
 object PirateHeroAttackTargetPolicy {
     const val NU_LING_NAGA = "BT_355"
 
+    /** Live DBF id emitted for the Demon Hunter +1 attack hero power. */
+    const val DEMON_HUNTER_HERO_POWER = "HERO_10cbp"
+
     private data class TargetPlan(
-        val target: Card,
+        val target: Card?,
         val requiresFriendlySetup: Boolean,
+        val blockedByTaunt: Boolean = false,
     )
 
     /** True while the death-trigger Naga is alive on our board. */
@@ -93,6 +98,42 @@ object PirateHeroAttackTargetPolicy {
         return plan?.target?.entityId == targetId
     }
 
+    /** True when a generated hero attack is blocked by an unkillable Taunt. */
+    fun isHeroAttackBlockedByUnkillableTaunt(action: Action, war: War): Boolean {
+        if (action !is AttackAction || action.creator?.cardType !== CardTypeEnum.HERO) return false
+        return targetPlan(war, effectiveHeroAttack(action.creator, war))?.blockedByTaunt == true
+    }
+
+    /**
+     * Do not spend Demon Hunter's +1 Attack power merely to make an attack
+     * that still cannot remove the Taunt. If the powered attack can remove it
+     * (alone or after currently legal friendly setup damage), leave the power
+     * available to normal MCTS ordering.
+     */
+    fun shouldBlockHeroPowerAgainstUnkillableTaunt(
+        action: Action,
+        war: War,
+        heroPowerAttackBonus: Int = 1,
+    ): Boolean {
+        if (action !is PowerAction || action.creator?.cardType !== CardTypeEnum.HERO_POWER) return false
+        if (!isDemonHunterHeroPower(action.creator)) return false
+
+        val taunts = CardUtil.getTauntCards(war.rival.playArea.cards, true)
+            .filter { it.cardType === CardTypeEnum.MINION && it.isAlive() && it.canBeAttacked() }
+        if (taunts.isEmpty()) return false
+
+        val heroAttack = effectiveHeroAttack(war.me.playArea.hero, war)
+        val friendlyComboDamage = { target: Card -> availableFriendlyAttackDamageAgainst(target, war) }
+        if (taunts.any { canKill(it, heroAttack) || canKill(it, heroAttack + friendlyComboDamage(it)) }) {
+            return false
+        }
+
+        val poweredAttack = heroAttack + heroPowerAttackBonus
+        return taunts.none {
+            canKill(it, poweredAttack) || canKill(it, poweredAttack + friendlyComboDamage(it))
+        }
+    }
+
     /** True when a friendly minion attack must happen before the hero attack. */
     fun requiresFriendlySetupAttack(war: War): Boolean =
         targetPlan(war, effectiveHeroAttack(war.me.playArea.hero, war))?.requiresFriendlySetup == true
@@ -103,7 +144,7 @@ object PirateHeroAttackTargetPolicy {
         val targetId = action.targetEntityId ?: return false
         val heroAttack = effectiveHeroAttack(war.me.playArea.hero, war)
         val plan = targetPlan(war, heroAttack) ?: return false
-        return plan.requiresFriendlySetup && plan.target.entityId == targetId
+        return plan.requiresFriendlySetup && plan.target?.entityId == targetId
     }
 
     private fun legalEnemyMinions(war: War): List<Card> {
@@ -147,11 +188,11 @@ object PirateHeroAttackTargetPolicy {
             return TargetPlan(highestThreat(comboKillable), requiresFriendlySetup = true)
         }
 
-        // A visible, attackable taunt is still compulsory even when the
-        // combined damage cannot remove it. Non-taunt minions do not block a
-        // nonlethal face attack under the new rule.
+        // A visible, attackable Taunt is compulsory only when it can actually
+        // be removed. An unkillable Taunt blocks both the collision and face;
+        // the caller can then rescan other actions and legally end the turn.
         return if (legalMinions.any { it.isTaunt }) {
-            TargetPlan(highestThreat(legalMinions), requiresFriendlySetup = false)
+            TargetPlan(target = null, requiresFriendlySetup = false, blockedByTaunt = true)
         } else {
             null
         }
@@ -171,6 +212,10 @@ object PirateHeroAttackTargetPolicy {
      */
     private fun threatScore(card: Card): Double =
         maxOf(card.atc, 0) * 100.0 +
+            // When attack is tied, prefer removing the healthier minion.  A
+            // ready 2/1 must not outrank an exhausted 2/3 merely because it
+            // contributes the canAttack() bonus below.
+            card.blood().coerceAtLeast(0) * 40.0 +
             (if (card.canAttack()) 35.0 else 0.0) +
             (if (card.isTaunt) 10_000.0 else 0.0) +
             (if (card.isMegaWindfury) 350.0 else if (card.isWindFury) 200.0 else 0.0) +
@@ -191,14 +236,27 @@ object PirateHeroAttackTargetPolicy {
             }
             .sumOf { it.atc.coerceAtLeast(0) }
 
-    private fun effectiveHeroAttack(hero: Card?, war: War): Int {
-        val printedAttack = hero?.atc?.coerceAtLeast(0) ?: 0
-        val weaponAttack = war.me.playArea.weapon?.atc?.coerceAtLeast(0) ?: 0
-        return printedAttack + weaponAttack
+    /**
+     * Return the current attack value that a live hero attack will deal.
+     *
+     * Power.log publishes the equipped weapon separately, but after the
+     * weapon has merged into the hero entity, [Card.atc] already contains the
+     * hero's current attack total. Adding both fields double-counts the
+     * weapon and can make a 3-attack hero appear to have 6 attack. During the
+     * short merge window the hero field can still be zero, so use the weapon
+     * as a conservative fallback only in that state.
+     */
+    fun effectiveHeroAttack(hero: Card?, war: War): Int {
+        val heroAttack = hero?.atc?.coerceAtLeast(0) ?: 0
+        if (heroAttack > 0) return heroAttack
+        return war.me.playArea.weapon?.atc?.coerceAtLeast(0) ?: 0
     }
 
     private fun canKill(target: Card, heroAttack: Int): Boolean =
         heroAttack >=
             (target.bloodLimit() - target.damage + if (target.isDivineShield) 1 else 0)
                 .coerceAtLeast(0)
+
+    private fun isDemonHunterHeroPower(card: Card?): Boolean =
+        card?.cardId == DEMON_HUNTER_HERO_POWER || card?.cardId == "CORE_$DEMON_HUNTER_HERO_POWER"
 }

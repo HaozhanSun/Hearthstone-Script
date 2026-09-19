@@ -4,12 +4,15 @@ import club.xiaojiawei.hsscript.bean.isDiscoverCardThread
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.config.DRIVER_LOCK
 import club.xiaojiawei.hsscript.dll.CSystemDll
+import club.xiaojiawei.hsscript.dll.User32ExDll
+import club.xiaojiawei.hsscript.dll.User32RawDll
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.MouseControlModeEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.GameWindowReadiness
+import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscriptbase.config.log
@@ -46,6 +49,25 @@ import kotlin.math.sin
  * @date 2022/11/24 11:18
  */
 object MouseUtil {
+
+    // A SetForegroundWindow request can be rejected while another process
+    // owns the foreground lock. A bounded topmost -> normal z-order pulse is
+    // a safer recovery than sending Robot input to the unrelated foreground
+    // window. The handles are the documented Win32 HWND_TOPMOST/NOTOPMOST
+    // sentinels; the window is returned to its normal non-topmost state.
+    private val HWND_TOPMOST = Pointer.createConstant(-1L)
+    private val HWND_NOTOPMOST = Pointer.createConstant(-2L)
+    private val HWND_BOTTOM = Pointer.createConstant(1L)
+    private const val SWP_NOSIZE = 0x0001
+    private const val SWP_NOMOVE = 0x0002
+    private const val SWP_SHOWWINDOW = 0x0040
+    private const val GWL_EXSTYLE = -20
+    private const val WS_EX_TOPMOST = 0x00000008
+
+    internal data class RecoveryForegroundResult<T>(
+        val foregroundConfirmed: Boolean,
+        val value: T?,
+    )
 
     private fun e2eInputEnabled(): Boolean =
         System.getProperty("hs.script.e2e.real-input") == "true" ||
@@ -96,22 +118,15 @@ object MouseUtil {
     private fun focusE2EWindow(
         hwnd: HWND,
         allowE2EWindowRefresh: Boolean = true,
+        recovery: Boolean = false,
     ): Boolean = runCatching {
-        // Re-discover immediately before an operation. A valid old HWND is
-        // not proof that it is still the client window that owns game input.
-        if (allowE2EWindowRefresh) {
-            val refreshed = GameUtil.findGameHWND()
-            if (refreshed != null && User32.INSTANCE.IsWindow(refreshed) &&
-                Pointer.nativeValue(refreshed.pointer) != Pointer.nativeValue(hwnd.pointer)
-            ) {
-                ScriptStatus.gameHWND = refreshed
-                log.info {
-                    "E2E_INPUT_WINDOW_REFRESH old=$hwnd refreshed=$refreshed " +
-                        "reason=pre-input-discovery"
-                }
-                return@runCatching focusE2EWindow(refreshed, allowE2EWindowRefresh = false)
-            }
-        }
+        // Keep the already-validated game HWND on the normal click path.
+        // Re-discovering the window before every click can enter the platform
+        // discovery path while Hearthstone is transitioning screens. That
+        // blocks the single Robot worker long enough for its caller timeout,
+        // which strands the queued E2E clicks and makes a turn appear stuck.
+        // Refresh only when the cached HWND is actually invalid; recovery and
+        // the next state observation will then acquire the replacement handle.
         if (!User32.INSTANCE.IsWindow(hwnd)) {
             // A manual or recovery restart replaces the Unity window and
             // leaves the old handle unusable. Refresh the one focus request
@@ -127,7 +142,11 @@ object MouseUtil {
                         "E2E_INPUT_WINDOW_REFRESH old=$hwnd refreshed=$refreshed " +
                             "reason=invalid-window-before-input"
                     }
-                    return@runCatching focusE2EWindow(refreshed, allowE2EWindowRefresh = false)
+                    return@runCatching focusE2EWindow(
+                        refreshed,
+                        allowE2EWindowRefresh = false,
+                        recovery = recovery,
+                    )
                 }
             }
             log.warn { "E2E_INPUT_ROBOT_FOREGROUND_UNAVAILABLE hwnd=$hwnd reason=invalid-window" }
@@ -136,58 +155,93 @@ object MouseUtil {
 
         User32.INSTANCE.ShowWindow(hwnd, SW_RESTORE)
 
-        // Windows may reject SetForegroundWindow from a worker thread when
-        // another application currently owns the foreground lock. Temporarily
-        // attach this thread to that foreground thread, request activation,
-        // then verify the actual foreground HWND before sending input.
-        val foreground = User32.INSTANCE.GetForegroundWindow()
-        val currentThread = Kernel32.INSTANCE.GetCurrentThreadId()
-        val foregroundThread = if (foreground != null) {
-            User32.INSTANCE.GetWindowThreadProcessId(foreground, null)
-        } else {
-            0
-        }
-        val attached = foregroundThread != 0 &&
-            foregroundThread != currentThread &&
-            User32.INSTANCE.AttachThreadInput(
-                WinDef.DWORD(currentThread.toLong()),
-                WinDef.DWORD(foregroundThread.toLong()),
-                true,
-            )
-        try {
-            User32.INSTANCE.BringWindowToTop(hwnd)
-            val requested = User32.INSTANCE.SetForegroundWindow(hwnd)
-            SystemUtil.delay(35)
-            val actual = User32.INSTANCE.GetForegroundWindow()
-            val exact = actual != null &&
-                Pointer.nativeValue(actual.pointer) == Pointer.nativeValue(hwnd.pointer)
-            val focused = isVisibleForegroundOfTarget(hwnd, actual)
-            val targetPid = windowProcessId(hwnd)
-            val foregroundPid = actual?.let(::windowProcessId) ?: 0
-            log.info {
-                "E2E_INPUT_ROBOT_FOREGROUND_RESULT hwnd=$hwnd requested=$requested " +
-                    "focused=$focused actual=$actual exact=$exact " +
-                    "targetVisible=${User32.INSTANCE.IsWindowVisible(hwnd)} " +
-                    "foregroundVisible=${actual?.let(User32.INSTANCE::IsWindowVisible) ?: false} " +
-                    "targetPid=$targetPid foregroundPid=$foregroundPid " +
-                    "foregroundThread=$foregroundThread attached=$attached"
-            }
-            if (!focused && allowE2EWindowRefresh) {
-                // One bounded retry gives Windows a chance to finish a
-                // foreground transition; callers never send input meanwhile.
-                SystemUtil.delay(75)
-                return@runCatching focusE2EWindow(hwnd, allowE2EWindowRefresh = false)
-            }
-            focused
-        } finally {
-            if (attached) {
+        // Windows can reject SetForegroundWindow when the caller and the
+        // current foreground window belong to different input queues. The
+        // normal path keeps the old short confirmation window. Recovery gets
+        // a bounded, focus-first retry sequence because a missed recovery
+        // click leaves the state machine stuck and was previously converted
+        // into a permanent STOP_UNTIL_STATE_CHANGE state.
+        val maxAttempts = if (recovery) 8 else E2EInputRecoveryPolicy.MAX_FOREGROUND_ATTEMPTS
+        var focused = false
+        var lastActual: HWND? = null
+        var lastRequested = false
+        var lastForegroundThread = 0
+        var lastAttached = false
+        for (attempt in 0 until maxAttempts) {
+            // Do this before every recovery attempt, not only after a failed
+            // attempt. A visible always-on-top overlay can otherwise remain
+            // above Hearthstone even while GetForegroundWindow reports the
+            // correct process.
+            if (recovery) forceForegroundZOrder(hwnd)
+            val foreground = User32.INSTANCE.GetForegroundWindow()
+            val currentThread = Kernel32.INSTANCE.GetCurrentThreadId()
+            val foregroundThread = foreground?.let { User32.INSTANCE.GetWindowThreadProcessId(it, null) } ?: 0
+            val targetThread = User32.INSTANCE.GetWindowThreadProcessId(hwnd, null)
+            val attachedForeground = foregroundThread != 0 &&
+                foregroundThread != currentThread &&
                 User32.INSTANCE.AttachThreadInput(
                     WinDef.DWORD(currentThread.toLong()),
                     WinDef.DWORD(foregroundThread.toLong()),
-                    false,
+                    true,
                 )
+            val attachedTarget = targetThread != 0 &&
+                targetThread != currentThread &&
+                targetThread != foregroundThread &&
+                User32.INSTANCE.AttachThreadInput(
+                    WinDef.DWORD(currentThread.toLong()),
+                    WinDef.DWORD(targetThread.toLong()),
+                    true,
+                )
+            try {
+                User32.INSTANCE.BringWindowToTop(hwnd)
+                User32.INSTANCE.SetFocus(hwnd)
+                lastRequested = User32.INSTANCE.SetForegroundWindow(hwnd)
+                SystemUtil.delay(if (recovery) 100 else 35)
+                lastActual = User32.INSTANCE.GetForegroundWindow()
+                focused = isVisibleForegroundOfTarget(hwnd, lastActual)
+                lastForegroundThread = foregroundThread
+                lastAttached = attachedForeground || attachedTarget
+                if (focused) break
+            } finally {
+                if (attachedTarget) {
+                    User32.INSTANCE.AttachThreadInput(
+                        WinDef.DWORD(currentThread.toLong()),
+                        WinDef.DWORD(targetThread.toLong()),
+                        false,
+                    )
+                }
+                if (attachedForeground) {
+                    User32.INSTANCE.AttachThreadInput(
+                        WinDef.DWORD(currentThread.toLong()),
+                        WinDef.DWORD(foregroundThread.toLong()),
+                        false,
+                    )
+                }
+            }
+            if (!focused && attempt + 1 < maxAttempts) {
+                log.warn {
+                    "E2E_INPUT_FOREGROUND_RETRY hwnd=$hwnd " +
+                        "attempt=${attempt + 1}/$maxAttempts reason=foreground-mismatch"
+                }
+                forceForegroundZOrder(hwnd)
+                SystemUtil.delay(if (recovery) 150 else E2EInputRecoveryPolicy.RETRY_DELAY_MS)
             }
         }
+        val actual = lastActual
+        val exact = actual != null &&
+            Pointer.nativeValue(actual.pointer) == Pointer.nativeValue(hwnd.pointer)
+        val targetPid = windowProcessId(hwnd)
+        val foregroundPid = actual?.let(::windowProcessId) ?: 0
+        log.info {
+            "E2E_INPUT_ROBOT_FOREGROUND_RESULT hwnd=$hwnd requested=$lastRequested " +
+                "focused=$focused actual=$actual exact=$exact " +
+                "targetVisible=${User32.INSTANCE.IsWindowVisible(hwnd)} " +
+                "foregroundVisible=${actual?.let(User32.INSTANCE::IsWindowVisible) ?: false} " +
+                "targetPid=$targetPid foregroundPid=$foregroundPid " +
+                "foregroundThread=$lastForegroundThread attached=$lastAttached " +
+                "recovery=$recovery attempts=$maxAttempts"
+        }
+        focused
     }.getOrElse { error ->
         if (error is InterruptedException) {
             // A phase transition can cancel the focus delay while the click
@@ -202,12 +256,147 @@ object MouseUtil {
     }
 
     /**
+     * Hold Hearthstone above every other top-level window while a recovery
+     * screenshot is taken. The previous implementation confirmed focus and
+     * immediately released z-order, which allowed Kodi/Codex/another
+     * always-on-top window to become the pixels seen by Robot.
+     */
+    internal fun <T> withRecoveryForeground(
+        hwnd: HWND?,
+        block: () -> T?,
+    ): RecoveryForegroundResult<T> {
+        val requestedTarget = hwnd ?: return RecoveryForegroundResult(false, null)
+        if (!forceFocusWindowForRecovery(requestedTarget)) {
+            log.warn { "E2E_RECOVERY_FOREGROUND_HOLD_SKIPPED hwnd=$requestedTarget reason=focus-unconfirmed" }
+            return RecoveryForegroundResult(false, null)
+        }
+
+        // forceFocusWindowForRecovery may replace a startup coordinate
+        // sentinel (const@0x1) after the real Hearthstone window appears.
+        // Use the refreshed handle for z-order, readiness, and capture; using
+        // the original argument here was the reason the logs could report a
+        // successful focus while the capture layer still targeted the stale
+        // fallback window.
+        val target = ScriptStatus.gameHWND
+            ?.takeIf { User32.INSTANCE.IsWindow(it) }
+            ?: requestedTarget
+        if (target != requestedTarget) {
+            log.info {
+                "E2E_RECOVERY_FOREGROUND_TARGET_REFRESH old=$requestedTarget " +
+                    "new=$target reason=focus-refresh"
+            }
+        }
+
+        val wasTopmost = (User32.INSTANCE.GetWindowLong(target, GWL_EXSTYLE) and WS_EX_TOPMOST) != 0
+        val flags = SWP_NOMOVE or SWP_NOSIZE or SWP_SHOWWINDOW
+        val heldTopmost = setTopmostAndVerify(target, flags)
+        val heldStyleTopmost = isTopmost(target)
+        User32.INSTANCE.BringWindowToTop(target)
+        // ForegroundWindow/foreground PID can become correct before DWM has
+        // composed the new z-order. Robot captures pixels, not window
+        // metadata, so re-activate and give the compositor a settling window
+        // before allowing capture.
+        User32ExDll.INSTANCE.SetActiveWindow(target)
+        User32.INSTANCE.SetForegroundWindow(target)
+        val confirmed = awaitVisibleForeground(target, "capture-hold")
+        if (confirmed) {
+            SystemUtil.delay(400)
+            User32.INSTANCE.BringWindowToTop(target)
+            User32ExDll.INSTANCE.SetActiveWindow(target)
+            User32.INSTANCE.SetForegroundWindow(target)
+            SystemUtil.delay(150)
+        }
+        log.info {
+            "E2E_RECOVERY_FOREGROUND_HOLD hwnd=$target heldTopmost=$heldTopmost " +
+                "styleTopmost=$heldStyleTopmost " +
+                "confirmed=$confirmed settled=${confirmed} wasTopmost=$wasTopmost " +
+                "targetPid=${windowProcessId(target)} settleMs=550"
+        }
+        if (!confirmed) {
+            if (!wasTopmost) setWindowPosRaw(target, HWND_NOTOPMOST, flags)
+            return RecoveryForegroundResult(false, null)
+        }
+
+        return try {
+            RecoveryForegroundResult(true, block())
+        } finally {
+            if (!wasTopmost) {
+                setWindowPosRaw(target, HWND_NOTOPMOST, flags)
+            }
+            log.info { "E2E_RECOVERY_FOREGROUND_RELEASE hwnd=$target restoredTopmost=${wasTopmost}" }
+        }
+    }
+
+    private fun awaitVisibleForeground(hwnd: HWND, reason: String): Boolean {
+        repeat(12) { attempt ->
+            val foreground = User32.INSTANCE.GetForegroundWindow()
+            if (isVisibleForegroundOfTarget(hwnd, foreground)) return true
+            if (attempt < 11) SystemUtil.delay(50)
+        }
+        val actual = User32.INSTANCE.GetForegroundWindow()
+        log.warn {
+            "E2E_RECOVERY_FOREGROUND_UNCONFIRMED hwnd=$hwnd reason=$reason actual=$actual " +
+                "targetPid=${windowProcessId(hwnd)} foregroundPid=${actual?.let(::windowProcessId) ?: 0}"
+        }
+        return false
+    }
+
+    private fun forceForegroundZOrder(hwnd: HWND) {
+        runCatching {
+            val flags = SWP_NOMOVE or SWP_NOSIZE or SWP_SHOWWINDOW
+            val raised = setTopmostAndVerify(hwnd, flags)
+            val restored = setWindowPosRaw(hwnd, HWND_NOTOPMOST, flags)
+            User32.INSTANCE.BringWindowToTop(hwnd)
+            log.info {
+                "E2E_INPUT_FOREGROUND_FORCE hwnd=$hwnd raised=$raised " +
+                    "styleTopmost=${isTopmost(hwnd)} restored=$restored"
+            }
+        }.onFailure { error ->
+            log.warn(error) {
+                "E2E_INPUT_FOREGROUND_FORCE_FAILED hwnd=$hwnd error=${error.javaClass.simpleName}"
+            }
+        }
+    }
+
+    private fun setWindowPosRaw(hwnd: HWND, insertAfter: Pointer, flags: Int): Boolean =
+        User32RawDll.INSTANCE.SetWindowPos(hwnd.pointer, insertAfter, 0, 0, 0, 0, flags)
+
+    private fun isTopmost(hwnd: HWND): Boolean =
+        (User32.INSTANCE.GetWindowLong(hwnd, GWL_EXSTYLE) and WS_EX_TOPMOST) != 0
+
+    private fun setTopmostAndVerify(hwnd: HWND, flags: Int): Boolean {
+        var returned = false
+        repeat(3) { attempt ->
+            returned = setWindowPosRaw(hwnd, HWND_TOPMOST, flags)
+            val observed = isTopmost(hwnd)
+            if (observed) return true
+            // Break a stale z-order relationship before retrying the sentinel
+            // operation. This is harmless for a non-topmost game window and
+            // makes the recovery path deterministic when another overlay owns
+            // the z-order slot.
+            if (attempt < 2) {
+                setWindowPosRaw(hwnd, HWND_BOTTOM, flags)
+                SystemUtil.delay(40)
+            }
+        }
+        return returned && isTopmost(hwnd)
+    }
+
+    /**
      * Focus the game before a keyboard fallback. Keyboard events are sent to
      * the real foreground window, so calling Robot.keyPress without this
      * check can silently deliver Return to the script UI or another app.
      */
     internal fun focusWindowForInput(hwnd: HWND?): Boolean =
         hwnd?.let(::focusE2EWindow) ?: false
+
+    /**
+     * Recovery must own the foreground before it captures or sends a click.
+     * This is intentionally separate from the normal short input gate so a
+     * transient foreground-lock failure cannot disable recovery permanently.
+     */
+    internal fun forceFocusWindowForRecovery(hwnd: HWND?): Boolean =
+        hwnd?.let { focusE2EWindow(it, recovery = true) } ?: false
 
     /**
      * Send Enter through the same real desktop input path as recovery clicks.
@@ -245,7 +434,7 @@ object MouseUtil {
         try {
             synchronized(e2eRobotLock) {
                 if (!ActionDispatchGate.allow("recovery.enter.locked")) return false
-                if (!focusE2EWindow(hwnd)) {
+                if (!focusE2EWindow(hwnd, recovery = true)) {
                     log.warn { "E2E_RECOVERY_KEY_SKIPPED key=ENTER hwnd=$hwnd reason=foreground-unconfirmed" }
                     return false
                 }
@@ -295,10 +484,14 @@ object MouseUtil {
             leftButtonClick(pos, hwnd)
             return true
         }
-        if (!hwndIsValid(hwnd) || !WorkTimeListener.working || PauseStatus.isPause) {
+        if (!hwndIsValid(hwnd) ||
+            (!WorkTimeListener.working && !PauseStatus.isAutomaticPause) ||
+            !PauseStatus.canRunAutomaticRecovery()
+        ) {
             log.warn {
                 "E2E_RECOVERY_CLICK_SKIPPED pos=(${pos.x},${pos.y}) hwnd=$hwnd " +
-                    "valid=${hwndIsValid(hwnd)} working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+                    "valid=${hwndIsValid(hwnd)} working=${WorkTimeListener.working} " +
+                    "paused=${PauseStatus.isPause} automaticPause=${PauseStatus.isAutomaticPause}"
             }
             return false
         }
@@ -315,7 +508,7 @@ object MouseUtil {
         try {
             synchronized(e2eRobotLock) {
                 if (!ActionDispatchGate.allow("recovery.left.locked")) return false
-                val focused = focusE2EWindow(hwnd)
+                val focused = forceFocusWindowForRecovery(hwnd)
                 if (!focused) {
                     log.warn {
                         "E2E_RECOVERY_CLICK_SKIPPED pos=(${pos.x},${pos.y}) hwnd=$hwnd " +
@@ -838,6 +1031,19 @@ object MouseUtil {
                         log.info {
                             "E2E_INPUT_SENDINPUT_FOREGROUND hwnd=$hwnd confirmed=$foregroundFocused"
                         }
+                        if (E2EInputRecoveryPolicy.decide(
+                                attempt = E2EInputRecoveryPolicy.MAX_FOREGROUND_ATTEMPTS - 1,
+                                windowValid = hwndIsValid(hwnd),
+                                foregroundMatches = foregroundFocused,
+                        ) == E2EInputRecoveryPolicy.Decision.BLOCK
+                        ) {
+                            LifecycleTrace.recordForegroundFailure(target = hwnd.toString())
+                            log.warn {
+                                "E2E_INPUT_SENDINPUT_BLOCKED hwnd=$hwnd " +
+                                    "reason=foreground-unconfirmed input=not-sent"
+                            }
+                            return
+                        }
                         if (prevPoint != pos) {
                             moveNativeAlongCurve(prevPoint, pos, hwnd, mouseMode)
                         }
@@ -874,6 +1080,7 @@ object MouseUtil {
                             "E2E_INPUT_SKIPPED_PHASE_CHANGED pos=(${pos.x},${pos.y}) hwnd=$hwnd"
                         }
                     } else {
+                        LifecycleTrace.recordForegroundFailure(target = hwnd?.toString() ?: "none")
                         log.error {
                             "E2E_INPUT_FAILED_NO_NATIVE_FALLBACK pos=(${pos.x},${pos.y}) hwnd=$hwnd"
                         }

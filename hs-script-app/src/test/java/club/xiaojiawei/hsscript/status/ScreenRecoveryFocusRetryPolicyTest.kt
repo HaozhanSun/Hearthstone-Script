@@ -5,7 +5,7 @@ import kotlin.test.assertEquals
 
 class ScreenRecoveryFocusRetryPolicyTest {
     @Test
-    fun `foreground recovery is bounded without pausing the worker`() {
+    fun `foreground recovery remains retryable without pausing the worker`() {
         assertEquals(
             ScreenRecoveryFocusRetryPolicy.Decision.RETRY_LATER,
             ScreenRecoveryFocusRetryPolicy.afterForegroundFailure(0),
@@ -15,8 +15,12 @@ class ScreenRecoveryFocusRetryPolicyTest {
             ScreenRecoveryFocusRetryPolicy.afterForegroundFailure(1),
         )
         assertEquals(
-            ScreenRecoveryFocusRetryPolicy.Decision.STOP_UNTIL_STATE_CHANGE,
+            ScreenRecoveryFocusRetryPolicy.Decision.RETRY_LATER,
             ScreenRecoveryFocusRetryPolicy.afterForegroundFailure(2),
+        )
+        assertEquals(
+            ScreenRecoveryFocusRetryPolicy.Decision.RETRY_LATER,
+            ScreenRecoveryFocusRetryPolicy.afterForegroundFailure(20),
         )
     }
 }

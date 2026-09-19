@@ -33,6 +33,10 @@ class WorkTimeRule : Cloneable {
     var strategyId: String by strategyIdProperty
 
     @JsonIgnore
+    val pairedStrategyIdsProperty: ObjectProperty<Map<Int, String>> = SimpleObjectProperty(emptyMap())
+    var pairedStrategyIds: Map<Int, String> by pairedStrategyIdsProperty
+
+    @JsonIgnore
     val deckPosProperty: ObjectProperty<Set<Int>> = SimpleObjectProperty(emptySet())
     var deckPos: Set<Int> by deckPosProperty
 
@@ -48,7 +52,8 @@ class WorkTimeRule : Cloneable {
         runMode: RunModeEnum,
         strategyId: String,
         deckPos: Set<Int>,
-        enable: Boolean
+        enable: Boolean,
+        pairedStrategyIds: Map<Int, String> = emptyMap(),
     ) {
         // Each schedule row owns its editable time range.  In particular, do
         // not retain the mutable DEFAULT_WORK_TIME singleton used by the UI.
@@ -56,6 +61,7 @@ class WorkTimeRule : Cloneable {
         this.operates = operates
         this.runMode = runMode
         this.strategyId = strategyId
+        this.pairedStrategyIds = pairedStrategyIds
         this.deckPos = deckPos
         this.enable = enable
     }
@@ -66,6 +72,7 @@ class WorkTimeRule : Cloneable {
         clone.operates = this.operates.toSet()
         clone.runMode = this.runMode
         clone.strategyId = this.strategyId
+        clone.pairedStrategyIds = this.pairedStrategyIds.toMap()
         clone.deckPos = this.deckPos.toSet()
         clone.enable = this.enable
         return clone

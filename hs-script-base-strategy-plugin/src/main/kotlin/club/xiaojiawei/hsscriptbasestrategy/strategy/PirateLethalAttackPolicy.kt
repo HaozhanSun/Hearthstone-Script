@@ -55,19 +55,19 @@ object PirateLethalAttackPolicy {
             }
             .sumOf { PirateDamageAuraPolicy.outgoingDamage(it, it.atc, war) }
 
-        val weaponDamage = me.playArea.hero?.let { hero ->
-            val weaponAttack = me.playArea.weapon?.atc?.coerceAtLeast(0) ?: 0
-            if (weaponAttack <= 0) return@let 0
+        val heroDamage = me.playArea.hero?.let { hero ->
+            val currentAttack = PirateHeroAttackTargetPolicy.effectiveHeroAttack(hero, war)
+            if (currentAttack <= 0) return@let 0
 
             val canAttack = hero.canAttack() || hero.canAttack(ignoreAtc = true)
             if (!canAttack) return@let 0
             val hasFaceAction = runCatching { hero.action.generateAttackActions(war, me) }
                 .getOrDefault(emptyList())
                 .any { isFaceAction(it, war) }
-            if (hasFaceAction) weaponAttack else 0
+            if (hasFaceAction) currentAttack else 0
         } ?: 0
 
-        return minionDamage + weaponDamage
+        return minionDamage + heroDamage
     }
 
     private fun isFaceAction(action: AttackAction, war: War): Boolean {

@@ -12,11 +12,13 @@ import club.xiaojiawei.hsscript.listener.log.ScreenLogListener
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
+import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.utils.*
 import club.xiaojiawei.hsscriptbase.config.CORE_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.util.isFalse
 import club.xiaojiawei.hsscriptbase.util.isTrue
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 
 /**
@@ -29,6 +31,9 @@ object Core {
     var lastActiveTime: Long = 0
 
     private val lock = ReentrantLock()
+
+    /** Prevent overlapping recovery/restart requests from fighting over focus and game state. */
+    private val restartInFlight = AtomicBoolean(false)
 
     val launch: Unit by lazy {
         PauseStatus.addChangeListener { _, _, newValue ->
@@ -87,7 +92,10 @@ object Core {
     fun start(force: Boolean = false) {
         if ((!force && WorkTimeListener.working) || lock.isLocked) return
 
+        log.info { "START_REQUEST_ACCEPTED source=core-start force=$force" }
+        LifecycleTrace.markStartupRequested("core-start")
         CORE_THREAD_POOL.execute {
+            val startedAt = System.currentTimeMillis()
             var acquired = false
             try {
                 if (!force && WorkTimeListener.working) return@execute
@@ -103,6 +111,10 @@ object Core {
                     PauseStatus.isPause = true
                 }
             } finally {
+                log.info {
+                    "START_REQUEST_DISPATCHED source=core-start force=$force " +
+                        "elapsedMs=${System.currentTimeMillis() - startedAt} working=${WorkTimeListener.working}"
+                }
                 if (acquired) {
                     lock.unlock()
                 }
@@ -114,17 +126,33 @@ object Core {
      * 重启脚本
      */
     fun restart(sync: Boolean = false) {
+        if (!restartInFlight.compareAndSet(false, true)) {
+            log.warn { "CORE_RESTART_SUPPRESSED reason=restart-already-in-flight" }
+            return
+        }
         ScreenLogListener.resetDealing()
         val exec = {
-            PauseStatus.asyncSetPause(true)
-            GameUtil.killGame(true)
-            log.info { "${GAME_CN_NAME}重启中……" }
-            PauseStatus.isPause = false
+            try {
+                PauseStatus.asyncSetPause(true)
+                GameUtil.killGame(true)
+                log.info { "${GAME_CN_NAME}重启中……" }
+                PauseStatus.isPause = false
+            } catch (fault: Throwable) {
+                log.error(fault) { "CORE_RESTART_FAILED action=release-restart-gate" }
+                throw fault
+            } finally {
+                restartInFlight.set(false)
+            }
         }
         if (sync) {
             exec()
         } else {
-            CORE_THREAD_POOL.execute { exec() }
+            try {
+                CORE_THREAD_POOL.execute { exec() }
+            } catch (fault: Throwable) {
+                restartInFlight.set(false)
+                log.error(fault) { "CORE_RESTART_SCHEDULE_FAILED action=release-restart-gate" }
+            }
         }
     }
 }

@@ -1,0 +1,19 @@
+[
+  {
+    "id": "standard-cannon-warrior-slot-3",
+    "name": "Standard Cannon Warrior V1.0 · slot 3",
+    "jitterSeconds": 0,
+    "timeRules": [
+      {
+        "workTime": { "startTime": "00:00", "endTime": "23:59" },
+        "operates": [],
+        "runMode": "STANDARD",
+        "strategyId": "e71234fa-9-standard-cannon-warrior-v1-0-9b1f-4d29-8f4f",
+        "deckPos": [3],
+        "enable": true
+      }
+    ]
+  }
+]
+
+

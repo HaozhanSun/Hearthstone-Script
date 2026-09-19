@@ -327,6 +327,7 @@ class MainController : MainView() {
             return
         }
         StrategyDefaultDeckSlotBindings.storeBinding(strategy.id(), deckSlot)
+        DeckStrategyManager.refreshRuntimeSelectionSnapshot("default-deck-slot-saved")
         updateDefaultDeckSlotView(strategy)
         notificationManger.showSuccess("已保存默认槽位：${strategy.name()} -> $deckSlot", 2)
         log.info { "STRATEGY_DEFAULT_DECK_SLOT_SAVED strategy=${strategy.id()} name=${strategy.name()} deckSlot=$deckSlot" }
@@ -484,11 +485,12 @@ class MainController : MainView() {
             // thread; otherwise a game-end update throws from the listener
             // pool and can make the script appear to close by itself.
             runUI {
-                gameCount.text = WarEx.warCount.toString()
+                gameCount.text = WarEx.playedCount.toString()
                 winningPercentage.text = (
                         String.format(
                             "%.1f",
-                            WarEx.winCount.toDouble() / WarEx.warCount * 100.0,
+                            if (WarEx.playedCount == 0) 0.0 else
+                                WarEx.playedWinCount.toDouble() / WarEx.playedCount * 100.0,
                         ) + "%"
                         )
                 gameTime.text = formatTime(WarEx.hangingTime)

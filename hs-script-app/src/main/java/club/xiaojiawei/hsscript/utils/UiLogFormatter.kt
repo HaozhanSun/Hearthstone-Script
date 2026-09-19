@@ -31,6 +31,11 @@ object UiLogFormatter {
         // The ROI line repeats the same evidence path already shown by
         // RANK_OCR_EVIDENCE. Keep it in the file log, not the compact UI.
         "RANK_OCR_ROI",
+        // Each PaddleX rank read can emit one diagnostic line per probe
+        // (bigRoi/smallRoi). The aggregate RANK_OCR line already presents
+        // the selected result; showing probe lines here makes a resolved
+        // rank appear to regress to "待确认" in the compact UI.
+        "RANK_OCR_PROBE",
         // Waiting is an internal retry/state signal, not a user-facing
         // decision. It can be emitted once per Power.log batch while the
         // mulligan boundary is not ready.
@@ -84,6 +89,7 @@ object UiLogFormatter {
             raw.startsWith("UNKNOWN_STATE_SCREENSHOT") -> "未知画面截图已保存"
             raw.startsWith("DEBUG_SCREENSHOT") -> "调试截图已保存"
             raw.startsWith("E2E_WINDOW_DISCOVERY") -> formatE2EWindowDiscovery(raw)
+            raw.startsWith("CARD_ACTION_UNRECOGNIZED") -> formatUnrecognizedCard(raw)
             raw.startsWith("E2E_") -> "端到端诊断 · ${raw.substringBefore(' ')}"
             else -> simplify(raw)
         }
@@ -171,6 +177,13 @@ object UiLogFormatter {
         "MISSING" -> "端到端 · 未发现游戏窗口"
         else -> "端到端诊断 · E2E_WINDOW_DISCOVERY"
     }
+
+    private fun formatUnrecognizedCard(raw: String): String = listOfNotNull(
+        "未识别卡牌",
+        value(raw, "cardName"),
+        value(raw, "cardId")?.let { "ID=$it" },
+        value(raw, "reason")?.let { "原因=$it" },
+    ).joinToString(" · ")
 
     private fun gameAndStage(raw: String): String {
         val game = gameNumber(raw)

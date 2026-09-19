@@ -35,11 +35,15 @@ interface User32ExDll : Library {
         uFlags: Int,
     ): Boolean
 
+    fun SetActiveWindow(hwnd: WinDef.HWND?): WinDef.HWND?
+
     companion object {
         val INSTANCE: User32ExDll by lazy {
             Native.load("user32", User32ExDll::class.java)
         }
 
+        val HWND_TOPMOST = WinDef.HWND(Pointer.createConstant(-1))
+        val HWND_NOTOPMOST = WinDef.HWND(Pointer.createConstant(-2))
         val HWND_BOTTOM = WinDef.HWND(Pointer.createConstant(1));
 
         const val SC_MONITORPOWER: Long = 0xF170

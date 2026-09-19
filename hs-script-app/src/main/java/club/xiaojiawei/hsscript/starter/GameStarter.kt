@@ -14,6 +14,7 @@ import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.utils.*
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
+import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.LAUNCH_PROGRAM_THREAD_POOL
@@ -26,6 +27,17 @@ import com.sun.jna.platform.win32.WinDef.HWND
 import com.sun.jna.platform.win32.WinUser.*
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+
+internal object PlatformCloseReadiness {
+    fun shouldClose(
+        gameAlive: Boolean,
+        visibleGameWindow: Boolean,
+        startupHandshakeConfirmed: Boolean,
+        stableForMs: Long,
+        requiredStabilityMs: Long,
+    ): Boolean =
+        gameAlive && visibleGameWindow && startupHandshakeConfirmed && stableForMs >= requiredStabilityMs
+}
 
 
 /**
@@ -45,8 +57,29 @@ class GameStarter : AbstractStarter() {
     private var platformCloseRequested = false
 
     private val startupProbeScheduled = AtomicBoolean(false)
+    private val startupRecoveryScheduled = AtomicBoolean(false)
+
+    private var handoffState = GameStartupHandoffPolicy.State()
+
+    /** Kept across starter-chain retries so a dead client cannot cause an unbounded loop. */
+    @Volatile
+    private var startupFailureAttempts = 0
+
+    @Volatile
+    private var lastGameLaunchAt = 0L
+
+    private companion object {
+        private const val PLATFORM_CLOSE_STABILITY_MS = 20_000L
+        private const val PLATFORM_CLOSE_MAX_WAIT_MS = 45_000L
+        private const val PLATFORM_CLOSE_POLL_MS = 1_000L
+        private const val STARTUP_RETRY_DELAY_MS = 1_500L
+        private const val STARTUP_HANDSHAKE_TIMEOUT_MS = 60_000L
+    }
 
     public override fun execStart() {
+        platformCloseRequested = false
+        startupProbeScheduled.set(false)
+        handoffState = GameStartupHandoffPolicy.State()
         log.info { "开始检查$GAME_CN_NAME" }
         val gameHWND = ScriptStatus.gameHWND
         if (gameHWND != null && User32.INSTANCE.IsWindow(gameHWND)) {
@@ -57,12 +90,15 @@ class GameStarter : AbstractStarter() {
         // ScriptStatus is reset between launcher stages, so checking only the
         // cached handle made a visible Hearthstone window look absent and
         // triggered repeated launch attempts.
-        if (System.getProperty("hs.script.e2e") == "true") {
-            GameUtil.findGameHWND()?.let {
-                log.info { "E2E已发现现有炉石窗口，跳过重复启动" }
-                next(it)
-                return
-            }
+        GameUtil.findGameHWND()?.let {
+            // Match the upstream starter's fast path: a visible existing
+            // Hearthstone client is already the handoff target, regardless of
+            // whether this run was started by the E2E harness or by F1/UI.
+            // Restricting this probe to E2E caused normal F1 starts to launch a
+            // second client and wait through a needless process-exit/retry.
+            log.info { "已发现现有炉石窗口，跳过重复启动" }
+            next(it)
+            return
         }
         var startTime = System.currentTimeMillis()
         var firstLogLaunch = true
@@ -74,51 +110,146 @@ class GameStarter : AbstractStarter() {
                         if (startTime == -1L) break
                         val diffTime = System.currentTimeMillis() - startTime
                         if (diffTime > 30_000) {
-                            log.warn { "启动${GAME_CN_NAME}失败次数过多，重新执行启动器链" }
+                            val now = System.currentTimeMillis()
+                            startupFailureAttempts++
+                            val decision = GameStartupRecoveryPolicy.decide(
+                                gameAlive = false,
+                                startupConfirmed = false,
+                                now = now,
+                                lastLaunchAt = lastGameLaunchAt,
+                                consecutiveFailures = startupFailureAttempts,
+                            )
+                            log.warn {
+                                "GAME_STARTUP_HANDOFF_FAILED attempt=$startupFailureAttempts " +
+                                    "decision=$decision gameAlive=false platformAlive=${GameUtil.isAliveOfPlatform()} " +
+                                    "powerLog=${PowerLogListener.logFile?.path() ?: "none"} " +
+                                    "powerLogLength=${PowerLogListener.logFile?.length() ?: 0L}"
+                            }
                             startTime = -1L
-                            EXTRA_THREAD_POOL.schedule({
-                                GameUtil.killGame(true)
-                                if (System.getProperty("hs.script.e2e") == "true") {
-                                    // The E2E fallback cannot distinguish the
-                                    // user's Battle.net session from a process
-                                    // started by this attempt. Never terminate
-                                    // every Battle.net.exe during an automatic
-                                    // retry; doing so made the launcher look
-                                    // like it crashed and prevented recovery.
-                                    log.warn { "E2E启动重试：保留现有战网进程，不执行全量Battle.net终止" }
-                                } else {
-                                    GameUtil.killLoginPlatform()
-                                    GameUtil.killPlatform()
+                            if (decision == GameStartupRecoveryPolicy.Decision.PAUSE_WITH_DIAGNOSTIC) {
+                                log.error {
+                                    "GAME_STARTUP_STOPPED action=AUTOMATIC_PAUSE reason=retry-budget-exhausted " +
+                                        "attempts=$startupFailureAttempts max=${GameStartupRecoveryPolicy.MAX_FAILURES} " +
+                                        "platformPreserved=true"
                                 }
-                                StarterConfig.starter.start()
+                                LifecycleTrace.stopRecoveryCascade("startup-retry-budget-exhausted")
+                                PauseStatus.setAutomaticPause(true)
+                            } else {
+                                EXTRA_THREAD_POOL.schedule({
+                                    // A short-lived Hearthstone process does not
+                                    // justify killing Battle.net.  The next
+                                    // PlatformStarter pass reuses whichever
+                                    // launcher instance is already alive.
+                                    GameUtil.killGame(true)
+                                    log.warn {
+                                        "GAME_STARTUP_RETRY action=RESTART_STARTER_CHAIN " +
+                                            "platformPreserved=true attempt=$startupFailureAttempts"
+                                    }
+                                    StarterConfig.starter.start()
                                 }, RandomUtil.getInteractionDelay(1000).toLong(), TimeUnit.MILLISECONDS)
+                            }
                             stopTask()
                             break
                         }
                         if (GameUtil.isAliveOfGame()) {
 //                    游戏刚启动时可能找不到窗口句柄
                             GameUtil.findGameHWND()?.let {
-                                next(it)
+                                val evaluation = GameStartupHandoffPolicy.observe(
+                                    state = handoffState,
+                                    processAlive = true,
+                                    windowFound = true,
+                                    nowMs = System.currentTimeMillis(),
+                                )
+                                handoffState = evaluation.state
+                                if (evaluation.decision == GameStartupHandoffPolicy.Decision.HANDOFF) {
+                                    log.info {
+                                        "GAME_STARTUP_HANDOFF_CONFIRMED " +
+                                            "stableObservations=${evaluation.state.stableObservations}"
+                                    }
+                                    next(it)
+                                } else {
+                                    log.info {
+                                        "GAME_STARTUP_HANDOFF_WAIT " +
+                                            "stableObservations=${evaluation.state.stableObservations} " +
+                                            "required=${GameStartupHandoffPolicy.REQUIRED_STABLE_OBSERVATIONS}"
+                                    }
+                                }
                             } ?: let {
-                                if (diffTime > 10_000) {
+                                val evaluation = GameStartupHandoffPolicy.observe(
+                                    state = handoffState,
+                                    processAlive = true,
+                                    windowFound = false,
+                                    nowMs = System.currentTimeMillis(),
+                                )
+                                handoffState = evaluation.state
+                                if (evaluation.decision == GameStartupHandoffPolicy.Decision.WAIT &&
+                                    handoffState.lastObservedAtMs != null
+                                ) {
+                                    log.info {
+                                        "GAME_STARTUP_HANDOFF_TRANSIENT_WINDOW_LOSS " +
+                                            "graceMs=${GameStartupHandoffPolicy.PROCESS_LOSS_GRACE_MS}"
+                                    }
+                                } else if (diffTime > 10_000) {
                                     log.info { "${GAME_CN_NAME}已在运行，但未找到对应窗口句柄" }
                                 }
                             }
                         } else {
-                            if (diffTime > 10_000) {
-                                val startupModeEnum = ConfigExUtil.getGameStartupMode().last()
-                                if (firstLogSecondaryLaunch) {
-                                    firstLogSecondaryLaunch = false
-                                    log.info { "以${startupModeEnum.name}方式启动$GAME_CN_NAME" }
+                            val evaluation = GameStartupHandoffPolicy.observe(
+                                state = handoffState,
+                                processAlive = false,
+                                windowFound = false,
+                                nowMs = System.currentTimeMillis(),
+                            )
+                            handoffState = evaluation.state
+                            if (evaluation.decision == GameStartupHandoffPolicy.Decision.WAIT &&
+                                handoffState.lastObservedAtMs != null
+                            ) {
+                                log.info {
+                                    "GAME_STARTUP_HANDOFF_TRANSIENT_PROCESS_LOSS " +
+                                        "graceMs=${GameStartupHandoffPolicy.PROCESS_LOSS_GRACE_MS}"
                                 }
-                                startupModeEnum.exec()
+                            } else if (diffTime > 10_000) {
+                                val startupModeEnum = ConfigExUtil.getGameStartupMode().last()
+                                val now = System.currentTimeMillis()
+                                val decision = GameStartupRecoveryPolicy.decide(
+                                    gameAlive = false,
+                                    startupConfirmed = false,
+                                    now = now,
+                                    lastLaunchAt = lastGameLaunchAt,
+                                    consecutiveFailures = startupFailureAttempts,
+                                )
+                                if (decision == GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF) {
+                                    lastGameLaunchAt = now
+                                    if (firstLogSecondaryLaunch) {
+                                        firstLogSecondaryLaunch = false
+                                        log.info { "以${startupModeEnum.name}方式启动$GAME_CN_NAME" }
+                                    } else {
+                                        log.info { "GAME_STARTUP_HANDOFF_RETRY mode=${startupModeEnum.name}" }
+                                    }
+                                    runCatching { startupModeEnum.exec() }
+                                        .onFailure { error -> log.warn(error) { "GAME_STARTUP_HANDOFF_DISPATCH_FAILED mode=${startupModeEnum.name}" } }
+                                }
                             } else {
                                 val startupModeEnum = ConfigExUtil.getGameStartupMode().first()
-                                if (firstLogLaunch) {
-                                    firstLogLaunch = false
-                                    log.info { "以${startupModeEnum.name}方式启动$GAME_CN_NAME" }
+                                val now = System.currentTimeMillis()
+                                val decision = GameStartupRecoveryPolicy.decide(
+                                    gameAlive = false,
+                                    startupConfirmed = false,
+                                    now = now,
+                                    lastLaunchAt = lastGameLaunchAt,
+                                    consecutiveFailures = startupFailureAttempts,
+                                )
+                                if (decision == GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF) {
+                                    lastGameLaunchAt = now
+                                    if (firstLogLaunch) {
+                                        firstLogLaunch = false
+                                        log.info { "以${startupModeEnum.name}方式启动$GAME_CN_NAME" }
+                                    } else {
+                                        log.info { "GAME_STARTUP_HANDOFF_RETRY mode=${startupModeEnum.name}" }
+                                    }
+                                    runCatching { startupModeEnum.exec() }
+                                        .onFailure { error -> log.warn(error) { "GAME_STARTUP_HANDOFF_DISPATCH_FAILED mode=${startupModeEnum.name}" } }
                                 }
-                                startupModeEnum.exec()
                             }
                             SystemUtil.delay(RandomUtil.getInteractionDelay(500))
                         }
@@ -133,7 +264,9 @@ class GameStarter : AbstractStarter() {
 
 
     private fun next(gameHWND: HWND) {
+        handoffState = GameStartupHandoffPolicy.State()
         updateGameMsg(gameHWND)
+        scheduleStartupHandoffWatchdog()
         scheduleStartupScreenProbe()
         closePlatformAfterGameIsReady()
         if (ConfigEnum.PREVENT_ADMIN_LAUNCH_GAME.getBoolean() && GameUtil.getGameProgramPermission()
@@ -143,18 +276,9 @@ class GameStarter : AbstractStarter() {
         } else {
             log.info { GAME_CN_NAME + "正在运行" }
         }
-        if (ConfigEnum.CLOSE_PLATFORM_AFTER_START_GAME.getBoolean()) {
-            go {
-                var count = 0
-                while (Mode.currMode === ModeEnum.STARTUP || Mode.currMode === ModeEnum.LOGIN) {
-                    if (count++ > 15) {
-                        return@go
-                    }
-                    SystemUtil.delay(RandomUtil.getInteractionDelay(1000))
-                }
-                GameUtil.killPlatform()
-            }
-        } else if (ConfigEnum.BOTTOM_PLACEMENT_PLATFORM_AFTER_START_GAME.getBoolean()) {
+        if (!ConfigEnum.CLOSE_PLATFORM_AFTER_START_GAME.getBoolean() &&
+            ConfigEnum.BOTTOM_PLACEMENT_PLATFORM_AFTER_START_GAME.getBoolean()
+        ) {
 //        将战网窗口置底
             User32ExDll.INSTANCE.SetWindowPos(
                 ScriptStatus.platformHWND,
@@ -168,6 +292,99 @@ class GameStarter : AbstractStarter() {
         }
 
         startNextStarter()
+    }
+
+    private fun startupHandshakeConfirmed(): Boolean {
+        val mode = Mode.currMode
+        return WarEx.inWar || (mode != null && mode != ModeEnum.STARTUP && mode != ModeEnum.LOGIN)
+    }
+
+    /**
+     * The original starter cancels its polling task as soon as a window is
+     * found.  If that process then exits during the Battle.net handoff, no
+     * code was left watching it and recovery waited forever for screen OCR.
+     * Keep a small, process-only supervisor alive through the handshake.
+     */
+    private fun scheduleStartupHandoffWatchdog() {
+        if (!startupRecoveryScheduled.compareAndSet(false, true)) return
+        EXTRA_THREAD_POOL.execute {
+            val startedAt = System.currentTimeMillis()
+            try {
+                while (System.currentTimeMillis() - startedAt < STARTUP_HANDSHAKE_TIMEOUT_MS) {
+                    if (startupHandshakeConfirmed()) {
+                        if (startupFailureAttempts != 0) {
+                            log.info { "GAME_STARTUP_HANDSHAKE_CONFIRMED resetFailures=$startupFailureAttempts" }
+                        }
+                        startupFailureAttempts = 0
+                        return@execute
+                    }
+                    if (!GameUtil.isAliveOfGame()) {
+                        startupFailureAttempts++
+                        val now = System.currentTimeMillis()
+                        val decision = GameStartupRecoveryPolicy.decide(
+                            gameAlive = false,
+                            startupConfirmed = false,
+                            now = now,
+                            lastLaunchAt = lastGameLaunchAt,
+                            consecutiveFailures = startupFailureAttempts,
+                        )
+                        log.warn {
+                            "GAME_STARTUP_PROCESS_EXITED attempt=$startupFailureAttempts decision=$decision " +
+                                "platformAlive=${GameUtil.isAliveOfPlatform()} " +
+                                "powerLog=${PowerLogListener.logFile?.path() ?: "none"} " +
+                                "powerLogLength=${PowerLogListener.logFile?.length() ?: 0L}"
+                        }
+                            if (decision == GameStartupRecoveryPolicy.Decision.PAUSE_WITH_DIAGNOSTIC) {
+                            log.error {
+                                "GAME_STARTUP_STOPPED action=AUTOMATIC_PAUSE reason=process-exited-before-handshake " +
+                                    "attempts=$startupFailureAttempts max=${GameStartupRecoveryPolicy.MAX_FAILURES} " +
+                                    "platformPreserved=true"
+                            }
+                            LifecycleTrace.stopRecoveryCascade("process-exited-before-handshake")
+                            PauseStatus.setAutomaticPause(true)
+                        } else {
+                            val cooldownRemaining = if (lastGameLaunchAt > 0L) {
+                                (GameStartupRecoveryPolicy.RELAUNCH_COOLDOWN_MS -
+                                    (System.currentTimeMillis() - lastGameLaunchAt)).coerceAtLeast(0L)
+                            } else {
+                                0L
+                            }
+                            val retryDelay = maxOf(STARTUP_RETRY_DELAY_MS, cooldownRemaining)
+                            log.info {
+                                "GAME_STARTUP_RETRY_DELAY delayMs=$retryDelay " +
+                                    "cooldownRemainingMs=$cooldownRemaining"
+                            }
+                            Thread.sleep(retryDelay)
+                            if (!startupHandshakeConfirmed()) {
+                                log.warn {
+                                    "GAME_STARTUP_RETRY action=STARTER_CHAIN reason=process-exited-before-handshake " +
+                                        "platformPreserved=true attempt=$startupFailureAttempts"
+                                }
+                                StarterConfig.starter.start()
+                            }
+                        }
+                        return@execute
+                    }
+                    Thread.sleep(1_000L)
+                }
+                if (!startupHandshakeConfirmed()) {
+                    log.error {
+                        "GAME_STARTUP_STOPPED action=AUTOMATIC_PAUSE reason=handshake-timeout " +
+                            "timeoutMs=$STARTUP_HANDSHAKE_TIMEOUT_MS " +
+                            "gameAlive=${GameUtil.isAliveOfGame()} " +
+                            "powerLog=${PowerLogListener.logFile?.path() ?: "none"} " +
+                            "powerLogLength=${PowerLogListener.logFile?.length() ?: 0L}"
+                    }
+                    LifecycleTrace.stopRecoveryCascade("startup-handshake-timeout")
+                    PauseStatus.setAutomaticPause(true)
+                }
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                log.info { "GAME_STARTUP_HANDOFF_WATCHDOG_INTERRUPTED" }
+            } finally {
+                startupRecoveryScheduled.set(false)
+            }
+        }
     }
 
     /**
@@ -186,35 +403,99 @@ class GameStarter : AbstractStarter() {
         }
         EXTRA_THREAD_POOL.execute {
             var attempt = 0
+            var initialProbeAttempted = false
+            val probeStartedAt = System.currentTimeMillis()
+            var lastPowerLogPosition = PowerLogListener.logFile?.getPosition() ?: Long.MIN_VALUE
+            var lastPowerLogProgressAt = probeStartedAt
             try {
-                // The starter chain discovers Hearthstone before the log listeners
-                // attach. Give those listeners a short head start, but do not wait
-                // for the 30-second stale-screen fallback.
-                Thread.sleep(2_500L)
-                val deadline = System.currentTimeMillis() + 15_000L
-                while (System.currentTimeMillis() < deadline && !PauseStatus.isPause) {
-                    attempt++
-                    log.info {
-                        "STARTUP_SCREEN_PROBE attempt=$attempt " +
-                            "gameWindow=${ScriptStatus.gameHWND != null} " +
-                            "working=${WorkTimeListener.working} war=${WarEx.inWar}"
+                while (!PauseStatus.isPause) {
+                    val currentMode = Mode.currMode
+                    val normalFlowActive = WarEx.inWar ||
+                        (currentMode != null && currentMode != ModeEnum.STARTUP && currentMode != ModeEnum.LOGIN)
+                    val now = System.currentTimeMillis()
+                    val powerLogPosition = PowerLogListener.logFile?.getPosition() ?: Long.MIN_VALUE
+                    if (powerLogPosition != Long.MIN_VALUE && powerLogPosition != lastPowerLogPosition) {
+                        lastPowerLogPosition = powerLogPosition
+                        lastPowerLogProgressAt = now
+                        log.info {
+                            "STARTUP_SCREEN_PROBE_LOG_PROGRESS elapsedMs=${now - probeStartedAt} " +
+                            "powerLogPosition=$powerLogPosition"
+                        }
                     }
-                    val result = runCatching {
-                        ScreenStateRecovery.inspectAndRecover(
-                            stuckForMs = 0L,
-                            stateFingerprint = "STARTUP_PROBE",
-                            startupProbe = true,
+                    val powerLog = PowerLogListener.logFile
+                    val powerLogLength = runCatching { powerLog?.length() ?: -1L }.getOrDefault(-1L)
+                    val startupProbeDecision = StartupScreenRecoveryPolicy.decide(
+                        elapsedMs = now - probeStartedAt,
+                        noLogProgressMs = now - lastPowerLogProgressAt,
+                        normalFlowActive = normalFlowActive,
+                        initialProbeAttempted = initialProbeAttempted,
+                    )
+                    if (startupProbeDecision == StartupScreenRecoveryPolicy.Decision.DEFER_NORMAL_FLOW) {
+                        log.info {
+                            "STARTUP_SCREEN_PROBE_DEFERRED reason=normal-flow-active " +
+                                "mode=${currentMode?.name ?: "NONE"} war=${WarEx.inWar} " +
+                                "elapsedMs=${now - probeStartedAt}"
+                        }
+                        return@execute
+                    }
+                    if (GameStartupHandoffPolicy.shouldDeferStartupScreenProbe(
+                            powerLogAttached = powerLog != null,
+                            powerLogLength = powerLogLength,
+                            decision = startupProbeDecision,
                         )
+                    ) {
+                        log.info {
+                            "STARTUP_SCREEN_PROBE_DEFERRED reason=power-log-not-ready " +
+                                "attached=${powerLog != null} length=$powerLogLength"
+                        }
+                        Thread.sleep(2_000L)
+                        continue
                     }
-                    var applied = false
-                    result.onSuccess {
-                        applied = it == ScreenStateRecovery.InspectionResult.APPLIED
-                        LifecycleTrace.mark("startup-screen-probe attempt=$attempt result=$it applied=$applied")
-                    }.onFailure { error ->
-                        log.warn(error) { "STARTUP_SCREEN_PROBE_FAILED attempt=$attempt" }
+                    when (startupProbeDecision) {
+                        StartupScreenRecoveryPolicy.Decision.DEFER_NORMAL_FLOW -> {
+                            return@execute
+                        }
+                        StartupScreenRecoveryPolicy.Decision.WAIT -> Thread.sleep(1_000L)
+                        StartupScreenRecoveryPolicy.Decision.PROBE -> {
+                            attempt++
+                            val noProgressMs = now - lastPowerLogProgressAt
+                            log.info {
+                                "STARTUP_SCREEN_PROBE attempt=$attempt " +
+                                    "reason=${if (initialProbeAttempted) "power-log-stalled" else "initial-fast-fallback"} " +
+                                    "elapsedMs=${now - probeStartedAt} noPowerLogProgressMs=$noProgressMs " +
+                                    "gameWindow=${ScriptStatus.gameHWND != null} " +
+                                    "working=${WorkTimeListener.working} war=${WarEx.inWar}"
+                            }
+                            initialProbeAttempted = true
+                            val result = runCatching {
+                                ScreenStateRecovery.inspectAndRecover(
+                                    stuckForMs = if (attempt == 1) {
+                                        StartupScreenRecoveryPolicy.INITIAL_PROBE_DELAY_MS
+                                    } else {
+                                        noProgressMs
+                                    },
+                                    stateFingerprint = "STARTUP_PROBE",
+                                    startupProbe = true,
+                                    stateStillCurrent = {
+                                        !WarEx.inWar &&
+                                            (Mode.currMode == null ||
+                                                Mode.currMode == ModeEnum.STARTUP ||
+                                                Mode.currMode == ModeEnum.LOGIN)
+                                    },
+                                )
+                            }
+                            var applied = false
+                            result.onSuccess {
+                                applied = it == ScreenStateRecovery.InspectionResult.APPLIED
+                                LifecycleTrace.mark("startup-screen-probe attempt=$attempt result=$it applied=$applied")
+                            }.onFailure { error ->
+                                log.warn(error) { "STARTUP_SCREEN_PROBE_FAILED attempt=$attempt" }
+                            }
+                            if (applied) return@execute
+                            lastPowerLogProgressAt = System.currentTimeMillis()
+                            Thread.sleep(1_000L)
+                        }
                     }
-                    if (applied) return@execute
-                    Thread.sleep(2_000L)
                 }
             } catch (error: InterruptedException) {
                 Thread.currentThread().interrupt()
@@ -233,8 +514,62 @@ class GameStarter : AbstractStarter() {
         if (platformCloseRequested) return
         platformCloseRequested = true
         go {
-            log.info { "${GAME_CN_NAME}进程和窗口已就绪，立即关闭${PLATFORM_CN_NAME}以避免卡在连接界面" }
-            GameUtil.killPlatform()
+            val waitStartedAt = System.currentTimeMillis()
+            var stableSince = 0L
+            log.info {
+                "PLATFORM_CLOSE_WAIT reason=game-startup-handshake " +
+                    "stabilityMs=$PLATFORM_CLOSE_STABILITY_MS maxWaitMs=$PLATFORM_CLOSE_MAX_WAIT_MS"
+            }
+            while (System.currentTimeMillis() - waitStartedAt < PLATFORM_CLOSE_MAX_WAIT_MS) {
+                if (!GameUtil.isAliveOfGame()) {
+                    log.warn {
+                        "PLATFORM_CLOSE_SKIPPED reason=game-exited-before-stable-readiness " +
+                            "waitedMs=${System.currentTimeMillis() - waitStartedAt}"
+                    }
+                    return@go
+                }
+                val discovered = GameUtil.findGameHWND()
+                val usableWindow = discovered != null &&
+                    User32.INSTANCE.IsWindow(discovered) &&
+                    User32.INSTANCE.IsWindowVisible(discovered)
+                if (usableWindow) {
+                    if (stableSince == 0L) {
+                        stableSince = System.currentTimeMillis()
+                        log.info { "PLATFORM_CLOSE_READINESS_OBSERVED hwnd=$discovered" }
+                    }
+                    if (PlatformCloseReadiness.shouldClose(
+                            gameAlive = true,
+                            visibleGameWindow = true,
+                            startupHandshakeConfirmed = startupHandshakeConfirmed(),
+                            stableForMs = System.currentTimeMillis() - stableSince,
+                            requiredStabilityMs = PLATFORM_CLOSE_STABILITY_MS,
+                        )
+                    ) {
+                        log.info {
+                            "PLATFORM_CLOSE_EXECUTE reason=game-window-stable " +
+                                "stableMs=${System.currentTimeMillis() - stableSince} hwnd=$discovered"
+                        }
+                        GameUtil.killPlatform()
+                        return@go
+                    }
+                    if (System.currentTimeMillis() - stableSince >= PLATFORM_CLOSE_STABILITY_MS &&
+                        !startupHandshakeConfirmed()
+                    ) {
+                        log.info {
+                            "PLATFORM_CLOSE_DEFERRED reason=handshake-not-confirmed " +
+                                "stableMs=${System.currentTimeMillis() - stableSince} " +
+                                "mode=${Mode.currMode?.name ?: "NONE"} inWar=${WarEx.inWar}"
+                        }
+                    }
+                } else {
+                    stableSince = 0L
+                }
+                SystemUtil.delay(PLATFORM_CLOSE_POLL_MS.toInt())
+            }
+            log.warn {
+                "PLATFORM_CLOSE_SKIPPED reason=game-readiness-timeout " +
+                    "waitedMs=${System.currentTimeMillis() - waitStartedAt} gameAlive=${GameUtil.isAliveOfGame()}"
+            }
         }
     }
 

@@ -21,6 +21,7 @@ object StrategyDefaultDeckSlotBindings {
         mapOf(
             DEFAULT_PIRATE_DEMON_HUNTER_STRATEGY_ID to 1,
             DEFAULT_PIRATE_WARRIOR_STRATEGY_ID to 2,
+            DEFAULT_ELEMENTAL_MAGE_STRATEGY_ID to 3,
         )
 
     private val objectMapper = jacksonObjectMapper()

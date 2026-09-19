@@ -684,7 +684,7 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
         if (action === TurnOverAction) return "结束回合"
         val creator = action.creator
         val card = creator?.let {
-            "${it.cardId.ifBlank { "NO_ID" }}:${it.entityName.ifBlank { "UNKNOWN" }}" +
+            "${it.cardId.ifBlank { "NO_ID" }}:${MctsCardDiagnostics.displayName(it)}" +
                 "(cost=${it.cost},entity=${it.entityId})"
         } ?: "无来源卡牌"
         val kind = when (action) {

@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
+import club.xiaojiawei.hsscriptcardsdk.cardparser.ParsedCardActionFactory
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeNode
@@ -18,6 +19,7 @@ import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsTurnPhaseFence
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class PirateWarriorMctsModelTest {
@@ -25,6 +27,12 @@ class PirateWarriorMctsModelTest {
     fun `battlefield is downranked until warrior has two friendly minions`() {
         val emptyBoard = testWar(turn = 2, mana = 3)
         val battlefield = testCard(PirateWarriorMctsModel.BATTLEFIELD, cost = 3)
+        assertFalse(
+            PirateWarriorMctsModel.isActionLegal(
+                PlayAction({}, {}, battlefield),
+                emptyBoard,
+            ),
+        )
         val emptyPrior = PirateWarriorMctsModel.actionPrior(
             PlayAction({}, {}, battlefield),
             emptyBoard,
@@ -203,6 +211,43 @@ class PirateWarriorMctsModelTest {
     }
 
     @Test
+    fun `hero attack prefers the healthier equal-attack killable minion over a ready one`() {
+        val war = testWar(turn = 6, mana = 1)
+        val hero = testCard("WEAPON_TRADE_HERO", cost = 0, attack = 3).apply {
+            cardType = CardTypeEnum.HERO
+            health = 30
+            isExhausted = false
+        }
+        val weapon = testCard("TLC_833", cost = 0, attack = 2).apply {
+            cardType = CardTypeEnum.WEAPON
+            health = 2
+        }
+        val rivalHero = testCard("WEAPON_TRADE_RIVAL_HERO", cost = 0, attack = 0).apply {
+            cardType = CardTypeEnum.HERO
+            health = 20
+        }
+        val healthier = testCard("REV_246", cost = 0, attack = 2).apply {
+            health = 3
+            isExhausted = true
+        }
+        val ready = testCard("TLC_903t", cost = 0, attack = 2).apply {
+            health = 1
+            isExhausted = false
+        }
+        war.addCard(hero, war.me.playArea)
+        war.me.playArea.weapon = weapon
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(healthier, war.rival.playArea)
+        war.addCard(ready, war.rival.playArea)
+
+        val healthierAttack = AttackAction({}, {}, hero, targetEntityId = healthier.entityId)
+        val readyAttack = AttackAction({}, {}, hero, targetEntityId = ready.entityId)
+
+        assertTrue(PirateWarriorMctsModel.isActionLegal(healthierAttack, war))
+        assertFalse(PirateWarriorMctsModel.isActionLegal(readyAttack, war))
+    }
+
+    @Test
     fun `hero may attack face when no enemy minion is killable`() {
         val war = testWar(turn = 2, mana = 3)
         val hero = testCard("FACE_HERO", cost = 0, attack = 3).apply {
@@ -265,6 +310,43 @@ class PirateWarriorMctsModelTest {
     }
 
     @Test
+    fun `fresh combat replan forces a direct minion kill before face`() {
+        val war = testWar(turn = 4, mana = 0)
+        val rivalHero = testCard("DIRECT_KILL_RIVAL_HERO", cost = 0, attack = 0).apply {
+            cardType = CardTypeEnum.HERO
+            health = 30
+        }
+        val damagedThreat = testCard("DAMAGED_FIVE_ATTACK_THREAT", cost = 0, attack = 5).apply {
+            health = 4
+            damage = 2
+            isExhausted = true
+        }
+        val readyPirate = testCard("READY_PIRATE", cost = 0, attack = 2).apply {
+            cardType = CardTypeEnum.MINION
+            cardRace = CardRaceEnum.PIRATE
+            health = 2
+            isExhausted = false
+        }
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(damagedThreat, war.rival.playArea)
+        war.addCard(readyPirate, war.me.playArea)
+
+        val kill = AttackAction({}, {}, readyPirate, targetEntityId = damagedThreat.entityId)
+        val face = AttackAction({}, {}, readyPirate, targetEntityId = rivalHero.entityId, targetIsHero = true)
+
+        assertTrue(PirateWarriorMctsModel.isActionLegal(kill, war))
+        assertTrue(PirateWarriorMctsModel.isMandatoryAction(kill, war))
+        assertFalse(PirateWarriorMctsModel.isMandatoryAction(face, war))
+        assertTrue(
+            PirateAttackOrderPolicy.isDirectFriendlyMinionKillAction(
+                kill,
+                war,
+                PirateWarriorMctsModel::effectivePirateAttack,
+            ),
+        )
+    }
+
+    @Test
     fun `hero attack respects a taunt even when it cannot be killed`() {
         val war = testWar(turn = 2, mana = 3)
         val hero = testCard("TAUNT_HERO", cost = 0, attack = 3).apply {
@@ -289,7 +371,7 @@ class PirateWarriorMctsModelTest {
         val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
         val tauntAttack = AttackAction({}, {}, hero, targetEntityId = taunt.entityId)
         assertTrue(!PirateWarriorMctsModel.isActionLegal(face, war))
-        assertTrue(PirateWarriorMctsModel.isActionLegal(tauntAttack, war))
+        assertTrue(!PirateWarriorMctsModel.isActionLegal(tauntAttack, war))
     }
 
     @Test
@@ -298,6 +380,66 @@ class PirateWarriorMctsModelTest {
             HsPirateWarriorMctsDeckStrategy().name()
                 .startsWith("海盗战 V${PirateMctsStrategyVersion.REVISION} · build "),
         )
+    }
+
+    @Test
+    fun `quest reward is recognized and must be played before hero power`() {
+        val war = testWar(turn = 9, mana = 6)
+        val reward = testCard(PirateWarriorMctsModel.QUEST_REWARD, cost = 5).apply {
+            entityId = "157"
+            entityName = "船长洛卡拉"
+            cardRace = CardRaceEnum.UNKNOWN
+        }
+        val power = testHeroPower()
+        war.addCard(reward, war.me.handArea)
+        war.addCard(power, war.me.playArea)
+
+        val rewardAction = PlayAction({}, {}, reward)
+        val powerAction = PowerAction({}, {}, power)
+
+        assertTrue(PirateWarriorMctsModel.isQuestReward(reward))
+        assertTrue(PirateWarriorMctsModel.canCreateOpaqueAction(reward, war))
+        assertTrue(PirateWarriorMctsModel.isMandatoryAction(rewardAction, war))
+        assertTrue(!PirateWarriorMctsModel.isMandatoryAction(powerAction, war))
+        assertEquals(5_000L, PirateWarriorMctsModel.preDispatchWaitMillis(rewardAction, war))
+        assertTrue(PirateWarriorMctsModel.shouldRetryAfterUnconfirmedDispatch(rewardAction, war, 0))
+        assertTrue(!PirateWarriorMctsModel.shouldRetryAfterUnconfirmedDispatch(rewardAction, war, 1))
+    }
+
+    @Test
+    fun `zero-cost aredar brute is mandatory before quest reward or other cards`() {
+        val war = testWar(turn = 9, mana = 5)
+        val rivalHero = testCard("GDB_FULL_BOARD_RIVAL_HERO", cost = 0).apply {
+            cardType = CardTypeEnum.HERO
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 30
+        }
+        war.addCard(rivalHero, war.rival.playArea)
+        repeat(7) { index ->
+            war.addCard(
+                testCard("GDB_FULL_BOARD_MINION_$index", cost = 0).apply {
+                    entityId = "GDB_FULL_BOARD_MINION_$index-entity"
+                    health = 1
+                    isExhausted = true
+                },
+                war.rival.playArea,
+            )
+        }
+        val brute = testCard("GDB_320", cost = 0).apply {
+            entityName = "艾瑞达蛮兵"
+            cardType = CardTypeEnum.MINION
+        }
+        val reward = testCard(PirateWarriorMctsModel.QUEST_REWARD, cost = 5).apply {
+            entityName = "船长洛卡拉"
+        }
+        war.addCard(brute, war.me.handArea)
+        war.addCard(reward, war.me.handArea)
+
+        val bruteAction = PlayAction({}, {}, brute)
+        val rewardAction = PlayAction({}, {}, reward)
+        assertTrue(PirateWarriorMctsModel.isMandatoryAction(bruteAction, war))
+        assertTrue(!PirateWarriorMctsModel.isMandatoryAction(rewardAction, war))
+        assertEquals(1_000.0, PirateWarriorMctsModel.actionPrior(bruteAction, war))
     }
     @Test
     fun `cannon is mandatory before treasure distributor`() {
@@ -326,6 +468,43 @@ class PirateWarriorMctsModelTest {
         )
         assertTrue(
             !PirateWarriorMctsModel.isMandatoryAction(PlayAction({}, {}, distributor), war),
+        )
+    }
+
+    @Test
+    fun `first turn quest is mandatory before cannon or distributor`() {
+        val war = testWar(turn = 1, mana = 2)
+        val quest = testCard(PirateWarriorMctsModel.QUESTLINE, cost = 1).apply {
+            cardType = CardTypeEnum.SPELL
+        }
+        val cannon = testCard(PirateWarriorMctsModel.SHIPS_CANNON, cost = 2)
+        val distributor = testCard(PirateWarriorMctsModel.TREASURE_DISTRIBUTOR, cost = 1)
+        war.addCard(quest, war.me.handArea)
+        war.addCard(cannon, war.me.handArea)
+        war.addCard(distributor, war.me.handArea)
+
+        assertTrue(PirateWarriorMctsModel.isMandatoryAction(PlayAction({}, {}, quest), war))
+        assertTrue(!PirateWarriorMctsModel.isMandatoryAction(PlayAction({}, {}, cannon), war))
+        assertTrue(!PirateWarriorMctsModel.isMandatoryAction(PlayAction({}, {}, distributor), war))
+    }
+
+    @Test
+    fun `first turn opaque quest survives phase fence`() {
+        val war = testWar(turn = 1, mana = 2)
+        val quest = testCard(PirateWarriorMctsModel.QUESTLINE, cost = 1).apply {
+            cardType = CardTypeEnum.SPELL
+        }
+        val cannon = testCard(PirateWarriorMctsModel.SHIPS_CANNON, cost = 2)
+        val weapon = testCard(PirateWarriorMctsModel.FRONTLINE_AXE, cost = 2).apply {
+            cardType = CardTypeEnum.WEAPON
+        }
+        war.addCard(quest, war.me.handArea)
+        war.addCard(cannon, war.me.handArea)
+        war.addCard(weapon, war.me.handArea)
+
+        assertEquals(
+            MctsActionOrderPhase.MINION_PLAY,
+            PirateWarriorMctsModel.actionOrderPhase(PlayAction({}, {}, quest), war),
         )
     }
 
@@ -436,17 +615,25 @@ class PirateWarriorMctsModelTest {
         })
 
         var afterMinionAttacks = afterMinionPlay
-        repeat(afterMinionPlay.actions.size) {
-            assertTrue(afterMinionAttacks.actions.isNotEmpty())
-            assertTrue(afterMinionAttacks.actions.all {
+        var minionAttackSteps = 0
+        while (afterMinionAttacks.actions.all {
                 it is AttackAction && it.creator?.cardType === CardTypeEnum.MINION
-            })
+            }
+        ) {
+            assertTrue(afterMinionAttacks.actions.isNotEmpty())
             afterMinionAttacks = afterMinionAttacks.buildNextNode(afterMinionAttacks.actions.first())
+            minionAttackSteps++
+            assertTrue(minionAttackSteps <= 7)
         }
         assertTrue(afterMinionAttacks.actions.isNotEmpty())
-        assertTrue(afterMinionAttacks.actions.all {
-            it is PowerAction && it.creator?.cardType === CardTypeEnum.HERO_POWER
-        })
+        if (!afterMinionAttacks.actions.all {
+                it is PowerAction && it.creator?.cardType === CardTypeEnum.HERO_POWER
+            }
+        ) {
+            throw AssertionError(
+                afterMinionAttacks.actions.joinToString { "${it::class.simpleName}:${it.creator?.cardType}:${it.creator?.cardId}" },
+            )
+        }
     }
 
     @Test
@@ -510,6 +697,42 @@ class PirateWarriorMctsModelTest {
                 onlyRagewing,
             ),
         )
+    }
+
+    @Test
+    fun `ragewing is deferred during hand scan so later attacks are not hidden by phase fence`() {
+        val war = testWar(turn = 2, mana = 4)
+        val ragewing = testCard(PirateWarriorMctsModel.RAGEWING, cost = 4)
+        val cannon = testCard(PirateWarriorMctsModel.SHIPS_CANNON, cost = 2)
+        war.addCard(ragewing, war.me.handArea)
+        war.addCard(cannon, war.me.handArea)
+
+        assertTrue(PirateWarriorMctsModel.shouldDefer(ragewing, war))
+    }
+
+    @Test
+    fun `ragewing stays last when hook n heave is recognized by built-in action`() {
+        ParsedCardActionFactory.clear()
+        val war = testWar(turn = 2, mana = 4)
+        val ragewing = testCard(PirateWarriorMctsModel.RAGEWING, cost = 2)
+        val hookNHeave = testCard(PirateWarriorMctsModel.HOOK_N_HEAVE, cost = 2).apply {
+            cardType = CardTypeEnum.SPELL
+            val parsedAction = requireNotNull(
+                ParsedCardActionFactory.getOrCreate(cardId, "钩手拖拽")
+            )()
+            parsedAction.belongCard = this
+            action = parsedAction
+        }
+        war.addCard(ragewing, war.me.handArea)
+        war.addCard(hookNHeave, war.me.handArea)
+
+        val ragewingAction = PlayAction({}, {}, ragewing)
+        assertTrue(PirateWarriorMctsModel.isDeferredAction(ragewingAction, war))
+        assertEquals(
+            "ragewing-deferred-behind-other-action",
+            PirateWarriorMctsModel.actionFilterReason(ragewingAction, war),
+        )
+        assertTrue(hookNHeave.action.generatePlayActions(war, war.me).isNotEmpty())
     }
 
     @Test
@@ -698,13 +921,9 @@ class PirateWarriorMctsModelTest {
 
         val afterPower = root.buildNextNode(root.actions.single())
         assertTrue(afterPower.actions.isNotEmpty())
-        assertTrue(afterPower.actions.all {
-            it is AttackAction && it.creator?.entityId == hero.entityId && it.targetEntityId == taunt.entityId
+        assertTrue(afterPower.actions.none {
+            it is AttackAction && it.creator?.entityId == hero.entityId
         })
-
-        val afterHero = afterPower.buildNextNode(afterPower.actions.single())
-        assertTrue(afterHero.actions.isNotEmpty())
-        assertTrue(afterHero.actions.all { it is AttackAction && it.creator?.entityId == minion.entityId })
     }
 
     @Test
@@ -772,7 +991,7 @@ class PirateWarriorMctsModelTest {
 
         val node = MonteCarloTreeNode(war, InitAction, testMctsArg())
 
-        assertTrue(node.actions.any { it is AttackAction && it.targetEntityId == taunt.entityId })
+        assertTrue(node.actions.none { it is AttackAction && it.targetEntityId == taunt.entityId })
         assertTrue(node.actions.none { it is AttackAction && it.targetIsHero })
     }
 
@@ -865,5 +1084,11 @@ class PirateWarriorMctsModelTest {
         atc = attack
         health = 3
         action.belongCard = this
+    }
+
+    private fun testHeroPower(): Card = testCard("HERO_01bp", 2).apply {
+        cardType = CardTypeEnum.HERO_POWER
+        cardRace = CardRaceEnum.UNKNOWN
+        isExhausted = false
     }
 }

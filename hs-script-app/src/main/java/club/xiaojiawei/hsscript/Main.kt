@@ -14,6 +14,7 @@ import club.xiaojiawei.hsscript.enums.MouseControlModeEnum
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.LifecycleTrace
+import club.xiaojiawei.hsscript.status.PrivacyProcessAudit
 import club.xiaojiawei.hsscript.status.RuntimeContractTrace
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
 import club.xiaojiawei.hsscript.utils.ExistingInstanceSignal
@@ -62,6 +63,7 @@ fun main(args: Array<String>) {
 
     setLogPath()
     RuntimeContractTrace.emit()
+    PrivacyProcessAudit.emit("startup")
 
     // Keep failures that happen outside the application's normal LRunnable
     // wrapper visible.  In particular, a JavaFX/JNA/native failure can make
@@ -82,6 +84,7 @@ fun main(args: Array<String>) {
             LoggerFactory.getLogger("ShutdownTrace").warn(
                 "JVM 正常执行关闭钩子，进程即将退出，pid=${ProcessHandle.current().pid()}"
             )
+            PrivacyProcessAudit.emit("shutdown")
         } catch (_: Throwable) {
             // Logging may already be unavailable during JVM teardown.
         }

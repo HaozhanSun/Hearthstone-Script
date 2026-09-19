@@ -74,6 +74,15 @@ object HubModeStrategy : AbstractModeStrategy<Any?>() {
         GameRect(0.4041, 0.4575, 0.4083, 0.4410)
     }
 
+    /** Close X for the full-screen hero-skin shop overlay. */
+    private val SHOP_OVERLAY_CLOSE_RECT = GameRect(-0.405, -0.365, -0.345, -0.295)
+
+    fun closeShopOverlayForRecovery(): Boolean {
+        SHOP_OVERLAY_CLOSE_RECT.lClickCenter(false)
+        log.info { "SCREEN_RECOVERY_SHOP_OVERLAY_CLOSE_DISPATCHED rect=top-left-x" }
+        return true
+    }
+
     /**
      * 任务按钮
      */

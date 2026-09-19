@@ -87,6 +87,33 @@ class PirateConditionalDamageSpellPolicyTest {
     }
 
     @Test
+    fun `high attack nonlethal threat outranks disposable lethal one one`() {
+        val war = testWar()
+        war.addCard(testCard("PIRATE_THREAT", CardTypeEnum.MINION, CardRaceEnum.PIRATE), war.me.playArea)
+        val disposable = testCard("DISPOSABLE", CardTypeEnum.MINION, CardRaceEnum.UNKNOWN).apply {
+            health = 1
+            atc = 1
+        }
+        val threat = testCard("HIGH_THREAT", CardTypeEnum.MINION, CardRaceEnum.UNKNOWN).apply {
+            health = 9
+            atc = 6
+        }
+        val spell = testCard(PirateConditionalDamageSpellPolicy.CARD_ID, CardTypeEnum.SPELL, CardRaceEnum.UNKNOWN)
+        war.addCard(disposable, war.rival.playArea)
+        war.addCard(threat, war.rival.playArea)
+        war.addCard(spell, war.me.handArea)
+
+        val disposableAction = damageAction(spell, disposable)
+        val threatAction = damageAction(spell, threat)
+
+        assertTrue(
+            PirateConditionalDamageSpellPolicy.softPrior(threatAction, war) >
+                PirateConditionalDamageSpellPolicy.softPrior(disposableAction, war),
+            "a five-damage spell should be reserved for the visible 6-attack threat",
+        )
+    }
+
+    @Test
     fun `no enemy target produces no tactical SW027 action`() {
         val war = testWar()
         val spell = testCard(PirateConditionalDamageSpellPolicy.CARD_ID, CardTypeEnum.SPELL, CardRaceEnum.UNKNOWN)

@@ -3,6 +3,7 @@ package club.xiaojiawei.hsscript.status.surrender
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.enums.SpecialCardEnum
 import club.xiaojiawei.hsscript.ocr.OcrHealth
 import club.xiaojiawei.hsscript.ocr.OcrProviderKind
 import club.xiaojiawei.hsscript.ocr.OcrRecognition
@@ -275,6 +276,71 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun revealedOpponentRenathalCardRequestsSurrenderBeforeMulligan() {
+        val war = warWithRivalHero("雷克萨")
+        war.addCard(Card(TestCardAction()).apply {
+            cardId = SpecialCardEnum.PRINCE_RENATHAL.cardId
+            cardType = CardTypeEnum.MINION
+        }, war.rival.handArea)
+
+        SurrenderPolicy.resetForNewGame()
+        val result = SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war)
+
+        assertTrue(result?.shouldSurrender == true)
+        assertEquals("opponent-prince-renathal", result?.ruleId)
+        assertTrue(result?.reason.orEmpty().contains("card-seen"))
+        assertEquals(
+            OpponentHeroInspectionState.SURRENDER_REQUESTED,
+            SurrenderPolicy.currentOpponentHeroInspectionState(),
+        )
+    }
+
+    @Test
+    fun initialFortyHealthFallbackRequestsSurrenderBeforeMulligan() {
+        val war = warWithRivalHero("雷克萨").apply {
+            rival.playArea.hero!!.health = 40
+            rival.playArea.hero!!.damage = 0
+        }
+
+        SurrenderPolicy.resetForNewGame()
+        val result = SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war)
+
+        assertTrue(result?.shouldSurrender == true)
+        assertEquals("opponent-health-is-40", result?.ruleId)
+        assertTrue(result?.reason.orEmpty().contains("source=Power.log"))
+    }
+
+    @Test
+    fun revealedOpponentDemonSeedRequestsUnifiedSurrenderFromAnyPowerLogZone() {
+        val war = warWithRivalHero("雷克萨")
+        war.addCard(Card(TestCardAction()).apply {
+            cardId = SpecialCardEnum.THE_DEMON_SEED.cardId
+            entityName = SpecialCardEnum.THE_DEMON_SEED.comment
+            cardType = CardTypeEnum.ENCHANTMENT
+        }, war.rival.secretArea)
+
+        SurrenderPolicy.resetForNewGame()
+        val result = SurrenderPolicy.evaluateOpponentPlayedCard(war)
+
+        assertTrue(result?.shouldSurrender == true)
+        assertEquals("opponent-played-card-demon-seed", result?.ruleId)
+        assertTrue(result?.reason.orEmpty().contains("SW_091"))
+        assertTrue(result?.reason.orEmpty().contains("zone=SECRET"))
+        // The same observed entity must not enqueue duplicate surrender work.
+        SurrenderPolicy.markOpponentCardSurrenderTriggered()
+        assertTrue(SurrenderPolicy.opponentCardSurrenderWasTriggered())
+    }
+
+    @Test
+    fun directSurrenderRegistryIsParameterizedForFutureCards() {
+        val rule = SurrenderPolicy.directSurrenderCardRegistry.single { it.key == "demon-seed" }
+
+        assertTrue(rule.cardIds.contains("SW_091"))
+        assertTrue(rule.localizedNames.contains("恶魔之种"))
+        assertTrue(SurrenderPolicy.directSurrenderCardRegistry.isNotEmpty())
+    }
+
+    @Test
     fun nonOriginalHeroShortCircuitsRankDetectorAndRequestsUnifiedSurrender() {
         val war = warWithRivalHero("星界雪怒")
 
@@ -309,13 +375,23 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun originalHeroAtFortyHealthDoesNotTriggerLegacyHealthSurrender() {
+    fun exactFortyOpponentHealthRequestsDirectSurrenderEvenWhenHeroSkinRuleIsDisabled() {
         val war = warWithRivalHero("加尔鲁什").apply {
             rival.playArea.hero!!.health = 40
             rival.playArea.hero!!.damage = 0
         }
 
-        assertNull(SurrenderPolicy.evaluateTurnStart(war))
+        val previous = ConfigUtil.getBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER)
+        try {
+            ConfigUtil.putBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER, false)
+            SurrenderPolicy.resetForNewGame()
+            val result = SurrenderPolicy.evaluateTurnStart(war)
+            assertTrue(result?.shouldSurrender == true)
+            assertEquals("opponent-health-is-40", result?.ruleId)
+            assertTrue(result?.reason.orEmpty().contains("source=Power.log"))
+        } finally {
+            ConfigUtil.putBoolean(ConfigEnum.OPPONENT_HERO_NON_ORIGINAL_SURRENDER, previous)
+        }
     }
 
     @Test
@@ -492,7 +568,29 @@ class SurrenderPolicyTest {
         assertTrue(badge.x + badge.width <= 105)
         assertTrue(expanded.x + expanded.width <= 100)
         assertTrue(digit.x + digit.width <= 70)
-        assertTrue(digit.y >= 950)
+        assertEquals(Rectangle(34, 938, 35, 45), digit)
+    }
+
+    @Test
+    fun rankDetectionSelectsTallerSmallRoiWhenFullBadgeIsUnresolved() {
+        fun probe(roi: String, rank: Int?, text: String = rank?.toString().orEmpty()) =
+            CurrentRankDetector.RankProbeResult(
+                roi = roi,
+                bounds = Rectangle(0, 0, 10, 10),
+                scale = if (roi == "bigRoi") 1 else 4,
+                rawText = text,
+                normalizedText = text,
+                candidate = rank?.let { CurrentRankDetector.RankCandidate(it, 0.99) },
+                confidence = 0.99,
+            )
+
+        val selection = CurrentRankDetector.selectRankProbeResults(
+            probe("bigRoi", null, ""),
+            probe("smallRoi", 9),
+        )
+
+        assertEquals("smallRoi", selection.selectedRoi)
+        assertEquals(9, selection.rank)
     }
 
     @Test
@@ -792,15 +890,15 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun rankTenRequestsSurrenderUnderTheCurrentRankPolicy() {
-        assertTrue(SurrenderPolicy.evaluateCurrentRank(10)?.shouldSurrender == true)
+    fun rankTenIsAnAllowedTargetUnderTheCurrentRankPolicy() {
+        assertNull(SurrenderPolicy.evaluateCurrentRank(10))
     }
 
     @Test
-    fun ranksFiveAndTenRequestSurrenderRegardlessOfTier() {
+    fun ranksFiveAndTenAreAllowedRegardlessOfTier() {
         for (tier in CurrentRankDetector.RankTier.values()) {
-            assertTrue(SurrenderPolicy.evaluateCurrentRank(rank = 5, tier = tier)?.shouldSurrender == true)
-            assertTrue(SurrenderPolicy.evaluateCurrentRank(rank = 10, tier = tier)?.shouldSurrender == true)
+            assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 5, tier = tier))
+            assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 10, tier = tier))
         }
     }
 
@@ -940,8 +1038,8 @@ class SurrenderPolicyTest {
             Scenario("legendary-233", "233", CurrentRankDetector.RankTier.LEGEND, true, false),
             Scenario("legendary-257", "257", CurrentRankDetector.RankTier.LEGEND, true, false),
             Scenario("platinum-2", "2", CurrentRankDetector.RankTier.PLATINUM, false, true),
-            Scenario("rank-5", "5", CurrentRankDetector.RankTier.SILVER, false, true),
-            Scenario("rank-10", "10", CurrentRankDetector.RankTier.GOLD, false, true),
+            Scenario("rank-5", "5", CurrentRankDetector.RankTier.SILVER, false, false),
+            Scenario("rank-10", "10", CurrentRankDetector.RankTier.GOLD, false, false),
             Scenario("rank-7", "7", CurrentRankDetector.RankTier.SILVER, false, true),
         )
 
@@ -971,7 +1069,7 @@ class SurrenderPolicyTest {
         assertTrue(result != null)
         assertTrue(result!!.shouldSurrender)
         assertEquals("current-rank-is-not-target", result.ruleId)
-        assertEquals("current-rank=9 target-ranks=LEGENDARY", result.reason)
+        assertEquals("current-rank=9 target-ranks=5,10", result.reason)
     }
 
     @Test
@@ -991,7 +1089,7 @@ class SurrenderPolicyTest {
         for (tier in CurrentRankDetector.RankTier.values()) {
             val result = SurrenderPolicy.evaluateCurrentRank(rank = 7, tier = tier)
             assertTrue(result!!.shouldSurrender)
-            assertEquals("current-rank=7 target-ranks=LEGENDARY", result.reason)
+            assertEquals("current-rank=7 target-ranks=5,10", result.reason)
         }
     }
 
@@ -1014,6 +1112,22 @@ class SurrenderPolicyTest {
         assertEquals("provider-failure-or-capture-failure", sidecarFailure.reason)
         assertTrue(sidecarFailure.wait)
         assertFalse(sidecarFailure.pause)
+    }
+
+    @Test
+    fun rankInspectionStateNeverRegressesAfterTerminalResult() {
+        assertEquals(
+            RankInspectionState.RESOLVED,
+            monotonicRankInspectionState(RankInspectionState.RESOLVED, RankInspectionState.NOT_READY),
+        )
+        assertEquals(
+            RankInspectionState.BLOCKED,
+            monotonicRankInspectionState(RankInspectionState.BLOCKED, RankInspectionState.WAITING_FOR_RANK),
+        )
+        assertEquals(
+            RankInspectionState.WAITING_FOR_RANK,
+            monotonicRankInspectionState(RankInspectionState.WAITING_FOR_RANK, RankInspectionState.NOT_READY),
+        )
     }
 
     @Test

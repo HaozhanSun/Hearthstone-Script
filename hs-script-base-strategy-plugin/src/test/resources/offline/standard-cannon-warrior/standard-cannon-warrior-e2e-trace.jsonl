@@ -1,0 +1,7 @@
+{"case":"standard-route","runMode":"STANDARD","deckSlot":3,"strategyId":"e71234fa-9-standard-cannon-warrior-v1-0-9b1f-4d29-8f4f","verdict":"PASS"}
+{"case":"first-turn-plan","sequence":["REV_990","AT_064"],"rule":"confirmed-sanguine-depths-prior-then-bash-with-rival-minion","verdict":"PASS"}
+{"case":"standard-key-card-sequence","cards":["REV_990","AT_064","EDR_457","END_021","JAIL_384"],"verdict":"PASS"}
+{"case":"unused-mana-replan","rule":"global-turn-plan-penalizes-unused-mana-for-confirmed-parser-backed-card","verdict":"PASS"}
+{"case":"unknown-action-fail-safe","rule":"parser-backed-only-no-opaque-fallback","verdict":"PASS"}
+
+

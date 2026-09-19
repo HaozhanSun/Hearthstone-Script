@@ -65,6 +65,46 @@ class ScreenWatchdogTest {
     }
 
     @Test
+    fun `authoritative active gameplay is recognized from the watchdog state`() {
+        assertTrue(
+            ScreenWatchdog.isAuthoritativeActiveGameplayForTest(
+                "mode=GAMEPLAY|inWar=true|warPhase=GAME_TURN|myTurn=true|warCount=82",
+            ),
+        )
+        assertFalse(
+            ScreenWatchdog.isAuthoritativeActiveGameplayForTest(
+                "mode=GAMEPLAY|inWar=true|warPhase=GAME_TURN|myTurn=false|warCount=82",
+            ),
+        )
+    }
+
+    @Test
+    fun `unknown OCR during authoritative active gameplay resumes normal gameplay`() {
+        val observation = ScreenWatchdog.inspectForSurrender(
+            state = "mode=GAMEPLAY|inWar=true|warPhase=GAME_TURN|myTurn=true|warCount=82",
+            attempts = 9,
+            captureProvider = { BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB) },
+            ocrProvider = { "" },
+        )
+
+        assertEquals(ScreenWatchdogKind.UNKNOWN, observation.kind)
+        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RESUME_GAMEPLAY, observation.action)
+    }
+
+    @Test
+    fun `capture failure during authoritative active gameplay resumes normal gameplay`() {
+        val observation = ScreenWatchdog.inspectForSurrender(
+            state = "mode=GAMEPLAY|inWar=true|warPhase=GAME_TURN|myTurn=true|warCount=82",
+            attempts = 9,
+            captureProvider = { null },
+            ocrProvider = { error("should not OCR without capture") },
+        )
+
+        assertEquals(ScreenWatchdogKind.CAPTURE_FAILED, observation.kind)
+        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RESUME_GAMEPLAY, observation.action)
+    }
+
+    @Test
     fun `timing gate waits until repeated action threshold`() {
         assertFalse(
             ScreenWatchdog.shouldInspect(

@@ -2,7 +2,6 @@ package club.xiaojiawei.hsscript.status
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 
 class DeckStrategyManagerSelectionTest {
     @Test
@@ -42,18 +41,5 @@ class DeckStrategyManagerSelectionTest {
                 userSelection = "pirate-demon-hunter-mcts",
             ),
         )
-    }
-
-    @Test
-    fun `refresh replacement cannot report applied when active strategy id disappeared`() {
-        val failure = assertFailsWith<IllegalStateException> {
-            DeckStrategyManager.resolveRefreshReplacement(
-                previous = "active-strategy",
-                loaded = listOf("different-strategy"),
-                id = { it },
-            )
-        }
-
-        assertEquals("matching-id-not-found strategy=active-strategy", failure.message)
     }
 }

@@ -16,6 +16,8 @@ import club.xiaojiawei.hsscript.interfaces.StageHook
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.WorkTimeStatus
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
+import club.xiaojiawei.hsscript.utils.WorkTimeRuleBulkEdit
+import club.xiaojiawei.hsscript.utils.WorkTimeRuleBulkEditRequest
 import club.xiaojiawei.hsscript.utils.WorkTimeJitter
 import club.xiaojiawei.hsscript.utils.go
 import club.xiaojiawei.hsscript.utils.runUI
@@ -40,8 +42,10 @@ import javafx.scene.Node
 import javafx.scene.control.*
 import javafx.scene.control.cell.CheckBoxTableCell
 import javafx.scene.layout.FlowPane
+import javafx.scene.layout.GridPane
 import javafx.scene.layout.HBox
 import javafx.scene.layout.Pane
+import javafx.scene.layout.VBox
 import javafx.scene.text.Text
 import javafx.util.Duration
 import javafx.util.StringConverter
@@ -123,6 +127,9 @@ class TimeSettingsController :
 
     @FXML
     protected lateinit var selectedStrategyCol: TableColumn<WorkTimeRule, String?>
+
+    @FXML
+    protected lateinit var selectedPairedStrategyCol: TableColumn<WorkTimeRule, Map<Int, String>?>
 
     @FXML
     protected lateinit var selectedEnableCol: TableColumn<WorkTimeRule, Boolean>
@@ -406,6 +413,11 @@ class TimeSettingsController :
             ColTableCell { index -> buildDeckPosPane(selectedWorkTimeRuleTable.items[index]) }
         }
 
+        selectedPairedStrategyCol.setCellValueFactory { cellData -> cellData.value.pairedStrategyIdsProperty }
+        selectedPairedStrategyCol.setCellFactory { p ->
+            ColTableCell { index -> buildPairedStrategyPane(selectedWorkTimeRuleTable.items[index]) }
+        }
+
         selectedEnableCol.setCellValueFactory { cellData -> cellData.value.enableProperty }
         selectedEnableCol.setCellFactory { p ->
             object : CheckBoxTableCell<WorkTimeRule, Boolean>() {
@@ -556,8 +568,268 @@ class TimeSettingsController :
                 }
             }, {
                 item.deckPos = deckPosCopy
+                item.pairedStrategyIds = item.pairedStrategyIds.filterKeys { it in deckPosCopy }
             }
         ).show()
+    }
+
+    private fun buildPairedStrategyPane(item: WorkTimeRule): Pane {
+        val strategyById = DeckStrategyManager.deckStrategies.associateBy { it.id() }
+        val text = item.deckPos.sorted().map { deckSlot ->
+            val strategyId = item.pairedStrategyIds[deckSlot]?.takeIf { it.isNotBlank() }
+            val strategyName = strategyId?.let { strategyById[it]?.name() ?: "缺失:$it" } ?: "默认策略"
+            "$deckSlot:$strategyName"
+        }.joinToString(",").ifBlank { "默认策略" }
+        return hbox {
+            alignCenter()
+            spacing(5.0)
+            addText(text)
+            addLabel {
+                graphic(button {
+                    style(EDIT_STYLE)
+                    cursor(Cursor.HAND)
+                    graphic(EditIco("main-color"))
+                    onAction { handleEditPairedStrategies(item) }
+                })
+            }
+        }
+    }
+
+    private fun handleEditPairedStrategies(item: WorkTimeRule) {
+        val deckSlots = item.deckPos.sorted()
+        if (deckSlots.isEmpty()) {
+            notificationManager.showInfo("请先设置卡组位", 2)
+            return
+        }
+        val strategies = runModeMap[item.runMode].orEmpty().sortedBy { it.name() }
+        val comboBoxes = deckSlots.associateWith { deckSlot ->
+            ComboBox<DeckStrategy?>().apply {
+                styleClass.addAll("combo-box-ui", "combo-box-ui-small", "combo-box-ui-normal")
+                items.add(null)
+                items.addAll(strategies)
+                value = strategies.find { it.id() == item.pairedStrategyIds[deckSlot] }
+                converter = object : StringConverter<DeckStrategy?>() {
+                    override fun toString(strategy: DeckStrategy?): String = strategy?.name() ?: "默认策略"
+                    override fun fromString(string: String?): DeckStrategy? = null
+                }
+            }
+        }
+        val content = VBox(8.0).apply {
+            padding = Insets(8.0)
+            comboBoxes.forEach { (deckSlot, comboBox) ->
+                children.add(HBox(8.0).apply {
+                    alignment = Pos.CENTER_LEFT
+                    children.add(Label("卡组位$deckSlot"))
+                    children.add(comboBox)
+                })
+            }
+        }
+        Modal(rootPane, "设置配套策略", content, {
+            item.pairedStrategyIds = comboBoxes.mapNotNull { (deckSlot, comboBox) ->
+                comboBox.value?.id()?.let { deckSlot to it }
+            }.toMap()
+            selectedWorkTimeRuleTable.refresh()
+        }, {}).show()
+    }
+
+    @FXML
+    protected fun bulkEditRules(actionEvent: ActionEvent) {
+        val workTimeRuleSet = workTimeRuleSetTable.selectionModel.selectedItem ?: return
+        if (workTimeRuleSet.id.isEmpty()) {
+            notificationManager.showInfo("不允许修改该规则", 2)
+            return
+        }
+        val rules = selectedWorkTimeRuleTable.items
+        if (rules.isEmpty()) {
+            notificationManager.showInfo("当前预设没有时间段", 2)
+            return
+        }
+
+        val modeCheckBox = CheckBox("模式").apply { styleClass.addAll("check-box-ui", "check-box-ui-main") }
+        val modeComboBox =
+            ComboBox<RunModeEnum>().apply {
+                styleClass.addAll("combo-box-ui", "combo-box-ui-normal")
+                items.setAll(runModeMap.keys.sortedBy { it.ordinal })
+                value = rules.firstOrNull()?.runMode ?: RunModeEnum.STANDARD
+                converter =
+                    object : StringConverter<RunModeEnum?>() {
+                        override fun toString(runModeEnum: RunModeEnum?): String = runModeEnum?.comment ?: ""
+
+                        override fun fromString(string: String?): RunModeEnum? = null
+                    }
+                isDisable = true
+            }
+        val strategyCheckBox = CheckBox("策略").apply { styleClass.addAll("check-box-ui", "check-box-ui-main") }
+        val strategyComboBox =
+            ComboBox<DeckStrategy>().apply {
+                styleClass.addAll("combo-box-ui", "combo-box-ui-normal")
+                converter =
+                    object : StringConverter<DeckStrategy?>() {
+                        override fun toString(strategy: DeckStrategy?): String = strategy?.name() ?: ""
+
+                        override fun fromString(string: String?): DeckStrategy? = null
+                    }
+                isDisable = true
+            }
+        fun updateStrategyItems(runMode: RunModeEnum?) {
+            val strategies =
+                if (modeCheckBox.isSelected && runMode != null) {
+                    runModeMap[runMode].orEmpty()
+                } else {
+                    DeckStrategyManager.deckStrategies
+                }
+            val selected = strategyComboBox.value
+            strategyComboBox.items.setAll(strategies)
+            strategyComboBox.value = selected?.takeIf { strategies.any { strategy -> strategy.id() == it.id() } }
+        }
+        modeCheckBox.selectedProperty().addListener { _, _, selected ->
+            modeComboBox.isDisable = !selected
+            updateStrategyItems(modeComboBox.value)
+        }
+        strategyCheckBox.selectedProperty().addListener { _, _, selected ->
+            strategyComboBox.isDisable = !selected
+            if (selected) updateStrategyItems(modeComboBox.value)
+        }
+        modeComboBox.valueProperty().addListener { _, _, runMode -> updateStrategyItems(runMode) }
+        updateStrategyItems(modeComboBox.value)
+
+        val deckPosCheckBox = CheckBox("卡组位").apply { styleClass.addAll("check-box-ui", "check-box-ui-main") }
+        val deckPosBoxes =
+            (1..9).map { deckPos ->
+                CheckBox(deckPos.toString()).apply {
+                    styleClass.addAll("check-box-ui", "check-box-ui-main")
+                    isSelected = rules.firstOrNull()?.deckPos?.contains(deckPos) == true
+                    isDisable = true
+                }
+            }
+        deckPosCheckBox.selectedProperty().addListener { _, _, selected ->
+            deckPosBoxes.forEach { it.isDisable = !selected }
+        }
+
+        val enableCheckBox = CheckBox("启用").apply { styleClass.addAll("check-box-ui", "check-box-ui-main") }
+        val enableValueCheckBox =
+            CheckBox("设为启用").apply {
+                styleClass.addAll("check-box-ui", "check-box-ui-main")
+                isSelected = true
+                isDisable = true
+            }
+        enableCheckBox.selectedProperty().addListener { _, _, selected -> enableValueCheckBox.isDisable = !selected }
+
+        val content =
+            GridPane().apply {
+                hgap = 12.0
+                vgap = 10.0
+                padding = Insets(8.0)
+                add(modeCheckBox, 0, 0)
+                add(modeComboBox, 1, 0)
+                add(strategyCheckBox, 0, 1)
+                add(strategyComboBox, 1, 1)
+                add(deckPosCheckBox, 0, 2)
+                add(
+                    HBox(8.0).apply {
+                        children.addAll(deckPosBoxes)
+                        alignment = Pos.CENTER_LEFT
+                    },
+                    1,
+                    2,
+                )
+                add(enableCheckBox, 0, 3)
+                add(enableValueCheckBox, 1, 3)
+            }
+
+        Modal(rootPane, "批量编辑时间段", content, {
+            val request = buildBulkEditRequest(
+                modeCheckBox,
+                modeComboBox,
+                strategyCheckBox,
+                strategyComboBox,
+                deckPosCheckBox,
+                deckPosBoxes,
+                enableCheckBox,
+                enableValueCheckBox,
+            ) ?: return@Modal
+            val validation = WorkTimeRuleBulkEdit.validate(rules, request)
+            when {
+                validation.missingSelectedFields -> {
+                    notificationManager.showInfo("请选择要批量修改的字段", 2)
+                    return@Modal
+                }
+
+                validation.unconfiguredRows.isNotEmpty() -> {
+                    notificationManager.showError(
+                        "存在未配置时间的行：${validation.unconfiguredRows.joinToString(",")}",
+                        3,
+                    )
+                    return@Modal
+                }
+
+                validation.incompatibleStrategyRows.isNotEmpty() -> {
+                    notificationManager.showError(
+                        "策略与第${validation.incompatibleStrategyRows.joinToString(",")}行模式不兼容",
+                        3,
+                    )
+                    return@Modal
+                }
+            }
+
+            val result = WorkTimeRuleBulkEdit.apply(rules, request)
+            workTimeRuleSet.setTimeRules(rules.toList())
+            selectedWorkTimeRuleTable.refresh()
+            workTimeRuleSetTable.refresh()
+            // Reuse the controller's complete schedule persistence path so the
+            // bulk edit updates both the stored rules and the active preset
+            // mapping without relying on a removed legacy helper.
+            save()
+            notificationManager.showSuccess("已批量更新${result.updatedCount}行", 2)
+        }, {}).show()
+    }
+
+    private fun buildBulkEditRequest(
+        modeCheckBox: CheckBox,
+        modeComboBox: ComboBox<RunModeEnum>,
+        strategyCheckBox: CheckBox,
+        strategyComboBox: ComboBox<DeckStrategy>,
+        deckPosCheckBox: CheckBox,
+        deckPosBoxes: List<CheckBox>,
+        enableCheckBox: CheckBox,
+        enableValueCheckBox: CheckBox,
+    ): WorkTimeRuleBulkEditRequest? {
+        val runMode =
+            if (modeCheckBox.isSelected) {
+                modeComboBox.value ?: run {
+                    notificationManager.showInfo("请选择模式", 2)
+                    return null
+                }
+            } else {
+                null
+            }
+        val strategy =
+            if (strategyCheckBox.isSelected) {
+                strategyComboBox.value ?: run {
+                    notificationManager.showInfo("请选择策略", 2)
+                    return null
+                }
+            } else {
+                null
+            }
+        val deckPos =
+            if (deckPosCheckBox.isSelected) {
+                deckPosBoxes.filter { it.isSelected }.map { it.text.toInt() }.toSet().also {
+                    if (it.isEmpty()) {
+                        notificationManager.showInfo("请至少选择一个卡组位", 2)
+                        return null
+                    }
+                }
+            } else {
+                null
+            }
+        return WorkTimeRuleBulkEditRequest(
+            runMode = runMode,
+            strategyId = strategy?.id(),
+            strategyAllowedRunModes = strategy?.runModes?.toSet(),
+            deckPos = deckPos,
+            enable = if (enableCheckBox.isSelected) enableValueCheckBox.isSelected else null,
+        )
     }
 
     private fun buildOperationPane(item: WorkTimeRule): Pane {

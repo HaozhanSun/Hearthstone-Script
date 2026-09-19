@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscript.bean.*
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.bean.single.repository.CustomRepository
 import club.xiaojiawei.hsscript.bean.single.repository.GiteeRepository
+import club.xiaojiawei.hsscript.status.WorkTimeRuleSlotStrategyNormalizer
 import club.xiaojiawei.hsscript.service.*
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -86,7 +87,7 @@ private fun defaultWorkTimeRule(
     )
 
 private fun defaultRandomAllDayWorkTimeRulesOne(): List<WorkTimeRule> =
-    listOf(
+    WorkTimeRuleSlotStrategyNormalizer.normalizeRulesForDefaultPreset(listOf(
         defaultWorkTimeRule("01:29", "02:03"),
         defaultWorkTimeRule("03:18", "03:55"),
         defaultWorkTimeRule("05:07", "05:31"),
@@ -100,7 +101,7 @@ private fun defaultRandomAllDayWorkTimeRulesOne(): List<WorkTimeRule> =
         defaultWorkTimeRule("19:31", "20:09"),
         defaultWorkTimeRule("21:28", "22:02"),
         defaultWorkTimeRule("23:43", "00:17"),
-    )
+    ))
 
 private fun defaultRandomAllDayWorkTimeRulesTwo(): List<WorkTimeRule> =
     listOf(
@@ -117,7 +118,11 @@ private fun defaultRandomAllDayWorkTimeRulesTwo(): List<WorkTimeRule> =
         defaultWorkTimeRule("19:38", "20:11"),
         defaultWorkTimeRule("21:33", "22:09"),
         defaultWorkTimeRule("23:26", "00:01"),
-    )
+    ).also { rules ->
+        WorkTimeRuleSlotStrategyNormalizer.normalize(
+            listOf(WorkTimeRuleSet("预设2", rules, WORK_TIME_RULE_PRESETS_TWO)),
+        )
+    }
 
 enum class ConfigEnum(
     val group: ConfigGroup,
@@ -621,6 +626,11 @@ enum class ConfigEnum(
      * 文件日志级别
      */
     FILE_LOG_LEVEL(group = DEV_CONFIG_GROUP, defaultValueInitializer = { Level.INFO.levelStr }),
+
+    /**
+     * Opt-in metadata-only process audit for controlled Hearthstone/Blizzard comparisons.
+     */
+    PROCESS_PRIVACY_AUDIT(group = DEV_CONFIG_GROUP, defaultValueInitializer = { FALSE_STR }),
 
     /**
      * 自动打开游戏数据分析页

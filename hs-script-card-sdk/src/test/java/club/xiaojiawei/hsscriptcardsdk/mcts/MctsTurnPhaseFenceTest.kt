@@ -73,4 +73,26 @@ class MctsTurnPhaseFenceTest {
             ),
         )
     }
+
+    @Test
+    fun `temporary mana may reopen minion play after the coin spell phase`() {
+        val fence = MctsTurnPhaseFence()
+        fence.observe(MctsActionOrderPhase.SPELL_PLAY)
+
+        assertFalse(
+            fence.allows(
+                MctsActionOrderPhase.MINION_PLAY,
+                isEndTurn = false,
+                endTurnLegal = true,
+            ),
+        )
+        assertTrue(
+            fence.allows(
+                MctsActionOrderPhase.MINION_PLAY,
+                isEndTurn = false,
+                endTurnLegal = true,
+                allowPhaseReopen = true,
+            ),
+        )
+    }
 }

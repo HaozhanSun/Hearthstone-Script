@@ -9,9 +9,11 @@ import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
+import club.xiaojiawei.hsscriptcardsdk.cardparser.ParsedCardActionFactory
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeNode
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -28,6 +30,55 @@ class PirateWarriorMctsGoldenScenarioTest {
         assertTrue(
             PirateWarriorMctsModel.isMandatoryAction(PlayAction({}, {}, distributor), war),
         )
+    }
+
+    @Test
+    fun `live treasure distributor makes hook n heave mandatory before a weapon`() {
+        val war = testWar(turn = 8, mana = 4)
+        val distributor = testCard(PirateWarriorMctsModel.TREASURE_DISTRIBUTOR, 1)
+        val hook = Card(requireNotNull(ParsedCardActionFactory.getOrCreate("CAP_105", "钩手拖拽"))()).apply {
+            entityId = "CAP_105-test"
+            cardId = PirateWarriorMctsModel.HOOK_N_HEAVE
+            entityName = cardId
+            cardType = CardTypeEnum.SPELL
+            cardRace = CardRaceEnum.UNKNOWN
+            cost = 2
+            action.belongCard = this
+        }
+        val weapon = testWeapon(PirateWarriorMctsModel.FRONTLINE_AXE, attack = 3, durability = 3)
+        war.addCard(distributor, war.me.playArea)
+        war.addCard(hook, war.me.handArea)
+        war.addCard(weapon, war.me.handArea)
+
+        val hookAction = PlayAction({}, {}, hook)
+        val weaponAction = PlayAction({}, {}, weapon)
+
+        assertTrue(PirateWarriorMctsModel.isMandatoryAction(hookAction, war))
+        assertFalse(PirateWarriorMctsModel.isMandatoryAction(weaponAction, war))
+    }
+
+    @Test
+    fun `hook n heave is illegal unless two friendly slots are available`() {
+        fun hookAction(war: War): PlayAction {
+            val hook = testCard(PirateWarriorMctsModel.HOOK_N_HEAVE, 2).apply {
+                cardType = CardTypeEnum.SPELL
+                cardRace = CardRaceEnum.UNKNOWN
+            }
+            war.addCard(hook, war.me.handArea)
+            return PlayAction({}, {}, hook)
+        }
+
+        val zeroSlots = testWar(turn = 5, mana = 2)
+        repeat(7) { index -> zeroSlots.addCard(testCard("BOARD_ZERO_$index", 1), zeroSlots.me.playArea) }
+        assertFalse(PirateWarriorMctsModel.isActionLegal(hookAction(zeroSlots), zeroSlots))
+
+        val oneSlot = testWar(turn = 5, mana = 2)
+        repeat(6) { index -> oneSlot.addCard(testCard("BOARD_ONE_$index", 1), oneSlot.me.playArea) }
+        assertFalse(PirateWarriorMctsModel.isActionLegal(hookAction(oneSlot), oneSlot))
+
+        val twoSlots = testWar(turn = 5, mana = 2)
+        repeat(5) { index -> twoSlots.addCard(testCard("BOARD_TWO_$index", 1), twoSlots.me.playArea) }
+        assertTrue(PirateWarriorMctsModel.isActionLegal(hookAction(twoSlots), twoSlots))
     }
 
     @Test
@@ -266,6 +317,68 @@ class PirateWarriorMctsGoldenScenarioTest {
         assertEquals(1, minionActions.count { PirateWarriorMctsModel.isActionLegal(it, war) })
         assertTrue(minionActions.any { PirateWarriorMctsModel.isActionLegal(it, war) })
         assertTrue(minionActions.all { PirateWarriorMctsModel.isDeferredAction(it, war) })
+    }
+
+    @Test
+    fun `treasure distributor attacks after other friendly pirates`() {
+        val war = testWar(turn = 4, mana = 0)
+        val distributor = testCard(PirateWarriorMctsModel.TREASURE_DISTRIBUTOR, 1, attack = 2).apply {
+            isExhausted = false
+        }
+        val otherPirate = testCard("OTHER_READY_PIRATE", 1, attack = 2).apply {
+            isExhausted = false
+        }
+        val rivalHero = testHero("DISTRIBUTOR_RIVAL_HERO", health = 20)
+        war.addCard(distributor, war.me.playArea)
+        war.addCard(otherPirate, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+
+        val distributorAttack = AttackAction({}, {}, distributor, targetEntityId = rivalHero.entityId, targetIsHero = true)
+
+        assertTrue(PirateAttackOrderPolicy.shouldDeferTreasureDistributorAttack(distributorAttack, war))
+        assertTrue(PirateWarriorMctsModel.isDeferredAction(distributorAttack, war))
+    }
+
+    @Test
+    fun `frontline axe minion trade is in the minion attack phase`() {
+        val war = frontlineAxeWar(heroHealth = 10, rivalHeroHealth = 30, minionHealth = 3)
+        val readyPirate = testCard("READY_BEFORE_AXE", 1, attack = 2).apply {
+            isExhausted = false
+        }
+        war.addCard(readyPirate, war.me.playArea)
+        val axeAttack = heroAttackActions(war).first { hitsRivalMinion(it, war) }
+
+        assertEquals(
+            MctsActionOrderPhase.MINION_ATTACK,
+            PirateWarriorMctsModel.actionOrderPhase(axeAttack, war),
+        )
+    }
+
+    @Test
+    fun `blastpowder engineer makes patches able to finish a pirate trade`() {
+        val war = testWar(turn = 4, mana = 0)
+        val engineer = testCard(PirateWarriorMctsModel.BLASTPOWDER_ENGINEER, 2, attack = 2).apply {
+            isExhausted = true
+        }
+        val patches = testCard(PirateWarriorMctsModel.PATCHES_THE_PIRATE, 1, attack = 2).apply {
+            isExhausted = false
+        }
+        val rivalHero = testHero("ENGINEER_RIVAL_HERO", health = 20)
+        val rivalMinion = testCard("ENGINEER_TARGET", 1, attack = 4).apply {
+            cardRace = CardRaceEnum.UNKNOWN
+            health = 3
+            isExhausted = true
+        }
+        war.addCard(engineer, war.me.playArea)
+        war.addCard(patches, war.me.playArea)
+        war.addCard(rivalHero, war.rival.playArea)
+        war.addCard(rivalMinion, war.rival.playArea)
+
+        val patchesAttack = AttackAction({}, {}, patches, targetEntityId = rivalMinion.entityId)
+
+        assertEquals(3, PirateWarriorMctsModel.effectivePirateAttack(patches, war))
+        assertTrue(PirateWarriorMctsModel.isActionLegal(patchesAttack, war))
+        assertTrue(PirateWarriorMctsModel.isMandatoryAction(patchesAttack, war))
     }
 
     @Test
