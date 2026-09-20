@@ -383,6 +383,90 @@ class PirateWarriorMctsModelTest {
     }
 
     @Test
+    fun `applause is a midgame draw breakpoint and not an opening hard rule`() {
+        val war = testWar(turn = 3, mana = 2)
+        war.addCard(typedMinion("BEAST_ON_BOARD", CardRaceEnum.PET), war.me.playArea)
+        war.addCard(typedMinion("PIRATE_ON_BOARD", CardRaceEnum.PIRATE), war.me.playArea)
+        val applause = spellCard(PirateWarriorMctsModel.APPLAUSE, cost = 2)
+        val action = PlayAction({}, {}, applause)
+
+        val valuation = PirateWarriorMctsModel.applauseDrawValuation(action, war)
+        assertEquals(2, valuation.currentTypes.size)
+        assertEquals(3, valuation.drawCount)
+        assertTrue(PirateWarriorMctsModel.actionPrior(action, war) >= 34.0)
+        assertEquals(
+            18.0,
+            PirateWarriorMctsModel.afterSimulatedAction(war, war.clone(), action).expectedReward,
+        )
+        assertFalse(PirateWarriorMctsModel.isMandatoryAction(action, war))
+
+        war.addCard(typedMinion("DRAGON_ON_BOARD", CardRaceEnum.DRAGON), war.me.playArea)
+        assertEquals(4, PirateWarriorMctsModel.applauseDrawValuation(action, war).drawCount)
+        assertTrue(PirateWarriorMctsModel.actionPrior(action, war) >= 42.0)
+    }
+
+    @Test
+    fun `mulligan removes applause and patches while retaining ordinary low-cost cards`() {
+        val strategy = HsPirateWarriorMctsDeckStrategy()
+        val applause = spellCard(PirateWarriorMctsModel.APPLAUSE, cost = 2)
+        val patches = testCard(PirateWarriorMctsModel.PATCHES_THE_PIRATE, cost = 1)
+        val keep = testCard("KEEP_ONE_COST_PIRATE", cost = 1)
+        val cards = hashSetOf(applause, patches, keep)
+
+        strategy.executeChangeCard(cards)
+
+        assertFalse(cards.contains(applause))
+        assertFalse(cards.contains(patches))
+        assertTrue(cards.contains(keep))
+    }
+
+    @Test
+    fun `going second original hand forces coin then ships cannon`() {
+        val war = testWar(turn = 1, mana = 1)
+        val cannon = testCard(PirateWarriorMctsModel.SHIPS_CANNON, cost = 2)
+        val pirate = testCard("OPENING_ONE_COST_PIRATE", cost = 1)
+        val coin = testCard("COIN", cost = 0).apply { isCoinCard = true }
+        war.addCard(cannon, war.me.handArea)
+        war.addCard(pirate, war.me.handArea)
+        war.addCard(coin, war.me.handArea)
+        PirateWarriorMctsModel.registerOpeningHandSnapshot(war, listOf(cannon, pirate))
+
+        val coinAction = PlayAction({}, {}, coin)
+        val cannonAction = PlayAction({}, {}, cannon)
+        assertEquals(
+            PirateWarriorMctsModel.OpeningCannonCoinStep.PLAY_COIN,
+            PirateWarriorMctsModel.openingCannonCoinStep(war),
+        )
+        assertTrue(PirateWarriorMctsModel.isMandatoryAction(coinAction, war))
+        assertFalse(PirateWarriorMctsModel.isMandatoryAction(cannonAction, war))
+
+        war.me.handArea.removeByEntityId(coin.entityId)
+        war.me.tempResources = 1
+        assertEquals(
+            PirateWarriorMctsModel.OpeningCannonCoinStep.PLAY_CANNON,
+            PirateWarriorMctsModel.openingCannonCoinStep(war),
+        )
+        assertTrue(PirateWarriorMctsModel.isMandatoryAction(cannonAction, war))
+        PirateWarriorMctsModel.clearOpeningHandSnapshot(war)
+    }
+
+    @Test
+    fun `opening coin exception fails closed without original one-cost pirate`() {
+        val war = testWar(turn = 1, mana = 1)
+        val cannon = testCard(PirateWarriorMctsModel.SHIPS_CANNON, cost = 2)
+        val coin = testCard("COIN", cost = 0).apply { isCoinCard = true }
+        war.addCard(cannon, war.me.handArea)
+        war.addCard(coin, war.me.handArea)
+        PirateWarriorMctsModel.registerOpeningHandSnapshot(war, listOf(cannon))
+
+        assertEquals(
+            PirateWarriorMctsModel.OpeningCannonCoinStep.NONE,
+            PirateWarriorMctsModel.openingCannonCoinStep(war),
+        )
+        PirateWarriorMctsModel.clearOpeningHandSnapshot(war)
+    }
+
+    @Test
     fun `quest reward is recognized and must be played before hero power`() {
         val war = testWar(turn = 9, mana = 6)
         val reward = testCard(PirateWarriorMctsModel.QUEST_REWARD, cost = 5).apply {
@@ -1091,4 +1175,13 @@ class PirateWarriorMctsModelTest {
         cardRace = CardRaceEnum.UNKNOWN
         isExhausted = false
     }
+
+    private fun typedMinion(cardId: String, race: CardRaceEnum, cost: Int = 0): Card =
+        testCard(cardId, cost).apply { cardRace = race }
+
+    private fun spellCard(cardId: String, cost: Int): Card =
+        testCard(cardId, cost).apply {
+            cardType = CardTypeEnum.SPELL
+            cardRace = CardRaceEnum.UNKNOWN
+        }
 }

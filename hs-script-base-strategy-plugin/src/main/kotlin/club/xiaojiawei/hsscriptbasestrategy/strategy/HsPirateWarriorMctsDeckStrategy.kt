@@ -22,7 +22,7 @@ class HsPirateWarriorMctsDeckStrategy : MCTSDeckStrategy() {
     override fun name(): String = PirateMctsStrategyVersion.displayName("海盗战")
 
     override fun description(): String =
-        "海盗战 MCTS ${PirateMctsStrategyVersion.REVISION}：未知卡牌可识别、艾瑞达蛮兵硬限制、前锋战斧只打必杀"
+        "海盗战 MCTS ${PirateMctsStrategyVersion.REVISION}：Coin→船载火炮开局例外、船载火炮 P0、掌声雷动起手换掉；未知卡牌可识别、艾瑞达蛮兵硬限制、前锋战斧只打必杀"
 
     override fun getRunMode(): Array<RunModeEnum> =
         arrayOf(RunModeEnum.WILD)
@@ -42,9 +42,13 @@ class HsPirateWarriorMctsDeckStrategy : MCTSDeckStrategy() {
         // draw with the same card ID cannot activate the opening exception.
         preMulliganHand = cards.toList()
         val patches = cards.filter { PirateWarriorMctsModel.isCard(it, PirateWarriorMctsModel.PATCHES_THE_PIRATE) }
-        cards.removeAll(patches.toSet())
+        val applause = cards.filter { PirateWarriorMctsModel.isCard(it, PirateWarriorMctsModel.APPLAUSE) }
+        cards.removeAll((patches + applause).toSet())
         if (patches.isNotEmpty()) {
             log.info { "海盗战 MCTS：起手直接换掉海盗帕奇斯 count=${patches.size}" }
+        }
+        if (applause.isNotEmpty()) {
+            log.info { "海盗战 MCTS：起手直接换掉掌声雷动 count=${applause.size}" }
         }
     }
 
@@ -57,13 +61,13 @@ class HsPirateWarriorMctsDeckStrategy : MCTSDeckStrategy() {
             war = war,
             event = "PIRATE_WARRIOR_MCTS_START",
             reason = "isolated model search started",
-            rule = "COIN>SHIP_CANNON_OPENING_EXCEPTION;QUEST_T1>P0_SHIP_CANNON>TREASURE_DISTRIBUTOR;PATCHES_BOTTOM",
+            rule = "COIN>SHIP_CANNON_OPENING_EXCEPTION;QUEST_T1>P0_SHIP_CANNON>TREASURE_DISTRIBUTOR;APPLAUSE_MULLIGAN;PATCHES_BOTTOM",
             priority = 0,
         )
         log.info {
             "海盗战 MCTS：开始搜索 turn=${war.me.turn} mana=${war.me.usableResource} " +
                 "hand=${war.me.handArea.cards.joinToString { it.cardId }} " +
-                "rules=COIN>SHIP_CANNON_OPENING_EXCEPTION;QUEST_REWARD_WAIT>QUEST_T1>P0_SHIP_CANNON>TREASURE_DISTRIBUTOR;PATCHES_BOTTOM;DIRECT_MINION_KILL;SAFE_HERO_ATTACK;TAUNT_SAFETY " +
+                "rules=COIN>SHIP_CANNON_OPENING_EXCEPTION;QUEST_REWARD_WAIT>QUEST_T1>P0_SHIP_CANNON>TREASURE_DISTRIBUTOR;APPLAUSE_MULLIGAN;PATCHES_BOTTOM;DIRECT_MINION_KILL;SAFE_HERO_ATTACK;TAUNT_SAFETY " +
                     "openingStep=${PirateWarriorMctsModel.openingCannonCoinStep(war)} version=${PirateMctsStrategyVersion.REVISION}"
         }
         return listOf(
