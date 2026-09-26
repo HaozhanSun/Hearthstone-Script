@@ -319,8 +319,32 @@ class ScreenStateRecoveryTest {
                     ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI to "选择套牌",
                     ScreenStateRoiSelector.RECONNECT_DIALOG_MESSAGE_ROI to dialogText,
                 ),
-            )?.screen,
+        )?.screen,
         )
+    }
+
+    @Test
+    fun `saved reconnect error screenshot outranks underlying deck title when dialog OCR is garbled`() {
+        val modal = loadFixture("reconnect-failure-dialog-over-deck-selection.png")
+        val ordinaryDeck = loadFixture("deck-selection-screen.png")
+        // Exact ROI transcript at hs_script.log:7833: the visible modal ROIs
+        // were OCR-noise/empty while the title behind it was read as a deck page.
+        val deployedOcr = mapOf(
+            ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI to "选择套牌个",
+            ScreenStateRoiSelector.RECONNECT_DIALOG_TITLE_ROI to "一人一",
+            ScreenStateRoiSelector.RECONNECT_DIALOG_STATUS_ROI to "|AN二:括",
+            ScreenStateRoiSelector.RECONNECT_DIALOG_MESSAGE_ROI to "人同人",
+        )
+
+        val blocked = ScreenStateRecovery.recoveryTransitionForImageForTest(modal, "", deployedOcr)
+        assertEquals("RECONNECT_FAILURE", blocked?.screen)
+        assertEquals(ModeEnum.LOGIN, blocked?.mode)
+        assertFalse(blocked?.enterStrategy ?: true)
+        assertEquals("RESTART_CLIENT", blocked?.action)
+
+        val actualDeck = ScreenStateRecovery.recoveryTransitionForImageForTest(ordinaryDeck, "", deployedOcr)
+        assertEquals("DECK_SELECTION", actualDeck?.screen)
+        assertEquals("START_MATCHING", actualDeck?.action)
     }
 
     private fun loadFixture(name: String) = ImageIO.read(

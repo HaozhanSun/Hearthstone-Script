@@ -66,6 +66,7 @@ object ScreenStateRecovery {
     private val reconnectAcceptedAt = AtomicLong(0L)
     private val reconnectProbeGeneration = AtomicLong(0L)
     private val offlineReconnectRecovery = OfflineReconnectRecovery()
+    private val reconnectFailureRecoveryPolicy = ReconnectFailureRecoveryPolicy()
     private val slowReconnectWarningObservedAt = AtomicLong(0L)
     /**
      * A visual loading signal can be the offline/reconnect dialog even when
@@ -112,6 +113,7 @@ object ScreenStateRecovery {
         val loadingCentralDarkRatio: Double,
         val resultContinueGrayLightRatio: Double,
         val resultBannerLowSaturationRatio: Double,
+        val reconnectFailureDialogVisual: Boolean = false,
     ) {
         override fun toString(): String =
             "hash=${java.lang.Long.toUnsignedString(sampleHash, 16)} " +
@@ -119,13 +121,15 @@ object ScreenStateRecovery {
                 "blueRatio=${"%.3f".format(Locale.ROOT, blueRatio)} " +
                 "loadingCentralDark=${"%.3f".format(Locale.ROOT, loadingCentralDarkRatio)} " +
                 "resultContinueGrayLight=${"%.3f".format(Locale.ROOT, resultContinueGrayLightRatio)} " +
-                "resultBannerLowSaturation=${"%.3f".format(Locale.ROOT, resultBannerLowSaturationRatio)}"
+                "resultBannerLowSaturation=${"%.3f".format(Locale.ROOT, resultBannerLowSaturationRatio)} " +
+                "reconnectFailureDialog=$reconnectFailureDialogVisual"
     }
 
     private data class RegionSignal(
         val grayLightRatio: Double,
         val lowSaturationRatio: Double,
         val darkRatio: Double,
+        val warmRatio: Double,
     )
 
     private data class Detection(
@@ -444,7 +448,7 @@ object ScreenStateRecovery {
                     }
                     roi.name to ocrScreenRoi(crop(capture.image, roi.bounds), tessData, targeted = true)
                 }
-            if (targetedScreenDetection(targeted) != null) {
+            if (targetedScreenDetection(targeted, capture.visual) != null) {
                 return@runCatching OcrEvidence(targeted.values.joinToString(separator = ""), targeted)
             }
 
@@ -572,6 +576,7 @@ object ScreenStateRecovery {
         val continueSignal = sampleRegion(image, 0.41, 0.59, 0.91, 0.98)
         val bannerSignal = sampleRegion(image, 0.38, 0.62, 0.52, 0.72)
         val loadingCenterSignal = sampleRegion(image, 0.18, 0.82, 0.08, 0.92)
+        val reconnectDialogPanelSignal = sampleRegion(image, 0.32, 0.68, 0.39, 0.62)
         return VisualSignature(
             sampleHash = hash,
             warmRatio = if (samples == 0) 0.0 else warm.toDouble() / samples,
@@ -579,6 +584,11 @@ object ScreenStateRecovery {
             loadingCentralDarkRatio = loadingCenterSignal.darkRatio,
             resultContinueGrayLightRatio = continueSignal.grayLightRatio,
             resultBannerLowSaturationRatio = bannerSignal.lowSaturationRatio,
+            reconnectFailureDialogVisual = looksLikeReconnectFailureDialogVisual(
+                lowSaturationRatio = reconnectDialogPanelSignal.lowSaturationRatio,
+                darkRatio = reconnectDialogPanelSignal.darkRatio,
+                warmRatio = reconnectDialogPanelSignal.warmRatio,
+            ),
         )
     }
 
@@ -597,6 +607,7 @@ object ScreenStateRecovery {
         var grayLight = 0
         var lowSaturation = 0
         var dark = 0
+        var warm = 0
         var y = y0
         while (y < y1) {
             var x = x0
@@ -611,16 +622,18 @@ object ScreenStateRecovery {
                 if (maximum - minimum <= 35) lowSaturation++
                 if (maximum - minimum <= 35 && average >= 180) grayLight++
                 if (average < 70) dark++
+                if (r > 70 && r > g * 1.12 && r > b * 1.12) warm++
                 samples++
                 x += 2
             }
             y += 2
         }
-        if (samples == 0) return RegionSignal(0.0, 0.0, 0.0)
+        if (samples == 0) return RegionSignal(0.0, 0.0, 0.0, 0.0)
         return RegionSignal(
             grayLightRatio = grayLight.toDouble() / samples,
             lowSaturationRatio = lowSaturation.toDouble() / samples,
             darkRatio = dark.toDouble() / samples,
+            warmRatio = warm.toDouble() / samples,
         )
     }
 
@@ -628,7 +641,7 @@ object ScreenStateRecovery {
         detect(OcrEvidence(ocrText, emptyMap()), visual)
 
     private fun detect(evidence: OcrEvidence, visual: VisualSignature): Detection? {
-        targetedScreenDetection(evidence.targeted)?.let { return it }
+        targetedScreenDetection(evidence.targeted, visual)?.let { return it }
 
         val ocrText = evidence.text
         val text = ocrText.lowercase(Locale.ROOT)
@@ -723,7 +736,7 @@ object ScreenStateRecovery {
         return null
     }
 
-    private fun targetedScreenDetection(targeted: Map<String, String>): Detection? {
+    private fun targetedScreenDetection(targeted: Map<String, String>, visual: VisualSignature): Detection? {
         val reconnectDialogText = listOf(
             targeted[ScreenStateRoiSelector.RECONNECT_DIALOG_TITLE_ROI].orEmpty(),
             targeted[ScreenStateRoiSelector.RECONNECT_DIALOG_STATUS_ROI].orEmpty(),
@@ -740,6 +753,18 @@ object ScreenStateRecovery {
         // prevents an OCR spill from the deck title into the traditional-mode
         // branch (or vice versa) from changing the recovery state.
         val deckTitle = targeted[ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI].orEmpty()
+        // The deployed 2026-09-26 capture had the exact deck title behind a
+        // centered, dark-gray non-reconnectable modal. OCR garbled the dialog
+        // ROIs, so the underlying deck title incorrectly won. Require both
+        // that screen-specific title anchor and the distinctive modal panel.
+        if (looksLikeDeckSelectionTitleText(deckTitle) && visual.reconnectFailureDialogVisual) {
+            return Detection(
+                ScreenKind.RECONNECT_FAILURE,
+                ModeEnum.LOGIN,
+                96,
+                "deck-underlay-centered-reconnect-failure-visual",
+            )
+        }
         if (looksLikeDeckSelectionTitleText(deckTitle)) {
             return Detection(
                 ScreenKind.DECK_SELECTION,
@@ -806,6 +831,13 @@ object ScreenStateRecovery {
             text.contains("请再试") ||
             text.contains("请重试")
     }
+
+    /** OCR-free modal fallback, gated by the dedicated deck-title anchor. */
+    internal fun looksLikeReconnectFailureDialogVisual(
+        lowSaturationRatio: Double,
+        darkRatio: Double,
+        warmRatio: Double,
+    ): Boolean = lowSaturationRatio >= 0.82 && darkRatio >= 0.74 && warmRatio <= 0.10
 
     private fun normalizedScreenText(ocrText: String): String =
         ocrText.lowercase(Locale.ROOT).replace(Regex("[\\s，。、“”‘’：:！!？?]"), "")
@@ -1079,9 +1111,30 @@ object ScreenStateRecovery {
                 ScreenKind.RESULT -> "DISMISS_STALE_RESULT"
                 ScreenKind.MATCHMAKING -> "WAIT_FOR_GAMEPLAY"
                 ScreenKind.RECONNECT -> "CLICK_RECONNECT"
-                ScreenKind.RECONNECT_FAILURE -> "DISMISS_RECOVERY_DIALOG"
+                ScreenKind.RECONNECT_FAILURE -> "RESTART_CLIENT"
                 ScreenKind.RECONNECT_SPINNER -> "WAIT_OR_CANCEL_RECONNECT"
                 ScreenKind.LOADING -> "WAIT_FOR_CLIENT"
+            },
+        )
+    }
+
+    internal fun recoveryTransitionForImageForTest(
+        image: BufferedImage,
+        ocrText: String,
+        targeted: Map<String, String>,
+    ): RecoveryTransitionForTest? = detect(
+        OcrEvidence(ocrText, targeted),
+        visualSignature(image),
+    )?.let { detection ->
+        RecoveryTransitionForTest(
+            screen = detection.kind.code,
+            mode = detection.mode,
+            enterStrategy = detection.kind != ScreenKind.DECK_SELECTION &&
+                detection.kind != ScreenKind.RECONNECT_FAILURE,
+            action = when (detection.kind) {
+                ScreenKind.DECK_SELECTION -> "START_MATCHING"
+                ScreenKind.RECONNECT_FAILURE -> "RESTART_CLIENT"
+                else -> "OTHER"
             },
         )
     }
@@ -1218,9 +1271,25 @@ object ScreenStateRecovery {
     }
 
     private fun apply(detection: Detection): Boolean {
-        if (WarEx.inWar) {
+        // A strongly identified cannot-reconnect modal is authoritative over a
+        // stale in-game flag: that match can no longer be resumed in-place.
+        if (WarEx.inWar && detection.kind != ScreenKind.RECONNECT_FAILURE) {
             log.warn { "SCREEN_RECOVERY_SKIPPED reason=war-started detected=${detection.kind.code}" }
             return false
+        }
+        if (detection.kind in setOf(
+                ScreenKind.HOME,
+                ScreenKind.TOURNAMENT,
+                ScreenKind.DECK_SELECTION,
+                ScreenKind.MATCHMAKING,
+                ScreenKind.RESULT,
+                ScreenKind.GAME_MODE,
+                ScreenKind.COLLECTION,
+                ScreenKind.PACK_OPENING,
+                ScreenKind.SHOP_OVERLAY,
+            )
+        ) {
+            reconnectFailureRecoveryPolicy.onStartupConfirmed()
         }
         if (detection.kind != ScreenKind.LOADING) {
             slowReconnectWarningObservedAt.set(0L)
@@ -1390,17 +1459,42 @@ object ScreenStateRecovery {
             }
 
             ScreenKind.RECONNECT_FAILURE -> {
-                // Dismiss only the known recovery dialog. Do not dispatch the
-                // reconnect click and do not enter any credential/login flow.
+                // This dialog explicitly says the game cannot reconnect. It
+                // is not a dismiss-and-continue state: hard-restart the client
+                // through the established Core path, then let GameStarter do
+                // the normal process handoff and bounded startup screen probe.
                 Mode.recover(ModeEnum.LOGIN, "visible-reconnect-failure", enterStrategy = false)
                 EXTRA_THREAD_POOL.schedule({
-                        if (LifecycleTrace.recoveryCascadeSuppressed()) {
-                            log.info { "SCREEN_RECOVERY_RECONNECT_FAILURE_SKIPPED reason=terminal-pause-fence" }
-                        } else if ((WorkTimeListener.working || PauseStatus.isAutomaticPause) &&
-                            PauseStatus.canRunAutomaticRecovery() && !WarEx.inWar
+                    if (LifecycleTrace.recoveryCascadeSuppressed()) {
+                        log.info { "SCREEN_RECOVERY_RECONNECT_FAILURE_SKIPPED reason=terminal-pause-fence" }
+                    } else if ((WorkTimeListener.working || PauseStatus.isAutomaticPause) &&
+                        PauseStatus.canRunAutomaticRecovery()
                     ) {
-                        LoginModeStrategy.RECONNECT_RECOVERY_EXIT_RECT.lClick(false)
-                        log.warn { "SCREEN_RECOVERY_APPLIED screen=RECONNECT_FAILURE action=DISMISS_RECOVERY_DIALOG" }
+                        val recovery = reconnectFailureRecoveryPolicy.observeFailure(System.currentTimeMillis())
+                        when (recovery.decision) {
+                            ReconnectFailureRecoveryPolicy.Decision.RESTART_CLIENT -> {
+                                log.warn {
+                                    "SCREEN_RECOVERY_APPLIED screen=RECONNECT_FAILURE action=RESTART_CLIENT " +
+                                        "reason=cannot-reconnect-dialog attempt=${recovery.attempt} " +
+                                        "maxAttempts=${ReconnectFailureRecoveryPolicy.DEFAULT_MAX_RESTARTS}"
+                                }
+                                Core.restart()
+                            }
+                            ReconnectFailureRecoveryPolicy.Decision.WAIT_FOR_RESTART -> log.info {
+                                "SCREEN_RECOVERY_RECONNECT_FAILURE_WAIT reason=restart-cooldown " +
+                                    "attempt=${recovery.attempt} " +
+                                    "cooldownMs=${ReconnectFailureRecoveryPolicy.DEFAULT_RETRY_COOLDOWN_MS}"
+                            }
+                            ReconnectFailureRecoveryPolicy.Decision.PAUSE_AUTOMATION -> {
+                                PauseStatus.setAutomaticPause(true)
+                                log.error {
+                                    "SCREEN_RECOVERY_RECONNECT_FAILURE_PAUSED " +
+                                        "reason=restart-attempts-exhausted " +
+                                        "attempts=${recovery.attempt} " +
+                                        "windowMs=${ReconnectFailureRecoveryPolicy.DEFAULT_ATTEMPT_WINDOW_MS}"
+                                }
+                            }
+                        }
                     } else {
                         log.info { "SCREEN_RECOVERY_RECONNECT_FAILURE_SKIPPED reason=state-changed" }
                     }
