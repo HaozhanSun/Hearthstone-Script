@@ -1,0 +1,14 @@
+Observed production sequence, kept with the exact after-win screenshot regression:
+
+Power.log: D:\Hearthstone\Logs\Hearthstone_2026_09_26_13_00_48\Power.log:11048
+D 13:10:01.6235333 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=WON
+Power.log: D:\Hearthstone\Logs\Hearthstone_2026_09_26_13_00_48\Power.log:11060-11061
+D 13:10:01.6235333 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+D 13:10:01.6235333 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE
+
+Modal screenshot captured later:
+debug-20260926-131221-736-screen-recovery-c3e122a8-7e06-40b2-b725-8b195eca9981.png
+hs_script.log: C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script Beta\log\hs_script.log:12646
+2026-09-26 13:12:30.620 SCREEN_RECOVERY_OBSERVATION provider=LEGACY roiEvidence=screen-state-deck-selection-title=选择套牌个;screen-state-reconnect-dialog-title=一人一;screen-state-reconnect-dialog-status=|AN;screen-state-reconnect-dialog-message=<empty> detected=DECK_SELECTION confidence=100 evidence=deck-selection-title-roi
+hs_script.log: same file:12653
+2026-09-26 13:12:31.115 SCREEN_RECOVERY_APPLIED screen=DECK_SELECTION next=START_MATCHING

@@ -347,6 +347,33 @@ class ScreenStateRecoveryTest {
         assertEquals("START_MATCHING", actualDeck?.action)
     }
 
+    @Test
+    fun `second reconnect modal after authoritative win does not return to deck selection`() {
+        val evidence = requireNotNull(
+            javaClass.getResourceAsStream("/offline-ocr/screen-recovery/won-then-reconnect-modal-evidence.txt"),
+        ).bufferedReader().use { it.readText() }
+        val ownWin = evidence.indexOf("PLAYSTATE value=WON")
+        val gameOver = evidence.indexOf("STEP value=FINAL_GAMEOVER")
+        val modalCapture = evidence.indexOf("debug-20260926-131221-736-screen-recovery-c3e122a8")
+        assertTrue(ownWin >= 0 && gameOver > ownWin && modalCapture > gameOver)
+
+        // This is the second deployed capture, taken after the authoritative
+        // WON/FINAL_GAMEOVER markers. At hs_script.log:12646 the same image was
+        // OCRed as a deck title plus noise and incorrectly selected DECK_SELECTION.
+        val afterWinModal = loadFixture("reconnect-failure-after-won-modal.png")
+        val deployedOcr = mapOf(
+            ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI to "选择套牌个",
+            ScreenStateRoiSelector.RECONNECT_DIALOG_TITLE_ROI to "一人一",
+            ScreenStateRoiSelector.RECONNECT_DIALOG_STATUS_ROI to "|AN",
+            ScreenStateRoiSelector.RECONNECT_DIALOG_MESSAGE_ROI to "",
+        )
+        val transition = ScreenStateRecovery.recoveryTransitionForImageForTest(afterWinModal, "", deployedOcr)
+        assertEquals("RECONNECT_FAILURE", transition?.screen)
+        assertEquals(ModeEnum.LOGIN, transition?.mode)
+        assertFalse(transition?.enterStrategy ?: true)
+        assertEquals("RESTART_CLIENT", transition?.action)
+    }
+
     private fun loadFixture(name: String) = ImageIO.read(
         requireNotNull(javaClass.getResourceAsStream("/offline-ocr/screen-recovery/$name")),
     )
