@@ -295,8 +295,7 @@ class GameStarter : AbstractStarter() {
     }
 
     private fun startupHandshakeConfirmed(): Boolean {
-        val mode = Mode.currMode
-        return WarEx.inWar || (mode != null && mode != ModeEnum.STARTUP && mode != ModeEnum.LOGIN)
+        return GameStartupHandoffPolicy.startupHandshakeConfirmed(WarEx.inWar, Mode.currMode)
     }
 
     /**
@@ -367,7 +366,9 @@ class GameStarter : AbstractStarter() {
                     }
                     Thread.sleep(1_000L)
                 }
-                if (!startupHandshakeConfirmed()) {
+                if (GameStartupHandoffPolicy.onHandshakeTimeout(startupHandshakeConfirmed()) ==
+                    GameStartupHandoffPolicy.HandshakeTimeoutDecision.AUTOMATIC_PAUSE
+                ) {
                     log.error {
                         "GAME_STARTUP_STOPPED action=AUTOMATIC_PAUSE reason=handshake-timeout " +
                             "timeoutMs=$STARTUP_HANDSHAKE_TIMEOUT_MS " +
@@ -438,24 +439,19 @@ class GameStarter : AbstractStarter() {
                         }
                         return@execute
                     }
-                    if (GameStartupHandoffPolicy.shouldDeferStartupScreenProbe(
-                            powerLogAttached = powerLog != null,
-                            powerLogLength = powerLogLength,
-                            decision = startupProbeDecision,
-                        )
-                    ) {
-                        log.info {
-                            "STARTUP_SCREEN_PROBE_DEFERRED reason=power-log-not-ready " +
-                                "attached=${powerLog != null} length=$powerLogLength"
-                        }
-                        Thread.sleep(2_000L)
-                        continue
-                    }
                     when (startupProbeDecision) {
                         StartupScreenRecoveryPolicy.Decision.DEFER_NORMAL_FLOW -> {
                             return@execute
                         }
                         StartupScreenRecoveryPolicy.Decision.WAIT -> Thread.sleep(1_000L)
+                        StartupScreenRecoveryPolicy.Decision.FINISHED -> {
+                            log.warn {
+                                "STARTUP_SCREEN_PROBE_FINISHED reason=bounded-probe-window " +
+                                    "elapsedMs=${now - probeStartedAt} attempts=$attempt " +
+                                    "powerLog=${powerLog?.path() ?: "none"} powerLogLength=$powerLogLength"
+                            }
+                            return@execute
+                        }
                         StartupScreenRecoveryPolicy.Decision.PROBE -> {
                             attempt++
                             val noProgressMs = now - lastPowerLogProgressAt

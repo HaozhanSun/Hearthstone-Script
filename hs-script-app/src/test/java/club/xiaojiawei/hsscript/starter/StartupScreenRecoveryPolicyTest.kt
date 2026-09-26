@@ -5,18 +5,41 @@ import kotlin.test.assertEquals
 
 class StartupScreenRecoveryPolicyTest {
     @Test
-    fun `first probe is allowed after three seconds`() {
+    fun `first probe is allowed after upstream startup grace even with an empty current log`() {
         assertEquals(
             StartupScreenRecoveryPolicy.Decision.PROBE,
-            StartupScreenRecoveryPolicy.decide(3_000L, 3_000L, false, false),
+            StartupScreenRecoveryPolicy.decide(
+                StartupScreenRecoveryPolicy.INITIAL_PROBE_DELAY_MS,
+                StartupScreenRecoveryPolicy.INITIAL_PROBE_DELAY_MS,
+                false,
+                false,
+            ),
         )
     }
 
     @Test
-    fun `later probe waits for thirty seconds without Power log progress`() {
+    fun `retry probe follows bounded two second no-progress interval`() {
         assertEquals(
             StartupScreenRecoveryPolicy.Decision.PROBE,
-            StartupScreenRecoveryPolicy.decide(33_000L, 30_000L, false, true),
+            StartupScreenRecoveryPolicy.decide(
+                StartupScreenRecoveryPolicy.INITIAL_PROBE_DELAY_MS + StartupScreenRecoveryPolicy.PROBE_RETRY_INTERVAL_MS,
+                StartupScreenRecoveryPolicy.PROBE_RETRY_INTERVAL_MS,
+                false,
+                true,
+            ),
+        )
+    }
+
+    @Test
+    fun `probe retries stop at the upstream fifteen second bound`() {
+        assertEquals(
+            StartupScreenRecoveryPolicy.Decision.FINISHED,
+            StartupScreenRecoveryPolicy.decide(
+                StartupScreenRecoveryPolicy.MAX_PROBE_WINDOW_MS,
+                StartupScreenRecoveryPolicy.PROBE_RETRY_INTERVAL_MS,
+                false,
+                true,
+            ),
         )
     }
 

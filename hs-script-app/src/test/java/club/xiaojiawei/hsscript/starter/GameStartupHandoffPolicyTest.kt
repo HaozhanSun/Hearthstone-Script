@@ -1,5 +1,6 @@
 package club.xiaojiawei.hsscript.starter
 
+import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -25,34 +26,26 @@ class GameStartupHandoffPolicyTest {
     }
 
     @Test
-    fun `startup screen probe waits for readable Power log content`() {
-        assertFalse(GameStartupHandoffPolicy.startupScreenProbeReady(false, 0L))
-        assertFalse(GameStartupHandoffPolicy.startupScreenProbeReady(true, 0L))
-        assertFalse(GameStartupHandoffPolicy.startupScreenProbeReady(true, -1L))
-        assertTrue(GameStartupHandoffPolicy.startupScreenProbeReady(true, 1L))
+    fun `verified Home mode confirms startup while the current session log is still empty`() {
+        assertTrue(GameStartupHandoffPolicy.startupHandshakeConfirmed(false, ModeEnum.HUB))
+        assertFalse(GameStartupHandoffPolicy.startupHandshakeConfirmed(false, ModeEnum.STARTUP))
+        assertFalse(GameStartupHandoffPolicy.startupHandshakeConfirmed(false, ModeEnum.LOGIN))
+        assertFalse(GameStartupHandoffPolicy.startupHandshakeConfirmed(false, null))
+        assertTrue(GameStartupHandoffPolicy.startupHandshakeConfirmed(true, null))
     }
 
     @Test
-    fun `startup screen probe remains blocked while Power log is empty`() {
-        assertTrue(
-            GameStartupHandoffPolicy.shouldDeferStartupScreenProbe(
-                powerLogAttached = true,
-                powerLogLength = 0L,
-                decision = StartupScreenRecoveryPolicy.Decision.WAIT,
+    fun `recognized Home prevents handshake timeout pause while unknown screen remains fail closed`() {
+        assertEquals(
+            GameStartupHandoffPolicy.HandshakeTimeoutDecision.NO_PAUSE_NEEDED,
+            GameStartupHandoffPolicy.onHandshakeTimeout(
+                GameStartupHandoffPolicy.startupHandshakeConfirmed(false, ModeEnum.HUB),
             ),
         )
-        assertTrue(
-            GameStartupHandoffPolicy.shouldDeferStartupScreenProbe(
-                powerLogAttached = true,
-                powerLogLength = 0L,
-                decision = StartupScreenRecoveryPolicy.Decision.PROBE,
-            ),
-        )
-        assertFalse(
-            GameStartupHandoffPolicy.shouldDeferStartupScreenProbe(
-                powerLogAttached = true,
-                powerLogLength = 1L,
-                decision = StartupScreenRecoveryPolicy.Decision.PROBE,
+        assertEquals(
+            GameStartupHandoffPolicy.HandshakeTimeoutDecision.AUTOMATIC_PAUSE,
+            GameStartupHandoffPolicy.onHandshakeTimeout(
+                GameStartupHandoffPolicy.startupHandshakeConfirmed(false, null),
             ),
         )
     }

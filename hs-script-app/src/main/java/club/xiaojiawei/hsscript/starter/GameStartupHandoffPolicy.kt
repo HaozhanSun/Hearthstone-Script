@@ -1,5 +1,7 @@
 package club.xiaojiawei.hsscript.starter
 
+import club.xiaojiawei.hsscriptbase.enums.ModeEnum
+
 /**
  * Keeps the fast upstream startup path while filtering a one-sample Windows
  * process/window race at the handoff boundary.
@@ -16,30 +18,17 @@ internal object GameStartupHandoffPolicy {
 
     enum class Decision { WAIT, HANDOFF, RETRY }
 
+    enum class HandshakeTimeoutDecision { NO_PAUSE_NEEDED, AUTOMATIC_PAUSE }
+
     data class Evaluation(val state: State, val decision: Decision)
 
-    /**
-     * A newly discovered client can have a visible window before Power.log
-     * contains any current-session data. Do not run the expensive visual
-     * recovery path during that short startup interval.
-     */
-    fun startupScreenProbeReady(powerLogAttached: Boolean, powerLogLength: Long): Boolean =
-        powerLogAttached && powerLogLength > 0L
+    /** A confirmed visible menu can finish startup before Power.log becomes non-empty. */
+    fun startupHandshakeConfirmed(inWar: Boolean, mode: ModeEnum?): Boolean =
+        inWar || (mode != null && mode != ModeEnum.STARTUP && mode != ModeEnum.LOGIN)
 
-    /**
-     * Never run the expensive startup visual recovery while the current
-     * Power.log is absent or empty.  A due probe is not evidence that the
-     * client is stale: the client can still be loading normally.  The normal
-     * listener/handoff path owns this interval; later lifecycle recovery has
-     * its own bounded stale-state policy once the log is usable.
-     */
-    fun shouldDeferStartupScreenProbe(
-        powerLogAttached: Boolean,
-        powerLogLength: Long,
-        decision: StartupScreenRecoveryPolicy.Decision,
-    ): Boolean =
-        !startupScreenProbeReady(powerLogAttached, powerLogLength) &&
-            decision != StartupScreenRecoveryPolicy.Decision.DEFER_NORMAL_FLOW
+    fun onHandshakeTimeout(startupConfirmed: Boolean): HandshakeTimeoutDecision =
+        if (startupConfirmed) HandshakeTimeoutDecision.NO_PAUSE_NEEDED
+        else HandshakeTimeoutDecision.AUTOMATIC_PAUSE
 
     fun observe(
         state: State,
