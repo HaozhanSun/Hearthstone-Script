@@ -6,11 +6,6 @@ internal object WindowMessageClickPolicy {
         ?.takeIf { it.isNotBlank() }
         ?.let { runCatching { java.nio.file.Path.of(it).fileName?.toString() }.getOrNull() }
 
-    fun isExpectedImage(expectedExecutable: String, actualImagePath: String?): Boolean {
-        val actualExecutable = executableName(actualImagePath)
-        return actualExecutable != null && actualExecutable.equals(expectedExecutable, ignoreCase = true)
-    }
-
     fun isInsideClient(x: Int, y: Int, width: Int, height: Int): Boolean =
         x >= 0 && y >= 0 && x < width && y < height && x <= 0xffff && y <= 0xffff
 

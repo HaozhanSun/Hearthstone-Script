@@ -3,7 +3,6 @@ package club.xiaojiawei.hsscript.utils
 import club.xiaojiawei.hsscript.bean.isDiscoverCardThread
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.config.DRIVER_LOCK
-import club.xiaojiawei.hsscript.consts.PLATFORM_PROGRAM_NAME
 import club.xiaojiawei.hsscript.dll.CSystemDll
 import club.xiaojiawei.hsscript.dll.Win32ProcessImagePath
 import club.xiaojiawei.hsscript.dll.User32ExDll
@@ -1129,13 +1128,25 @@ object MouseUtil {
         User32.INSTANCE.GetWindowThreadProcessId(hwnd, ownerPid)
         val ownerImagePath = Win32ProcessImagePath.query(ownerPid.value)
         val ownerImage = WindowMessageClickPolicy.executableName(ownerImagePath)
-        if (!WindowMessageClickPolicy.isExpectedImage(PLATFORM_PROGRAM_NAME, ownerImagePath)) {
+        val configuredPlatformPath = ConfigUtil.getString(ConfigEnum.PLATFORM_PATH)
+        val signatureEvidence = ownerImagePath?.let(WindowsAuthenticodeEvidenceProvider::inspect)
+        val ownerDecision = BattleNetOwnerIdentityPolicy.evaluate(
+            configuredPlatformPath,
+            ownerImagePath,
+            signatureEvidence,
+        )
+        if (!ownerDecision.allowed) {
             log.warn {
                 "PLATFORM_MESSAGE_STARTUP_BLOCKED reason=launcher-window-owner-unverified " +
-                    "hwnd=$hwnd ownerPid=${ownerPid.value} " +
-                    "ownerExecutable=${ownerImage ?: "unknown"}"
+                    "detail=${ownerDecision.reason} hwnd=$hwnd ownerPid=${ownerPid.value} " +
+                    "ownerExecutable=${ownerImage ?: "unknown"} signatureStatus=${signatureEvidence?.status ?: "unknown"}"
             }
             return false
+        }
+        log.info {
+            "PLATFORM_MESSAGE_OWNER_VERIFIED hwnd=$hwnd ownerPid=${ownerPid.value} " +
+                "ownerExecutable=${ownerImage ?: "unknown"} signer=${signatureEvidence?.signerSimpleName} " +
+                "identity=${ownerDecision.reason}"
         }
 
         val clientRect = WinDef.RECT()

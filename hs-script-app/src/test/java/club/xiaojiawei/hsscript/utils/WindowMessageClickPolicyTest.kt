@@ -3,9 +3,9 @@ package club.xiaojiawei.hsscript.utils
 import club.xiaojiawei.hsscript.dll.Win32ProcessImagePath
 import java.nio.file.Path
 import kotlin.test.Test
-import kotlin.test.assertNotNull
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
@@ -13,21 +13,59 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 class WindowMessageClickPolicyTest {
     @Test
     fun `startup owner validation uses actual image path instead of command line`() {
-        val misleadingCommand = "C:\\Users\\tester\\AppData\\Local\\Temp\\temp_a6289c43bb612c7b933dbbff6b9cfd03.exe"
-        assertTrue(
-            WindowMessageClickPolicy.isExpectedImage(
-                "Battle.net.exe",
-                "C:\\Users\\tester\\Battle.net\\Battle.net.exe",
-            ),
+        val configuredImage = "C:\\Users\\tester\\Battle.net\\Battle.net.exe"
+        val selfUpdateImage = "C:\\Users\\tester\\Battle.net\\temp_a6289c43bb612c7b933dbbff6b9cfd03.exe"
+        val verifiedBattleNet = AuthenticodeEvidence(
+            status = "Valid",
+            signerSimpleName = "Blizzard Entertainment, Inc.",
+            originalFilename = "Battle.net.exe",
+            productName = "Battle.net",
         )
-        assertFalse(WindowMessageClickPolicy.isExpectedImage("Battle.net.exe", misleadingCommand))
-        assertFalse(WindowMessageClickPolicy.isExpectedImage("Battle.net.exe", "C:\\Apps\\Codex.exe"))
-        assertFalse(WindowMessageClickPolicy.isExpectedImage("Battle.net.exe", null))
-        assertTrue(
-            WindowMessageClickPolicy.isExpectedImage(
-                "Battle.net.exe",
-                "\\\\?\\C:\\Users\\tester\\Battle.net\\Battle.net.exe",
-            ),
+
+        assertTrue(BattleNetOwnerIdentityPolicy.evaluate(configuredImage, selfUpdateImage, verifiedBattleNet).allowed)
+        assertTrue(BattleNetOwnerIdentityPolicy.evaluate(configuredImage, configuredImage, verifiedBattleNet).allowed)
+        assertFalse(BattleNetOwnerIdentityPolicy.evaluate(configuredImage, selfUpdateImage, null).allowed)
+        assertFalse(
+            BattleNetOwnerIdentityPolicy.evaluate(
+                configuredImage,
+                selfUpdateImage,
+                verifiedBattleNet.copy(status = "NotSigned"),
+            ).allowed,
+        )
+        assertFalse(
+            BattleNetOwnerIdentityPolicy.evaluate(
+                configuredImage,
+                selfUpdateImage,
+                verifiedBattleNet.copy(signerSimpleName = "Unknown Publisher"),
+            ).allowed,
+        )
+        assertFalse(
+            BattleNetOwnerIdentityPolicy.evaluate(
+                configuredImage,
+                selfUpdateImage,
+                verifiedBattleNet.copy(originalFilename = "other.exe"),
+            ).allowed,
+        )
+        assertFalse(
+            BattleNetOwnerIdentityPolicy.evaluate(
+                configuredImage,
+                selfUpdateImage,
+                verifiedBattleNet.copy(productName = "Other Product"),
+            ).allowed,
+        )
+        assertFalse(
+            BattleNetOwnerIdentityPolicy.evaluate(
+                configuredImage,
+                "C:\\Other\\temp_a6289c43bb612c7b933dbbff6b9cfd03.exe",
+                verifiedBattleNet,
+            ).allowed,
+        )
+        assertFalse(
+            BattleNetOwnerIdentityPolicy.evaluate(
+                configuredImage,
+                "C:\\Users\\tester\\Battle.net\\temp_not-a-hash.exe",
+                verifiedBattleNet,
+            ).allowed,
         )
     }
 
@@ -39,6 +77,19 @@ class WindowMessageClickPolicyTest {
         val imageName = Path.of(imagePath).fileName.toString()
         assertTrue(imageName.equals("java.exe", ignoreCase = true) || imageName.equals("javaw.exe", ignoreCase = true))
         assertNull(Win32ProcessImagePath.query(0))
+    }
+
+    @Test
+    fun `PowerShell Authenticode probe verifies optional signed Battle net fixture`() {
+        assumeTrue(System.getProperty("os.name").contains("Windows", ignoreCase = true))
+        val fixturePath = System.getenv("HSSCRIPT_TEST_AUTHENTICODE_IMAGE")
+        assumeTrue(!fixturePath.isNullOrBlank())
+
+        val evidence = assertNotNull(WindowsAuthenticodeEvidenceProvider.inspect(fixturePath!!))
+        assertEquals("Valid", evidence.status)
+        assertEquals("Blizzard Entertainment, Inc.", evidence.signerSimpleName)
+        assertEquals("Battle.net.exe", evidence.originalFilename)
+        assertEquals("Battle.net", evidence.productName)
     }
 
     @Test
