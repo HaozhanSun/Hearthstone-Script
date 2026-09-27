@@ -50,10 +50,10 @@ object LoginModeStrategy : AbstractModeStrategy<Any?>() {
             ) {
                 val powerLog = PowerLogListener.logFile
                 log.info {
-                    "LOGIN_RETRY_ACTION_BLOCKED reason=safe-native-requires-verified-screen " +
+                    "LOGIN_RETRY_ACTION_BLOCKED reason=safe-native-retries-require-screen-recovery " +
                         "powerLog=${powerLog?.path() ?: "none"} " +
                         "length=${powerLog?.length() ?: 0L} " +
-                        "verifiedScreen=false"
+                        "recoveryOwnsVerifiedActions=true"
                 }
             } else if (stayTime > 7) {
                 log.info { "长时间停留在${Mode.currMode?.comment}，尝试点击其他确定按钮" }

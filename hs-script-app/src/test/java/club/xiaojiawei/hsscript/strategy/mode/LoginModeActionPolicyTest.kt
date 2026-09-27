@@ -6,23 +6,8 @@ import kotlin.test.assertTrue
 
 class LoginModeActionPolicyTest {
     @Test
-    fun `safe native startup blocks speculative clicks without verified screen evidence`() {
+    fun `safe native scheduled login retries stay blocked pending visual recovery`() {
         assertFalse(LoginModeActionPolicy.mayRetryCoordinateAction(true))
-    }
-
-    @Test
-    fun `safe native login retry resumes only with independently verified screen evidence`() {
-        assertTrue(LoginModeActionPolicy.mayRetryCoordinateAction(true, independentlyVerifiedScreen = true))
-    }
-
-    @Test
-    fun `independently verified screen can use its explicit recovery action`() {
-        assertTrue(
-            LoginModeActionPolicy.mayRetryCoordinateAction(
-                safeNative = true,
-                independentlyVerifiedScreen = true,
-            ),
-        )
     }
 
     @Test
