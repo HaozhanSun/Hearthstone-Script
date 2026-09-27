@@ -65,6 +65,10 @@ class GameStarter : AbstractStarter() {
     @Volatile
     private var startupFailureAttempts = 0
 
+    /** Rotate launch methods across the starter-chain retries; never pin to the configured last method. */
+    @Volatile
+    private var startupModeDispatches = 0
+
     @Volatile
     private var lastGameLaunchAt = 0L
 
@@ -101,8 +105,6 @@ class GameStarter : AbstractStarter() {
             return
         }
         var startTime = System.currentTimeMillis()
-        var firstLogLaunch = true
-        var firstLogSecondaryLaunch = true
         addTask(
             LAUNCH_PROGRAM_THREAD_POOL.scheduleWithFixedDelay(
                 {
@@ -209,7 +211,6 @@ class GameStarter : AbstractStarter() {
                                         "graceMs=${GameStartupHandoffPolicy.PROCESS_LOSS_GRACE_MS}"
                                 }
                             } else if (diffTime > 10_000) {
-                                val startupModeEnum = ConfigExUtil.getGameStartupMode().last()
                                 val now = System.currentTimeMillis()
                                 val decision = GameStartupRecoveryPolicy.decide(
                                     gameAlive = false,
@@ -220,17 +221,9 @@ class GameStarter : AbstractStarter() {
                                 )
                                 if (decision == GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF) {
                                     lastGameLaunchAt = now
-                                    if (firstLogSecondaryLaunch) {
-                                        firstLogSecondaryLaunch = false
-                                        log.info { "以${startupModeEnum.name}方式启动$GAME_CN_NAME" }
-                                    } else {
-                                        log.info { "GAME_STARTUP_HANDOFF_RETRY mode=${startupModeEnum.name}" }
-                                    }
-                                    runCatching { startupModeEnum.exec() }
-                                        .onFailure { error -> log.warn(error) { "GAME_STARTUP_HANDOFF_DISPATCH_FAILED mode=${startupModeEnum.name}" } }
+                                    dispatchStartupMode(lane = "secondary")
                                 }
                             } else {
-                                val startupModeEnum = ConfigExUtil.getGameStartupMode().first()
                                 val now = System.currentTimeMillis()
                                 val decision = GameStartupRecoveryPolicy.decide(
                                     gameAlive = false,
@@ -241,14 +234,7 @@ class GameStarter : AbstractStarter() {
                                 )
                                 if (decision == GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF) {
                                     lastGameLaunchAt = now
-                                    if (firstLogLaunch) {
-                                        firstLogLaunch = false
-                                        log.info { "以${startupModeEnum.name}方式启动$GAME_CN_NAME" }
-                                    } else {
-                                        log.info { "GAME_STARTUP_HANDOFF_RETRY mode=${startupModeEnum.name}" }
-                                    }
-                                    runCatching { startupModeEnum.exec() }
-                                        .onFailure { error -> log.warn(error) { "GAME_STARTUP_HANDOFF_DISPATCH_FAILED mode=${startupModeEnum.name}" } }
+                                    dispatchStartupMode(lane = "primary")
                                 }
                             }
                             SystemUtil.delay(RandomUtil.getInteractionDelay(500))
@@ -262,9 +248,31 @@ class GameStarter : AbstractStarter() {
         )
     }
 
+    private fun dispatchStartupMode(lane: String) {
+        val selection = GameStartupModeSequencePolicy.select(
+            configuredModes = ConfigExUtil.getGameStartupMode(),
+            attemptIndex = startupModeDispatches,
+            launcherWindowAvailable = GameUtil.findPlatformHWND() != null,
+        )
+        startupModeDispatches++
+        log.info {
+            "GAME_STARTUP_HANDOFF_DISPATCH attempt=${selection.attempt} lane=$lane " +
+                "configuredMode=${selection.configuredMode.name} mode=${selection.mode.name} " +
+                "fallbackApplied=${selection.fallbackApplied} acceptance=awaiting-game-process-window"
+        }
+        runCatching { selection.mode.exec() }
+            .onFailure { error ->
+                log.warn(error) {
+                    "GAME_STARTUP_HANDOFF_DISPATCH_FAILED attempt=${selection.attempt} " +
+                        "mode=${selection.mode.name}"
+                }
+            }
+    }
+
 
     private fun next(gameHWND: HWND) {
         handoffState = GameStartupHandoffPolicy.State()
+        startupModeDispatches = 0
         updateGameMsg(gameHWND)
         scheduleStartupHandoffWatchdog()
         scheduleStartupScreenProbe()

@@ -16,6 +16,33 @@ class GameStartupHandoffPolicyTest {
     }
 
     @Test
+    fun `a startup input dispatch without a game process and window is not an accepted handoff`() {
+        // Posting an input / logging a launch attempt is not target acceptance.
+        val afterDispatch = GameStartupHandoffPolicy.observe(
+            GameStartupHandoffPolicy.State(),
+            processAlive = false,
+            windowFound = false,
+            nowMs = 1_000L,
+        )
+        assertEquals(GameStartupHandoffPolicy.Decision.WAIT, afterDispatch.decision)
+
+        val firstLiveObservation = GameStartupHandoffPolicy.observe(
+            afterDispatch.state,
+            processAlive = true,
+            windowFound = true,
+            nowMs = 2_000L,
+        )
+        assertEquals(GameStartupHandoffPolicy.Decision.WAIT, firstLiveObservation.decision)
+        val confirmed = GameStartupHandoffPolicy.observe(
+            firstLiveObservation.state,
+            processAlive = true,
+            windowFound = true,
+            nowMs = 2_100L,
+        )
+        assertEquals(GameStartupHandoffPolicy.Decision.HANDOFF, confirmed.decision)
+    }
+
+    @Test
     fun `short process loss waits and requires fresh observations`() {
         val observed = GameStartupHandoffPolicy.observe(GameStartupHandoffPolicy.State(), true, true, 1_000L)
         val lost = GameStartupHandoffPolicy.observe(observed.state, false, false, 2_000L)

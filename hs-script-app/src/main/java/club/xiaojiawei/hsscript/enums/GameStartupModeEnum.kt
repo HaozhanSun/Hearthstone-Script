@@ -8,6 +8,8 @@ import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.MouseUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscript.utils.getString
+import club.xiaojiawei.hsscript.status.RuntimeSafety
+import club.xiaojiawei.hsscriptbase.config.log
 import com.sun.jna.platform.win32.WinDef
 import org.jetbrains.kotlin.utils.addToStdlib.ifTrue
 import java.awt.Point
@@ -45,17 +47,25 @@ enum class GameStartupModeEnum(val comment: String, val introduction: String, va
             val platformHWND = GameUtil.findPlatformHWND()
             val rect = WinDef.RECT()
             SystemUtil.updateRECT(platformHWND, rect)
-            MouseUtil.leftButtonClick(
-                Point(145, rect.bottom - rect.top - 150),
-                platformHWND,
-                MouseControlModeEnum.MESSAGE.code,
-            )
-            SystemUtil.delayShort()
-            MouseUtil.leftButtonClick(
-                Point(145, rect.bottom - rect.top - 130),
-                platformHWND,
-                MouseControlModeEnum.MESSAGE.code,
-            )
+            val upperClick = Point(145, rect.bottom - rect.top - 150)
+            val lowerClick = Point(145, rect.bottom - rect.top - 130)
+            if (RuntimeSafety.safeNative) {
+                // E2E/safe-native intercepts the generic click API and turns
+                // MESSAGE mode into foreground Robot input. Preserve the
+                // configured MESSAGE contract with window messages instead;
+                // focus/Robot clicks were observed going to another HWND.
+                val upperQueued = MouseUtil.postStartupWindowMessageClick(upperClick, platformHWND)
+                SystemUtil.delayShort()
+                val lowerQueued = MouseUtil.postStartupWindowMessageClick(lowerClick, platformHWND)
+                log.info {
+                    "PLATFORM_MESSAGE_STARTUP_DISPATCH upperQueued=$upperQueued lowerQueued=$lowerQueued " +
+                        "hwnd=$platformHWND acceptance=awaiting-game-process-window"
+                }
+            } else {
+                MouseUtil.leftButtonClick(upperClick, platformHWND, MouseControlModeEnum.MESSAGE.code)
+                SystemUtil.delayShort()
+                MouseUtil.leftButtonClick(lowerClick, platformHWND, MouseControlModeEnum.MESSAGE.code)
+            }
         }),
 
     ;

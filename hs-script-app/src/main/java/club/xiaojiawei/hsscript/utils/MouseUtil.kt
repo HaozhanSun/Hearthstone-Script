@@ -3,9 +3,11 @@ package club.xiaojiawei.hsscript.utils
 import club.xiaojiawei.hsscript.bean.isDiscoverCardThread
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.config.DRIVER_LOCK
+import club.xiaojiawei.hsscript.consts.PLATFORM_PROGRAM_NAME
 import club.xiaojiawei.hsscript.dll.CSystemDll
 import club.xiaojiawei.hsscript.dll.User32ExDll
 import club.xiaojiawei.hsscript.dll.User32RawDll
+import club.xiaojiawei.hsscript.dll.User32PostMessageDll
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.MouseControlModeEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
@@ -1101,6 +1103,66 @@ object MouseUtil {
                 DRIVER_LOCK.unlock()
             }
         }
+    }
+
+    /**
+     * Use the configured MESSAGE semantics for the Battle.net startup button
+     * when safe-native/E2E would otherwise route the generic click through
+     * foreground Robot input. A successful PostMessage only means Windows
+     * queued the message; GameStarter separately confirms actual game launch.
+     */
+    internal fun postStartupWindowMessageClick(pos: Point, hwnd: HWND?): Boolean {
+        if (!ActionDispatchGate.allow("startup.platform.message")) return false
+        if (!ScriptStatus.testMode &&
+            (!WorkTimeListener.working || !ConfigUtil.getBoolean(ConfigEnum.ENABLE_MOUSE))
+        ) {
+            log.warn { "PLATFORM_MESSAGE_STARTUP_BLOCKED reason=work-or-mouse-disabled" }
+            return false
+        }
+        if (hwnd == null || !User32.INSTANCE.IsWindow(hwnd) || !User32.INSTANCE.IsWindowVisible(hwnd)) {
+            log.warn { "PLATFORM_MESSAGE_STARTUP_BLOCKED reason=launcher-window-not-visible hwnd=$hwnd" }
+            return false
+        }
+
+        val ownerPid = IntByReference()
+        User32.INSTANCE.GetWindowThreadProcessId(hwnd, ownerPid)
+        val ownerCommand = runCatching {
+            ProcessHandle.of(ownerPid.value.toLong()).flatMap { it.info().command() }.orElse(null)
+        }.getOrNull()
+        if (!WindowMessageClickPolicy.isExpectedOwner(PLATFORM_PROGRAM_NAME, ownerCommand)) {
+            log.warn {
+                "PLATFORM_MESSAGE_STARTUP_BLOCKED reason=launcher-window-owner-unverified " +
+                    "hwnd=$hwnd ownerPid=${ownerPid.value} " +
+                    "ownerExecutable=${WindowMessageClickPolicy.executableName(ownerCommand) ?: "unknown"}"
+            }
+            return false
+        }
+
+        val clientRect = WinDef.RECT()
+        if (!User32.INSTANCE.GetClientRect(hwnd, clientRect)) {
+            log.warn { "PLATFORM_MESSAGE_STARTUP_BLOCKED reason=client-rect-unavailable hwnd=$hwnd" }
+            return false
+        }
+        val width = clientRect.right - clientRect.left
+        val height = clientRect.bottom - clientRect.top
+        if (!WindowMessageClickPolicy.isInsideClient(pos.x, pos.y, width, height)) {
+            log.warn {
+                "PLATFORM_MESSAGE_STARTUP_BLOCKED reason=point-outside-client " +
+                    "point=(${pos.x},${pos.y}) client=${width}x$height hwnd=$hwnd"
+            }
+            return false
+        }
+        val packed = WindowMessageClickPolicy.packClientPoint(pos.x, pos.y) ?: return false
+        val lParam = WinDef.LPARAM(packed)
+        val moved = User32PostMessageDll.INSTANCE.PostMessage(hwnd, 0x0200, WinDef.WPARAM(0L), lParam) // WM_MOUSEMOVE
+        val pressed = User32PostMessageDll.INSTANCE.PostMessage(hwnd, 0x0201, WinDef.WPARAM(1L), lParam) // WM_LBUTTONDOWN
+        val released = User32PostMessageDll.INSTANCE.PostMessage(hwnd, 0x0202, WinDef.WPARAM(0L), lParam) // WM_LBUTTONUP
+        val queued = moved && pressed && released
+        log.info {
+            "PLATFORM_MESSAGE_STARTUP_INPUT point=(${pos.x},${pos.y}) hwnd=$hwnd " +
+                "messagesQueued=$queued acceptance=not-confirmed"
+        }
+        return queued
     }
 
     fun rightButtonClick(hwnd: HWND?) {
