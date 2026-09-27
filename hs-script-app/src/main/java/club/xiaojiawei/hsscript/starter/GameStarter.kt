@@ -260,6 +260,9 @@ class GameStarter : AbstractStarter() {
             launcherWindowAvailable = GameUtil.findPlatformHWND() != null,
         )
         startupModeDispatches++
+        LifecycleTrace.markStartupHandoffAttempt(
+            "lane=$lane attempt=${selection.attempt} mode=${selection.mode.name}",
+        )
         log.info {
             "GAME_STARTUP_HANDOFF_DISPATCH attempt=${selection.attempt} lane=$lane " +
                 "configuredMode=${selection.configuredMode.name} mode=${selection.mode.name} " +

@@ -46,6 +46,7 @@ object LifecycleTrace {
     private val stateRecoveryInFlight = AtomicBoolean(false)
 
     private val noProgressWatchdog = NoProgressWatchdog()
+    private val startupHandoffActivity = StartupHandoffActivityTracker()
     private val recoveryCascadeGuard = RecoveryCascadeGuard()
     private val foregroundFailureCount = AtomicInteger(0)
     private val foregroundRecoveryPending = AtomicBoolean(false)
@@ -107,6 +108,12 @@ object LifecycleTrace {
     fun markStartupRequested(reason: String, now: Long = System.currentTimeMillis()) {
         startupRecoveryGraceUntil = now + STARTUP_RECOVERY_GRACE_MS
         mark("startup-recovery-grace reason=$reason until=$startupRecoveryGraceUntil")
+    }
+
+    /** Record a normal GameStarter dispatch attempt, not game/platform acceptance. */
+    fun markStartupHandoffAttempt(reason: String, now: Long = System.currentTimeMillis()) {
+        startupHandoffActivity.recordAttempt(now)
+        log.debug { "STARTUP_HANDOFF_ACTIVITY_SIGNAL reason=$reason acceptance=not-confirmed" }
     }
 
     internal fun startupRecoveryGraceRemainingMs(now: Long): Long =
@@ -386,11 +393,40 @@ object LifecycleTrace {
             WarEx.inWar -> NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY
             else -> NoProgressWatchdog.ScreenExpectation.MENU_OR_MATCHING
         }
+        val expectedMode = Mode.nextMode?.name ?: Mode.currMode?.name ?: "NONE"
+        val startupActivityContext = StartupHandoffActivityTracker.Context(
+            working = WorkTimeListener.working,
+            paused = PauseStatus.isPause,
+            automaticPause = PauseStatus.isAutomaticPause,
+            recoveryPending = recoveryPending,
+            replaying = PowerLogListener.replayingExistingLog,
+            inWar = WarEx.inWar,
+            terminalState = screen == NoProgressWatchdog.ScreenExpectation.RESULT,
+            screen = screen,
+            mode = Mode.currMode?.name ?: "NONE",
+            expectedMode = expectedMode,
+            gameProcessAlive = currentPid != null,
+            powerLogPath = powerLogPath,
+        )
+        if (startupHandoffActivity.shouldDeferNoProgress(startupActivityContext, now)) {
+            // Discard any old startup baseline while normal handoff retries are
+            // being initiated. Once dispatch activity expires, the existing
+            // bounded watchdog starts a fresh observation window.
+            noProgressWatchdog.reset()
+            noProgressBoundPid = null
+            noProgressBoundPowerLogPath = null
+            log.debug {
+                "NO_PROGRESS_DEFERRED reason=active-startup-handoff " +
+                    "mode=${startupActivityContext.mode} expectedMode=${startupActivityContext.expectedMode} " +
+                    "gamePid=none powerLog=none acceptance=not-confirmed"
+            }
+            return
+        }
         val decision = noProgressWatchdog.observe(
             NoProgressWatchdog.Snapshot(
                 nowMs = now,
                 mode = Mode.currMode?.name ?: "NONE",
-                expectedMode = Mode.nextMode?.name ?: Mode.currMode?.name ?: "NONE",
+                expectedMode = expectedMode,
                 screen = screen,
                 processAlive = currentPid != null,
                 currentPid = currentPid,
