@@ -7,18 +7,23 @@ import org.junit.jupiter.api.Test
 class NoProgressWatchdogTest {
 
     @Test
-    fun `zero byte startup times out into bounded recovery`() {
+    fun `zero byte startup retries stay alive after bounded recovery exhaustion`() {
         val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 120_000L)
         val first = watchdog.observe(snapshot(now = 0L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
         val second = watchdog.observe(snapshot(now = 120_000L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
         val third = watchdog.observe(snapshot(now = 240_000L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
         val fourth = watchdog.observe(snapshot(now = 360_000L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
+        val nextWindow = watchdog.observe(snapshot(now = 360_001L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
+        val nextRetryCycle = watchdog.observe(snapshot(now = 480_000L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
 
         assertEquals(NoProgressWatchdog.RecoveryAction.WAIT, first.action)
         assertEquals(NoProgressWatchdog.RecoveryAction.REBIND, second.action)
         assertEquals(NoProgressWatchdog.RecoveryAction.RESTART, third.action)
-        assertEquals(NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE, fourth.action)
-        assertTrue(fourth.reason.endsWith("retry-exhausted"))
+        assertEquals(NoProgressWatchdog.RecoveryAction.STARTUP_RETRY_BACKOFF, fourth.action)
+        assertEquals("startup-or-initialization-timeout-retry-exhausted-rearmed", fourth.reason)
+        assertEquals(1L, nextWindow.elapsedNoProgressMs)
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, nextWindow.action)
+        assertEquals(NoProgressWatchdog.RecoveryAction.REBIND, nextRetryCycle.action)
     }
 
     @Test

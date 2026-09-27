@@ -35,6 +35,7 @@ internal class NoProgressWatchdog(
         DISMISS_EXTERNAL_MODAL,
         REBIND,
         RESTART,
+        STARTUP_RETRY_BACKOFF,
         ESCALATE_PAUSE,
     }
 
@@ -163,6 +164,19 @@ internal class NoProgressWatchdog(
     private fun recoverOrPause(reason: String, nowMs: Long): Decision {
         val nextAttempt = recoveryAttempts + 1
         if (nextAttempt > maxRecoveryAttempts.coerceAtLeast(0)) {
+            if (reason == "startup-or-initialization-timeout") {
+                // A failed platform handoff is not grounds to pause the user's
+                // session. Re-arm the bounded watchdog window; GameStarter's
+                // own capped retry policy remains responsible for retries.
+                recoveryAttempts = 0
+                noProgressSinceMs = nowMs
+                return decision(
+                    RecoveryAction.STARTUP_RETRY_BACKOFF,
+                    "$reason-retry-exhausted-rearmed",
+                    nowMs,
+                    nextAttempt,
+                )
+            }
             return decision(
                 RecoveryAction.ESCALATE_PAUSE,
                 "$reason-retry-exhausted",

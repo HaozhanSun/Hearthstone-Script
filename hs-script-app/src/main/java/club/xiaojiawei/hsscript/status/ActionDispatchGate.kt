@@ -14,6 +14,10 @@ object ActionDispatchGate {
     fun allow(action: String): Boolean {
         val paused = PauseStatus.isPause
         val working = WorkTimeListener.working
+        return allowForState(action, paused, working)
+    }
+
+    internal fun allowForState(action: String, paused: Boolean, working: Boolean): Boolean {
         if (paused || !working) {
             log.warn {
                 "ACTION_BLOCKED action=$action reason=${if (paused) "paused" else "not-working"} " +

@@ -507,6 +507,13 @@ object LifecycleTrace {
                 Mode.recover(ModeEnum.STARTUP, "no-progress-${decision.reason}", enterStrategy = false)
                 StarterConfig.starter.start()
             }
+            NoProgressWatchdog.RecoveryAction.STARTUP_RETRY_BACKOFF -> {
+                log.warn {
+                    "NO_PROGRESS_STARTUP_RETRY_BACKOFF attempt=${decision.recoveryAttempt} " +
+                        "reason=${decision.reason} watchdogRearmed=true automaticPause=false " +
+                        "startupRetryPolicy=bounded-rate"
+                }
+            }
             NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE -> {
                 log.error {
                     "NO_PROGRESS_ESCALATED attempt=${decision.recoveryAttempt} " +

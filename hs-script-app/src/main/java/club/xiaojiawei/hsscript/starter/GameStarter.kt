@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.utils.*
@@ -259,6 +260,17 @@ class GameStarter : AbstractStarter() {
             attemptIndex = startupModeDispatches,
             launcherWindowAvailable = GameUtil.findPlatformHWND() != null,
         )
+        // Both normal startup modes have side effects: PLATFORM_ARG launches
+        // Battle.net and PLATFORM_MESSAGE clicks its UI. Keep them behind the
+        // same hard pause/working gate so PLATFORM_ARG cannot continue after
+        // lifecycle escalation has stopped MESSAGE dispatch.
+        if (!ActionDispatchGate.allow("startup.handoff")) {
+            log.warn {
+                "GAME_STARTUP_HANDOFF_BLOCKED lane=$lane mode=${selection.mode.name} " +
+                    "reason=action-dispatch-gate attemptNotRecorded=true"
+            }
+            return
+        }
         startupModeDispatches++
         LifecycleTrace.markStartupHandoffAttempt(
             "lane=$lane attempt=${selection.attempt} mode=${selection.mode.name}",
