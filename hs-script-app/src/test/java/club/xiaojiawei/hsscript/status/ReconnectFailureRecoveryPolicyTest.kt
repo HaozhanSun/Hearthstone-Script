@@ -1,8 +1,12 @@
 package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscript.starter.StartupScreenRecoveryPolicy
+import club.xiaojiawei.hsscript.starter.GameStartupHandoffPolicy
+import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class ReconnectFailureRecoveryPolicyTest {
     @Test
@@ -58,6 +62,17 @@ class ReconnectFailureRecoveryPolicyTest {
                 noLogProgressMs = 0L,
                 normalFlowActive = false,
                 initialProbeAttempted = false,
+            ),
+        )
+        assertFalse(GameStartupHandoffPolicy.startupHandshakeConfirmed(inWar = false, mode = ModeEnum.LOGIN))
+        assertTrue(GameStartupHandoffPolicy.startupHandshakeConfirmed(inWar = false, mode = ModeEnum.HUB))
+        assertEquals(
+            GameStartupHandoffPolicy.HandshakeTimeoutDecision.NO_PAUSE_NEEDED,
+            GameStartupHandoffPolicy.onHandshakeTimeout(
+                startupConfirmed = GameStartupHandoffPolicy.startupHandshakeConfirmed(
+                    inWar = false,
+                    mode = ModeEnum.HUB,
+                ),
             ),
         )
     }

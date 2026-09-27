@@ -57,6 +57,7 @@ class GameStarter : AbstractStarter() {
     private var platformCloseRequested = false
 
     private val startupProbeScheduled = AtomicBoolean(false)
+    private val startupProbeRunning = AtomicBoolean(false)
     private val startupRecoveryScheduled = AtomicBoolean(false)
 
     private var handoffState = GameStartupHandoffPolicy.State()
@@ -366,12 +367,35 @@ class GameStarter : AbstractStarter() {
                     }
                     Thread.sleep(1_000L)
                 }
-                if (GameStartupHandoffPolicy.onHandshakeTimeout(startupHandshakeConfirmed()) ==
-                    GameStartupHandoffPolicy.HandshakeTimeoutDecision.AUTOMATIC_PAUSE
-                ) {
+                var probeGraceElapsedMs = 0L
+                var timeoutDecision = GameStartupHandoffPolicy.onHandshakeTimeout(
+                    startupConfirmed = startupHandshakeConfirmed(),
+                    screenProbeInProgress = startupProbeRunning.get(),
+                    probeGraceElapsedMs = probeGraceElapsedMs,
+                )
+                if (timeoutDecision == GameStartupHandoffPolicy.HandshakeTimeoutDecision.WAIT_FOR_SCREEN_PROBE) {
+                    val probeGraceStartedAt = System.currentTimeMillis()
+                    log.warn {
+                        "GAME_STARTUP_HANDSHAKE_WAIT_FOR_SCREEN_PROBE " +
+                            "graceMs=${GameStartupHandoffPolicy.SCREEN_PROBE_COMPLETION_GRACE_MS} " +
+                            "powerLog=${PowerLogListener.logFile?.path() ?: "none"} " +
+                            "powerLogLength=${PowerLogListener.logFile?.length() ?: 0L}"
+                    }
+                    do {
+                        Thread.sleep(250L)
+                        probeGraceElapsedMs = System.currentTimeMillis() - probeGraceStartedAt
+                        timeoutDecision = GameStartupHandoffPolicy.onHandshakeTimeout(
+                            startupConfirmed = startupHandshakeConfirmed(),
+                            screenProbeInProgress = startupProbeRunning.get(),
+                            probeGraceElapsedMs = probeGraceElapsedMs,
+                        )
+                    } while (timeoutDecision == GameStartupHandoffPolicy.HandshakeTimeoutDecision.WAIT_FOR_SCREEN_PROBE)
+                }
+                if (timeoutDecision == GameStartupHandoffPolicy.HandshakeTimeoutDecision.AUTOMATIC_PAUSE) {
                     log.error {
                         "GAME_STARTUP_STOPPED action=AUTOMATIC_PAUSE reason=handshake-timeout " +
                             "timeoutMs=$STARTUP_HANDSHAKE_TIMEOUT_MS " +
+                            "probeGraceElapsedMs=$probeGraceElapsedMs " +
                             "gameAlive=${GameUtil.isAliveOfGame()} " +
                             "powerLog=${PowerLogListener.logFile?.path() ?: "none"} " +
                             "powerLogLength=${PowerLogListener.logFile?.length() ?: 0L}"
@@ -398,6 +422,7 @@ class GameStarter : AbstractStarter() {
      */
     private fun scheduleStartupScreenProbe() {
         if (!startupProbeScheduled.compareAndSet(false, true)) return
+        startupProbeRunning.set(true)
         log.info {
             "STARTUP_SCREEN_PROBE_SCHEDULED gameWindow=${ScriptStatus.gameHWND != null} " +
                 "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
@@ -497,6 +522,7 @@ class GameStarter : AbstractStarter() {
                 Thread.currentThread().interrupt()
                 log.info { "STARTUP_SCREEN_PROBE_INTERRUPTED attempts=$attempt" }
             } finally {
+                startupProbeRunning.set(false)
                 log.info {
                     "STARTUP_SCREEN_PROBE_FINISHED attempts=$attempt " +
                         "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"

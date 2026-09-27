@@ -10,6 +10,7 @@ internal object GameStartupHandoffPolicy {
     const val REQUIRED_STABLE_OBSERVATIONS = 2
     const val PROCESS_LOSS_GRACE_MS = 5_000L
     const val POWER_LOG_STALL_RETRY_MS = 30_000L
+    const val SCREEN_PROBE_COMPLETION_GRACE_MS = 15_000L
 
     data class State(
         val stableObservations: Int = 0,
@@ -18,7 +19,7 @@ internal object GameStartupHandoffPolicy {
 
     enum class Decision { WAIT, HANDOFF, RETRY }
 
-    enum class HandshakeTimeoutDecision { NO_PAUSE_NEEDED, AUTOMATIC_PAUSE }
+    enum class HandshakeTimeoutDecision { NO_PAUSE_NEEDED, WAIT_FOR_SCREEN_PROBE, AUTOMATIC_PAUSE }
 
     data class Evaluation(val state: State, val decision: Decision)
 
@@ -26,9 +27,16 @@ internal object GameStartupHandoffPolicy {
     fun startupHandshakeConfirmed(inWar: Boolean, mode: ModeEnum?): Boolean =
         inWar || (mode != null && mode != ModeEnum.STARTUP && mode != ModeEnum.LOGIN)
 
-    fun onHandshakeTimeout(startupConfirmed: Boolean): HandshakeTimeoutDecision =
-        if (startupConfirmed) HandshakeTimeoutDecision.NO_PAUSE_NEEDED
-        else HandshakeTimeoutDecision.AUTOMATIC_PAUSE
+    fun onHandshakeTimeout(
+        startupConfirmed: Boolean,
+        screenProbeInProgress: Boolean = false,
+        probeGraceElapsedMs: Long = SCREEN_PROBE_COMPLETION_GRACE_MS,
+    ): HandshakeTimeoutDecision = when {
+        startupConfirmed -> HandshakeTimeoutDecision.NO_PAUSE_NEEDED
+        screenProbeInProgress && probeGraceElapsedMs < SCREEN_PROBE_COMPLETION_GRACE_MS ->
+            HandshakeTimeoutDecision.WAIT_FOR_SCREEN_PROBE
+        else -> HandshakeTimeoutDecision.AUTOMATIC_PAUSE
+    }
 
     fun observe(
         state: State,

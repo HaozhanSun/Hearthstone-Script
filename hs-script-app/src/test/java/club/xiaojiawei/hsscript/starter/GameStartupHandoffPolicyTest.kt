@@ -35,7 +35,15 @@ class GameStartupHandoffPolicyTest {
     }
 
     @Test
-    fun `recognized Home prevents handshake timeout pause while unknown screen remains fail closed`() {
+    fun `empty log and unconfirmed login pause at timeout while verified Home completes startup`() {
+        // A zero-byte session Power.log is not itself a menu/handshake proof.
+        assertFalse(GameStartupHandoffPolicy.startupHandshakeConfirmed(false, ModeEnum.LOGIN))
+        assertEquals(
+            GameStartupHandoffPolicy.HandshakeTimeoutDecision.AUTOMATIC_PAUSE,
+            GameStartupHandoffPolicy.onHandshakeTimeout(
+                GameStartupHandoffPolicy.startupHandshakeConfirmed(false, ModeEnum.LOGIN),
+            ),
+        )
         assertEquals(
             GameStartupHandoffPolicy.HandshakeTimeoutDecision.NO_PAUSE_NEEDED,
             GameStartupHandoffPolicy.onHandshakeTimeout(
@@ -46,6 +54,34 @@ class GameStartupHandoffPolicyTest {
             GameStartupHandoffPolicy.HandshakeTimeoutDecision.AUTOMATIC_PAUSE,
             GameStartupHandoffPolicy.onHandshakeTimeout(
                 GameStartupHandoffPolicy.startupHandshakeConfirmed(false, null),
+            ),
+        )
+    }
+
+    @Test
+    fun `handshake timeout grants only a bounded grace to an in-flight visual probe`() {
+        assertEquals(
+            GameStartupHandoffPolicy.HandshakeTimeoutDecision.WAIT_FOR_SCREEN_PROBE,
+            GameStartupHandoffPolicy.onHandshakeTimeout(
+                startupConfirmed = false,
+                screenProbeInProgress = true,
+                probeGraceElapsedMs = GameStartupHandoffPolicy.SCREEN_PROBE_COMPLETION_GRACE_MS - 1,
+            ),
+        )
+        assertEquals(
+            GameStartupHandoffPolicy.HandshakeTimeoutDecision.NO_PAUSE_NEEDED,
+            GameStartupHandoffPolicy.onHandshakeTimeout(
+                startupConfirmed = true,
+                screenProbeInProgress = true,
+                probeGraceElapsedMs = 0,
+            ),
+        )
+        assertEquals(
+            GameStartupHandoffPolicy.HandshakeTimeoutDecision.AUTOMATIC_PAUSE,
+            GameStartupHandoffPolicy.onHandshakeTimeout(
+                startupConfirmed = false,
+                screenProbeInProgress = true,
+                probeGraceElapsedMs = GameStartupHandoffPolicy.SCREEN_PROBE_COMPLETION_GRACE_MS,
             ),
         )
     }
