@@ -23,4 +23,18 @@ class WildOnlyMctsStrategyModeTest {
 
         assertFalse(standardStrategies.isNotEmpty())
     }
+
+    @Test
+    fun `pirate entries expose the current shared strategy revision`() {
+        val revision = "V${PirateMctsStrategyVersion.REVISION} · build "
+        assertEquals(
+            true,
+            HsPirateWarriorMctsDeckStrategy().name().contains(revision),
+        )
+        assertEquals(
+            true,
+            HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().contains(revision),
+        )
+        assertEquals("2.7", PirateMctsStrategyVersion.REVISION)
+    }
 }

@@ -10,7 +10,9 @@ import club.xiaojiawei.hsscriptbasestrategy.VersionInfo
  * strategy cannot remain indistinguishable in the dropdown after a rebuild.
  */
 object PirateMctsStrategyVersion {
-    const val REVISION = "2.6"
+    // Bump whenever Pirate Warrior or Pirate Demon Hunter decision rules,
+    // mode availability, or mulligan contracts change.
+    const val REVISION = "2.7"
 
     private val buildVersion: String
         get() = VersionInfo.VERSION.removePrefix("v").substringBefore('-')
