@@ -299,6 +299,13 @@ class GameStarter : AbstractStarter() {
         return GameStartupHandoffPolicy.startupHandshakeConfirmed(WarEx.inWar, Mode.currMode)
     }
 
+    private fun hasVisibleGameWindowForRecovery(): Boolean = runCatching {
+        val hwnd = ScriptStatus.gameHWND
+            ?.takeIf { User32.INSTANCE.IsWindow(it) && User32.INSTANCE.IsWindowVisible(it) }
+            ?: GameUtil.findGameHWND()
+        hwnd != null && User32.INSTANCE.IsWindow(hwnd) && User32.INSTANCE.IsWindowVisible(hwnd)
+    }.getOrDefault(false)
+
     /**
      * The original starter cancels its polling task as soon as a window is
      * found.  If that process then exits during the Battle.net handoff, no
@@ -309,6 +316,7 @@ class GameStarter : AbstractStarter() {
         if (!startupRecoveryScheduled.compareAndSet(false, true)) return
         EXTRA_THREAD_POOL.execute {
             val startedAt = System.currentTimeMillis()
+            var retryVisibleClientRecovery = false
             try {
                 while (System.currentTimeMillis() - startedAt < STARTUP_HANDSHAKE_TIMEOUT_MS) {
                     if (startupHandshakeConfirmed()) {
@@ -372,6 +380,8 @@ class GameStarter : AbstractStarter() {
                     startupConfirmed = startupHandshakeConfirmed(),
                     screenProbeInProgress = startupProbeRunning.get(),
                     probeGraceElapsedMs = probeGraceElapsedMs,
+                    gameAlive = GameUtil.isAliveOfGame(),
+                    visibleGameWindow = hasVisibleGameWindowForRecovery(),
                 )
                 if (timeoutDecision == GameStartupHandoffPolicy.HandshakeTimeoutDecision.WAIT_FOR_SCREEN_PROBE) {
                     val probeGraceStartedAt = System.currentTimeMillis()
@@ -388,10 +398,20 @@ class GameStarter : AbstractStarter() {
                             startupConfirmed = startupHandshakeConfirmed(),
                             screenProbeInProgress = startupProbeRunning.get(),
                             probeGraceElapsedMs = probeGraceElapsedMs,
+                            gameAlive = GameUtil.isAliveOfGame(),
+                            visibleGameWindow = hasVisibleGameWindowForRecovery(),
                         )
                     } while (timeoutDecision == GameStartupHandoffPolicy.HandshakeTimeoutDecision.WAIT_FOR_SCREEN_PROBE)
                 }
-                if (timeoutDecision == GameStartupHandoffPolicy.HandshakeTimeoutDecision.AUTOMATIC_PAUSE) {
+                if (timeoutDecision == GameStartupHandoffPolicy.HandshakeTimeoutDecision.RETRY_VISIBLE_CLIENT) {
+                    log.warn {
+                        "GAME_STARTUP_RECOVERY_WAITING action=RETRY_VERIFIED_SCREEN_CAPTURE " +
+                            "reason=visible-client-unconfirmed timeoutMs=$STARTUP_HANDSHAKE_TIMEOUT_MS " +
+                            "dispatch=false processPreserved=true nextProbeInMs=5000"
+                    }
+                    scheduleStartupScreenProbe()
+                    retryVisibleClientRecovery = true
+                } else if (timeoutDecision == GameStartupHandoffPolicy.HandshakeTimeoutDecision.AUTOMATIC_PAUSE) {
                     log.error {
                         "GAME_STARTUP_STOPPED action=AUTOMATIC_PAUSE reason=handshake-timeout " +
                             "timeoutMs=$STARTUP_HANDSHAKE_TIMEOUT_MS " +
@@ -408,6 +428,13 @@ class GameStarter : AbstractStarter() {
                 log.info { "GAME_STARTUP_HANDOFF_WATCHDOG_INTERRUPTED" }
             } finally {
                 startupRecoveryScheduled.set(false)
+                if (retryVisibleClientRecovery) {
+                    EXTRA_THREAD_POOL.schedule(
+                        { scheduleStartupHandoffWatchdog() },
+                        5_000L,
+                        TimeUnit.MILLISECONDS,
+                    )
+                }
             }
         }
     }

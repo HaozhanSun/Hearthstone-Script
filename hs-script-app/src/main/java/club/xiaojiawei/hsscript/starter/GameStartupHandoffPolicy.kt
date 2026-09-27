@@ -19,7 +19,12 @@ internal object GameStartupHandoffPolicy {
 
     enum class Decision { WAIT, HANDOFF, RETRY }
 
-    enum class HandshakeTimeoutDecision { NO_PAUSE_NEEDED, WAIT_FOR_SCREEN_PROBE, AUTOMATIC_PAUSE }
+    enum class HandshakeTimeoutDecision {
+        NO_PAUSE_NEEDED,
+        WAIT_FOR_SCREEN_PROBE,
+        RETRY_VISIBLE_CLIENT,
+        AUTOMATIC_PAUSE,
+    }
 
     data class Evaluation(val state: State, val decision: Decision)
 
@@ -31,10 +36,13 @@ internal object GameStartupHandoffPolicy {
         startupConfirmed: Boolean,
         screenProbeInProgress: Boolean = false,
         probeGraceElapsedMs: Long = SCREEN_PROBE_COMPLETION_GRACE_MS,
+        gameAlive: Boolean = false,
+        visibleGameWindow: Boolean = false,
     ): HandshakeTimeoutDecision = when {
         startupConfirmed -> HandshakeTimeoutDecision.NO_PAUSE_NEEDED
         screenProbeInProgress && probeGraceElapsedMs < SCREEN_PROBE_COMPLETION_GRACE_MS ->
             HandshakeTimeoutDecision.WAIT_FOR_SCREEN_PROBE
+        gameAlive && visibleGameWindow -> HandshakeTimeoutDecision.RETRY_VISIBLE_CLIENT
         else -> HandshakeTimeoutDecision.AUTOMATIC_PAUSE
     }
 

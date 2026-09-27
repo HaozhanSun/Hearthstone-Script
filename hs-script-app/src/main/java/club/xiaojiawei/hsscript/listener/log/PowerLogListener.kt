@@ -37,6 +37,9 @@ object PowerLogListener :
     @Volatile
     var replayingExistingLog: Boolean = false
 
+    /** Attach a process-session-verified late Power.log without restarting the client. */
+    internal fun bindCurrentSessionLog(file: File): Boolean = bindCurrentSessionDiskLog(file)
+
     /**
      * A Power.log result block contains a tail of repeated state/event lines
      * after FINAL_GAMEOVER.  WarEx.reset() intentionally returns the model to

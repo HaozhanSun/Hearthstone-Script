@@ -56,6 +56,9 @@ internal class NoProgressWatchdog(
         val powerLogAgeMs: Long,
         val authoritativeTransition: Boolean = false,
         val paddlexInitializing: Boolean = false,
+        /** A current-process Power.log contains an unfinished CREATE_GAME. */
+        val liveMatchEvidence: Boolean = false,
+        val mulliganEvidence: Boolean = false,
     )
 
     data class Decision(
@@ -83,6 +86,48 @@ internal class NoProgressWatchdog(
 
     fun observe(snapshot: Snapshot): Decision {
         val firstObservation = baselineFingerprint == null
+        if (snapshot.screen == ScreenExpectation.RESULT) {
+            return decision(RecoveryAction.NOOP_RESULT, "result-screen-priority", snapshot.nowMs)
+        }
+
+        if (snapshot.liveMatchEvidence) {
+            if (!snapshot.processAlive || snapshot.currentPid == null || !snapshot.windowPresent) {
+                return decision(RecoveryAction.ESCALATE_PAUSE, "live-match-lineage-missing-no-restart", snapshot.nowMs)
+            }
+            if (snapshot.boundPid != null && snapshot.currentPid != snapshot.boundPid) {
+                return decision(RecoveryAction.ESCALATE_PAUSE, "live-match-lineage-mismatch-no-restart", snapshot.nowMs)
+            }
+        }
+
+        // A session-matched unfinished CREATE_GAME is stronger evidence than
+        // stale UI/OCR phase state. Preserve that client: one bounded listener
+        // rebind is allowed, but a live game is never sent through STARTUP's
+        // process-restart chain.
+        if (snapshot.liveMatchEvidence) {
+            val fingerprint = fingerprint(snapshot)
+            val changed = baselineFingerprint != null && baselineFingerprint != fingerprint
+            if (baselineFingerprint == null || changed || snapshot.authoritativeTransition) {
+                baselineFingerprint = fingerprint
+                noProgressSinceMs = snapshot.nowMs
+                if (changed || snapshot.authoritativeTransition) recoveryAttempts = 0
+                return decision(
+                    RecoveryAction.WAIT,
+                    if (snapshot.mulliganEvidence) "live-mulligan-power-log-progress" else "live-match-power-log-progress",
+                    snapshot.nowMs,
+                )
+            }
+            if (noProgressSinceMs == null) noProgressSinceMs = snapshot.nowMs
+            val elapsed = snapshot.nowMs - (noProgressSinceMs ?: snapshot.nowMs)
+            if (elapsed < noProgressTimeoutMs) {
+                return decision(RecoveryAction.WAIT_EXPECTED, "live-match-no-progress-bounded-wait", snapshot.nowMs)
+            }
+            if (recoveryAttempts == 0) {
+                recoveryAttempts = 1
+                return decision(RecoveryAction.REBIND, "live-match-power-log-rebind-only", snapshot.nowMs, 1)
+            }
+            return decision(RecoveryAction.ESCALATE_PAUSE, "live-match-stalled-no-restart", snapshot.nowMs, recoveryAttempts)
+        }
+
         val processLineageChanged = !firstObservation &&
             snapshot.currentPid != null && snapshot.boundPid != null &&
                 snapshot.currentPid != snapshot.boundPid
@@ -114,10 +159,6 @@ internal class NoProgressWatchdog(
             )
         }
         if (noProgressSinceMs == null) noProgressSinceMs = snapshot.nowMs
-
-        if (snapshot.screen == ScreenExpectation.RESULT) {
-            return decision(RecoveryAction.NOOP_RESULT, "result-screen-priority", snapshot.nowMs)
-        }
 
         val elapsed = snapshot.nowMs - (noProgressSinceMs ?: snapshot.nowMs)
         if (snapshot.paddlexInitializing || snapshot.screen == ScreenExpectation.STARTUP ||
@@ -203,6 +244,8 @@ internal class NoProgressWatchdog(
         snapshot.mode,
         snapshot.expectedMode,
         snapshot.screen,
+        snapshot.liveMatchEvidence,
+        snapshot.mulliganEvidence,
     ).joinToString("|")
 }
 

@@ -13,6 +13,7 @@ import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -362,22 +363,48 @@ object LifecycleTrace {
         }
 
         val now = System.currentTimeMillis()
+        val currentPid = GameUtil.findGameProcessIdForDiagnostics()
+        val processStartedAt = currentPid?.let { pid ->
+            runCatching {
+                ProcessHandle.of(pid).orElse(null)?.info()?.startInstant()?.orElse(null)?.toEpochMilli()
+            }.getOrNull()
+        }
+        val candidatePowerLog = GameUtil.getLatestLogDir()
+            ?.resolve("Power.log")
+            ?.takeIf { it.isFile }
+        var sessionEvidence = PowerLogSessionEvidence.inspect(candidatePowerLog, processStartedAt, now)
+        if (sessionEvidence.liveMatch && candidatePowerLog != null) {
+            val listenerPath = PowerLogListener.logFile?.path()
+            if (listenerPath != candidatePowerLog.absolutePath) {
+                val rebound = PowerLogListener.bindCurrentSessionLog(candidatePowerLog)
+                log.warn {
+                    "POWER_LOG_LIVE_MATCH_BIND_CANDIDATE pid=${currentPid ?: "none"} " +
+                        "processStartedAt=${processStartedAt ?: "unknown"} path=${candidatePowerLog.absolutePath} " +
+                        "length=${sessionEvidence.length} marker=${sessionEvidence.latestMarker} " +
+                        "rebound=$rebound"
+                }
+                // Replay may observe a terminal transition while attaching; refresh
+                // the proof after the listener has caught up to the current file.
+                sessionEvidence = PowerLogSessionEvidence.inspect(candidatePowerLog, processStartedAt, now)
+            }
+        }
         val powerLog = PowerLogListener.logFile
         val powerLogPath = powerLog?.path()
-        val powerLogPosition = powerLog?.getPosition() ?: Long.MIN_VALUE
-        val powerLogLength = powerLog?.length() ?: 0L
-        val powerLogAge = powerLogPath?.let { path ->
+        val observedPowerLogPath = powerLogPath ?: sessionEvidence.path
+        val powerLogPosition = powerLog?.getPosition() ?: sessionEvidence.length
+        val powerLogLength = powerLog?.length() ?: sessionEvidence.length
+        val powerLogAge = observedPowerLogPath?.let { path ->
             runCatching { (now - java.io.File(path).lastModified()).coerceAtLeast(0L) }
                 .getOrNull()
         } ?: Long.MAX_VALUE
-        val currentPid = GameUtil.findGameProcessIdForDiagnostics()
         if (noProgressBoundPid == null && currentPid != null) noProgressBoundPid = currentPid
-        if (noProgressBoundPowerLogPath == null && powerLogPath != null) {
-            noProgressBoundPowerLogPath = powerLogPath
+        if (noProgressBoundPowerLogPath == null && observedPowerLogPath != null) {
+            noProgressBoundPowerLogPath = observedPowerLogPath
         }
         val screen = when {
             WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState() ->
                 NoProgressWatchdog.ScreenExpectation.RESULT
+            sessionEvidence.preserveClient -> NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY
             Mode.nextMode == ModeEnum.STARTUP || powerLog == null ->
                 NoProgressWatchdog.ScreenExpectation.STARTUP
             recoveryPending && WarEx.inWar -> NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY
@@ -398,7 +425,7 @@ object LifecycleTrace {
                 windowPresent = ScriptStatus.gameHWND != null,
                 foregroundMatches = foregroundFailureCount.get() == 0,
                 foregroundFailureCount = foregroundFailureCount.get(),
-                powerLogPath = powerLogPath,
+                powerLogPath = observedPowerLogPath,
                 boundPowerLogPath = noProgressBoundPowerLogPath,
                 powerLogPosition = powerLogPosition,
                 powerLogLength = powerLogLength,
@@ -407,6 +434,8 @@ object LifecycleTrace {
                     OcrRuntime.currentProvider() == OcrProviderKind.PADDLEX &&
                         !PowerLogListener.replayingExistingLog && powerLogLength == 0L
                 }.getOrDefault(false),
+                liveMatchEvidence = sessionEvidence.preserveClient,
+                mulliganEvidence = sessionEvidence.mulligan,
             ),
         )
         if (decision.action != NoProgressWatchdog.RecoveryAction.WAIT) {
@@ -415,11 +444,14 @@ object LifecycleTrace {
                     "expectedMode=${Mode.nextMode?.name ?: Mode.currMode?.name ?: "NONE"} " +
                     "mode=${Mode.currMode?.name ?: "NONE"} pid=${currentPid ?: "none"} " +
                     "boundPid=${noProgressBoundPid ?: "none"} window=${ScriptStatus.gameHWND ?: "none"} " +
-                    "powerLog=${powerLogPath ?: "none"} position=$powerLogPosition length=$powerLogLength " +
-                    "ageMs=$powerLogAge screen=$screen action=${decision.action} reason=${decision.reason}"
+                    "powerLog=${observedPowerLogPath ?: "none"} position=$powerLogPosition length=$powerLogLength " +
+                    "ageMs=$powerLogAge liveMatch=${sessionEvidence.liveMatch} " +
+                    "preserveClient=${sessionEvidence.preserveClient} currentSession=${sessionEvidence.currentSession} " +
+                    "mulligan=${sessionEvidence.mulligan} marker=${sessionEvidence.latestMarker} " +
+                    "action=${decision.action} reason=${decision.reason}"
             }
         }
-        applyNoProgressDecision(decision, currentPid, powerLogPath)
+        applyNoProgressDecision(decision, currentPid, observedPowerLogPath)
     }
 
     private fun applyNoProgressDecision(

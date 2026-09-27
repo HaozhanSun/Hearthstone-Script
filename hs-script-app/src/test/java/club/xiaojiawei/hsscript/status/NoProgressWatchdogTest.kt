@@ -132,6 +132,55 @@ class NoProgressWatchdogTest {
         )
     }
 
+    @Test
+    fun `current session mulligan evidence overrides startup and never restarts live client`() {
+        val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1_000L)
+        val mulligan = snapshot(
+            now = 0L,
+            screen = NoProgressWatchdog.ScreenExpectation.STARTUP,
+            powerLogPath = "session-01/Power.log",
+            powerLogLength = 0L,
+            liveMatchEvidence = true,
+            mulliganEvidence = true,
+        )
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT, watchdog.observe(mulligan).action)
+
+        val growing = watchdog.observe(mulligan.copy(nowMs = 500L, powerLogLength = 4_096L))
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT, growing.action)
+        assertEquals("live-mulligan-power-log-progress", growing.reason)
+
+        val stalled = watchdog.observe(mulligan.copy(nowMs = 1_500L, powerLogLength = 4_096L))
+        assertEquals(NoProgressWatchdog.RecoveryAction.REBIND, stalled.action)
+        val bounded = watchdog.observe(mulligan.copy(nowMs = 2_500L, powerLogLength = 4_096L))
+        assertEquals(NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE, bounded.action)
+        assertTrue(bounded.reason.endsWith("no-restart"))
+    }
+
+    @Test
+    fun `current session live match with missing process fails closed without relaunch`() {
+        val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1L)
+        val evidence = snapshot(
+            now = 0L,
+            currentPid = 111L,
+            boundPid = 111L,
+            liveMatchEvidence = true,
+        )
+        watchdog.observe(evidence)
+        val missing = watchdog.observe(evidence.copy(nowMs = 5L, currentPid = null, processAlive = false))
+        assertEquals(NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE, missing.action)
+        assertEquals("live-match-lineage-missing-no-restart", missing.reason)
+    }
+
+    @Test
+    fun `live match with changed process lineage pauses instead of relaunching`() {
+        val watchdog = NoProgressWatchdog()
+        val decision = watchdog.observe(
+            snapshot(now = 10L, currentPid = 222L, boundPid = 111L, liveMatchEvidence = true),
+        )
+        assertEquals(NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE, decision.action)
+        assertEquals("live-match-lineage-mismatch-no-restart", decision.reason)
+    }
+
     private fun snapshot(
         now: Long,
         screen: NoProgressWatchdog.ScreenExpectation = NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY,
@@ -141,6 +190,9 @@ class NoProgressWatchdogTest {
         boundPowerLogPath: String? = "run/Power.log",
         foregroundMatches: Boolean = true,
         foregroundFailureCount: Int = 0,
+        powerLogLength: Long = 0L,
+        liveMatchEvidence: Boolean = false,
+        mulliganEvidence: Boolean = false,
     ) = NoProgressWatchdog.Snapshot(
         nowMs = now,
         mode = "GAMEPLAY",
@@ -155,8 +207,10 @@ class NoProgressWatchdogTest {
         powerLogPath = powerLogPath,
         boundPowerLogPath = boundPowerLogPath,
         powerLogPosition = 0L,
-        powerLogLength = 0L,
+        powerLogLength = powerLogLength,
         powerLogAgeMs = now,
+        liveMatchEvidence = liveMatchEvidence,
+        mulliganEvidence = mulliganEvidence,
     )
 }
 

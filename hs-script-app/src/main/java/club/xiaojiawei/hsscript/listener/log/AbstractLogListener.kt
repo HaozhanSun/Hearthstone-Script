@@ -139,28 +139,60 @@ abstract class AbstractLogListener(
                 log.error(e) {}
                 return
             }
-            logScheduledFuture = LISTEN_LOG_THREAD_POOL.scheduleWithFixedDelay({
-                if (PauseStatus.isPause || !WorkTimeListener.working) {
-                    stopAll()
-                } else {
-                    try {
-                        // Hearthstone creates a new timestamped log directory
-                        // for a fresh client session. A listener attached to
-                        // the previous session otherwise reaches EOF forever,
-                        // leaving the state machine in FILL_DECK while the
-                        // pixels already show an active game.
-                        if (!rotateToLatestDiskLog()) {
-                            dealNewLog()
-                        }
-                    } catch (e: InterruptedException) {
-                        log.warn(e) { logFileName + "监听中断" }
-                    } catch (e: Throwable) {
-                        log.error(e) { logFileName + "监听发生错误" }
-                    }
-                }
-            }, listenInitialDelay, listenPeriod, listenTimeUnit)
+            schedulePolling()
             listenNextListener()
         }
+    }
+
+    /**
+     * Bind a session-verified late disk log without restarting Hearthstone.
+     * The same replay path used for normal log rotation reconstructs an
+     * unfinished game before the listener resumes consuming appended lines.
+     */
+    internal fun bindCurrentSessionDiskLog(file: File): Boolean = synchronized(this) {
+        if (ScriptStatus.gameLogMode !== GameLogModeEnum.DISK || !file.isFile) return false
+        val currentPath = logFile?.path()?.let { File(it).absoluteFile.normalize().path }
+        val candidatePath = file.absoluteFile.normalize().path
+        if (currentPath == candidatePath) return false
+
+        logFile?.close()
+        logFile = DiskLogFile(candidatePath)
+        log.warn {
+            "POWER_LOG_CURRENT_SESSION_BIND log=$logFileName previous=${currentPath ?: "none"} " +
+                "current=$candidatePath length=${file.length()} replay=unfinished-game-only"
+        }
+        try {
+            dealOldLog()
+        } catch (error: Throwable) {
+            log.error(error) { "POWER_LOG_CURRENT_SESSION_BIND_FAILED log=$logFileName path=$candidatePath" }
+            closeLogFile()
+            return false
+        }
+        val future = logScheduledFuture
+        if (future == null || future.isDone) {
+            schedulePolling()
+            listenNextListener()
+        }
+        true
+    }
+
+    private fun schedulePolling() {
+        logScheduledFuture = LISTEN_LOG_THREAD_POOL.scheduleWithFixedDelay({
+            if (PauseStatus.isPause || !WorkTimeListener.working) {
+                stopAll()
+            } else {
+                try {
+                    // Hearthstone creates a new timestamped log directory
+                    // for a fresh client session. A listener attached to
+                    // the previous session otherwise reaches EOF forever.
+                    if (!rotateToLatestDiskLog()) dealNewLog()
+                } catch (e: InterruptedException) {
+                    log.warn(e) { logFileName + "监听中断" }
+                } catch (e: Throwable) {
+                    log.error(e) { logFileName + "监听发生错误" }
+                }
+            }
+        }, listenInitialDelay, listenPeriod, listenTimeUnit)
     }
 
     private fun closeLogFile() {
@@ -179,6 +211,7 @@ abstract class AbstractLogListener(
      *
      * @return true when a new file was attached and replayed this cycle.
      */
+    @Synchronized
     private fun rotateToLatestDiskLog(): Boolean {
         if (ScriptStatus.gameLogMode !== GameLogModeEnum.DISK) return false
         val current = logFile ?: return false

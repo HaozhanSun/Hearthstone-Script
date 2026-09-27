@@ -87,6 +87,27 @@ class GameStartupHandoffPolicyTest {
     }
 
     @Test
+    fun `visible unconfirmed client retries safe screen probes instead of terminal auto pause`() {
+        assertEquals(
+            GameStartupHandoffPolicy.HandshakeTimeoutDecision.RETRY_VISIBLE_CLIENT,
+            GameStartupHandoffPolicy.onHandshakeTimeout(
+                startupConfirmed = false,
+                screenProbeInProgress = false,
+                gameAlive = true,
+                visibleGameWindow = true,
+            ),
+        )
+        assertEquals(
+            GameStartupHandoffPolicy.HandshakeTimeoutDecision.AUTOMATIC_PAUSE,
+            GameStartupHandoffPolicy.onHandshakeTimeout(
+                startupConfirmed = false,
+                gameAlive = false,
+                visibleGameWindow = false,
+            ),
+        )
+    }
+
+    @Test
     fun `power log retry begins at thirty seconds`() {
         assertFalse(GameStartupHandoffPolicy.powerLogStallRetryDue(10_000L, 39_999L))
         assertTrue(GameStartupHandoffPolicy.powerLogStallRetryDue(10_000L, 40_000L))

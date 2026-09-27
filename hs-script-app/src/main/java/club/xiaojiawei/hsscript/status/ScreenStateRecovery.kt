@@ -48,6 +48,7 @@ object ScreenStateRecovery {
         APPLIED,
         NO_ACTION,
         DEFERRED_GAME_FOREGROUND,
+        CAPTURE_RETRY_EXHAUSTED,
     }
 
     private const val MAX_OCR_TEXT_LENGTH = 500
@@ -101,6 +102,13 @@ object ScreenStateRecovery {
         val visual: VisualSignature,
         val gameRectKnown: Boolean,
         val gameWindowKnown: Boolean,
+    )
+
+    private data class ForegroundCaptureResult(
+        val foregroundConfirmed: Boolean,
+        val capture: Capture?,
+        val attempts: Int,
+        val exhausted: Boolean,
     )
 
     private data class OcrEvidence(
@@ -187,22 +195,12 @@ object ScreenStateRecovery {
         // operation. Releasing z-order between those steps was the cause of
         // screenshots containing Kodi/Codex while the log claimed that
         // Hearthstone was foreground.
-        val captureResult = if (RuntimeSafety.safeNative) {
-            MouseUtil.withRecoveryForeground(gameWindow) {
-                // The focus helper can refresh ScriptStatus.gameHWND while
-                // replacing the startup coordinate sentinel. Resolve it
-                // again inside the foreground lease so capture and focus use
-                // the same live window.
-                captureScreen(ScriptStatus.gameHWND ?: gameWindow, allowCachedGameRect = false)
-            }
-        } else {
-            MouseUtil.RecoveryForegroundResult(true, captureScreen(gameWindow, allowCachedGameRect = false))
-        }
+        val captureResult = captureWithForegroundRetry(gameWindow)
         val powerLog = PowerLogListener.logFile
         log.info {
             "SCREEN_RECOVERY_WINDOW_READINESS gameWindow=$gameWindow " +
-                "handleKnown=${gameWindow != null} foregroundConfirmed=${captureResult.foregroundConfirmed} " +
-                "captureReturned=${captureResult.value != null} " +
+                "handleKnown=true foregroundConfirmed=${captureResult.foregroundConfirmed} " +
+                "captureReturned=${captureResult.capture != null} attempts=${captureResult.attempts} " +
                 "powerLog=${powerLog?.path() ?: "none"} " +
                 "powerLogReadable=${(powerLog?.length() ?: 0L) > 0L}"
         }
@@ -213,13 +211,18 @@ object ScreenStateRecovery {
             }
             return InspectionResult.DEFERRED_GAME_FOREGROUND
         }
-        val capture = captureResult.value
+        val capture = captureResult.capture
         if (capture == null) {
-            log.warn {
-                "SCREEN_RECOVERY_FAILED reason=capture-null stuckForMs=$stuckForMs " +
-                    "state=$stateFingerprint"
+            if (captureResult.exhausted) {
+                log.error {
+                    "SCREEN_RECOVERY_CAPTURE_RETRY_EXHAUSTED attempts=${captureResult.attempts} " +
+                        "reason=foreground-confirmed-frame-untrusted action=NO_INPUT " +
+                        "state=$stateFingerprint automaticPauseHandledByStartupDeadline=true"
+                }
+                return InspectionResult.CAPTURE_RETRY_EXHAUSTED
             }
-            return InspectionResult.NO_ACTION
+            log.warn { "SCREEN_RECOVERY_FAILED reason=foreground-unconfirmed state=$stateFingerprint" }
+            return InspectionResult.DEFERRED_GAME_FOREGROUND
         }
 
         log.warn {
@@ -871,6 +874,54 @@ object ScreenStateRecovery {
             text.contains("重新连接失败") ||
             text.contains("请再试") ||
             text.contains("请重试")
+    }
+
+    /**
+     * A foreground HWND confirmation is not pixel evidence. Reacquire focus
+     * and capture a new frame a small, fixed number of times so a transient
+     * DWM/z-order race can recover, while a persistent overlay remains
+     * rejected and produces an explicit bounded terminal diagnostic.
+     */
+    private fun captureWithForegroundRetry(gameWindow: WinDef.HWND): ForegroundCaptureResult {
+        val outcome = ForegroundCaptureRetryPolicy.run(
+            acquire = { _ ->
+                val result = if (RuntimeSafety.safeNative) {
+                    MouseUtil.withRecoveryForeground(gameWindow) {
+                        val target = ScriptStatus.gameHWND
+                            ?.takeIf { User32.INSTANCE.IsWindow(it) }
+                            ?: gameWindow
+                        captureScreen(target, allowCachedGameRect = false)
+                    }
+                } else {
+                    MouseUtil.RecoveryForegroundResult(
+                        true,
+                        captureScreen(gameWindow, allowCachedGameRect = false),
+                    )
+                }
+                ForegroundCaptureRetryPolicy.Attempt(
+                    foregroundConfirmed = result.foregroundConfirmed,
+                    provenanceAccepted = result.value != null,
+                    frame = result.value,
+                )
+            },
+            onRetry = { attempt ->
+                log.warn {
+                    "SCREEN_RECOVERY_CAPTURE_RETRY attempt=$attempt " +
+                        "reason=foreground-confirmed-frame-rejected refocus=true freshCapture=true input=false"
+                }
+                SystemUtil.delay(500)
+            },
+        )
+        if (outcome.decision == ForegroundCaptureRetryPolicy.Decision.ACCEPT) {
+            if (outcome.attempts > 1) {
+                log.info { "SCREEN_RECOVERY_CAPTURE_RETRY_RECOVERED attempts=${outcome.attempts} freshFrame=true" }
+            }
+            return ForegroundCaptureResult(true, outcome.frame, outcome.attempts, false)
+        }
+        if (outcome.decision == ForegroundCaptureRetryPolicy.Decision.EXHAUSTED) {
+            return ForegroundCaptureResult(true, null, outcome.attempts, true)
+        }
+        return ForegroundCaptureResult(false, null, outcome.attempts, false)
     }
 
     private fun captureStillTrusted(capture: Capture): Boolean {
