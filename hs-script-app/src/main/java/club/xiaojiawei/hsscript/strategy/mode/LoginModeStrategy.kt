@@ -6,6 +6,8 @@ import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscript.bean.GameRect
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.RuntimeSafety
+import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil
 import java.util.concurrent.TimeUnit
@@ -42,6 +44,17 @@ object LoginModeStrategy : AbstractModeStrategy<Any?>() {
             stayTime++
             if (PauseStatus.isPause) {
                 cancelAllEnteredTasks()
+            } else if (!LoginModeActionPolicy.mayRetryCoordinateAction(
+                    safeNative = RuntimeSafety.safeNative,
+                )
+            ) {
+                val powerLog = PowerLogListener.logFile
+                log.info {
+                    "LOGIN_RETRY_ACTION_BLOCKED reason=safe-native-requires-verified-screen " +
+                        "powerLog=${powerLog?.path() ?: "none"} " +
+                        "length=${powerLog?.length() ?: 0L} " +
+                        "verifiedScreen=false"
+                }
             } else if (stayTime > 7) {
                 log.info { "长时间停留在${Mode.currMode?.comment}，尝试点击其他确定按钮" }
                 CARD_ADJUSTMENT_CONFIRM_RECT.lClick()

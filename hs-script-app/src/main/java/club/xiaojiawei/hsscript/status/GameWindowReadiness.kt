@@ -2,6 +2,13 @@ package club.xiaojiawei.hsscript.status
 
 /** Pure, replayable predicate for deciding whether desktop input may target the game. */
 internal object GameWindowReadiness {
+    fun exactVisibleForeground(
+        targetVisible: Boolean,
+        foregroundVisible: Boolean,
+        targetHandle: Long,
+        foregroundHandle: Long,
+    ): Boolean = targetVisible && foregroundVisible && targetHandle != 0L && targetHandle == foregroundHandle
+
     fun sameVisibleGameProcess(
         targetVisible: Boolean,
         foregroundVisible: Boolean,

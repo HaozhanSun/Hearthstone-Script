@@ -17,6 +17,7 @@ import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import com.sun.jna.platform.win32.User32
 import com.sun.jna.platform.win32.WinDef
+import com.sun.jna.Pointer
 import com.sun.jna.ptr.IntByReference
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import java.awt.GraphicsEnvironment
@@ -95,6 +96,7 @@ object ScreenStateRecovery {
     private data class Capture(
         val image: BufferedImage,
         val bounds: Rectangle,
+        val hwnd: WinDef.HWND?,
         val file: File?,
         val visual: VisualSignature,
         val gameRectKnown: Boolean,
@@ -229,6 +231,13 @@ object ScreenStateRecovery {
 
         val ocrEvidence = runOCR(capture)
         val ocrText = ocrEvidence.text
+        if (!captureStillTrusted(capture)) {
+            log.warn {
+                "SCREEN_RECOVERY_SKIPPED reason=capture-provenance-changed-during-ocr " +
+                    "hwnd=${capture.hwnd} bounds=${capture.bounds}"
+            }
+            return InspectionResult.DEFERRED_GAME_FOREGROUND
+        }
         if (!stateStillCurrent()) {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-during-inspection state=$stateFingerprint" }
             return InspectionResult.NO_ACTION
@@ -312,6 +321,10 @@ object ScreenStateRecovery {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-before-apply state=$stateFingerprint" }
             return InspectionResult.NO_ACTION
         }
+        if (!captureStillTrusted(capture)) {
+            log.warn { "SCREEN_RECOVERY_SKIPPED reason=capture-provenance-changed-before-apply hwnd=${capture.hwnd}" }
+            return InspectionResult.DEFERRED_GAME_FOREGROUND
+        }
         return if (apply(detection)) InspectionResult.APPLIED else InspectionResult.NO_ACTION
     }
 
@@ -364,13 +377,14 @@ object ScreenStateRecovery {
         val foregroundBefore = User32.INSTANCE.GetForegroundWindow()
         val targetPid = hwnd?.let(::windowProcessId) ?: 0
         val foregroundPidBefore = foregroundBefore?.let(::windowProcessId) ?: 0
-        val foregroundBeforeOk = hwnd != null &&
-            GameWindowReadiness.sameVisibleGameProcess(
-                targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
-                foregroundVisible = foregroundBefore?.let(User32.INSTANCE::IsWindowVisible) ?: false,
-                targetPid = targetPid,
-                foregroundPid = foregroundPidBefore,
-            )
+        val targetHandle = hwnd?.let { Pointer.nativeValue(it.pointer) } ?: 0L
+        val foregroundHandleBefore = foregroundBefore?.let { Pointer.nativeValue(it.pointer) } ?: 0L
+        val foregroundBeforeOk = hwnd != null && GameWindowReadiness.exactVisibleForeground(
+            targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
+            foregroundVisible = foregroundBefore?.let(User32.INSTANCE::IsWindowVisible) ?: false,
+            targetHandle = targetHandle,
+            foregroundHandle = foregroundHandleBefore,
+        )
         log.info {
             "SCREEN_RECOVERY_CAPTURE_GATE phase=before hwnd=$hwnd " +
                 "foreground=$foregroundBefore targetPid=$targetPid foregroundPid=$foregroundPidBefore " +
@@ -380,32 +394,58 @@ object ScreenStateRecovery {
             log.warn { "SCREEN_RECOVERY_CAPTURE_REJECTED phase=before reason=foreground-mismatch hwnd=$hwnd" }
             return null
         }
+        // Preserve an explicitly quarantined frame for diagnostics, but do
+        // not allow it into OCR/state recovery when an upper z-order layer
+        // overlaps Hearthstone's captured client rectangle.
         val image = Robot().createScreenCapture(bounds)
+        val beforeOcclusion = if (RuntimeSafety.safeNative && hwnd != null) {
+            inspectZOrderAbove(hwnd, bounds)
+        } else {
+            ScreenCaptureOcclusionPolicy.Decision(true, "not-safe-native")
+        }
+        log.info {
+            "SCREEN_RECOVERY_OCCLUSION_GATE phase=before hwnd=$hwnd accepted=${beforeOcclusion.accepted} " +
+                "reason=${beforeOcclusion.reason} occludingHwnd=${beforeOcclusion.occludingHandle ?: "none"}"
+        }
+        if (!beforeOcclusion.accepted) {
+            saveQuarantinedCapture(image, "before-${beforeOcclusion.reason}")
+            log.warn {
+                "SCREEN_RECOVERY_CAPTURE_REJECTED phase=before reason=occluded-capture " +
+                    "detail=${beforeOcclusion.reason} hwnd=${beforeOcclusion.occludingHandle ?: "none"}"
+            }
+            return null
+        }
         val foregroundAfter = User32.INSTANCE.GetForegroundWindow()
         val foregroundPidAfter = foregroundAfter?.let(::windowProcessId) ?: 0
-        val foregroundAfterOk = hwnd != null &&
-            GameWindowReadiness.sameVisibleGameProcess(
-                targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
-                foregroundVisible = foregroundAfter?.let(User32.INSTANCE::IsWindowVisible) ?: false,
-                targetPid = targetPid,
-                foregroundPid = foregroundPidAfter,
-            )
+        val foregroundHandleAfter = foregroundAfter?.let { Pointer.nativeValue(it.pointer) } ?: 0L
+        val foregroundAfterOk = hwnd != null && GameWindowReadiness.exactVisibleForeground(
+            targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
+            foregroundVisible = foregroundAfter?.let(User32.INSTANCE::IsWindowVisible) ?: false,
+            targetHandle = targetHandle,
+            foregroundHandle = foregroundHandleAfter,
+        )
+        val afterOcclusion = if (RuntimeSafety.safeNative && hwnd != null) {
+            inspectZOrderAbove(hwnd, bounds)
+        } else {
+            ScreenCaptureOcclusionPolicy.Decision(true, "not-safe-native")
+        }
+        log.info {
+            "SCREEN_RECOVERY_OCCLUSION_GATE phase=after hwnd=$hwnd accepted=${afterOcclusion.accepted} " +
+                "reason=${afterOcclusion.reason} occludingHwnd=${afterOcclusion.occludingHandle ?: "none"}"
+        }
         val captureAccepted = !RuntimeSafety.safeNative ||
-            GameWindowReadiness.captureRemainsOnGame(
-                targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
-                foregroundVisibleBefore = foregroundBefore?.let(User32.INSTANCE::IsWindowVisible) ?: false,
-                foregroundVisibleAfter = foregroundAfter?.let(User32.INSTANCE::IsWindowVisible) ?: false,
-                targetPid = targetPid,
-                foregroundPidBefore = foregroundPidBefore,
-                foregroundPidAfter = foregroundPidAfter,
-            )
+            (foregroundBeforeOk && foregroundAfterOk && beforeOcclusion.accepted && afterOcclusion.accepted)
         log.info {
             "SCREEN_RECOVERY_CAPTURE_GATE phase=after hwnd=$hwnd " +
                 "foreground=$foregroundAfter targetPid=$targetPid foregroundPid=$foregroundPidAfter " +
                 "accepted=$captureAccepted beforeAccepted=$foregroundBeforeOk bounds=$bounds"
         }
         if (!captureAccepted) {
-            log.warn { "SCREEN_RECOVERY_CAPTURE_REJECTED phase=after reason=foreground-changed hwnd=$hwnd" }
+            saveQuarantinedCapture(image, "after-${afterOcclusion.reason}")
+            log.warn {
+                "SCREEN_RECOVERY_CAPTURE_REJECTED phase=after reason=provenance-invalid " +
+                    "foregroundOk=$foregroundAfterOk occlusion=${afterOcclusion.reason} hwnd=$hwnd"
+            }
             return null
         }
         val saved = DebugScreenshotRing.save(image, "screen-recovery", "stale-screen")
@@ -413,6 +453,7 @@ object ScreenStateRecovery {
         Capture(
             image,
             bounds,
+            hwnd,
             file,
             visualSignature(image),
             gameRectKnown,
@@ -830,6 +871,75 @@ object ScreenStateRecovery {
             text.contains("重新连接失败") ||
             text.contains("请再试") ||
             text.contains("请重试")
+    }
+
+    private fun captureStillTrusted(capture: Capture): Boolean {
+        if (!RuntimeSafety.safeNative) return true
+        val hwnd = capture.hwnd ?: return false
+        if (!User32.INSTANCE.IsWindow(hwnd) || !User32.INSTANCE.IsWindowVisible(hwnd)) return false
+        val foreground = User32.INSTANCE.GetForegroundWindow() ?: return false
+        if (!GameWindowReadiness.exactVisibleForeground(
+                targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
+                foregroundVisible = User32.INSTANCE.IsWindowVisible(foreground),
+                targetHandle = Pointer.nativeValue(hwnd.pointer),
+                foregroundHandle = Pointer.nativeValue(foreground.pointer),
+            )
+        ) return false
+        val occlusion = inspectZOrderAbove(hwnd, capture.bounds)
+        log.info {
+            "SCREEN_RECOVERY_CAPTURE_REVALIDATION hwnd=$hwnd accepted=${occlusion.accepted} " +
+                "reason=${occlusion.reason} occludingHwnd=${occlusion.occludingHandle ?: "none"}"
+        }
+        return occlusion.accepted
+    }
+
+    private fun saveQuarantinedCapture(image: BufferedImage, reason: String) {
+        val saved = DebugScreenshotRing.save(image, "screen-recovery-quarantined", reason)
+        log.warn {
+            "SCREEN_RECOVERY_CAPTURE_QUARANTINED reason=$reason " +
+                "path=${saved?.file?.absolutePath ?: "not-saved"}"
+        }
+    }
+
+    /**
+     * Check every visible top-level window above Hearthstone in z-order.
+     * Unknown bounds or incomplete enumeration fail closed; no application
+     * (including Codex) receives a transparency exception.
+     */
+    private fun inspectZOrderAbove(target: WinDef.HWND, captureBounds: Rectangle): ScreenCaptureOcclusionPolicy.Decision {
+        val layers = ArrayList<ScreenCaptureOcclusionPolicy.Layer>()
+        val visited = HashSet<Long>()
+        var cursor = User32.INSTANCE.GetWindow(target, WinDef.DWORD(3L) /* GW_HWNDPREV */)
+        var complete = false
+        for (index in 0 until 256) {
+            if (cursor == null || Pointer.nativeValue(cursor.pointer) == 0L) {
+                complete = true
+                break
+            }
+            val handle = Pointer.nativeValue(cursor.pointer)
+            if (!visited.add(handle)) break
+            val visible = User32.INSTANCE.IsWindowVisible(cursor)
+            val rect = if (visible) WinDef.RECT().let { nativeRect ->
+                if (User32.INSTANCE.GetWindowRect(cursor, nativeRect)) {
+                    Rectangle(
+                        nativeRect.left,
+                        nativeRect.top,
+                        nativeRect.right - nativeRect.left,
+                        nativeRect.bottom - nativeRect.top,
+                    )
+                } else null
+            } else null
+            layers += ScreenCaptureOcclusionPolicy.Layer(handle, visible, rect)
+            cursor = User32.INSTANCE.GetWindow(cursor, WinDef.DWORD(3L) /* GW_HWNDPREV */)
+            if (index == 255 && (cursor == null || Pointer.nativeValue(cursor.pointer) == 0L)) complete = true
+        }
+        val decision = ScreenCaptureOcclusionPolicy.evaluate(
+            targetHandle = Pointer.nativeValue(target.pointer),
+            captureBounds = captureBounds,
+            layersAboveTarget = layers,
+            enumerationComplete = complete,
+        )
+        return if (complete) decision else ScreenCaptureOcclusionPolicy.Decision(false, "z-order-limit-or-cycle")
     }
 
     /** OCR-free modal fallback, gated by the dedicated deck-title anchor. */

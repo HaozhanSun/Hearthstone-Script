@@ -598,6 +598,24 @@ object MouseUtil {
                     return@submit false
                 }
                 if (!ActionDispatchGate.allow("mouse.robot.before-press")) return@submit false
+                val foregroundBeforePress = User32.INSTANCE.GetForegroundWindow()
+                val exactTargetForeground = foregroundBeforePress != null &&
+                    Pointer.nativeValue(foregroundBeforePress.pointer) == Pointer.nativeValue(hwnd.pointer)
+                val pressAllowed = shouldDispatchE2ERobotInputAtPress(
+                    targetHandle = Pointer.nativeValue(hwnd.pointer),
+                    foregroundHandle = foregroundBeforePress?.let { Pointer.nativeValue(it.pointer) } ?: 0L,
+                    targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
+                    foregroundVisible = foregroundBeforePress?.let(User32.INSTANCE::IsWindowVisible) ?: false,
+                    workerInterrupted = Thread.currentThread().isInterrupted,
+                    actionAllowed = ActionDispatchGate.allow("mouse.robot.exact-target-before-press"),
+                )
+                if (!pressAllowed) {
+                    log.warn {
+                        "E2E_INPUT_ROBOT_ABORTED reason=foreground-stolen-before-press hwnd=$hwnd " +
+                            "actual=${foregroundBeforePress ?: "none"} exact=$exactTargetForeground"
+                    }
+                    return@submit false
+                }
                 e2eRobot.apply {
                     mousePress(buttonMask)
                     log.info { "E2E_INPUT_ROBOT_PRESSED" }
@@ -605,12 +623,28 @@ object MouseUtil {
                     mouseRelease(buttonMask)
                 }
                 val foregroundAfterInput = User32.INSTANCE.GetForegroundWindow()
-                val focusAfterInput = foregroundAfterInput != null &&
-                    Pointer.nativeValue(foregroundAfterInput.pointer) == Pointer.nativeValue(hwnd.pointer)
-                log.info {
-                    "E2E_INPUT_ROBOT_SENT client=(${pos.x},${pos.y}) screen=(${screenPoint.x},${screenPoint.y}) " +
-                        "hwnd=$hwnd foregroundAfter=$foregroundAfterInput focusedAfter=$focusAfterInput"
+                val focusAfterInput = e2eRobotForegroundRemainedTarget(
+                    targetHandle = Pointer.nativeValue(hwnd.pointer),
+                    foregroundHandle = foregroundAfterInput?.let { Pointer.nativeValue(it.pointer) } ?: 0L,
+                    targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
+                    foregroundVisible = foregroundAfterInput?.let(User32.INSTANCE::IsWindowVisible) ?: false,
+                )
+                if (focusAfterInput) {
+                    log.info {
+                        "E2E_INPUT_ROBOT_DISPATCHED client=(${pos.x},${pos.y}) screen=(${screenPoint.x},${screenPoint.y}) " +
+                            "hwnd=$hwnd foregroundAfter=$foregroundAfterInput focusedAfter=true " +
+                            "uiAcceptance=UNVERIFIED"
+                    }
+                } else {
+                    log.warn {
+                        "E2E_INPUT_ROBOT_DISPATCHED client=(${pos.x},${pos.y}) screen=(${screenPoint.x},${screenPoint.y}) " +
+                            "hwnd=$hwnd foregroundAfter=$foregroundAfterInput focusedAfter=false " +
+                            "uiAcceptance=UNVERIFIED reason=foreground-changed-after-input"
+                    }
                 }
+                // A physical press/release already happened. Returning false
+                // here could trigger a duplicate retry after an action the
+                // game may have accepted. Keep this distinct from UI evidence.
                 true
             }
         }
@@ -1159,6 +1193,32 @@ object MouseUtil {
         workerInterrupted: Boolean,
     ): Boolean = foregroundConfirmed && !workerInterrupted
 
+    internal fun shouldDispatchE2ERobotInputAtPress(
+        targetHandle: Long,
+        foregroundHandle: Long,
+        targetVisible: Boolean,
+        foregroundVisible: Boolean,
+        workerInterrupted: Boolean,
+        actionAllowed: Boolean,
+    ): Boolean = GameWindowReadiness.exactVisibleForeground(
+        targetVisible = targetVisible,
+        foregroundVisible = foregroundVisible,
+        targetHandle = targetHandle,
+        foregroundHandle = foregroundHandle,
+    ) && !workerInterrupted && actionAllowed
+
+    internal fun e2eRobotForegroundRemainedTarget(
+        targetHandle: Long,
+        foregroundHandle: Long,
+        targetVisible: Boolean,
+        foregroundVisible: Boolean,
+    ): Boolean = GameWindowReadiness.exactVisibleForeground(
+        targetVisible = targetVisible,
+        foregroundVisible = foregroundVisible,
+        targetHandle = targetHandle,
+        foregroundHandle = foregroundHandle,
+    )
+
     private fun isVisibleForegroundOfTarget(target: HWND, foreground: HWND?): Boolean {
         if (foreground == null || !User32.INSTANCE.IsWindow(target) || !User32.INSTANCE.IsWindow(foreground)) {
             return false
@@ -1166,13 +1226,11 @@ object MouseUtil {
         if (!User32.INSTANCE.IsWindowVisible(target) || !User32.INSTANCE.IsWindowVisible(foreground)) {
             return false
         }
-        val targetPid = windowProcessId(target)
-        val foregroundPid = windowProcessId(foreground)
-        return GameWindowReadiness.sameVisibleGameProcess(
-            targetVisible = true,
-            foregroundVisible = true,
-            targetPid = targetPid,
-            foregroundPid = foregroundPid,
+        return GameWindowReadiness.exactVisibleForeground(
+            targetVisible = User32.INSTANCE.IsWindowVisible(target),
+            foregroundVisible = User32.INSTANCE.IsWindowVisible(foreground),
+            targetHandle = Pointer.nativeValue(target.pointer),
+            foregroundHandle = Pointer.nativeValue(foreground.pointer),
         )
     }
 

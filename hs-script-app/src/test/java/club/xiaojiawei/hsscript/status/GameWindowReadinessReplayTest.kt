@@ -68,4 +68,29 @@ class GameWindowReadinessReplayTest {
             ),
         )
     }
+
+    @Test
+    fun `same process is insufficient when a different Hearthstone window owns foreground`() {
+        assertFalse(
+            GameWindowReadiness.exactVisibleForeground(
+                targetVisible = true,
+                foregroundVisible = true,
+                targetHandle = 0x100L,
+                foregroundHandle = 0x200L,
+            ),
+        )
+    }
+
+    @Test
+    fun `exact target handle must remain visible foreground`() {
+        assertTrue(
+            GameWindowReadiness.exactVisibleForeground(
+                targetVisible = true,
+                foregroundVisible = true,
+                targetHandle = 0x100L,
+                foregroundHandle = 0x100L,
+            ),
+        )
+        assertFalse(GameWindowReadiness.exactVisibleForeground(true, false, 0x100L, 0x100L))
+    }
 }
