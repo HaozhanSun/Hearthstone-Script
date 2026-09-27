@@ -80,6 +80,7 @@ object ScreenStateRecovery {
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
         HOME("HOME"),
+        HOME_TASK_OVERLAY("HOME_TASK_OVERLAY"),
         TOURNAMENT("TOURNAMENT"),
         MATCHMAKING("MATCHMAKING"),
         RESULT("RESULT"),
@@ -715,6 +716,9 @@ object ScreenStateRecovery {
         if (looksLikeShopOverlayText(text) && looksLikeShopOverlayVisual(visual)) {
             return Detection(ScreenKind.SHOP_OVERLAY, ModeEnum.HUB, 94, "shop-overlay-text-and-visual")
         }
+        if (looksLikeStartupQuestOverlayText(text)) {
+            return Detection(ScreenKind.HOME_TASK_OVERLAY, ModeEnum.HUB, 96, "startup-your-quests-overlay")
+        }
         // The live client uses "搜寻对手" while some localized/client builds
         // use "寻找对手". OCR also commonly separates the cancel label, so
         // accept both forms but require a matchmaking-specific phrase.
@@ -864,6 +868,12 @@ object ScreenStateRecovery {
             text.contains("库存") ||
             text.contains("流浪者")
         return market && detail
+    }
+
+    /** The modal title is distinct from the persistent hub's small task button. */
+    internal fun looksLikeStartupQuestOverlayText(ocrText: String): Boolean {
+        val normalized = ocrText.lowercase(Locale.ROOT).replace(Regex("[\\s\\p{Punct}，。、“”‘’：:！!？?]"), "")
+        return normalized.contains("你的任务") || normalized.contains("yourquests")
     }
 
     internal fun looksLikeReconnectFailureDialogRoiText(ocrText: String): Boolean {
@@ -1253,6 +1263,7 @@ object ScreenStateRecovery {
             screen = detection.kind.code,
             mode = detection.mode,
             enterStrategy = detection.kind != ScreenKind.DECK_SELECTION &&
+                detection.kind != ScreenKind.HOME_TASK_OVERLAY &&
                 detection.kind != ScreenKind.RESULT &&
                 detection.kind != ScreenKind.MATCHMAKING &&
                 detection.kind != ScreenKind.RECONNECT &&
@@ -1260,6 +1271,7 @@ object ScreenStateRecovery {
                 detection.kind != ScreenKind.RECONNECT_SPINNER &&
                 detection.kind != ScreenKind.LOADING,
             action = when (detection.kind) {
+                ScreenKind.HOME_TASK_OVERLAY -> "DISMISS_HOME_TASK_OVERLAY"
                 ScreenKind.DECK_SELECTION -> "START_MATCHING"
                 ScreenKind.HOME,
                 ScreenKind.TOURNAMENT,
@@ -1291,8 +1303,10 @@ object ScreenStateRecovery {
             screen = detection.kind.code,
             mode = detection.mode,
             enterStrategy = detection.kind != ScreenKind.DECK_SELECTION &&
+                detection.kind != ScreenKind.HOME_TASK_OVERLAY &&
                 detection.kind != ScreenKind.RECONNECT_FAILURE,
             action = when (detection.kind) {
+                ScreenKind.HOME_TASK_OVERLAY -> "DISMISS_HOME_TASK_OVERLAY"
                 ScreenKind.DECK_SELECTION -> "START_MATCHING"
                 ScreenKind.RECONNECT_FAILURE -> "RESTART_CLIENT"
                 else -> "OTHER"
@@ -1431,6 +1445,87 @@ object ScreenStateRecovery {
         }
     }
 
+    private fun scheduleHomeTaskOverlayRecovery(dismissDispatches: Int, delayMs: Long) {
+        EXTRA_THREAD_POOL.schedule({
+            if ((!WorkTimeListener.working && !PauseStatus.isAutomaticPause) ||
+                !PauseStatus.canRunAutomaticRecovery() || PauseStatus.pauseOrigin == PauseStatus.Origin.MANUAL ||
+                WarEx.inWar || Mode.currMode != ModeEnum.HUB
+            ) {
+                log.info {
+                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_SKIPPED reason=state-changed " +
+                        "working=${WorkTimeListener.working} pauseOrigin=${PauseStatus.pauseOrigin} " +
+                        "mode=${Mode.currMode?.name ?: "NONE"} inWar=${WarEx.inWar}"
+                }
+                return@schedule
+            }
+
+            val hwnd = resolveLiveGameWindow()
+            if (hwnd == null) {
+                log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=game-window-unavailable" }
+                return@schedule
+            }
+            val frameResult = captureWithForegroundRetry(hwnd)
+            val capture = frameResult.capture
+            if (!frameResult.foregroundConfirmed || capture == null || !captureStillTrusted(capture)) {
+                log.warn {
+                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=trusted-capture-unavailable " +
+                        "foregroundConfirmed=${frameResult.foregroundConfirmed} " +
+                        "capture=${capture != null} attempts=${frameResult.attempts}"
+                }
+                return@schedule
+            }
+            val evidence = runOCR(capture)
+            if (!captureStillTrusted(capture)) {
+                log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=capture-provenance-changed" }
+                return@schedule
+            }
+            val detection = detect(evidence, capture.visual)
+            val observation = when (detection?.kind) {
+                ScreenKind.HOME_TASK_OVERLAY -> StartupQuestOverlayPolicy.Observation.QUEST_OVERLAY
+                ScreenKind.HOME -> StartupQuestOverlayPolicy.Observation.HUB
+                else -> StartupQuestOverlayPolicy.Observation.UNKNOWN
+            }
+            val action = StartupQuestOverlayPolicy.decide(
+                observation = observation,
+                captureTrusted = true,
+                dismissDispatches = dismissDispatches,
+            )
+            log.info {
+                "SCREEN_RECOVERY_HOME_TASK_OVERLAY_PROBE observation=$observation " +
+                    "detected=${detection?.kind?.code ?: "UNKNOWN"} confidence=${detection?.confidence ?: 0} " +
+                    "action=$action dismissDispatches=$dismissDispatches screenshot=${capture.file?.absolutePath ?: "none"}"
+            }
+            when (action) {
+                StartupQuestOverlayPolicy.Action.DISMISS_OVERLAY -> {
+                    val accepted = MouseUtil.leftButtonClickForRecovery(
+                        HubModeStrategy.HIDE_TASK_RECT.getCenterClickPos(),
+                    )
+                    log.warn {
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_DISMISS dispatched=$accepted " +
+                            "uiAccepted=unverified attempt=${dismissDispatches + 1}"
+                    }
+                    if (accepted) scheduleHomeTaskOverlayRecovery(dismissDispatches + 1, 900L)
+                }
+                StartupQuestOverlayPolicy.Action.ENTER_HUB -> {
+                    if (PauseStatus.resumeAutomaticPause("verified-hub-after-quest-overlay")) {
+                        log.warn { "SCREEN_RECOVERY_AUTO_RESUME reason=verified-hub-after-quest-overlay" }
+                    }
+                    Mode.recover(ModeEnum.HUB, "verified-hub-after-quest-overlay", enterStrategy = true)
+                    log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_CONFIRMED state=HUB strategyStarted=true" }
+                }
+                StartupQuestOverlayPolicy.Action.WAIT_FOR_TRUSTED_CAPTURE ->
+                    log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_WAIT reason=screen-unclassified action=NO_INPUT" }
+                StartupQuestOverlayPolicy.Action.BLOCK_UNTRUSTED ->
+                    log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=untrusted-frame action=NO_INPUT" }
+                StartupQuestOverlayPolicy.Action.EXHAUSTED ->
+                    log.error {
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_EXHAUSTED dismissDispatches=$dismissDispatches " +
+                            "state=HUB strategyStarted=false action=NO_INPUT"
+                    }
+            }
+        }, delayMs, TimeUnit.MILLISECONDS)
+    }
+
     private fun apply(detection: Detection): Boolean {
         // A strongly identified cannot-reconnect modal is authoritative over a
         // stale in-game flag: that match can no longer be resumed in-place.
@@ -1448,6 +1543,7 @@ object ScreenStateRecovery {
                 ScreenKind.COLLECTION,
                 ScreenKind.PACK_OPENING,
                 ScreenKind.SHOP_OVERLAY,
+                ScreenKind.HOME_TASK_OVERLAY,
             )
         ) {
             reconnectFailureRecoveryPolicy.onStartupConfirmed()
@@ -1458,6 +1554,16 @@ object ScreenStateRecovery {
         }
 
         when (detection.kind) {
+            ScreenKind.HOME_TASK_OVERLAY -> {
+                // Treat the quest dialog as a transient Home overlay, not a
+                // startup chain. A bounded recovery probes a trusted fresh
+                // frame before each click and requires a later frame to prove
+                // that the dialog actually closed.
+                Mode.recover(ModeEnum.HUB, "visible-home-task-overlay", enterStrategy = false)
+                log.warn { "SCREEN_RECOVERY_APPLIED screen=HOME_TASK_OVERLAY action=PROBE_THEN_DISMISS" }
+                scheduleHomeTaskOverlayRecovery(dismissDispatches = 0, delayMs = 300L)
+            }
+
             ScreenKind.DECK_SELECTION -> {
                 if (DeckStrategyManager.currentDeckStrategy == null ||
                     DeckStrategyManager.currentRunMode == null

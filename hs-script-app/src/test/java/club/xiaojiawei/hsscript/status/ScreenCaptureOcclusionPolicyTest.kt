@@ -61,4 +61,45 @@ class ScreenCaptureOcclusionPolicyTest {
             ).accepted,
         )
     }
+
+    @Test
+    fun `zero area invisible and geometrically tiny utility windows do not reject capture`() {
+        val result = ScreenCaptureOcclusionPolicy.evaluate(
+            target,
+            capture,
+            listOf(
+                ScreenCaptureOcclusionPolicy.Layer(0x201L, true, Rectangle(0, 0, 0, 0)),
+                ScreenCaptureOcclusionPolicy.Layer(0x202L, true, Rectangle(0, 0, 1, 1)),
+                ScreenCaptureOcclusionPolicy.Layer(0x203L, true, Rectangle(100, 100, 3, 3)),
+                ScreenCaptureOcclusionPolicy.Layer(0x204L, true, Rectangle(0, 0, 2, 2)),
+                ScreenCaptureOcclusionPolicy.Layer(0x205L, false, null),
+            ),
+            enumerationComplete = true,
+        )
+
+        assertTrue(result.accepted)
+        assertEquals("only-non-meaningful-tiny-windows", result.reason)
+        assertEquals(4, result.ignoredTinyLayerCount)
+    }
+
+    @Test
+    fun `thin or ordinary intersecting windows still reject capture`() {
+        val thinStrip = ScreenCaptureOcclusionPolicy.evaluate(
+            target,
+            capture,
+            listOf(ScreenCaptureOcclusionPolicy.Layer(0x301L, true, Rectangle(100, 100, 2, 200))),
+            enumerationComplete = true,
+        )
+        assertFalse(thinStrip.accepted)
+        assertEquals(0x301L, thinStrip.occludingHandle)
+
+        val ordinary = ScreenCaptureOcclusionPolicy.evaluate(
+            target,
+            capture,
+            listOf(ScreenCaptureOcclusionPolicy.Layer(0x302L, true, Rectangle(100, 100, 1920, 1080))),
+            enumerationComplete = true,
+        )
+        assertFalse(ordinary.accepted)
+        assertEquals("visible-window-intersects-capture", ordinary.reason)
+    }
 }
