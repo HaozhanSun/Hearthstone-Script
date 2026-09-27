@@ -76,7 +76,6 @@ class GameStarter : AbstractStarter() {
         private const val PLATFORM_CLOSE_STABILITY_MS = 20_000L
         private const val PLATFORM_CLOSE_MAX_WAIT_MS = 45_000L
         private const val PLATFORM_CLOSE_POLL_MS = 1_000L
-        private const val STARTUP_RETRY_DELAY_MS = 1_500L
         private const val STARTUP_HANDSHAKE_TIMEOUT_MS = 60_000L
     }
 
@@ -111,7 +110,7 @@ class GameStarter : AbstractStarter() {
                     do {
                         if (startTime == -1L) break
                         val diffTime = System.currentTimeMillis() - startTime
-                        if (diffTime > 30_000) {
+                        if (diffTime > 30_000 && !GameUtil.isAliveOfGame()) {
                             val now = System.currentTimeMillis()
                             startupFailureAttempts++
                             val decision = GameStartupRecoveryPolicy.decide(
@@ -119,7 +118,6 @@ class GameStarter : AbstractStarter() {
                                 startupConfirmed = false,
                                 now = now,
                                 lastLaunchAt = lastGameLaunchAt,
-                                consecutiveFailures = startupFailureAttempts,
                             )
                             log.warn {
                                 "GAME_STARTUP_HANDOFF_FAILED attempt=$startupFailureAttempts " +
@@ -128,28 +126,37 @@ class GameStarter : AbstractStarter() {
                                     "powerLogLength=${PowerLogListener.logFile?.length() ?: 0L}"
                             }
                             startTime = -1L
-                            if (decision == GameStartupRecoveryPolicy.Decision.PAUSE_WITH_DIAGNOSTIC) {
-                                log.error {
-                                    "GAME_STARTUP_STOPPED action=AUTOMATIC_PAUSE reason=retry-budget-exhausted " +
-                                        "attempts=$startupFailureAttempts max=${GameStartupRecoveryPolicy.MAX_FAILURES} " +
-                                        "platformPreserved=true"
-                                }
-                                LifecycleTrace.stopRecoveryCascade("startup-retry-budget-exhausted")
-                                PauseStatus.setAutomaticPause(true)
-                            } else {
-                                EXTRA_THREAD_POOL.schedule({
-                                    // A short-lived Hearthstone process does not
-                                    // justify killing Battle.net.  The next
-                                    // PlatformStarter pass reuses whichever
-                                    // launcher instance is already alive.
-                                    GameUtil.killGame(true)
-                                    log.warn {
-                                        "GAME_STARTUP_RETRY action=RESTART_STARTER_CHAIN " +
-                                            "platformPreserved=true attempt=$startupFailureAttempts"
-                                    }
-                                    StarterConfig.starter.start()
-                                }, RandomUtil.getInteractionDelay(1000).toLong(), TimeUnit.MILLISECONDS)
+                            val retryDelay = GameStartupRecoveryPolicy.retryDelayMs(
+                                now,
+                                lastGameLaunchAt,
+                                startupFailureAttempts,
+                            )
+                            log.warn {
+                                "GAME_STARTUP_RETRY action=RESTART_STARTER_CHAIN reason=handoff-not-confirmed " +
+                                    "platformPreserved=true attempt=$startupFailureAttempts retryDelayMs=$retryDelay"
                             }
+                            EXTRA_THREAD_POOL.schedule({
+                                // The launcher's existing process is reused by PlatformStarter. Do not kill a
+                                // late-starting client during the retry delay.
+                                when (
+                                    GameStartupRecoveryPolicy.retryAction(
+                                        startupConfirmed = startupHandshakeConfirmed(),
+                                        gameAlive = GameUtil.isAliveOfGame(),
+                                    )
+                                ) {
+                                    GameStartupRecoveryPolicy.RetryAction.REATTACH_GAME_STARTER -> {
+                                        log.info {
+                                            "GAME_STARTUP_RETRY action=REATTACH_GAME_STARTER " +
+                                                "reason=game-process-alive-window-pending attempt=$startupFailureAttempts"
+                                        }
+                                        execStart()
+                                    }
+                                    GameStartupRecoveryPolicy.RetryAction.STARTER_CHAIN -> {
+                                        StarterConfig.starter.start()
+                                    }
+                                    GameStartupRecoveryPolicy.RetryAction.NONE -> Unit
+                                }
+                            }, retryDelay, TimeUnit.MILLISECONDS)
                             stopTask()
                             break
                         }
@@ -217,7 +224,6 @@ class GameStarter : AbstractStarter() {
                                     startupConfirmed = false,
                                     now = now,
                                     lastLaunchAt = lastGameLaunchAt,
-                                    consecutiveFailures = startupFailureAttempts,
                                 )
                                 if (decision == GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF) {
                                     lastGameLaunchAt = now
@@ -230,7 +236,6 @@ class GameStarter : AbstractStarter() {
                                     startupConfirmed = false,
                                     now = now,
                                     lastLaunchAt = lastGameLaunchAt,
-                                    consecutiveFailures = startupFailureAttempts,
                                 )
                                 if (decision == GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF) {
                                     lastGameLaunchAt = now
@@ -333,7 +338,6 @@ class GameStarter : AbstractStarter() {
                             startupConfirmed = false,
                             now = now,
                             lastLaunchAt = lastGameLaunchAt,
-                            consecutiveFailures = startupFailureAttempts,
                         )
                         log.warn {
                             "GAME_STARTUP_PROCESS_EXITED attempt=$startupFailureAttempts decision=$decision " +
@@ -341,34 +345,23 @@ class GameStarter : AbstractStarter() {
                                 "powerLog=${PowerLogListener.logFile?.path() ?: "none"} " +
                                 "powerLogLength=${PowerLogListener.logFile?.length() ?: 0L}"
                         }
-                            if (decision == GameStartupRecoveryPolicy.Decision.PAUSE_WITH_DIAGNOSTIC) {
-                            log.error {
-                                "GAME_STARTUP_STOPPED action=AUTOMATIC_PAUSE reason=process-exited-before-handshake " +
-                                    "attempts=$startupFailureAttempts max=${GameStartupRecoveryPolicy.MAX_FAILURES} " +
-                                    "platformPreserved=true"
+                        val retryDelay = GameStartupRecoveryPolicy.retryDelayMs(
+                            System.currentTimeMillis(),
+                            lastGameLaunchAt,
+                            startupFailureAttempts,
+                        )
+                        log.info {
+                            "GAME_STARTUP_RETRY_DELAY delayMs=$retryDelay " +
+                                "attempt=$startupFailureAttempts strategy=exponential-capped"
+                        }
+                        Thread.sleep(retryDelay)
+                        if (!startupHandshakeConfirmed()) {
+                            log.warn {
+                                "GAME_STARTUP_RETRY action=STARTER_CHAIN reason=process-exited-before-handshake " +
+                                    "platformPreserved=true attempt=$startupFailureAttempts " +
+                                    "retryDelayMs=$retryDelay"
                             }
-                            LifecycleTrace.stopRecoveryCascade("process-exited-before-handshake")
-                            PauseStatus.setAutomaticPause(true)
-                        } else {
-                            val cooldownRemaining = if (lastGameLaunchAt > 0L) {
-                                (GameStartupRecoveryPolicy.RELAUNCH_COOLDOWN_MS -
-                                    (System.currentTimeMillis() - lastGameLaunchAt)).coerceAtLeast(0L)
-                            } else {
-                                0L
-                            }
-                            val retryDelay = maxOf(STARTUP_RETRY_DELAY_MS, cooldownRemaining)
-                            log.info {
-                                "GAME_STARTUP_RETRY_DELAY delayMs=$retryDelay " +
-                                    "cooldownRemainingMs=$cooldownRemaining"
-                            }
-                            Thread.sleep(retryDelay)
-                            if (!startupHandshakeConfirmed()) {
-                                log.warn {
-                                    "GAME_STARTUP_RETRY action=STARTER_CHAIN reason=process-exited-before-handshake " +
-                                        "platformPreserved=true attempt=$startupFailureAttempts"
-                                }
-                                StarterConfig.starter.start()
-                            }
+                            StarterConfig.starter.start()
                         }
                         return@execute
                     }

@@ -1165,15 +1165,16 @@ object MouseUtil {
         }
         val packed = WindowMessageClickPolicy.packClientPoint(pos.x, pos.y) ?: return false
         val lParam = WinDef.LPARAM(packed)
-        val moved = User32PostMessageDll.INSTANCE.PostMessage(hwnd, 0x0200, WinDef.WPARAM(0L), lParam) // WM_MOUSEMOVE
-        val pressed = User32PostMessageDll.INSTANCE.PostMessage(hwnd, 0x0201, WinDef.WPARAM(1L), lParam) // WM_LBUTTONDOWN
-        val released = User32PostMessageDll.INSTANCE.PostMessage(hwnd, 0x0202, WinDef.WPARAM(0L), lParam) // WM_LBUTTONUP
-        val queued = moved && pressed && released
+        val dispatch = StartupWindowMessageDispatch.click(hwnd, lParam) { target, message, wParam, point ->
+            User32PostMessageDll.INSTANCE.PostMessageW(target, message, wParam, point)
+        }
         log.info {
             "PLATFORM_MESSAGE_STARTUP_INPUT point=(${pos.x},${pos.y}) hwnd=$hwnd " +
-                "messagesQueued=$queued acceptance=not-confirmed"
+                "messagesQueued=${dispatch.allMessagesPosted} " +
+                "move=${dispatch.mouseMovePosted} down=${dispatch.mouseDownPosted} up=${dispatch.mouseUpPosted} " +
+                "nativeBindingFailure=${dispatch.nativeBindingFailure} acceptance=not-confirmed"
         }
-        return queued
+        return dispatch.allMessagesPosted
     }
 
     fun rightButtonClick(hwnd: HWND?) {
