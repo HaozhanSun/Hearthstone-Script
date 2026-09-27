@@ -638,21 +638,18 @@ object GameUtil {
             }
             val forceNormalUser = RuntimeSafety.safeNative
             if (ConfigUtil.getBoolean(ConfigEnum.PREVENT_ADMIN_LAUNCH_GAME) || forceNormalUser) {
-                if (forceNormalUser) {
-                    log.info { "安全启动：以普通用户启动${GAME_CN_NAME}，避免UIPI吞掉 Java 输入" }
-                    // The native launchAsNormalUser helper is intentionally
-                    // excluded from E2E.  It can terminate the parent JVM
-                    // without producing a Java exception.  The test runner
-                    // already owns a normal-user desktop session, so direct
-                    // ProcessBuilder execution has the desired token.
-                    ProcessBuilder(buildPlatformCommand(platformPath, launchGame = true)).start()
-                    return
+                log.info {
+                    "NORMAL_USER_PLATFORM_LAUNCH_REQUEST source=${if (forceNormalUser) "safe-native" else "config"} " +
+                        "controllerElevatedLaunchIsolated=true acceptance=awaiting-game-process-window"
                 }
-                CSystemDll.launchAsNormalUser(
-                    platformPath, listOf(
-                        """--exec="launch WTCG""""
-                    )
+                val helper = NormalUserPlatformLaunch.startFromCurrentJar(
+                    platformExecutable = platformPath,
+                    platformArguments = listOf("""--exec="launch WTCG""""),
                 )
+                log.info {
+                    "NORMAL_USER_PLATFORM_LAUNCH_HELPER_STARTED helperPid=${helper.pid()} " +
+                        "controllerPid=${ProcessHandle.current().pid()} acceptance=awaiting-game-process-window"
+                }
             } else {
                 ProcessBuilder(buildPlatformCommand(platformPath, launchGame = true)).start()
             }

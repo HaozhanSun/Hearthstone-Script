@@ -548,7 +548,11 @@ class MainApplication : Application() {
 
     private fun checkSystem() {
         if (RuntimeSafety.safeNative) {
-            log.info { "E2E运行：跳过原生权限检查" }
+            val e2eEnabled = System.getProperty("hs.script.e2e") == "true"
+            log.info {
+                "SAFE_NATIVE_PRIVILEGE_CHECK_SKIPPED enabled=true e2e=$e2eEnabled " +
+                    "reason=${if (e2eEnabled) "e2e" else "message-mode-safe-native-default"}"
+            }
         } else CSystemDll.INSTANCE.isRunAsAdministrator().isFalse {
             val text = "当前进程不是以管理员启动，功能可能受限"
             log.warn { text }

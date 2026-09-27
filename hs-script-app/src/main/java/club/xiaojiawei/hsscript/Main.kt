@@ -16,8 +16,10 @@ import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PrivacyProcessAudit
 import club.xiaojiawei.hsscript.status.RuntimeContractTrace
+import club.xiaojiawei.hsscript.dll.CSystemDll
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
 import club.xiaojiawei.hsscript.utils.ExistingInstanceSignal
+import club.xiaojiawei.hsscript.utils.NormalUserPlatformLaunch
 import club.xiaojiawei.hsscript.utils.WindowUtil
 import com.sun.jna.platform.win32.Kernel32
 import com.sun.jna.platform.win32.WinError
@@ -25,6 +27,7 @@ import javafx.application.Application
 import javafx.application.Platform
 import org.slf4j.LoggerFactory
 import java.io.File
+import kotlin.system.exitProcess
 
 
 /**
@@ -32,6 +35,13 @@ import java.io.File
  * @date 2024/10/14 17:42
  */
 fun main(args: Array<String>) {
+    NormalUserPlatformLaunch.runHelper(args) { platformExecutable, platformArguments ->
+        CSystemDll.launchAsNormalUser(platformExecutable, platformArguments)
+    }?.let { helperExitCode ->
+        System.err.println("NORMAL_USER_LAUNCH_HELPER_EXIT code=$helperExitCode pid=${ProcessHandle.current().pid()}")
+        exitProcess(helperExitCode)
+    }
+
     System.setProperty("jna.library.path", "lib")
     // MESSAGE mode has a safe Java input path and must not load the legacy
     // interception bridge by default. DRIVE mode remains opt-in and keeps
