@@ -6,9 +6,9 @@ import club.xiaojiawei.hsscript.consts.PLATFORM_CN_NAME
 import club.xiaojiawei.hsscript.utils.CMDUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.MouseUtil
+import club.xiaojiawei.hsscript.utils.PlatformMessageStartupDispatch
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscript.utils.getString
-import club.xiaojiawei.hsscript.status.RuntimeSafety
 import club.xiaojiawei.hsscriptbase.config.log
 import com.sun.jna.platform.win32.WinDef
 import org.jetbrains.kotlin.utils.addToStdlib.ifTrue
@@ -49,22 +49,16 @@ enum class GameStartupModeEnum(val comment: String, val introduction: String, va
             SystemUtil.updateRECT(platformHWND, rect)
             val upperClick = Point(145, rect.bottom - rect.top - 150)
             val lowerClick = Point(145, rect.bottom - rect.top - 130)
-            if (RuntimeSafety.safeNative) {
-                // E2E/safe-native intercepts the generic click API and turns
-                // MESSAGE mode into foreground Robot input. Preserve the
-                // configured MESSAGE contract with window messages instead;
-                // focus/Robot clicks were observed going to another HWND.
-                val upperQueued = MouseUtil.postStartupWindowMessageClick(upperClick, platformHWND)
-                SystemUtil.delayShort()
-                val lowerQueued = MouseUtil.postStartupWindowMessageClick(lowerClick, platformHWND)
-                log.info {
-                    "PLATFORM_MESSAGE_STARTUP_DISPATCH upperQueued=$upperQueued lowerQueued=$lowerQueued " +
-                        "hwnd=$platformHWND acceptance=awaiting-game-process-window"
-                }
-            } else {
-                MouseUtil.leftButtonClick(upperClick, platformHWND, MouseControlModeEnum.MESSAGE.code)
-                SystemUtil.delayShort()
-                MouseUtil.leftButtonClick(lowerClick, platformHWND, MouseControlModeEnum.MESSAGE.code)
+            PlatformMessageStartupDispatch.dispatch(
+                upperClick = upperClick,
+                lowerClick = lowerClick,
+                hwnd = platformHWND,
+                click = MouseUtil::leftButtonClick,
+                delay = SystemUtil::delayShort,
+            )
+            log.info {
+                "PLATFORM_MESSAGE_STARTUP_DISPATCH transport=mouse-util-message hwnd=$platformHWND " +
+                    "clicksAttempted=2 acceptance=awaiting-game-process-window"
             }
         }),
 
