@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.config.DRIVER_LOCK
 import club.xiaojiawei.hsscript.consts.PLATFORM_PROGRAM_NAME
 import club.xiaojiawei.hsscript.dll.CSystemDll
+import club.xiaojiawei.hsscript.dll.Win32ProcessImagePath
 import club.xiaojiawei.hsscript.dll.User32ExDll
 import club.xiaojiawei.hsscript.dll.User32RawDll
 import club.xiaojiawei.hsscript.dll.User32PostMessageDll
@@ -1126,14 +1127,13 @@ object MouseUtil {
 
         val ownerPid = IntByReference()
         User32.INSTANCE.GetWindowThreadProcessId(hwnd, ownerPid)
-        val ownerCommand = runCatching {
-            ProcessHandle.of(ownerPid.value.toLong()).flatMap { it.info().command() }.orElse(null)
-        }.getOrNull()
-        if (!WindowMessageClickPolicy.isExpectedOwner(PLATFORM_PROGRAM_NAME, ownerCommand)) {
+        val ownerImagePath = Win32ProcessImagePath.query(ownerPid.value)
+        val ownerImage = WindowMessageClickPolicy.executableName(ownerImagePath)
+        if (!WindowMessageClickPolicy.isExpectedImage(PLATFORM_PROGRAM_NAME, ownerImagePath)) {
             log.warn {
                 "PLATFORM_MESSAGE_STARTUP_BLOCKED reason=launcher-window-owner-unverified " +
                     "hwnd=$hwnd ownerPid=${ownerPid.value} " +
-                    "ownerExecutable=${WindowMessageClickPolicy.executableName(ownerCommand) ?: "unknown"}"
+                    "ownerExecutable=${ownerImage ?: "unknown"}"
             }
             return false
         }

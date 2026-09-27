@@ -1,22 +1,44 @@
 package club.xiaojiawei.hsscript.utils
 
+import club.xiaojiawei.hsscript.dll.Win32ProcessImagePath
+import java.nio.file.Path
 import kotlin.test.Test
+import kotlin.test.assertNotNull
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 
 class WindowMessageClickPolicyTest {
     @Test
-    fun `startup message target must be owned by Battle net executable`() {
+    fun `startup owner validation uses actual image path instead of command line`() {
+        val misleadingCommand = "C:\\Users\\tester\\AppData\\Local\\Temp\\temp_a6289c43bb612c7b933dbbff6b9cfd03.exe"
         assertTrue(
-            WindowMessageClickPolicy.isExpectedOwner(
+            WindowMessageClickPolicy.isExpectedImage(
                 "Battle.net.exe",
                 "C:\\Users\\tester\\Battle.net\\Battle.net.exe",
             ),
         )
-        assertFalse(WindowMessageClickPolicy.isExpectedOwner("Battle.net.exe", "C:\\Apps\\Codex.exe"))
-        assertFalse(WindowMessageClickPolicy.isExpectedOwner("Battle.net.exe", null))
+        assertFalse(WindowMessageClickPolicy.isExpectedImage("Battle.net.exe", misleadingCommand))
+        assertFalse(WindowMessageClickPolicy.isExpectedImage("Battle.net.exe", "C:\\Apps\\Codex.exe"))
+        assertFalse(WindowMessageClickPolicy.isExpectedImage("Battle.net.exe", null))
+        assertTrue(
+            WindowMessageClickPolicy.isExpectedImage(
+                "Battle.net.exe",
+                "\\\\?\\C:\\Users\\tester\\Battle.net\\Battle.net.exe",
+            ),
+        )
+    }
+
+    @Test
+    fun `Win32 image query reads this process executable and rejects invalid pid`() {
+        assumeTrue(System.getProperty("os.name").contains("Windows", ignoreCase = true))
+
+        val imagePath = assertNotNull(Win32ProcessImagePath.query(ProcessHandle.current().pid().toInt()))
+        val imageName = Path.of(imagePath).fileName.toString()
+        assertTrue(imageName.equals("java.exe", ignoreCase = true) || imageName.equals("javaw.exe", ignoreCase = true))
+        assertNull(Win32ProcessImagePath.query(0))
     }
 
     @Test
