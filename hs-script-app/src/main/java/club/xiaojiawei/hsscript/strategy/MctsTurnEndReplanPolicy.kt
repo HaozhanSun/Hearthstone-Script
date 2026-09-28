@@ -12,6 +12,14 @@ package club.xiaojiawei.hsscript.strategy
 internal object MctsTurnEndReplanPolicy {
     const val INITIAL_PLANNING_PASS = 0
     const val MAX_REPLANS = 3
+    const val MAX_END_TURN_DISPATCH_ATTEMPTS = 20
+
+    enum class ExhaustionFallbackResult {
+        NOT_SELECTED,
+        PAUSED,
+        TURN_NOT_ACTIVE,
+        DISPATCHED,
+    }
 
     fun totalPlanningPasses(completedReplans: Int): Int {
         require(completedReplans >= 0) { "completedReplans must not be negative" }
@@ -55,5 +63,39 @@ internal object MctsTurnEndReplanPolicy {
                 "no-live-actionable-creator"
             },
         )
+    }
+
+    /**
+     * Runs the selected fallback without changing pause state. Manual pause and
+     * a turn/mode transition remain authoritative at the dispatch boundary.
+     */
+    fun dispatchExhaustionFallback(
+        decision: Decision,
+        paused: Boolean,
+        turnActive: Boolean,
+        dispatch: () -> Unit,
+    ): ExhaustionFallbackResult {
+        if (!decision.allowEndTurnWhenExhausted) return ExhaustionFallbackResult.NOT_SELECTED
+        if (paused) return ExhaustionFallbackResult.PAUSED
+        if (!turnActive) return ExhaustionFallbackResult.TURN_NOT_ACTIVE
+        dispatch()
+        return ExhaustionFallbackResult.DISPATCHED
+    }
+
+    /**
+     * Executes bounded end-turn attempts while the caller's live turn/pause
+     * predicate remains true. Re-checking before every attempt makes an F2
+     * pause or turn transition stop retries immediately.
+     */
+    fun runBoundedEndTurnAttempts(
+        shouldContinue: () -> Boolean,
+        attempt: (attemptNumber: Int) -> Unit,
+    ): Int {
+        var attempts = 0
+        while (attempts < MAX_END_TURN_DISPATCH_ATTEMPTS && shouldContinue()) {
+            attempts++
+            attempt(attempts)
+        }
+        return attempts
     }
 }

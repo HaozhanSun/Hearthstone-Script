@@ -8,7 +8,6 @@ import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.MctsDeckProfileTelemetry
 import club.xiaojiawei.hsscript.status.Mode
-import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
@@ -490,8 +489,11 @@ object DeckStrategyActuator {
                         "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                         "screenshotLink=${evidence?.link ?: "none"}"
                 }
-                LifecycleTrace.requestActionRecovery("mcts-turn-end-replan-exhausted")
-                if (replanDecision.allowEndTurnWhenExhausted) {
+                val fallbackResult = MctsTurnEndReplanPolicy.dispatchExhaustionFallback(
+                    decision = replanDecision,
+                    paused = PauseStatus.isPause,
+                    turnActive = war.isMyTurn && Mode.currMode === ModeEnum.GAMEPLAY,
+                ) {
                     MctsReplayTrace.record(
                         war,
                         "turn_end_fallback_selected",
@@ -511,6 +513,15 @@ object DeckStrategyActuator {
                     )
                     MctsRoundScreenshot.capture(war, war.me.turn)
                     clickEndTurnUntilTransition()
+                }
+                if (fallbackResult != MctsTurnEndReplanPolicy.ExhaustionFallbackResult.DISPATCHED &&
+                    fallbackResult != MctsTurnEndReplanPolicy.ExhaustionFallbackResult.NOT_SELECTED
+                ) {
+                    log.warn {
+                        "MCTS_TURN_END_FALLBACK_BLOCKED result=$fallbackResult " +
+                            "pause=${PauseStatus.isPause} myTurn=${war.isMyTurn} mode=${Mode.currMode} " +
+                            "automaticPause=false"
+                    }
                 }
                 return
             }
@@ -558,9 +569,12 @@ object DeckStrategyActuator {
 
     private fun clickEndTurnUntilTransition() {
         GameUtil.cancelAction()
-        for (i in 0 until 20) {
-            if (!war.isMyTurn) break
-            if (i > 3) {
+        MctsTurnEndReplanPolicy.runBoundedEndTurnAttempts(
+            shouldContinue = {
+                war.isMyTurn && !PauseStatus.isPause && Mode.currMode === ModeEnum.GAMEPLAY
+            },
+        ) { attemptNumber ->
+            if (attemptNumber > 4) {
                 GameUtil.getThreeDiscoverCardRect(0).lClick()
                 SystemUtil.delayShortMedium()
             }
