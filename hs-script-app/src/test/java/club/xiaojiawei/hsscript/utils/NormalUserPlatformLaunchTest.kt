@@ -4,8 +4,19 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class NormalUserPlatformLaunchTest {
+
+    @Test
+    fun `safe native mode keeps the known working direct launch path`() {
+        assertFalse(NormalUserPlatformLaunch.shouldUseHelper(preventAdminLaunch = false))
+    }
+
+    @Test
+    fun `explicit prevent admin setting uses isolated normal user helper`() {
+        assertTrue(NormalUserPlatformLaunch.shouldUseHelper(preventAdminLaunch = true))
+    }
 
     @Test
     fun `helper command starts an isolated JVM and preserves paths and platform arguments`() {

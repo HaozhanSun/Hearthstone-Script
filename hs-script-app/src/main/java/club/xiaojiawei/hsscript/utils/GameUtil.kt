@@ -637,9 +637,10 @@ object GameUtil {
                 return
             }
             val forceNormalUser = RuntimeSafety.safeNative
-            if (ConfigUtil.getBoolean(ConfigEnum.PREVENT_ADMIN_LAUNCH_GAME) || forceNormalUser) {
+            val preventAdminLaunch = ConfigUtil.getBoolean(ConfigEnum.PREVENT_ADMIN_LAUNCH_GAME)
+            if (NormalUserPlatformLaunch.shouldUseHelper(preventAdminLaunch)) {
                 log.info {
-                    "NORMAL_USER_PLATFORM_LAUNCH_REQUEST source=${if (forceNormalUser) "safe-native" else "config"} " +
+                    "NORMAL_USER_PLATFORM_LAUNCH_REQUEST source=config " +
                         "controllerElevatedLaunchIsolated=true acceptance=awaiting-game-process-window"
                 }
                 val helper = NormalUserPlatformLaunch.startFromCurrentJar(
@@ -651,7 +652,12 @@ object GameUtil {
                         "controllerPid=${ProcessHandle.current().pid()} acceptance=awaiting-game-process-window"
                 }
             } else {
-                ProcessBuilder(buildPlatformCommand(platformPath, launchGame = true)).start()
+                val process = ProcessBuilder(buildPlatformCommand(platformPath, launchGame = true)).start()
+                log.info {
+                    "PLATFORM_ARG_STARTUP_DISPATCH pid=${process.pid()} " +
+                        "source=${if (forceNormalUser) "safe-native-direct" else "default-direct"} " +
+                        "acceptance=awaiting-game-process-window"
+                }
             }
         } catch (e: IOException) {
             log.error(e) { "启动${PLATFORM_CN_NAME}及${GAME_CN_NAME}异常" }

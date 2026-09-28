@@ -9,6 +9,9 @@ import java.io.File
 internal object NormalUserPlatformLaunch {
     const val HELPER_ARGUMENT = "--hs-internal-launch-platform-as-normal-user"
 
+    /** The helper is only needed when the user explicitly forbids elevated game launches. */
+    fun shouldUseHelper(preventAdminLaunch: Boolean): Boolean = preventAdminLaunch
+
     fun buildHelperCommand(
         javaExecutable: String,
         appJar: String,
