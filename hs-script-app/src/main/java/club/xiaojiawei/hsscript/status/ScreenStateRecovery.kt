@@ -44,6 +44,7 @@ import net.sourceforge.tess4j.Tesseract
 object ScreenStateRecovery {
 
     enum class InspectionResult {
+        DISABLED,
         APPLIED,
         NO_ACTION,
         DEFERRED_GAME_FOREGROUND,
@@ -157,6 +158,8 @@ object ScreenStateRecovery {
         startupProbe: Boolean = false,
         stateStillCurrent: () -> Boolean = { true },
     ): InspectionResult {
+        val recoveryToken = ScreenRecoveryRuntime.tokenOrNull()
+            ?: return InspectionResult.DISABLED
         if ((!WorkTimeListener.working && !PauseStatus.isAutomaticPause) ||
             !PauseStatus.canRunAutomaticRecovery() ||
             WarEx.inWar
@@ -196,6 +199,7 @@ object ScreenStateRecovery {
         } else {
             MouseUtil.RecoveryForegroundResult(true, captureScreen(gameWindow, allowCachedGameRect = false))
         }
+        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return InspectionResult.DISABLED
         val powerLog = PowerLogListener.logFile
         log.info {
             "SCREEN_RECOVERY_WINDOW_READINESS gameWindow=$gameWindow " +
@@ -228,12 +232,14 @@ object ScreenStateRecovery {
         }
 
         val ocrEvidence = runOCR(capture)
+        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return InspectionResult.DISABLED
         val ocrText = ocrEvidence.text
         if (!stateStillCurrent()) {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-during-inspection state=$stateFingerprint" }
             return InspectionResult.NO_ACTION
         }
         val detection = detect(ocrEvidence, capture.visual)
+        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return InspectionResult.DISABLED
         log.info {
             "SCREEN_RECOVERY_OBSERVATION " +
                 "provider=LEGACY " +
@@ -312,7 +318,7 @@ object ScreenStateRecovery {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-before-apply state=$stateFingerprint" }
             return InspectionResult.NO_ACTION
         }
-        return if (apply(detection)) InspectionResult.APPLIED else InspectionResult.NO_ACTION
+        return if (apply(detection, recoveryToken)) InspectionResult.APPLIED else InspectionResult.NO_ACTION
     }
 
     private fun captureScreen(
@@ -1009,13 +1015,14 @@ object ScreenStateRecovery {
     }
 
     /** Re-inspect after reconnect so the offline prompt and spinner are not conflated. */
-    private fun scheduleReconnectSpinnerProbe() {
+    private fun scheduleReconnectSpinnerProbe(parentToken: Long) {
+        if (!ScreenRecoveryRuntime.isCurrent(parentToken)) return
         val generation = reconnectProbeGeneration.incrementAndGet()
         EXTRA_THREAD_POOL.schedule({
-            if (generation != reconnectProbeGeneration.get() || !WorkTimeListener.working ||
+            if (!ScreenRecoveryRuntime.isCurrent(parentToken) ||
+                generation != reconnectProbeGeneration.get() || !WorkTimeListener.working ||
                 PauseStatus.isPause || WarEx.inWar
             ) {
-                log.info { "SCREEN_RECOVERY_RECONNECT_PROBE_SKIPPED reason=state-changed generation=$generation" }
                 return@schedule
             }
             log.info { "SCREEN_RECOVERY_RECONNECT_PROBE_STARTED waitMs=$RECONNECT_SPINNER_CHECK_DELAY_MS" }
@@ -1177,18 +1184,25 @@ object ScreenStateRecovery {
      * and null means capture/OCR was inconclusive. A null must never be
      * treated as proof that the result was dismissed.
      */
-    internal fun isResultVisibleForRecovery(): Boolean? = runCatching {
-        val liveWindow = resolveLiveGameWindow() ?: return@runCatching null
-        val capture = captureScreen(liveWindow, allowCachedGameRect = false) ?: return@runCatching null
-        val detection = detect(runOCR(capture), capture.visual)
-        when {
-            detection == null || detection.confidence < 85 -> null
-            detection.kind == ScreenKind.RESULT -> true
-            else -> false
+    internal fun isResultVisibleForRecovery(): Boolean? {
+        val token = ScreenRecoveryRuntime.tokenOrNull() ?: return null
+        return runCatching {
+            val liveWindow = resolveLiveGameWindow() ?: return@runCatching null
+            val capture = captureScreen(liveWindow, allowCachedGameRect = false) ?: return@runCatching null
+            if (!ScreenRecoveryRuntime.isCurrent(token)) return@runCatching null
+            val detection = detect(runOCR(capture), capture.visual)
+            if (!ScreenRecoveryRuntime.isCurrent(token)) return@runCatching null
+            when {
+                detection == null || detection.confidence < 85 -> null
+                detection.kind == ScreenKind.RESULT -> true
+                else -> false
+            }
+        }.getOrElse { error ->
+            if (ScreenRecoveryRuntime.isCurrent(token)) {
+                log.warn(error) { "SCREEN_RECOVERY_RESULT_POSTCHECK_FAILED" }
+            }
+            null
         }
-    }.getOrElse { error ->
-        log.warn(error) { "SCREEN_RECOVERY_RESULT_POSTCHECK_FAILED" }
-        null
     }
 
     /**
@@ -1270,7 +1284,8 @@ object ScreenStateRecovery {
         }
     }
 
-    private fun apply(detection: Detection): Boolean {
+    private fun apply(detection: Detection, recoveryToken: Long): Boolean {
+        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return false
         // A strongly identified cannot-reconnect modal is authoritative over a
         // stale in-game flag: that match can no longer be resumed in-place.
         if (WarEx.inWar && detection.kind != ScreenKind.RECONNECT_FAILURE) {
@@ -1311,6 +1326,7 @@ object ScreenStateRecovery {
                         "deckSlot=${DeckStrategyManager.currentDeckStrategy?.let(TournamentModeStrategy::expectedDeckSlot)}"
                 }
                 EXTRA_THREAD_POOL.schedule({
+                        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@schedule
                         if (LifecycleTrace.recoveryCascadeSuppressed()) {
                             log.info { "SCREEN_RECOVERY_DECK_SELECTION_SKIPPED reason=terminal-pause-fence" }
                         } else if ((WorkTimeListener.working || PauseStatus.isAutomaticPause) &&
@@ -1352,6 +1368,7 @@ object ScreenStateRecovery {
                 // Hub polling before sending the close click.
                 Mode.recover(ModeEnum.HUB, "visible-shop-overlay", enterStrategy = false)
                 EXTRA_THREAD_POOL.schedule({
+                    if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@schedule
                     if (WorkTimeListener.working && !PauseStatus.isPause && !WarEx.inWar &&
                         Mode.currMode == ModeEnum.HUB
                     ) {
@@ -1362,6 +1379,7 @@ object ScreenStateRecovery {
                         }
                         if (accepted) {
                             EXTRA_THREAD_POOL.schedule({
+                                if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@schedule
                                 if (WorkTimeListener.working && !PauseStatus.isPause &&
                                     !WarEx.inWar && Mode.currMode == ModeEnum.HUB
                                 ) {
@@ -1406,7 +1424,7 @@ object ScreenStateRecovery {
                     // wait for the optional slow-loading warning: once the
                     // confirmed reconnect attempt has been stuck for the
                     // recovery threshold, restart the client directly.
-                    Core.restart()
+                    if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) Core.restart()
                 } else if (acceptedReconnectAt <= 0L &&
                     reconnectDecision.action == OfflineReconnectRecovery.Action.FOCUS_AND_CLICK_RECONNECT &&
                     shouldAttemptReconnect(now)
@@ -1416,6 +1434,7 @@ object ScreenStateRecovery {
                             "action=CLICK_RECONNECT retryIntervalMs=$RECONNECT_RETRY_INTERVAL_MS"
                     }
                     EXTRA_THREAD_POOL.schedule({
+                        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@schedule
                         if (LifecycleTrace.recoveryCascadeSuppressed()) {
                             log.info { "SCREEN_RECOVERY_RECONNECT_SKIPPED reason=terminal-pause-fence" }
                         } else if ((WorkTimeListener.working || PauseStatus.isAutomaticPause) &&
@@ -1439,7 +1458,7 @@ object ScreenStateRecovery {
                             }
                             if (accepted) {
                                 reconnectAcceptedAt.set(System.currentTimeMillis())
-                                scheduleReconnectSpinnerProbe()
+                                scheduleReconnectSpinnerProbe(recoveryToken)
                                 if (PauseStatus.resumeAutomaticPause("reconnect-click-accepted")) {
                                     log.warn {
                                         "SCREEN_RECOVERY_AUTO_RESUME reason=reconnect-click-accepted"
@@ -1465,6 +1484,7 @@ object ScreenStateRecovery {
                 // the normal process handoff and bounded startup screen probe.
                 Mode.recover(ModeEnum.LOGIN, "visible-reconnect-failure", enterStrategy = false)
                 EXTRA_THREAD_POOL.schedule({
+                    if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@schedule
                     if (LifecycleTrace.recoveryCascadeSuppressed()) {
                         log.info { "SCREEN_RECOVERY_RECONNECT_FAILURE_SKIPPED reason=terminal-pause-fence" }
                     } else if ((WorkTimeListener.working || PauseStatus.isAutomaticPause) &&
@@ -1478,7 +1498,7 @@ object ScreenStateRecovery {
                                         "reason=cannot-reconnect-dialog attempt=${recovery.attempt} " +
                                         "maxAttempts=${ReconnectFailureRecoveryPolicy.DEFAULT_MAX_RESTARTS}"
                                 }
-                                Core.restart()
+                                if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) Core.restart()
                             }
                             ReconnectFailureRecoveryPolicy.Decision.WAIT_FOR_RESTART -> log.info {
                                 "SCREEN_RECOVERY_RECONNECT_FAILURE_WAIT reason=restart-cooldown " +
@@ -1514,6 +1534,7 @@ object ScreenStateRecovery {
                 }
                 when (decision.action) {
                     OfflineReconnectRecovery.Action.FOCUS_AND_CLICK_CANCEL -> EXTRA_THREAD_POOL.schedule({
+                        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@schedule
                         if (LifecycleTrace.recoveryCascadeSuppressed()) {
                             log.info { "SCREEN_RECOVERY_RECONNECT_CANCEL_SKIPPED reason=terminal-pause-fence" }
                         } else if ((WorkTimeListener.working || PauseStatus.isAutomaticPause) &&
@@ -1531,9 +1552,9 @@ object ScreenStateRecovery {
                                 "SCREEN_RECOVERY_RECONNECT_CANCEL_DISPATCHED accepted=$accepted " +
                                     "state=${result.state} action=${result.action}"
                             }
-                            if (accepted) scheduleReconnectSpinnerProbe()
+                            if (accepted) scheduleReconnectSpinnerProbe(recoveryToken)
                             if (result.action == OfflineReconnectRecovery.Action.ESCALATE) {
-                                PauseStatus.isPause = true
+                if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) PauseStatus.isPause = true
                             }
                         } else {
                             log.info { "SCREEN_RECOVERY_RECONNECT_CANCEL_SKIPPED reason=state-changed" }
@@ -1545,7 +1566,7 @@ object ScreenStateRecovery {
                             "SCREEN_RECOVERY_RECONNECT_ESCALATED state=${decision.state} " +
                                 "reason=${decision.reason} result=spinner-still-visible"
                         }
-                        PauseStatus.isPause = true
+                        if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) PauseStatus.isPause = true
                     }
 
                     else -> Unit
@@ -1585,7 +1606,7 @@ object ScreenStateRecovery {
                     // rediscover that window. This also covers a reconnect
                     // dialog whose text OCR was missed and was classified
                     // only by the loading visual.
-                    Core.restart()
+                    if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) Core.restart()
                 } else {
                     log.info {
                         "SCREEN_RECOVERY_APPLIED screen=LOADING action=WAIT_FOR_CLIENT " +

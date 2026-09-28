@@ -3,6 +3,8 @@ package club.xiaojiawei.hsscript.status
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.ocr.OcrProviderMode
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrCancelledException
+import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.utils.ConfigUtil
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -12,11 +14,46 @@ import java.awt.image.BufferedImage
 
 class ScreenWatchdogTest {
 
+    private val originalRecoveryEnabled = ConfigUtil.getBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED)
     private val originalSettingsProvider = OcrRuntime.settingsProvider
     private val originalProviderModeProvider = OcrRuntime.providerModeProvider
 
+    @Test
+    fun `global recovery switch off performs no watchdog capture or OCR`() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED, false, store = false)
+        var captures = 0
+        var ocrCalls = 0
+
+        val timing = ScreenWatchdog.shouldInspect(
+            startedAt = 0L,
+            attempts = 99,
+            now = 100_000L,
+            stuckMs = 0L,
+            maxRetries = 1,
+            cooldownMs = 0L,
+        )
+        val observation = ScreenWatchdog.inspectForSurrender(
+            state = "mode=GAMEPLAY|warPhase=GAME_TURN",
+            attempts = 99,
+            captureProvider = { captures++; BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB) },
+            ocrProvider = { ocrCalls++; "失败 点击继续" },
+        )
+
+        assertFalse(timing.shouldInspect)
+        assertEquals("beta-screen-recovery-disabled", timing.reason)
+        assertEquals(0, captures)
+        assertEquals(0, ocrCalls)
+        assertEquals("DISABLED", observation.provider)
+    }
+
+    @org.junit.jupiter.api.BeforeEach
+    fun enableRecoveryForLegacyWatchdogTests() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED, true, store = false)
+    }
+
     @AfterEach
     fun tearDown() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED, originalRecoveryEnabled, store = false)
         OcrRuntime.settingsProvider = originalSettingsProvider
         OcrRuntime.providerModeProvider = originalProviderModeProvider
     }

@@ -15,6 +15,7 @@ import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Low-noise process/window heartbeat used to distinguish a hidden JavaFX
@@ -60,13 +61,23 @@ object LifecycleTrace {
 
     fun start() {
         if (running) return
+        ScreenRecoveryRuntime.initialize()
         running = true
         Thread {
             var lastState = ""
+            var lastRecoveryGeneration = -1L
             while (running) {
-                detectStuckGameOver()
-                detectStuckStateRecovery()
-                detectNoProgress()
+                val generation = ScreenRecoveryRuntime.generation()
+                val recoveryToken = ScreenRecoveryRuntime.tokenOrNull()
+                if (generation != lastRecoveryGeneration) {
+                    if (recoveryToken != null) resetRecoveryState()
+                    lastRecoveryGeneration = generation
+                }
+                if (recoveryToken != null) {
+                    detectStuckGameOver(recoveryToken)
+                    detectStuckStateRecovery(recoveryToken)
+                    detectNoProgress(recoveryToken)
+                }
                 val state = snapshot()
                 if (state != lastState) {
                     log.info { "LIFECYCLE_STATE $state" }
@@ -125,6 +136,7 @@ object LifecycleTrace {
 
     /** Fence recovery after a terminal startup/no-progress pause. */
     internal fun stopRecoveryCascade(rootCause: String) {
+        if (!ScreenRecoveryRuntime.isEnabled()) return
         if (recoveryCascadeGuard.trip(rootCause)) {
             log.error {
                 "RECOVERY_CASCADE_STOP rootCause=$rootCause " +
@@ -139,7 +151,7 @@ object LifecycleTrace {
      * before a terminal pause must not clear that pause and dispatch input.
      */
     internal fun recoveryCascadeSuppressed(): Boolean =
-        recoveryCascadeGuard.suppressWhilePaused(PauseStatus.isPause)
+        ScreenRecoveryRuntime.isEnabled() && recoveryCascadeGuard.suppressWhilePaused(PauseStatus.isPause)
 
     internal fun shouldObserveNoProgress(
         working: Boolean,
@@ -156,6 +168,7 @@ object LifecycleTrace {
      * are not enough in this case: no click was actually dispatched.
      */
     fun recordForegroundFailure(target: String, actual: String? = null) {
+        if (!ScreenRecoveryRuntime.isEnabled()) return
         val count = foregroundFailureCount.incrementAndGet()
         log.warn {
             "NO_PROGRESS_FOREGROUND_FAILURE count=$count target=$target " +
@@ -174,6 +187,7 @@ object LifecycleTrace {
     }
 
     fun recordForegroundRecovered() {
+        if (!ScreenRecoveryRuntime.isEnabled()) return
         if (foregroundFailureCount.getAndSet(0) > 0) {
             log.info { "NO_PROGRESS_FOREGROUND_RECOVERED dispatch=false" }
         }
@@ -181,6 +195,7 @@ object LifecycleTrace {
 
     /** Used when a turn-end replan exhausted without a confirmed dispatch. */
     fun requestActionRecovery(reason: String) {
+        if (!ScreenRecoveryRuntime.isEnabled()) return
         log.error { "NO_PROGRESS_ACTION_RECOVERY_REQUESTED reason=$reason dispatch=false" }
         if (foregroundRecoveryPending.compareAndSet(false, true)) {
             AbstractModeStrategy.cancelAllTask()
@@ -194,7 +209,8 @@ object LifecycleTrace {
      * an unchanged Power.log cursor for 30 seconds is an actionable anomaly.
      * In E2E mode, schedule the bounded stale-result-page recovery task once.
      */
-    private fun detectStuckGameOver() {
+    private fun detectStuckGameOver(recoveryToken: Long) {
+        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return
         val phase = WarEx.war.currentPhase
         val position = PowerLogListener.logFile?.getPosition() ?: Long.MIN_VALUE
         if (phase != WarPhaseEnum.GAME_OVER || WarEx.inWar || position == Long.MIN_VALUE) {
@@ -238,7 +254,8 @@ object LifecycleTrace {
      * a turn can legitimately last more than 30 seconds and must never be
      * interrupted by this fallback.
      */
-    private fun detectStuckStateRecovery() {
+    private fun detectStuckStateRecovery(recoveryToken: Long) {
+        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return
         if (recoveryCascadeGuard.suppressWhilePaused(PauseStatus.isPause)) {
             return
         }
@@ -296,8 +313,10 @@ object LifecycleTrace {
             "SCREEN_RECOVERY_SCHEDULED stuckForMs=$stuckFor state=$fingerprint " +
                 "powerLogPosition=$powerLogPosition reason=no-power-log-progress"
         }
-        EXTRA_THREAD_POOL.execute {
+        val taskRef = AtomicReference<java.util.concurrent.Future<*>?>()
+        val task = EXTRA_THREAD_POOL.submit {
             try {
+                if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@submit
                 val recoveryResult = ScreenStateRecovery.inspectAndRecover(
                     stuckFor,
                     fingerprint,
@@ -322,6 +341,7 @@ object LifecycleTrace {
                     else -> stateRecoveryForegroundDeferrals.set(0)
                 }
             } catch (error: Throwable) {
+                if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@submit
                 val evidence = UnknownStateScreenshot.capture(
                     category = UnknownStateScreenshot.CATEGORY_SCREEN_RECOVERY_UNRESOLVED,
                     trigger = "screen-recovery-worker-failure",
@@ -337,8 +357,11 @@ object LifecycleTrace {
                 }
             } finally {
                 stateRecoveryInFlight.set(false)
+                taskRef.get()?.let(ScreenRecoveryRuntime::forget)
             }
         }
+        taskRef.set(task)
+        ScreenRecoveryRuntime.track(recoveryToken, task)
     }
 
     /**
@@ -346,7 +369,8 @@ object LifecycleTrace {
      * workers.  This catches the failure mode where retry/error logging keeps
      * growing while the game window is not receiving input.
      */
-    private fun detectNoProgress() {
+    private fun detectNoProgress(recoveryToken: Long) {
+        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return
         if (recoveryCascadeGuard.suppressWhilePaused(PauseStatus.isPause)) {
             noProgressWatchdog.reset()
             noProgressBoundPid = null
@@ -446,6 +470,7 @@ object LifecycleTrace {
             ),
         )
         if (decision.action != NoProgressWatchdog.RecoveryAction.WAIT) {
+            if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return
             log.warn {
                 "NO_PROGRESS_OBSERVED elapsedMs=${decision.elapsedNoProgressMs} " +
                     "expectedMode=${Mode.nextMode?.name ?: Mode.currMode?.name ?: "NONE"} " +
@@ -455,14 +480,18 @@ object LifecycleTrace {
                     "ageMs=$powerLogAge screen=$screen action=${decision.action} reason=${decision.reason}"
             }
         }
-        applyNoProgressDecision(decision, currentPid, powerLogPath)
+        if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) {
+            applyNoProgressDecision(decision, currentPid, powerLogPath, recoveryToken)
+        }
     }
 
     private fun applyNoProgressDecision(
         decision: NoProgressWatchdog.Decision,
         currentPid: Long?,
         powerLogPath: String?,
+        recoveryToken: Long,
     ) {
+        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return
         when (decision.action) {
             NoProgressWatchdog.RecoveryAction.WAIT,
             NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED,
@@ -486,6 +515,7 @@ object LifecycleTrace {
                 }
             }
             NoProgressWatchdog.RecoveryAction.REBIND -> {
+                if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return
                 log.warn {
                     "NO_PROGRESS_RECOVERY attempt=${decision.recoveryAttempt} " +
                         "decision=REBIND reason=${decision.reason} dispatch=false"
@@ -500,6 +530,7 @@ object LifecycleTrace {
                 }
             }
             NoProgressWatchdog.RecoveryAction.RESTART -> {
+                if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return
                 log.error {
                     "NO_PROGRESS_RECOVERY attempt=${decision.recoveryAttempt} " +
                         "decision=RESTART reason=${decision.reason} dispatch=false"
@@ -515,6 +546,7 @@ object LifecycleTrace {
                 }
             }
             NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE -> {
+                if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return
                 log.error {
                     "NO_PROGRESS_ESCALATED attempt=${decision.recoveryAttempt} " +
                         "reason=${decision.reason} dispatch=false terminal=PAUSE"
@@ -525,6 +557,22 @@ object LifecycleTrace {
                 PauseStatus.isPause = true
             }
         }
+    }
+
+    private fun resetRecoveryState() {
+        gameOverStuckSince = 0L
+        gameOverStuckLogPosition = Long.MIN_VALUE
+        gameOverRecoveryRequested = false
+        stateRecoverySince = 0L
+        stateRecoveryFingerprint = ""
+        stateRecoveryPowerLogPosition = Long.MIN_VALUE
+        stateRecoveryAttemptAt = 0L
+        stateRecoveryForegroundDeferrals.set(0)
+        noProgressWatchdog.reset()
+        noProgressBoundPid = null
+        noProgressBoundPowerLogPath = null
+        foregroundFailureCount.set(0)
+        foregroundRecoveryPending.set(false)
     }
 
     /**

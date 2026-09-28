@@ -12,6 +12,7 @@ import org.ini4j.Config
 import org.ini4j.Ini
 import java.io.File
 import java.nio.file.Path
+import java.util.concurrent.CopyOnWriteArrayList
 
 
 /**
@@ -19,6 +20,8 @@ import java.nio.file.Path
  * @date 2024/9/28 15:35
  */
 object ConfigUtil {
+
+    private val booleanChangeListeners = CopyOnWriteArrayList<(ConfigEnum, Boolean) -> Unit>()
 
     private val objectMapper: ObjectMapper by lazy {
         jacksonObjectMapper().apply {
@@ -137,10 +140,21 @@ object ConfigUtil {
      * 存储boolean类型数据
      */
     fun putBoolean(key: ConfigEnum, value: Boolean, store: Boolean = true) {
+        val previous = getBoolean(key)
         CONFIG.put(key.group.name, key.name, value)
         if (store) {
             store()
         }
+        if (previous != value) {
+            booleanChangeListeners.forEach { listener ->
+                runCatching { listener(key, value) }
+                    .onFailure { error -> log.warn(error) { "配置变更监听器失败 key=${key.name}" } }
+            }
+        }
+    }
+
+    fun addBooleanChangeListener(listener: (ConfigEnum, Boolean) -> Unit) {
+        booleanChangeListeners.addIfAbsent(listener)
     }
 
     /**

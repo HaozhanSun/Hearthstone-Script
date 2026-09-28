@@ -13,6 +13,7 @@ import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
+import club.xiaojiawei.hsscript.status.ScreenRecoveryRuntime
 import club.xiaojiawei.hsscript.utils.*
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
@@ -27,7 +28,9 @@ import com.sun.jna.platform.win32.User32
 import com.sun.jna.platform.win32.WinDef.HWND
 import com.sun.jna.platform.win32.WinUser.*
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 internal object PlatformCloseReadiness {
     fun shouldClose(
@@ -333,17 +336,21 @@ class GameStarter : AbstractStarter() {
      * Keep a small, process-only supervisor alive through the handshake.
      */
     private fun scheduleStartupHandoffWatchdog() {
+        val recoveryToken = ScreenRecoveryRuntime.tokenOrNull() ?: return
         if (!startupRecoveryScheduled.compareAndSet(false, true)) return
-        EXTRA_THREAD_POOL.execute {
+        val taskRef = AtomicReference<Future<*>?>()
+        val task = EXTRA_THREAD_POOL.submit {
             val startedAt = System.currentTimeMillis()
             try {
-                while (System.currentTimeMillis() - startedAt < STARTUP_HANDSHAKE_TIMEOUT_MS) {
+                while (ScreenRecoveryRuntime.isCurrent(recoveryToken) &&
+                    System.currentTimeMillis() - startedAt < STARTUP_HANDSHAKE_TIMEOUT_MS
+                ) {
                     if (startupHandshakeConfirmed()) {
                         if (startupFailureAttempts != 0) {
                             log.info { "GAME_STARTUP_HANDSHAKE_CONFIRMED resetFailures=$startupFailureAttempts" }
                         }
                         startupFailureAttempts = 0
-                        return@execute
+                        return@submit
                     }
                     if (!GameUtil.isAliveOfGame()) {
                         startupFailureAttempts++
@@ -370,7 +377,7 @@ class GameStarter : AbstractStarter() {
                                 "attempt=$startupFailureAttempts strategy=exponential-capped"
                         }
                         Thread.sleep(retryDelay)
-                        if (!startupHandshakeConfirmed()) {
+                        if (ScreenRecoveryRuntime.isCurrent(recoveryToken) && !startupHandshakeConfirmed()) {
                             log.warn {
                                 "GAME_STARTUP_RETRY action=STARTER_CHAIN reason=process-exited-before-handshake " +
                                     "platformPreserved=true attempt=$startupFailureAttempts " +
@@ -378,11 +385,12 @@ class GameStarter : AbstractStarter() {
                             }
                             StarterConfig.starter.start()
                         }
-                        return@execute
+                        return@submit
                     }
                     Thread.sleep(1_000L)
                 }
-                if (GameStartupHandoffPolicy.onHandshakeTimeout(startupHandshakeConfirmed()) ==
+                if (ScreenRecoveryRuntime.isCurrent(recoveryToken) &&
+                    GameStartupHandoffPolicy.onHandshakeTimeout(startupHandshakeConfirmed()) ==
                     GameStartupHandoffPolicy.HandshakeTimeoutDecision.AUTOMATIC_PAUSE
                 ) {
                     log.error {
@@ -397,11 +405,16 @@ class GameStarter : AbstractStarter() {
                 }
             } catch (error: InterruptedException) {
                 Thread.currentThread().interrupt()
-                log.info { "GAME_STARTUP_HANDOFF_WATCHDOG_INTERRUPTED" }
+                if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) {
+                    log.info { "GAME_STARTUP_HANDOFF_WATCHDOG_INTERRUPTED" }
+                }
             } finally {
                 startupRecoveryScheduled.set(false)
+                taskRef.get()?.let(ScreenRecoveryRuntime::forget)
             }
         }
+        taskRef.set(task)
+        ScreenRecoveryRuntime.track(recoveryToken, task)
     }
 
     /**
@@ -413,19 +426,21 @@ class GameStarter : AbstractStarter() {
      * the long-stall fallback.
      */
     private fun scheduleStartupScreenProbe() {
+        val recoveryToken = ScreenRecoveryRuntime.tokenOrNull() ?: return
         if (!startupProbeScheduled.compareAndSet(false, true)) return
         log.info {
             "STARTUP_SCREEN_PROBE_SCHEDULED gameWindow=${ScriptStatus.gameHWND != null} " +
                 "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
         }
-        EXTRA_THREAD_POOL.execute {
+        val taskRef = AtomicReference<Future<*>?>()
+        val task = EXTRA_THREAD_POOL.submit {
             var attempt = 0
             var initialProbeAttempted = false
             val probeStartedAt = System.currentTimeMillis()
             var lastPowerLogPosition = PowerLogListener.logFile?.getPosition() ?: Long.MIN_VALUE
             var lastPowerLogProgressAt = probeStartedAt
             try {
-                while (!PauseStatus.isPause) {
+                while (ScreenRecoveryRuntime.isCurrent(recoveryToken) && !PauseStatus.isPause) {
                     val currentMode = Mode.currMode
                     val normalFlowActive = WarEx.inWar ||
                         (currentMode != null && currentMode != ModeEnum.STARTUP && currentMode != ModeEnum.LOGIN)
@@ -453,11 +468,11 @@ class GameStarter : AbstractStarter() {
                                 "mode=${currentMode?.name ?: "NONE"} war=${WarEx.inWar} " +
                                 "elapsedMs=${now - probeStartedAt}"
                         }
-                        return@execute
+                        return@submit
                     }
                     when (startupProbeDecision) {
                         StartupScreenRecoveryPolicy.Decision.DEFER_NORMAL_FLOW -> {
-                            return@execute
+                            return@submit
                         }
                         StartupScreenRecoveryPolicy.Decision.WAIT -> Thread.sleep(1_000L)
                         StartupScreenRecoveryPolicy.Decision.FINISHED -> {
@@ -466,9 +481,10 @@ class GameStarter : AbstractStarter() {
                                     "elapsedMs=${now - probeStartedAt} attempts=$attempt " +
                                     "powerLog=${powerLog?.path() ?: "none"} powerLogLength=$powerLogLength"
                             }
-                            return@execute
+                            return@submit
                         }
                         StartupScreenRecoveryPolicy.Decision.PROBE -> {
+                            if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@submit
                             attempt++
                             val noProgressMs = now - lastPowerLogProgressAt
                             log.info {
@@ -503,7 +519,7 @@ class GameStarter : AbstractStarter() {
                             }.onFailure { error ->
                                 log.warn(error) { "STARTUP_SCREEN_PROBE_FAILED attempt=$attempt" }
                             }
-                            if (applied) return@execute
+                            if (applied) return@submit
                             lastPowerLogProgressAt = System.currentTimeMillis()
                             Thread.sleep(1_000L)
                         }
@@ -511,14 +527,22 @@ class GameStarter : AbstractStarter() {
                 }
             } catch (error: InterruptedException) {
                 Thread.currentThread().interrupt()
-                log.info { "STARTUP_SCREEN_PROBE_INTERRUPTED attempts=$attempt" }
-            } finally {
-                log.info {
-                    "STARTUP_SCREEN_PROBE_FINISHED attempts=$attempt " +
-                        "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+                if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) {
+                    log.info { "STARTUP_SCREEN_PROBE_INTERRUPTED attempts=$attempt" }
                 }
+            } finally {
+                if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) {
+                    log.info {
+                        "STARTUP_SCREEN_PROBE_FINISHED attempts=$attempt " +
+                            "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+                    }
+                }
+                startupProbeScheduled.set(false)
+                taskRef.get()?.let(ScreenRecoveryRuntime::forget)
             }
         }
+        taskRef.set(task)
+        ScreenRecoveryRuntime.track(recoveryToken, task)
     }
 
     private fun closePlatformAfterGameIsReady() {

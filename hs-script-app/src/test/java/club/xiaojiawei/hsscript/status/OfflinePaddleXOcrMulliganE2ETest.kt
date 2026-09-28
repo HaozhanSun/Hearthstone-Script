@@ -6,6 +6,8 @@ import club.xiaojiawei.hsscript.ocr.OcrProviderMode
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.ocr.OcrTextBridge
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrException
+import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
 import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
@@ -37,10 +39,12 @@ class OfflinePaddleXOcrMulliganE2ETest {
     private val originalProviderModeProvider = OcrRuntime.providerModeProvider
     private val originalUnknownStateDirectory = System.getProperty("hs.script.unknown-state.dir")
     private val originalPause = PauseStatus.isPause
+    private val originalScreenRecoveryEnabled = ConfigUtil.getBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED)
     private lateinit var testEvidenceDirectory: Path
 
     @BeforeEach
     fun isolateEvidenceOutput() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED, true, store = false)
         testEvidenceDirectory = Files.createTempDirectory("offline-paddlex-e2e-evidence-")
         System.setProperty("hs.script.unknown-state.dir", testEvidenceDirectory.toString())
         PauseStatus.isPause = false
@@ -57,6 +61,7 @@ class OfflinePaddleXOcrMulliganE2ETest {
             System.setProperty("hs.script.unknown-state.dir", originalUnknownStateDirectory)
         }
         PauseStatus.isPause = originalPause
+        ConfigUtil.putBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED, originalScreenRecoveryEnabled, store = false)
         if (::testEvidenceDirectory.isInitialized) {
             testEvidenceDirectory.toFile().deleteRecursively()
         }

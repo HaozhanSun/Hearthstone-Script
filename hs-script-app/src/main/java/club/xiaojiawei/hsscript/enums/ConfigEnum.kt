@@ -719,6 +719,12 @@ enum class ConfigEnum(
         defaultValueInitializer = { "120000" },
     ),
 
+    /** Global Beta-only kill switch for optional visual/screen recovery. */
+    BETA_SCREEN_RECOVERY_ENABLED(
+        group = DEV_CONFIG_GROUP,
+        defaultValueInitializer = { FALSE_STR },
+    ),
+
     /**
      * 启用 PaddleX 屏幕 watchdog；卡住或重复恢复动作时截图 OCR 校正状态机
      */

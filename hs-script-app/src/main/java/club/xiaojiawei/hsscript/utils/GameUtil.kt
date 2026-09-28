@@ -20,6 +20,7 @@ import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.ScreenWatchdog
 import club.xiaojiawei.hsscript.status.ScreenWatchdogRecoveryAction
+import club.xiaojiawei.hsscript.status.ScreenRecoveryRuntime
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
@@ -998,6 +999,7 @@ object GameUtil {
      * become a permanent clicker that can touch a later live game.
      */
     fun dismissStaleGameEndScreen() {
+        val recoveryToken = ScreenRecoveryRuntime.tokenOrNull() ?: return
         if (Mode.currMode !== ModeEnum.GAMEPLAY || WarEx.inWar) return
 
         val attempt = AtomicInteger(0)
@@ -1005,6 +1007,11 @@ object GameUtil {
         lateinit var future: ScheduledFuture<*>
         future = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
             {
+                if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) {
+                    future.cancel(false)
+                    gameEndTasks.remove(future)
+                    return@scheduleWithFixedDelay
+                }
                 val number = attempt.incrementAndGet()
                 if (
                     PauseStatus.isPause ||
@@ -1050,6 +1057,7 @@ object GameUtil {
                     // randomized point only after the center has had a chance
                     // to receive the input.
                     if (shouldUseStaleResultCenterClick(number)) {
+                        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@runCatching
                         log.info { "E2E恢复：结果页使用稳定中心点" }
                         MouseUtil.leftButtonClickForRecovery(GAME_END_CONTINUE_RECT.getCenterClickPos())
                     } else if (number == 2) {
@@ -1058,14 +1066,17 @@ object GameUtil {
                         // The focused result page also accepts Return; keep
                         // this as one bounded fallback before returning to the
                         // existing randomized click attempts.
+                        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@runCatching
                         val focused = MouseUtil.focusWindowForInput(ScriptStatus.gameHWND)
                         if (focused) {
+                            if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@runCatching
                             log.info { "E2E恢复：结果页鼠标无效，已确认炉石前台，使用一次 SendInput Enter 后备输入" }
                             MouseUtil.pressEnterForRecovery()
                         } else {
                             log.warn { "E2E恢复：无法确认炉石前台，跳过 Return 后备输入" }
                         }
                     } else {
+                        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@runCatching
                         MouseUtil.leftButtonClickForRecovery(GAME_END_CONTINUE_RECT.getClickPos())
                     }
                 }.onFailure { error ->
@@ -1077,6 +1088,7 @@ object GameUtil {
             TimeUnit.MILLISECONDS,
         )
         gameEndTasks.add(future)
+        ScreenRecoveryRuntime.track(recoveryToken, future)
     }
 
     fun hidePlatformWindow() {
