@@ -19,7 +19,9 @@ import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.ScreenWatchdog
+import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 import club.xiaojiawei.hsscript.status.ScreenWatchdogRecoveryAction
+import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
@@ -843,8 +845,19 @@ object GameUtil {
                                 }
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CLEAR_RESULT -> {
                                     stopSurrenderTask()
+                                    if (!GameOverPhaseStrategy.forceTerminalFromScreenWatchdog(
+                                            ScreenWatchdogKind.RESULT,
+                                            observation.screenshotPath ?: observation.reason,
+                                        )
+                                    ) {
+                                        log.error {
+                                            "SCREEN_WATCHDOG_RESULT_BLOCKED reason=authoritative-terminal-unavailable " +
+                                                "state=$state retry=false dispatch=false"
+                                        }
+                                        return@scheduleWithFixedDelay
+                                    }
                                     Mode.recover(ModeEnum.GAMEPLAY, "screen-watchdog-result-page", enterStrategy = false)
-                                    dismissStaleGameEndScreen()
+                                    dismissStaleGameEndScreen(resultAlreadyObserved = true)
                                     return@scheduleWithFixedDelay
                                 }
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MATCHMAKING -> {
@@ -997,8 +1010,14 @@ object GameUtil {
      * bounded and cancel it as soon as a new game is detected; it must never
      * become a permanent clicker that can touch a later live game.
      */
-    fun dismissStaleGameEndScreen() {
-        if (Mode.currMode !== ModeEnum.GAMEPLAY || WarEx.inWar) return
+    fun dismissStaleGameEndScreen(resultAlreadyObserved: Boolean = false) {
+        if (Mode.currMode !== ModeEnum.GAMEPLAY || (WarEx.inWar && !resultAlreadyObserved)) {
+            log.info {
+                "RESULT_PAGE_DISMISSAL_BLOCKED reason=unsafe-start " +
+                    "mode=${Mode.currMode} inWar=${WarEx.inWar} resultAlreadyObserved=$resultAlreadyObserved"
+            }
+            return
+        }
 
         val attempt = AtomicInteger(0)
         val interval = RandomUtil.getActionInterval(800).toLong()
@@ -1006,39 +1025,43 @@ object GameUtil {
         future = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
             {
                 val number = attempt.incrementAndGet()
-                if (
-                    PauseStatus.isPause ||
-                    WarEx.inWar ||
-                    Mode.currMode !== ModeEnum.GAMEPLAY
-                ) {
+                    if (PauseStatus.isPause || Mode.currMode !== ModeEnum.GAMEPLAY) {
                     future.cancel(false)
                     gameEndTasks.remove(future)
                     return@scheduleWithFixedDelay
                 }
 
-                // An input call returning only means that Robot queued a
-                // desktop event. Probe the visible client before each retry so
-                // a successful transition stops the task, while a still-live
-                // result page remains diagnosable instead of being reported as
-                // recovered merely because five events were sent.
-                if (number > 1) {
-                    when (ScreenStateRecovery.isResultVisibleForRecovery()) {
-                        false -> {
-                            log.info { "E2E恢复：结果页关闭已确认，停止重试" }
+                    // A queued Robot event is not proof the client accepted it.
+                    // When Power.log still says inWar, require a fresh positive
+                    // result-page observation before every click; never turn an
+                    // UNKNOWN postcheck into a success or a speculative input.
+                    val visible = if (resultAlreadyObserved || number > 1) {
+                        ScreenStateRecovery.isResultVisibleForRecovery()
+                    } else null
+                    when (ResultPageDismissalPolicy.decide(WarEx.inWar, visible, number, maxAttempts = 5)) {
+                        ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED -> {
+                            log.info { "RESULT_PAGE_DISMISSAL_CONFIRMED source=visible-screen-postcheck attempt=$number" }
                             future.cancel(false)
                             gameEndTasks.remove(future)
                             return@scheduleWithFixedDelay
                         }
-                        null -> log.warn { "E2E恢复：结果页后置检查未知，保留有界重试" }
-                        true -> Unit
+                        ResultPageDismissalPolicy.Decision.BLOCKED_UNCONFIRMED_DURING_WAR -> {
+                            log.warn {
+                                "RESULT_PAGE_DISMISSAL_BLOCKED reason=result-page-not-confirmed-during-war " +
+                                    "attempt=$number postcheck=UNKNOWN dispatch=false"
+                            }
+                            future.cancel(false)
+                            gameEndTasks.remove(future)
+                            return@scheduleWithFixedDelay
+                        }
+                        ResultPageDismissalPolicy.Decision.EXHAUSTED -> {
+                            log.error { "RESULT_PAGE_DISMISSAL_FAILED reason=bounded-retries-exhausted attempt=$number confirmed=false" }
+                            future.cancel(false)
+                            gameEndTasks.remove(future)
+                            return@scheduleWithFixedDelay
+                        }
+                        ResultPageDismissalPolicy.Decision.DISPATCH_CLICK -> Unit
                     }
-                }
-                if (number > 5) {
-                    log.error { "E2E恢复：结果页关闭未确认，停止无效重试" }
-                    future.cancel(false)
-                    gameEndTasks.remove(future)
-                    return@scheduleWithFixedDelay
-                }
 
                 runCatching {
                     log.info { "E2E恢复：尝试关闭旧结算页面 #$number" }

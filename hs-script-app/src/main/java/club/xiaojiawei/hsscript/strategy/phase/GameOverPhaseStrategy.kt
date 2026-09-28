@@ -80,11 +80,17 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
     }
 
     fun forceTerminalFromScreenWatchdog(kind: ScreenWatchdogKind, evidence: String): Boolean {
-        val resultOverride = when (kind) {
-            ScreenWatchdogKind.WIN -> true
-            ScreenWatchdogKind.LOST -> false
-            else -> null
+        val powerLogTerminal = if (kind == ScreenWatchdogKind.RESULT) {
+            E2ETrace.readPowerLogTerminal(PowerLogListener.logFile?.path(), war.me.gameId)
+        } else null
+        val resolution = resolveScreenWatchdogTerminal(kind, powerLogTerminal)
+        if (!resolution.accepted) {
+            club.xiaojiawei.hsscriptbase.config.log.warn {
+                "SCREEN_STATE_CORRECTION_BLOCKED reason=result-without-authoritative-power-log-terminal evidence=$evidence"
+            }
+            return false
         }
+        val resultOverride = resolution.winOverride
         if (!resultHandlingStarted.compareAndSet(false, true)) {
             club.xiaojiawei.hsscriptbase.config.log.warn {
                 "SCREEN_STATE_CORRECTED_SKIPPED reason=result-handler-already-started kind=$kind evidence=$evidence"
@@ -92,18 +98,18 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
             return false
         }
         resultOverride?.let { WarEx.endWar(it) }
-        val outcome = when (kind) {
-            ScreenWatchdogKind.WIN -> "win"
-            ScreenWatchdogKind.LOST -> "loss"
-            else -> "draw-or-unknown"
-        }
+        val outcome = resolution.outcome
         club.xiaojiawei.hsscriptbase.config.log.warn {
             "SCREEN_STATE_CORRECTED source=screen-watchdog terminal=$kind outcome=$outcome " +
                 "action=RECORD_RESULT_AND_CLEAR_PAGE evidence=$evidence"
         }
         resultScreenshotCaptured.compareAndSet(false, true)
         GameResultScreenshot.capture(outcome, WarEx.warCount)
-        addGameEndTask()
+        // Generic RESULT OCR can miss the localized WIN/LOST banner. When
+        // Power.log has already proven the terminal state, reset the stale
+        // in-war model here and let the caller use its bounded, postchecked
+        // page dismissal path instead of the continuous generic click task.
+        if (kind != ScreenWatchdogKind.RESULT) addGameEndTask()
         WarEx.reset()
         return true
     }
@@ -440,4 +446,26 @@ internal fun terminalToWinOverride(
     E2ETrace.PowerLogTerminal.CONCEDED,
     -> false
     null -> null
+}
+
+internal data class ScreenWatchdogTerminalResolution(
+    val accepted: Boolean,
+    val winOverride: Boolean?,
+    val outcome: String,
+)
+
+/** Generic RESULT text is not enough to erase an active war; require Power.log terminal evidence. */
+internal fun resolveScreenWatchdogTerminal(
+    kind: ScreenWatchdogKind,
+    terminal: E2ETrace.PowerLogTerminal?,
+): ScreenWatchdogTerminalResolution = when (kind) {
+    ScreenWatchdogKind.WIN -> ScreenWatchdogTerminalResolution(true, true, "win")
+    ScreenWatchdogKind.LOST -> ScreenWatchdogTerminalResolution(true, false, "loss")
+    ScreenWatchdogKind.RESULT -> when (terminal) {
+        E2ETrace.PowerLogTerminal.WON -> ScreenWatchdogTerminalResolution(true, true, "win")
+        E2ETrace.PowerLogTerminal.LOST -> ScreenWatchdogTerminalResolution(true, false, "loss")
+        E2ETrace.PowerLogTerminal.CONCEDED -> ScreenWatchdogTerminalResolution(true, false, "conceded")
+        null -> ScreenWatchdogTerminalResolution(false, null, "draw-or-unknown")
+    }
+    else -> ScreenWatchdogTerminalResolution(false, null, "draw-or-unknown")
 }

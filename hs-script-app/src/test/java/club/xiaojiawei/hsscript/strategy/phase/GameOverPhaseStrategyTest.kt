@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.strategy.phase
 
 import club.xiaojiawei.hsscript.status.E2ETrace
+import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -101,6 +102,22 @@ class GameOverPhaseStrategyTest {
                 localSurrenderRequested = false,
                 authoritativeTerminal = E2ETrace.PowerLogTerminal.CONCEDED,
             ),
+        )
+    }
+
+    @Test
+    fun `generic result screen requires authoritative Power log terminal before resetting war`() {
+        assertEquals(
+            ScreenWatchdogTerminalResolution(false, null, "draw-or-unknown"),
+            resolveScreenWatchdogTerminal(ScreenWatchdogKind.RESULT, null),
+        )
+        assertEquals(
+            ScreenWatchdogTerminalResolution(true, false, "loss"),
+            resolveScreenWatchdogTerminal(ScreenWatchdogKind.RESULT, E2ETrace.PowerLogTerminal.LOST),
+        )
+        assertEquals(
+            ScreenWatchdogTerminalResolution(true, false, "conceded"),
+            resolveScreenWatchdogTerminal(ScreenWatchdogKind.RESULT, E2ETrace.PowerLogTerminal.CONCEDED),
         )
     }
 }

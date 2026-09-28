@@ -6,8 +6,6 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrCancelledException
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptbase.config.log
-import com.sun.jna.platform.win32.User32
-import com.sun.jna.platform.win32.WinDef
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
@@ -20,38 +18,6 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.CancellationException
 import net.sourceforge.tess4j.Tesseract
 
-enum class ScreenWatchdogKind {
-    WIN,
-    LOST,
-    RESULT,
-    MATCHMAKING,
-    MAIN_MENU,
-    GAMEPLAY,
-    UNKNOWN,
-    CAPTURE_FAILED,
-}
-
-enum class ScreenWatchdogRecoveryAction {
-    CONTINUE_ACTION,
-    STOP_SURRENDER_NO_ACTION,
-    STOP_SURRENDER_AND_RECORD_WIN,
-    STOP_SURRENDER_AND_RECORD_LOSS,
-    STOP_SURRENDER_AND_CLEAR_RESULT,
-    STOP_SURRENDER_AND_RECOVER_MATCHMAKING,
-    STOP_SURRENDER_AND_RECOVER_MAIN_MENU,
-    STOP_SURRENDER_AND_CONTINUE_UNKNOWN,
-    STOP_SURRENDER_AND_RESUME_GAMEPLAY,
-}
-
-data class ScreenWatchdogObservation(
-    val kind: ScreenWatchdogKind,
-    val action: ScreenWatchdogRecoveryAction,
-    val ocrText: String,
-    val screenshotPath: String?,
-    val provider: String,
-    val reason: String,
-)
-
 /**
  * Last-chance screen observer for repeated recovery actions.
  *
@@ -60,7 +26,7 @@ data class ScreenWatchdogObservation(
  * suspect, then captures the visible client, OCRs it through the configured
  * OCR runtime, and gives terminal/result screens priority over more clicks.
  */
-object ScreenWatchdog {
+object UpstreamScreenWatchdog {
 
     private const val OCR_MAX_WIDTH = 1280
     private val lastCaptureAt = AtomicLong(0L)
@@ -69,10 +35,6 @@ object ScreenWatchdog {
         val shouldInspect: Boolean,
         val reason: String,
     )
-
-    internal fun resetTimingForTest() {
-        lastCaptureAt.set(0L)
-    }
 
     internal fun shouldInspect(
         startedAt: Long,
@@ -108,20 +70,7 @@ object ScreenWatchdog {
         captureProvider: () -> BufferedImage? = ::captureScreen,
         ocrProvider: (BufferedImage) -> String = ::runOCR,
     ): ScreenWatchdogObservation {
-        // Keep the established watchdog as a separate, rename-only upstream
-        // implementation.  The additive Beta capture/state heuristics must
-        // not leak into a runtime with the Beta extension switch turned off.
-        if (!ScreenRecoveryRuntime.isEnabled()) {
-            return UpstreamScreenWatchdog.inspectForSurrender(
-                state = state,
-                attempts = attempts,
-                trigger = trigger,
-                captureProvider = captureProvider,
-                ocrProvider = ocrProvider,
-            )
-        }
         val runId = System.getProperty("hs.script.e2e.run-id", "normal")
-        val activeGameplay = isAuthoritativeActiveGameplay(state)
         // This watchdog only classifies terminal/menu screens. Keep it on the
         // local OCR path so a PaddleX rank request can never block surrender
         // recovery or hold the action executor for a long sidecar timeout.
@@ -135,11 +84,7 @@ object ScreenWatchdog {
         if (image == null) {
             return ScreenWatchdogObservation(
                 kind = ScreenWatchdogKind.CAPTURE_FAILED,
-                action = if (activeGameplay) {
-                    ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RESUME_GAMEPLAY
-                } else {
-                    ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN
-                },
+                action = ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN,
                 ocrText = "",
                 screenshotPath = null,
                 provider = provider,
@@ -162,8 +107,7 @@ object ScreenWatchdog {
         )
         log.warn {
             "SCREEN_WATCHDOG_CAPTURE runId=$runId trigger=$trigger state=$state attempts=$attempts " +
-                "activeGameplay=$activeGameplay provider=$provider " +
-                "path=${evidence?.file?.absolutePath ?: "not-saved"}"
+                "provider=$provider path=${evidence?.file?.absolutePath ?: "not-saved"}"
         }
 
         val ocrText = runCatching { ocrProvider(image).replace(Regex("\\s+"), "") }.getOrElse { error ->
@@ -193,11 +137,10 @@ object ScreenWatchdog {
         }
         val providerUsed = "LEGACY"
         val kind = classify(ocrText)
-        val action = decide(kind, activeGameplay)
+        val action = decide(kind)
         log.warn {
             "SCREEN_WATCHDOG_OCR runId=$runId provider=$providerUsed kind=$kind action=$action " +
-                "activeGameplay=$activeGameplay chars=${ocrText.length} " +
-                "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
+                "chars=${ocrText.length} screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                 "ocr=${sanitize(ocrText).take(240).ifBlank { "<empty>" }}"
         }
         return ScreenWatchdogObservation(
@@ -213,9 +156,6 @@ object ScreenWatchdog {
     internal fun classifyForTest(ocrText: String): ScreenWatchdogKind = classify(ocrText)
 
     internal fun decideForTest(kind: ScreenWatchdogKind): ScreenWatchdogRecoveryAction = decide(kind)
-
-    internal fun isAuthoritativeActiveGameplayForTest(state: String): Boolean =
-        isAuthoritativeActiveGameplay(state)
 
     private fun classify(ocrText: String): ScreenWatchdogKind {
         val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
@@ -261,10 +201,7 @@ object ScreenWatchdog {
         return ScreenWatchdogKind.UNKNOWN
     }
 
-    private fun decide(
-        kind: ScreenWatchdogKind,
-        activeGameplay: Boolean = false,
-    ): ScreenWatchdogRecoveryAction = when (kind) {
+    private fun decide(kind: ScreenWatchdogKind): ScreenWatchdogRecoveryAction = when (kind) {
         ScreenWatchdogKind.WIN -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_WIN
         ScreenWatchdogKind.LOST -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECORD_LOSS
         ScreenWatchdogKind.RESULT -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CLEAR_RESULT
@@ -273,22 +210,7 @@ object ScreenWatchdog {
         ScreenWatchdogKind.GAMEPLAY -> ScreenWatchdogRecoveryAction.CONTINUE_ACTION
         ScreenWatchdogKind.UNKNOWN,
         ScreenWatchdogKind.CAPTURE_FAILED,
-        -> if (activeGameplay) {
-            ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RESUME_GAMEPLAY
-        } else {
-            ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN
-        }
-    }
-
-    private fun isAuthoritativeActiveGameplay(state: String): Boolean {
-        val fields = state.lowercase(Locale.ROOT)
-            .split('|', ';', ' ', ',')
-            .filter { it.isNotBlank() }
-            .toSet()
-        return fields.contains("mode=gameplay") &&
-            fields.contains("inwar=true") &&
-            fields.contains("warphase=game_turn") &&
-            fields.contains("myturn=true")
+        -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN
     }
 
     private fun captureScreen(): BufferedImage? = runCatching {
@@ -299,11 +221,20 @@ object ScreenWatchdog {
             .map { it.defaultConfiguration.bounds }
             .fold(Rectangle()) { all, next -> all.union(next) }
         if (allScreens.width <= 0 || allScreens.height <= 0) return null
-        val bounds = gameBounds(allScreens)
-            ?: run {
-                log.info { "SCREEN_WATCHDOG_CAPTURE_SKIPPED reason=game-bounds-unknown" }
-                return null
-            }
+        val gameRect = ScriptStatus.GAME_RECT
+        val candidate = if (gameRect.right - gameRect.left >= 400 &&
+            gameRect.bottom - gameRect.top >= 300
+        ) {
+            Rectangle(
+                gameRect.left,
+                gameRect.top,
+                gameRect.right - gameRect.left,
+                gameRect.bottom - gameRect.top,
+            )
+        } else {
+            allScreens
+        }
+        val bounds = candidate.intersection(allScreens)
         if (bounds.width < 400 || bounds.height < 300) return null
         Robot().createScreenCapture(bounds)
     }.getOrElse { error ->
@@ -336,40 +267,6 @@ object ScreenWatchdog {
             graphics.dispose()
         }
         return resized
-    }
-
-    /** Resolve only the Hearthstone client bounds; never OCR the whole desktop. */
-    private fun gameBounds(allScreens: Rectangle): Rectangle? {
-        val gameRect = ScriptStatus.GAME_RECT
-        val cachedGameBounds = if (gameRect.right - gameRect.left >= 400 && gameRect.bottom - gameRect.top >= 300) {
-            Rectangle(
-                gameRect.left,
-                gameRect.top,
-                gameRect.right - gameRect.left,
-                gameRect.bottom - gameRect.top,
-            )
-        } else {
-            null
-        }
-        val hwnd = ScriptStatus.gameHWND
-        val windowRect = WinDef.RECT()
-        val currentWindowBounds = hwnd
-            ?.takeIf { User32.INSTANCE.IsWindow(it) }
-            ?.takeIf { User32.INSTANCE.GetWindowRect(it, windowRect) }
-            ?.let {
-                Rectangle(
-                    windowRect.left,
-                    windowRect.top,
-                    windowRect.right - windowRect.left,
-                    windowRect.bottom - windowRect.top,
-                )
-            }
-        return ScreenWatchdogCaptureBoundsPolicy.select(
-            cachedGameBounds = cachedGameBounds,
-            currentWindowBounds = currentWindowBounds,
-            desktopBounds = allScreens,
-            betaExtensionsEnabled = ScreenRecoveryRuntime.isEnabled(),
-        )
     }
 
     private fun sanitize(value: String): String = value

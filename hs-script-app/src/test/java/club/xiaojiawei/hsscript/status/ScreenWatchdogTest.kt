@@ -47,6 +47,23 @@ class ScreenWatchdogTest {
         assertEquals(ScreenWatchdogKind.CAPTURE_FAILED, observation.kind)
     }
 
+    @Test
+    fun `beta off routes active-game unknown OCR through exact upstream behavior`() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
+        val frame = BufferedImage(16, 16, BufferedImage.TYPE_INT_RGB)
+        val state = "mode=GAMEPLAY|inWar=true|warPhase=GAME_TURN|myTurn=true|warCount=82"
+        val capture: () -> BufferedImage? = { frame }
+        val ocr: (BufferedImage) -> String = { "" }
+
+        val routed = ScreenWatchdog.inspectForSurrender(state, 9, captureProvider = capture, ocrProvider = ocr)
+        val upstream = UpstreamScreenWatchdog.inspectForSurrender(state, 9, captureProvider = capture, ocrProvider = ocr)
+
+        assertEquals(upstream.kind, routed.kind)
+        assertEquals(upstream.action, routed.action)
+        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN, routed.action)
+        assertEquals("ocr-classified", routed.reason)
+    }
+
     @org.junit.jupiter.api.BeforeEach
     fun enableRecoveryForLegacyWatchdogTests() {
         ScreenWatchdog.resetTimingForTest()
@@ -143,6 +160,56 @@ class ScreenWatchdogTest {
 
         assertEquals(ScreenWatchdogKind.CAPTURE_FAILED, observation.kind)
         assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RESUME_GAMEPLAY, observation.action)
+    }
+
+    @Test
+    fun `beta active gameplay extension is selected only when switch is enabled`() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)
+        val observation = ScreenWatchdog.inspectForSurrender(
+            state = "mode=GAMEPLAY|inWar=true|warPhase=GAME_TURN|myTurn=true|warCount=82",
+            attempts = 9,
+            captureProvider = { BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB) },
+            ocrProvider = { "" },
+        )
+
+        assertEquals(ScreenWatchdogKind.UNKNOWN, observation.kind)
+        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RESUME_GAMEPLAY, observation.action)
+    }
+
+    @Test
+    fun `result observation requires accepted dismissal postcheck before success`() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)
+        val result = ScreenWatchdog.inspectForSurrender(
+            state = "mode=GAMEPLAY|inWar=true|warPhase=FILL_DECK|myTurn=false|warCount=82",
+            attempts = 9,
+            captureProvider = { BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB) },
+            ocrProvider = { "对战结束 点击继续" },
+        )
+        assertEquals(ScreenWatchdogKind.RESULT, result.kind)
+        assertEquals(ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CLEAR_RESULT, result.action)
+
+        val click = ResultPageDismissalPolicy.decide(
+            inWar = true,
+            resultPageVisible = true,
+            attempt = 1,
+            maxAttempts = 5,
+        )
+        val uncertainPostcheck = ResultPageDismissalPolicy.decide(
+            inWar = true,
+            resultPageVisible = null,
+            attempt = 2,
+            maxAttempts = 5,
+        )
+        val acceptedPostcheck = ResultPageDismissalPolicy.decide(
+            inWar = true,
+            resultPageVisible = false,
+            attempt = 2,
+            maxAttempts = 5,
+        )
+
+        assertEquals(ResultPageDismissalPolicy.Decision.DISPATCH_CLICK, click)
+        assertEquals(ResultPageDismissalPolicy.Decision.BLOCKED_UNCONFIRMED_DURING_WAR, uncertainPostcheck)
+        assertEquals(ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED, acceptedPostcheck)
     }
 
     @Test
