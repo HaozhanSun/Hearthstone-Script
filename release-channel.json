@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "channel": "beta",
-  "branch": "beta/screen-watchdog-upstream-parity-v4.16.480",
+  "branch": "beta/screen-watchdog-upstream-parity-v4.16.481",
   "displayName": "Hearthstone Script Beta",
   "runtimeDirectoryName": "Hearthstone Script Beta",
   "shortcutName": "Hearthstone Script Beta.lnk",

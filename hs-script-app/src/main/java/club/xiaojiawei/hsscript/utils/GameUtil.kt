@@ -113,11 +113,12 @@ object GameUtil {
     }
 
     /**
-     * The first stale-result recovery click is deliberately deterministic so
-     * the center of the visible continue control is exercised before the
-     * bounded, humanized retry points are used.
+     * A stale result can advance through multiple post-game screens, each
+     * presenting the same lower-center Continue action. Keep every bounded
+     * retry on that observed control; changing to Enter or a randomized point
+     * after an unclassified intermediate screen can leave Hearthstone stuck.
      */
-    internal fun shouldUseStaleResultCenterClick(attempt: Int): Boolean = attempt == 1
+    internal fun shouldUseStaleResultCenterClick(attempt: Int): Boolean = attempt in 1..5
 
     /**
      * Safe-native mode deliberately avoids the injected/native window helper.
@@ -1065,31 +1066,20 @@ object GameUtil {
 
                 runCatching {
                     log.info { "E2E恢复：尝试关闭旧结算页面 #$number" }
-                    // First use the stable center of the localized result
-                    // control.  The live client can render the glyph inside
-                    // a transparent/animated hit area, and a randomized edge
-                    // point may land on the banner without being actionable.
-                    // Keep the bounded retry task and use the historical
-                    // randomized point only after the center has had a chance
-                    // to receive the input.
+                    // The live client can advance from defeat to a separate
+                    // rank/reward screen that still exposes the same Continue
+                    // control while OCR temporarily returns no text. Keep the
+                    // retry on its stable center. Input acceptance is not UI
+                    // confirmation; only the fresh screen postcheck below can
+                    // finish this task.
                     if (shouldUseStaleResultCenterClick(number)) {
                         log.info { "E2E恢复：结果页使用稳定中心点" }
                         MouseUtil.leftButtonClickForRecovery(GAME_END_CONTINUE_RECT.getCenterClickPos())
-                    } else if (number == 2) {
-                        // Some Unity client builds expose the result control
-                        // visually but do not consume the first mouse event.
-                        // The focused result page also accepts Return; keep
-                        // this as one bounded fallback before returning to the
-                        // existing randomized click attempts.
-                        val focused = MouseUtil.focusWindowForInput(ScriptStatus.gameHWND)
-                        if (focused) {
-                            log.info { "E2E恢复：结果页鼠标无效，已确认炉石前台，使用一次 SendInput Enter 后备输入" }
-                            MouseUtil.pressEnterForRecovery()
-                        } else {
-                            log.warn { "E2E恢复：无法确认炉石前台，跳过 Return 后备输入" }
-                        }
                     } else {
-                        MouseUtil.leftButtonClickForRecovery(GAME_END_CONTINUE_RECT.getClickPos())
+                        log.error {
+                            "RESULT_PAGE_DISMISSAL_FAILED reason=invalid-attempt-target attempt=$number " +
+                                "dispatch=false confirmed=false"
+                        }
                     }
                 }.onFailure { error ->
                     log.warn(error) { "E2E恢复：关闭旧结算页面尝试失败 #$number" }

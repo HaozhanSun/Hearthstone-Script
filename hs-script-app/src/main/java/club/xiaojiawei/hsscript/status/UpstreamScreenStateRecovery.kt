@@ -752,7 +752,7 @@ object UpstreamScreenStateRecovery {
             ScreenKind.RESULT -> {
                 Mode.recover(ModeEnum.GAMEPLAY, "visible-result-screen", enterStrategy = false)
                 log.warn { "SCREEN_RECOVERY_APPLIED screen=RESULT next=DISMISS_STALE_RESULT" }
-                GameUtil.dismissStaleGameEndScreen()
+                GameUtil.dismissStaleGameEndScreen(resultAlreadyObserved = true)
             }
 
             ScreenKind.MATCHMAKING -> {
