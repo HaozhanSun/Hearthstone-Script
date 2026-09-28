@@ -108,4 +108,55 @@ class GameStartupRecoveryPolicyTest {
             GameStartupRecoveryPolicy.retryAction(startupConfirmed = true, gameAlive = false),
         )
     }
+
+    @Test
+    fun `launch dispatch stays unconfirmed through retries until a stable game window appears`() {
+        var handoff = GameStartupHandoffPolicy.State()
+
+        // A process-launch request and even a live Battle.net launcher are not
+        // proof Hearthstone accepted the request.
+        repeat(3) { attempt ->
+            val now = 20_000L + attempt * 30_000L
+            val observation = GameStartupHandoffPolicy.observe(
+                handoff,
+                processAlive = false,
+                windowFound = false,
+                nowMs = now,
+            )
+            handoff = observation.state
+            assertEquals(GameStartupHandoffPolicy.Decision.WAIT, observation.decision)
+            assertEquals(
+                GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF,
+                GameStartupRecoveryPolicy.decide(
+                    gameAlive = false,
+                    startupConfirmed = false,
+                    now = now,
+                    lastLaunchAt = 1_000L,
+                ),
+            )
+            assertEquals(
+                GameStartupRecoveryPolicy.RETRY_BACKOFF_MAX_MS,
+                GameStartupRecoveryPolicy.retryDelayMs(now, 1_000L, consecutiveFailures = 20),
+            )
+        }
+
+        assertEquals(
+            GameStartupRecoveryPolicy.RetryAction.REATTACH_GAME_STARTER,
+            GameStartupRecoveryPolicy.retryAction(startupConfirmed = false, gameAlive = true),
+        )
+        val firstVisible = GameStartupHandoffPolicy.observe(
+            handoff,
+            processAlive = true,
+            windowFound = true,
+            nowMs = 110_000L,
+        )
+        assertEquals(GameStartupHandoffPolicy.Decision.WAIT, firstVisible.decision)
+        val stableVisible = GameStartupHandoffPolicy.observe(
+            firstVisible.state,
+            processAlive = true,
+            windowFound = true,
+            nowMs = 110_100L,
+        )
+        assertEquals(GameStartupHandoffPolicy.Decision.HANDOFF, stableVisible.decision)
+    }
 }
