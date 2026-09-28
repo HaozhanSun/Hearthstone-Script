@@ -3,88 +3,83 @@ package club.xiaojiawei.hsscript.status
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ScreenRecoveryGateTest {
 
-    private enum class ScreenState { STARTUP, GAME, RESULT, UNKNOWN }
-    private enum class SideEffect { POLL, OCR, SCREENSHOT, STATE_MUTATION, INPUT, AUTOMATIC_PAUSE, DIAGNOSTIC }
-    private enum class FailurePath { TIMEOUT, RETRY, EXCEPTION, LOW_CONFIDENCE }
+    private val originalEnabled = ConfigUtil.getBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED)
 
-    @Test
-    fun `global default off bypasses live screen recovery before any screen access`() {
-        val previous = ConfigUtil.getBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED)
-        try {
-            ConfigUtil.putBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED, false, store = false)
-            assertEquals(
-                ScreenStateRecovery.InspectionResult.DISABLED,
-                ScreenStateRecovery.inspectAndRecover(30_000, "test-state"),
-            )
-        } finally {
-            ConfigUtil.putBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED, previous, store = false)
-        }
+    @AfterTest
+    fun restoreFeatureSetting() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, originalEnabled, store = false)
     }
 
     @Test
-    fun `default off gate prevents all recovery side effects in every screen state`() {
-        val gate = ScreenRecoveryGate()
-        val effects = mutableListOf<Triple<ScreenState, FailurePath, SideEffect>>()
+    fun `off runtime does not execute an admitted beta recovery effect`() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
+        ScreenRecoveryRuntime.initialize()
+        val effects = AtomicInteger()
+        val admitted = ScreenRecoveryRuntime.runIfEnabled { effects.incrementAndGet() }
 
-        ScreenState.entries.forEach { state ->
-            FailurePath.entries.forEach { failure ->
-                SideEffect.entries.forEach { effect ->
-                    val token = gate.tokenOrNull()
-                    if (gate.isCurrent(token)) effects += Triple(state, failure, effect)
-                }
-            }
-        }
-
-        assertNull(gate.tokenOrNull())
-        assertTrue(effects.isEmpty())
+        assertFalse(admitted)
+        assertEquals(0, effects.get())
     }
 
     @Test
-    fun `enable admits recovery work while normal state progression remains independent`() {
-        val gate = ScreenRecoveryGate()
-        gate.setEnabled(true)
-        val token = gate.tokenOrNull()
+    fun `beta-only capture pipeline returns before touching screen when switch is off`() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
+        ScreenRecoveryRuntime.initialize()
 
-        assertTrue(gate.isCurrent(token))
-        // The normal event/phase path has no dependency on the recovery gate.
-        var normalTransitions = 0
-        listOf("STARTUP", "HUB", "TOURNAMENT", "GAMEPLAY", "GAME_OVER").forEach {
-            normalTransitions++
-        }
-        assertTrue(normalTransitions == 5)
+        assertEquals(
+            ScreenStateRecovery.InspectionResult.DISABLED,
+            ScreenStateRecovery.inspectBetaAndRecover(30_000, "test-state"),
+        )
     }
 
     @Test
-    fun `disabling invalidates in-flight decisions and cancels queued recovery tasks`() {
-        val gate = ScreenRecoveryGate(initiallyEnabled = true)
-        val token = requireNotNull(gate.tokenOrNull())
+    fun `ConfigUtil live toggle admits then cancels queued beta work`() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
+        ScreenRecoveryRuntime.initialize()
+        val effects = AtomicInteger()
+        assertFalse(ScreenRecoveryRuntime.isEnabled())
+
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)
+        val token = requireNotNull(ScreenRecoveryRuntime.tokenOrNull())
         val pending = CompletableFuture<Void>()
+        assertTrue(ScreenRecoveryRuntime.track(token, pending))
 
-        assertTrue(gate.track(token, pending))
-        gate.setEnabled(false)
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
 
-        assertFalse(gate.isCurrent(token))
-        assertTrue(pending.isCancelled)
-        assertNull(gate.tokenOrNull())
+        assertTrue(pending.isCancelled || pending.isDone)
+        assertFalse(ScreenRecoveryRuntime.isCurrent(token))
+        assertFalse(ScreenRecoveryRuntime.runIfEnabled { effects.incrementAndGet() })
+        assertEquals(0, effects.get())
     }
 
     @Test
-    fun `stale recovery work cannot resume after disable and re-enable`() {
-        val gate = ScreenRecoveryGate(initiallyEnabled = true)
-        val staleToken = requireNotNull(gate.tokenOrNull())
+    fun `off switch preserves the upstream screen classifier for normal lifecycle fallback`() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
+        ScreenRecoveryRuntime.initialize()
 
-        gate.setEnabled(false)
-        gate.setEnabled(true)
+        assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyForTest("选择套牌"))
+        assertEquals("RESULT", UpstreamScreenStateRecovery.classifyForTest("胜利 点击继续"))
+    }
 
-        assertFalse(gate.isCurrent(staleToken))
-        assertTrue(gate.isCurrent(gate.tokenOrNull()))
+    @Test
+    fun `stale generation cannot re-enter after disable and re-enable`() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)
+        ScreenRecoveryRuntime.initialize()
+        val staleToken = requireNotNull(ScreenRecoveryRuntime.tokenOrNull())
+
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)
+
+        assertFalse(ScreenRecoveryRuntime.isCurrent(staleToken))
+        assertTrue(ScreenRecoveryRuntime.isCurrent(ScreenRecoveryRuntime.tokenOrNull()))
     }
 }

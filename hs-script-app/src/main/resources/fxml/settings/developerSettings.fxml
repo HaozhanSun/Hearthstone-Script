@@ -101,11 +101,11 @@
                                              toggleGroup="$ocrProviderToggle"
                                              styleClass="radio-button-ui, radio-button-ui-main"/>
                             </SettingHBox>
-                            <SettingHBox name="Beta 屏幕恢复总开关（默认关闭）"
-                                         tip="关闭时不运行可选屏幕恢复轮询、OCR探测、状态纠正、恢复输入或恢复自动暂停；Power.log 驱动的正常对局流程不受影响。仅 Beta 构建提供。"
+                            <SettingHBox name="Beta 恢复扩展（默认关闭）"
+                                         tip="仅控制 Beta 新增的 no-progress、前台失败和启动交接恢复扩展。关闭时，上游生命周期/屏幕恢复、启动屏幕探测、结算页恢复仍按原逻辑运行；Screen Watchdog 仍由 SCREEN_WATCHDOG_ENABLED 独立控制。Power.log 驱动的正常对局流程不受影响。"
                                          tabWindow="DEVELOPER_SETTINGS" group="调试">
                                 <ConfigSwitch notificationManager="${notificationManager}"
-                                              config="BETA_SCREEN_RECOVERY_ENABLED"/>
+                                              config="BETA_RECOVERY_EXTENSIONS_ENABLED"/>
                             </SettingHBox>
                             <SettingHBox name="日志级别" tabWindow="DEVELOPER_SETTINGS" group="调试">
                                 <Hyperlink text="日志" onAction="#openLogFile"/>

@@ -719,8 +719,8 @@ enum class ConfigEnum(
         defaultValueInitializer = { "120000" },
     ),
 
-    /** Global Beta-only kill switch for optional visual/screen recovery. */
-    BETA_SCREEN_RECOVERY_ENABLED(
+    /** Global Beta-only switch for additive no-progress and recovery extensions. */
+    BETA_RECOVERY_EXTENSIONS_ENABLED(
         group = DEV_CONFIG_GROUP,
         defaultValueInitializer = { FALSE_STR },
     ),

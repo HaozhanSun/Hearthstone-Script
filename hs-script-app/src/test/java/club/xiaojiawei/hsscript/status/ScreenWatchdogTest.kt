@@ -14,20 +14,22 @@ import java.awt.image.BufferedImage
 
 class ScreenWatchdogTest {
 
-    private val originalRecoveryEnabled = ConfigUtil.getBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED)
+    private val originalRecoveryEnabled = ConfigUtil.getBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED)
+    private val originalWatchdogEnabled = ConfigUtil.getBoolean(ConfigEnum.SCREEN_WATCHDOG_ENABLED)
     private val originalSettingsProvider = OcrRuntime.settingsProvider
     private val originalProviderModeProvider = OcrRuntime.providerModeProvider
 
     @Test
-    fun `global recovery switch off performs no watchdog capture or OCR`() {
-        ConfigUtil.putBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED, false, store = false)
+    fun `upstream screen watchdog remains available when beta recovery is off`() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
+        ConfigUtil.putBoolean(ConfigEnum.SCREEN_WATCHDOG_ENABLED, true, store = false)
         var captures = 0
         var ocrCalls = 0
 
         val timing = ScreenWatchdog.shouldInspect(
             startedAt = 0L,
             attempts = 99,
-            now = 100_000L,
+            now = System.currentTimeMillis() + 60_000L,
             stuckMs = 0L,
             maxRetries = 1,
             cooldownMs = 0L,
@@ -35,25 +37,27 @@ class ScreenWatchdogTest {
         val observation = ScreenWatchdog.inspectForSurrender(
             state = "mode=GAMEPLAY|warPhase=GAME_TURN",
             attempts = 99,
-            captureProvider = { captures++; BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB) },
+            captureProvider = { captures++; null },
             ocrProvider = { ocrCalls++; "失败 点击继续" },
         )
 
-        assertFalse(timing.shouldInspect)
-        assertEquals("beta-screen-recovery-disabled", timing.reason)
-        assertEquals(0, captures)
+        assertTrue(timing.shouldInspect)
+        assertEquals(1, captures)
         assertEquals(0, ocrCalls)
-        assertEquals("DISABLED", observation.provider)
+        assertEquals(ScreenWatchdogKind.CAPTURE_FAILED, observation.kind)
     }
 
     @org.junit.jupiter.api.BeforeEach
     fun enableRecoveryForLegacyWatchdogTests() {
-        ConfigUtil.putBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED, true, store = false)
+        ScreenWatchdog.resetTimingForTest()
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)
+        ConfigUtil.putBoolean(ConfigEnum.SCREEN_WATCHDOG_ENABLED, true, store = false)
     }
 
     @AfterEach
     fun tearDown() {
-        ConfigUtil.putBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED, originalRecoveryEnabled, store = false)
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, originalRecoveryEnabled, store = false)
+        ConfigUtil.putBoolean(ConfigEnum.SCREEN_WATCHDOG_ENABLED, originalWatchdogEnabled, store = false)
         OcrRuntime.settingsProvider = originalSettingsProvider
         OcrRuntime.providerModeProvider = originalProviderModeProvider
     }

@@ -13,7 +13,7 @@ import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
-import club.xiaojiawei.hsscript.status.ScreenRecoveryRuntime
+import club.xiaojiawei.hsscript.status.BetaScreenRecoveryService
 import club.xiaojiawei.hsscript.utils.*
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
@@ -28,9 +28,7 @@ import com.sun.jna.platform.win32.User32
 import com.sun.jna.platform.win32.WinDef.HWND
 import com.sun.jna.platform.win32.WinUser.*
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 
 internal object PlatformCloseReadiness {
     fun shouldClose(
@@ -61,7 +59,6 @@ class GameStarter : AbstractStarter() {
     private var platformCloseRequested = false
 
     private val startupProbeScheduled = AtomicBoolean(false)
-    private val startupRecoveryScheduled = AtomicBoolean(false)
 
     private var handoffState = GameStartupHandoffPolicy.State()
 
@@ -80,7 +77,6 @@ class GameStarter : AbstractStarter() {
         private const val PLATFORM_CLOSE_STABILITY_MS = 20_000L
         private const val PLATFORM_CLOSE_MAX_WAIT_MS = 45_000L
         private const val PLATFORM_CLOSE_POLL_MS = 1_000L
-        private const val STARTUP_HANDSHAKE_TIMEOUT_MS = 60_000L
     }
 
     public override fun execStart() {
@@ -336,85 +332,16 @@ class GameStarter : AbstractStarter() {
      * Keep a small, process-only supervisor alive through the handshake.
      */
     private fun scheduleStartupHandoffWatchdog() {
-        val recoveryToken = ScreenRecoveryRuntime.tokenOrNull() ?: return
-        if (!startupRecoveryScheduled.compareAndSet(false, true)) return
-        val taskRef = AtomicReference<Future<*>?>()
-        val task = EXTRA_THREAD_POOL.submit {
-            val startedAt = System.currentTimeMillis()
-            try {
-                while (ScreenRecoveryRuntime.isCurrent(recoveryToken) &&
-                    System.currentTimeMillis() - startedAt < STARTUP_HANDSHAKE_TIMEOUT_MS
-                ) {
-                    if (startupHandshakeConfirmed()) {
-                        if (startupFailureAttempts != 0) {
-                            log.info { "GAME_STARTUP_HANDSHAKE_CONFIRMED resetFailures=$startupFailureAttempts" }
-                        }
-                        startupFailureAttempts = 0
-                        return@submit
-                    }
-                    if (!GameUtil.isAliveOfGame()) {
-                        startupFailureAttempts++
-                        val now = System.currentTimeMillis()
-                        val decision = GameStartupRecoveryPolicy.decide(
-                            gameAlive = false,
-                            startupConfirmed = false,
-                            now = now,
-                            lastLaunchAt = lastGameLaunchAt,
-                        )
-                        log.warn {
-                            "GAME_STARTUP_PROCESS_EXITED attempt=$startupFailureAttempts decision=$decision " +
-                                "platformAlive=${GameUtil.isAliveOfPlatform()} " +
-                                "powerLog=${PowerLogListener.logFile?.path() ?: "none"} " +
-                                "powerLogLength=${PowerLogListener.logFile?.length() ?: 0L}"
-                        }
-                        val retryDelay = GameStartupRecoveryPolicy.retryDelayMs(
-                            System.currentTimeMillis(),
-                            lastGameLaunchAt,
-                            startupFailureAttempts,
-                        )
-                        log.info {
-                            "GAME_STARTUP_RETRY_DELAY delayMs=$retryDelay " +
-                                "attempt=$startupFailureAttempts strategy=exponential-capped"
-                        }
-                        Thread.sleep(retryDelay)
-                        if (ScreenRecoveryRuntime.isCurrent(recoveryToken) && !startupHandshakeConfirmed()) {
-                            log.warn {
-                                "GAME_STARTUP_RETRY action=STARTER_CHAIN reason=process-exited-before-handshake " +
-                                    "platformPreserved=true attempt=$startupFailureAttempts " +
-                                    "retryDelayMs=$retryDelay"
-                            }
-                            StarterConfig.starter.start()
-                        }
-                        return@submit
-                    }
-                    Thread.sleep(1_000L)
-                }
-                if (ScreenRecoveryRuntime.isCurrent(recoveryToken) &&
-                    GameStartupHandoffPolicy.onHandshakeTimeout(startupHandshakeConfirmed()) ==
-                    GameStartupHandoffPolicy.HandshakeTimeoutDecision.AUTOMATIC_PAUSE
-                ) {
-                    log.error {
-                        "GAME_STARTUP_STOPPED action=AUTOMATIC_PAUSE reason=handshake-timeout " +
-                            "timeoutMs=$STARTUP_HANDSHAKE_TIMEOUT_MS " +
-                            "gameAlive=${GameUtil.isAliveOfGame()} " +
-                            "powerLog=${PowerLogListener.logFile?.path() ?: "none"} " +
-                            "powerLogLength=${PowerLogListener.logFile?.length() ?: 0L}"
-                    }
-                    LifecycleTrace.stopRecoveryCascade("startup-handshake-timeout")
-                    PauseStatus.setAutomaticPause(true)
-                }
-            } catch (error: InterruptedException) {
-                Thread.currentThread().interrupt()
-                if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) {
-                    log.info { "GAME_STARTUP_HANDOFF_WATCHDOG_INTERRUPTED" }
-                }
-            } finally {
-                startupRecoveryScheduled.set(false)
-                taskRef.get()?.let(ScreenRecoveryRuntime::forget)
-            }
-        }
-        taskRef.set(task)
-        ScreenRecoveryRuntime.track(recoveryToken, task)
+        BetaScreenRecoveryService.scheduleStartupHandoffWatchdog(
+            startupHandshakeConfirmed = ::startupHandshakeConfirmed,
+            nextFailureAttempt = {
+                startupFailureAttempts++
+                startupFailureAttempts
+            },
+            clearFailureAttempts = { startupFailureAttempts = 0 },
+            lastGameLaunchAt = { lastGameLaunchAt },
+            retryStarterChain = { StarterConfig.starter.start() },
+        )
     }
 
     /**
@@ -426,123 +353,53 @@ class GameStarter : AbstractStarter() {
      * the long-stall fallback.
      */
     private fun scheduleStartupScreenProbe() {
-        val recoveryToken = ScreenRecoveryRuntime.tokenOrNull() ?: return
         if (!startupProbeScheduled.compareAndSet(false, true)) return
         log.info {
             "STARTUP_SCREEN_PROBE_SCHEDULED gameWindow=${ScriptStatus.gameHWND != null} " +
                 "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
         }
-        val taskRef = AtomicReference<Future<*>?>()
-        val task = EXTRA_THREAD_POOL.submit {
+        EXTRA_THREAD_POOL.execute {
             var attempt = 0
-            var initialProbeAttempted = false
-            val probeStartedAt = System.currentTimeMillis()
-            var lastPowerLogPosition = PowerLogListener.logFile?.getPosition() ?: Long.MIN_VALUE
-            var lastPowerLogProgressAt = probeStartedAt
             try {
-                while (ScreenRecoveryRuntime.isCurrent(recoveryToken) && !PauseStatus.isPause) {
-                    val currentMode = Mode.currMode
-                    val normalFlowActive = WarEx.inWar ||
-                        (currentMode != null && currentMode != ModeEnum.STARTUP && currentMode != ModeEnum.LOGIN)
-                    val now = System.currentTimeMillis()
-                    val powerLogPosition = PowerLogListener.logFile?.getPosition() ?: Long.MIN_VALUE
-                    if (powerLogPosition != Long.MIN_VALUE && powerLogPosition != lastPowerLogPosition) {
-                        lastPowerLogPosition = powerLogPosition
-                        lastPowerLogProgressAt = now
-                        log.info {
-                            "STARTUP_SCREEN_PROBE_LOG_PROGRESS elapsedMs=${now - probeStartedAt} " +
-                            "powerLogPosition=$powerLogPosition"
-                        }
+                // The starter chain discovers Hearthstone before the log listeners
+                // attach. Give those listeners a short head start, but do not wait
+                // for the 30-second stale-screen fallback.
+                Thread.sleep(2_500L)
+                val deadline = System.currentTimeMillis() + 15_000L
+                while (System.currentTimeMillis() < deadline && !PauseStatus.isPause) {
+                    attempt++
+                    log.info {
+                        "STARTUP_SCREEN_PROBE attempt=$attempt " +
+                            "gameWindow=${ScriptStatus.gameHWND != null} " +
+                            "working=${WorkTimeListener.working} war=${WarEx.inWar}"
                     }
-                    val powerLog = PowerLogListener.logFile
-                    val powerLogLength = runCatching { powerLog?.length() ?: -1L }.getOrDefault(-1L)
-                    val startupProbeDecision = StartupScreenRecoveryPolicy.decide(
-                        elapsedMs = now - probeStartedAt,
-                        noLogProgressMs = now - lastPowerLogProgressAt,
-                        normalFlowActive = normalFlowActive,
-                        initialProbeAttempted = initialProbeAttempted,
-                    )
-                    if (startupProbeDecision == StartupScreenRecoveryPolicy.Decision.DEFER_NORMAL_FLOW) {
-                        log.info {
-                            "STARTUP_SCREEN_PROBE_DEFERRED reason=normal-flow-active " +
-                                "mode=${currentMode?.name ?: "NONE"} war=${WarEx.inWar} " +
-                                "elapsedMs=${now - probeStartedAt}"
-                        }
-                        return@submit
+                    val result = runCatching {
+                        ScreenStateRecovery.inspectAndRecover(
+                            stuckForMs = 0L,
+                            stateFingerprint = "STARTUP_PROBE",
+                            startupProbe = true,
+                        )
                     }
-                    when (startupProbeDecision) {
-                        StartupScreenRecoveryPolicy.Decision.DEFER_NORMAL_FLOW -> {
-                            return@submit
-                        }
-                        StartupScreenRecoveryPolicy.Decision.WAIT -> Thread.sleep(1_000L)
-                        StartupScreenRecoveryPolicy.Decision.FINISHED -> {
-                            log.warn {
-                                "STARTUP_SCREEN_PROBE_FINISHED reason=bounded-probe-window " +
-                                    "elapsedMs=${now - probeStartedAt} attempts=$attempt " +
-                                    "powerLog=${powerLog?.path() ?: "none"} powerLogLength=$powerLogLength"
-                            }
-                            return@submit
-                        }
-                        StartupScreenRecoveryPolicy.Decision.PROBE -> {
-                            if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@submit
-                            attempt++
-                            val noProgressMs = now - lastPowerLogProgressAt
-                            log.info {
-                                "STARTUP_SCREEN_PROBE attempt=$attempt " +
-                                    "reason=${if (initialProbeAttempted) "power-log-stalled" else "initial-fast-fallback"} " +
-                                    "elapsedMs=${now - probeStartedAt} noPowerLogProgressMs=$noProgressMs " +
-                                    "gameWindow=${ScriptStatus.gameHWND != null} " +
-                                    "working=${WorkTimeListener.working} war=${WarEx.inWar}"
-                            }
-                            initialProbeAttempted = true
-                            val result = runCatching {
-                                ScreenStateRecovery.inspectAndRecover(
-                                    stuckForMs = if (attempt == 1) {
-                                        StartupScreenRecoveryPolicy.INITIAL_PROBE_DELAY_MS
-                                    } else {
-                                        noProgressMs
-                                    },
-                                    stateFingerprint = "STARTUP_PROBE",
-                                    startupProbe = true,
-                                    stateStillCurrent = {
-                                        !WarEx.inWar &&
-                                            (Mode.currMode == null ||
-                                                Mode.currMode == ModeEnum.STARTUP ||
-                                                Mode.currMode == ModeEnum.LOGIN)
-                                    },
-                                )
-                            }
-                            var applied = false
-                            result.onSuccess {
-                                applied = it == ScreenStateRecovery.InspectionResult.APPLIED
-                                LifecycleTrace.mark("startup-screen-probe attempt=$attempt result=$it applied=$applied")
-                            }.onFailure { error ->
-                                log.warn(error) { "STARTUP_SCREEN_PROBE_FAILED attempt=$attempt" }
-                            }
-                            if (applied) return@submit
-                            lastPowerLogProgressAt = System.currentTimeMillis()
-                            Thread.sleep(1_000L)
-                        }
+                    var applied = false
+                    result.onSuccess {
+                        applied = it
+                        LifecycleTrace.mark("startup-screen-probe attempt=$attempt applied=$it")
+                    }.onFailure { error ->
+                        log.warn(error) { "STARTUP_SCREEN_PROBE_FAILED attempt=$attempt" }
                     }
+                    if (applied) return@execute
+                    Thread.sleep(2_000L)
                 }
             } catch (error: InterruptedException) {
                 Thread.currentThread().interrupt()
-                if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) {
-                    log.info { "STARTUP_SCREEN_PROBE_INTERRUPTED attempts=$attempt" }
-                }
+                log.info { "STARTUP_SCREEN_PROBE_INTERRUPTED attempts=$attempt" }
             } finally {
-                if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) {
-                    log.info {
-                        "STARTUP_SCREEN_PROBE_FINISHED attempts=$attempt " +
-                            "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
-                    }
+                log.info {
+                    "STARTUP_SCREEN_PROBE_FINISHED attempts=$attempt " +
+                        "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
                 }
-                startupProbeScheduled.set(false)
-                taskRef.get()?.let(ScreenRecoveryRuntime::forget)
             }
         }
-        taskRef.set(task)
-        ScreenRecoveryRuntime.track(recoveryToken, task)
     }
 
     private fun closePlatformAfterGameIsReady() {

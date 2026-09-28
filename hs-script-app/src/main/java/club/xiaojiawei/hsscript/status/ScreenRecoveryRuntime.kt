@@ -7,7 +7,7 @@ import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-/** A generation-based gate shared by optional Beta screen-recovery entry points. */
+/** Generation gate for additive Beta recovery work; upstream recovery paths do not use it. */
 internal class ScreenRecoveryGate(initiallyEnabled: Boolean = false) {
     private val enabled = AtomicBoolean(initiallyEnabled)
     private val generation = AtomicLong(1L)
@@ -49,8 +49,8 @@ internal class ScreenRecoveryGate(initiallyEnabled: Boolean = false) {
 }
 
 /**
- * Opt-in recovery runtime. Normal Power.log-driven mode/phase processing does
- * not depend on this feature and is never stopped by the switch.
+ * Runtime switch for additive Beta recovery extensions. Upstream lifecycle,
+ * startup-screen, result-screen, and watchdog paths remain independent.
  */
 internal object ScreenRecoveryRuntime {
     private val initialized = AtomicBoolean(false)
@@ -58,10 +58,15 @@ internal object ScreenRecoveryRuntime {
 
     fun initialize() {
         if (!initialized.compareAndSet(false, true)) return
-        gate.setEnabled(ConfigUtil.getBoolean(ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED))
+        val enabled = ConfigUtil.getBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED)
+        gate.setEnabled(enabled)
         ConfigUtil.addBooleanChangeListener { key, value ->
-            if (key == ConfigEnum.BETA_SCREEN_RECOVERY_ENABLED) gate.setEnabled(value)
+            if (key == ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED) {
+                gate.setEnabled(value)
+                BetaScreenRecoveryService.onFeatureChanged(value)
+            }
         }
+        BetaScreenRecoveryService.onFeatureChanged(enabled)
     }
 
     fun isEnabled(): Boolean {
@@ -77,6 +82,14 @@ internal object ScreenRecoveryRuntime {
     fun tokenOrNull(): Long? {
         initialize()
         return gate.tokenOrNull()
+    }
+
+    /** Run optional Beta work only when the current feature generation admits it. */
+    fun runIfEnabled(action: (Long) -> Unit): Boolean {
+        val token = tokenOrNull() ?: return false
+        if (!isCurrent(token)) return false
+        action(token)
+        return isCurrent(token)
     }
 
     fun isCurrent(token: Long?): Boolean {

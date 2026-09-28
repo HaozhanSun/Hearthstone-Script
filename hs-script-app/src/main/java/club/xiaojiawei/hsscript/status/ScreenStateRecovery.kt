@@ -157,6 +157,25 @@ object ScreenStateRecovery {
         stateFingerprint: String,
         startupProbe: Boolean = false,
         stateStillCurrent: () -> Boolean = { true },
+    ): Boolean {
+        if (!ScreenRecoveryRuntime.isEnabled()) {
+            return UpstreamScreenStateRecovery.inspectAndRecover(
+                stuckForMs = stuckForMs,
+                stateFingerprint = stateFingerprint,
+                startupProbe = startupProbe,
+                stateStillCurrent = stateStillCurrent,
+            )
+        }
+        return inspectBetaAndRecover(stuckForMs, stateFingerprint, startupProbe, stateStillCurrent) ==
+            InspectionResult.APPLIED
+    }
+
+    /** Optional Beta-specific recovery pipeline; never used for baseline OFF behavior. */
+    internal fun inspectBetaAndRecover(
+        stuckForMs: Long,
+        stateFingerprint: String,
+        startupProbe: Boolean = false,
+        stateStillCurrent: () -> Boolean = { true },
     ): InspectionResult {
         val recoveryToken = ScreenRecoveryRuntime.tokenOrNull()
             ?: return InspectionResult.DISABLED
@@ -1185,7 +1204,8 @@ object ScreenStateRecovery {
      * treated as proof that the result was dismissed.
      */
     internal fun isResultVisibleForRecovery(): Boolean? {
-        val token = ScreenRecoveryRuntime.tokenOrNull() ?: return null
+        val token = ScreenRecoveryRuntime.tokenOrNull()
+            ?: return UpstreamScreenStateRecovery.isResultVisibleForRecovery()
         return runCatching {
             val liveWindow = resolveLiveGameWindow() ?: return@runCatching null
             val capture = captureScreen(liveWindow, allowCachedGameRect = false) ?: return@runCatching null

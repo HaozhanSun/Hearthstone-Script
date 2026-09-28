@@ -1,15 +1,25 @@
 package club.xiaojiawei.hsscript.status
 
+import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.utils.ConfigUtil
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class LifecycleTraceTest {
 
+    private val originalRecoveryEnabled = ConfigUtil.getBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED)
+
+    @AfterTest
+    fun restoreRecoverySetting() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, originalRecoveryEnabled, store = false)
+    }
+
     @Test
     fun automaticPauseStartupRemainsObservableButManualPauseDoesNot() {
         assertEquals(
             true,
-            LifecycleTrace.shouldObserveNoProgress(
+            BetaScreenRecoveryService.shouldObserveNoProgress(
                 working = false,
                 automaticPause = true,
                 replaying = false,
@@ -19,7 +29,7 @@ class LifecycleTraceTest {
         )
         assertEquals(
             false,
-            LifecycleTrace.shouldObserveNoProgress(
+            BetaScreenRecoveryService.shouldObserveNoProgress(
                 working = false,
                 automaticPause = false,
                 replaying = false,
@@ -32,11 +42,12 @@ class LifecycleTraceTest {
     @Test
     fun startupRecoveryGraceDefersRecoveryOnlyDuringTheGraceWindow() {
         val now = 1_000_000L
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)
 
-        LifecycleTrace.markStartupRequested("offline-test", now)
+        BetaScreenRecoveryService.markStartupRequested("offline-test", now)
 
-        assertEquals(3_000L, LifecycleTrace.startupRecoveryGraceRemainingMs(now))
-        assertEquals(0L, LifecycleTrace.startupRecoveryGraceRemainingMs(now + 3_000L))
-        assertEquals(0L, LifecycleTrace.startupRecoveryGraceRemainingMs(now + 30_000L))
+        assertEquals(3_000L, BetaScreenRecoveryService.startupRecoveryGraceRemainingMs(now))
+        assertEquals(0L, BetaScreenRecoveryService.startupRecoveryGraceRemainingMs(now + 3_000L))
+        assertEquals(0L, BetaScreenRecoveryService.startupRecoveryGraceRemainingMs(now + 30_000L))
     }
 }

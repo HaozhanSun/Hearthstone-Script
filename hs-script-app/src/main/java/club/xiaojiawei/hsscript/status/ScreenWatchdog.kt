@@ -70,6 +70,10 @@ object ScreenWatchdog {
         val reason: String,
     )
 
+    internal fun resetTimingForTest() {
+        lastCaptureAt.set(0L)
+    }
+
     internal fun shouldInspect(
         startedAt: Long,
         attempts: Int,
@@ -78,9 +82,6 @@ object ScreenWatchdog {
         maxRetries: Int = ConfigUtil.getInt(ConfigEnum.SCREEN_WATCHDOG_MAX_RETRIES),
         cooldownMs: Long = ConfigUtil.getLong(ConfigEnum.SCREEN_WATCHDOG_COOLDOWN_MS),
     ): TimingDecision {
-        if (!ScreenRecoveryRuntime.isEnabled()) {
-            return TimingDecision(false, "beta-screen-recovery-disabled")
-        }
         if (!ConfigUtil.getBoolean(ConfigEnum.SCREEN_WATCHDOG_ENABLED)) {
             return TimingDecision(false, "disabled")
         }
@@ -107,23 +108,8 @@ object ScreenWatchdog {
         captureProvider: () -> BufferedImage? = ::captureScreen,
         ocrProvider: (BufferedImage) -> String = ::runOCR,
     ): ScreenWatchdogObservation {
-        if (!ScreenRecoveryRuntime.isEnabled()) {
-            return ScreenWatchdogObservation(
-                kind = ScreenWatchdogKind.UNKNOWN,
-                action = ScreenWatchdogRecoveryAction.STOP_SURRENDER_NO_ACTION,
-                ocrText = "",
-                screenshotPath = null,
-                provider = "DISABLED",
-                reason = "beta-screen-recovery-disabled",
-            )
-        }
-        val recoveryToken = ScreenRecoveryRuntime.tokenOrNull() ?: return ScreenWatchdogObservation(
-            ScreenWatchdogKind.UNKNOWN,
-            ScreenWatchdogRecoveryAction.STOP_SURRENDER_NO_ACTION,
-            "", null, "DISABLED", "beta-screen-recovery-disabled",
-        )
         val runId = System.getProperty("hs.script.e2e.run-id", "normal")
-        val activeGameplay = isAuthoritativeActiveGameplay(state)
+        val activeGameplay = ScreenRecoveryRuntime.isEnabled() && isAuthoritativeActiveGameplay(state)
         // This watchdog only classifies terminal/menu screens. Keep it on the
         // local OCR path so a PaddleX rank request can never block surrender
         // recovery or hold the action executor for a long sidecar timeout.
@@ -133,13 +119,6 @@ object ScreenWatchdog {
                 "SCREEN_WATCHDOG_CAPTURE_FAILED runId=$runId trigger=$trigger state=$state attempts=$attempts"
             }
             null
-        }
-        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) {
-            return ScreenWatchdogObservation(
-                ScreenWatchdogKind.UNKNOWN,
-                ScreenWatchdogRecoveryAction.STOP_SURRENDER_NO_ACTION,
-                "", null, "DISABLED", "beta-screen-recovery-disabled-during-capture",
-            )
         }
         if (image == null) {
             return ScreenWatchdogObservation(
@@ -201,13 +180,6 @@ object ScreenWatchdog {
             ""
         }
         val providerUsed = "LEGACY"
-        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) {
-            return ScreenWatchdogObservation(
-                ScreenWatchdogKind.UNKNOWN,
-                ScreenWatchdogRecoveryAction.STOP_SURRENDER_NO_ACTION,
-                "", evidence?.file?.absolutePath, "DISABLED", "beta-screen-recovery-disabled-during-ocr",
-            )
-        }
         val kind = classify(ocrText)
         val action = decide(kind, activeGameplay)
         log.warn {
