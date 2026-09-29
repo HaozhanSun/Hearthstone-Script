@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -112,6 +113,7 @@ class ElementalMageMctsStrategyTest {
 
         assertTrue(CardTimingPolicy.isActionLegal(attack, war))
         assertTrue(ElementalMageMctsModel.isActionLegal(attack, war))
+        assertEquals(MctsActionOrderPhase.MINION_ATTACK, ElementalMageMctsModel.actionOrderPhase(attack, war))
         assertEquals(null, ElementalMageMctsModel.actionFilterReason(attack, war))
     }
 

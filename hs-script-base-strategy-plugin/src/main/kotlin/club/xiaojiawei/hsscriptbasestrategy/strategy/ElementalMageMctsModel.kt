@@ -13,6 +13,7 @@ import club.xiaojiawei.hsscriptcardsdk.mcts.MctsCardDiagnostics
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsLethalTelemetry
 import java.util.concurrent.ConcurrentHashMap
+import club.xiaojiawei.hsscriptcardsdk.mcts.defaultMctsActionOrderPhase
 
 /**
  * First offline-safe Elemental Mage model.
@@ -173,7 +174,12 @@ object ElementalMageMctsModel : MctsDecisionModel {
             MctsActionOrderPhase.MINION_PLAY
         action is PlayAction && action.creator?.cardType === CardTypeEnum.SPELL ->
             MctsActionOrderPhase.SPELL_PLAY
-        else -> null
+        // The live executor wraps this model in a monotonic phase fence after
+        // the first action of a cycle.  Returning null for an attack makes the
+        // fence reject a genuinely generated attack once a spell has already
+        // been played (null means "unclassified", not "always allowed").
+        // Preserve the intended order by classifying attacks explicitly.
+        else -> defaultMctsActionOrderPhase(action)
     }
 
     override fun actionPrior(action: Action, war: War): Double {
