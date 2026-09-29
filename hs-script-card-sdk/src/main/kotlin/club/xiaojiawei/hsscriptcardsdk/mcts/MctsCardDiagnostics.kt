@@ -126,12 +126,13 @@ object MctsCardDiagnostics {
             CardTypeEnum.MINION -> hasUsableUnknownMinionStats(card) &&
                 !card.isBattlecry && !card.isChooseOne && !hasTargetOrChoiceText(card)
             CardTypeEnum.WEAPON -> true
-            // A generic spell click is only safe when the local DB (or the
-            // live name) positively tells us that no target/choice is needed.
-            // An empty DB lookup is not evidence of a no-target spell: it is
-            // the metadata-missing case that used to allow unsafe clicks.
+            // A generic spell click is allowed as a late brave fallback when
+            // no target/choice signal is present.  If the card is actually
+            // targeted or requires a choice, the tree builder must instead
+            // find a legal engine-provided action; it must not fabricate a
+            // target click from incomplete metadata.
             CardTypeEnum.SPELL -> !card.isDiscover && !card.isBattlecry && !card.isTradeable &&
-                opaqueEffectSafety(card) === OpaqueEffectSafety.KNOWN_NO_TARGET
+                opaqueEffectSafety(card) !== OpaqueEffectSafety.UNSAFE_TARGET_OR_CHOICE
             else -> false
         }
     }
@@ -148,8 +149,6 @@ object MctsCardDiagnostics {
                 card.isTradeable -> "tradeable-spell-needs-explicit-choice"
                 opaqueEffectSafety(card) === OpaqueEffectSafety.UNSAFE_TARGET_OR_CHOICE ->
                     "unsafe-target-or-choice"
-                opaqueEffectSafety(card) === OpaqueEffectSafety.UNKNOWN_METADATA ->
-                    "unknown-effect-metadata"
                 else -> null
             }
             CardTypeEnum.MINION -> when {

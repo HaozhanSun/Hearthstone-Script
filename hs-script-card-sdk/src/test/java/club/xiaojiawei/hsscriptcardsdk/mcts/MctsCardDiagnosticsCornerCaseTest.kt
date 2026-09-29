@@ -71,25 +71,25 @@ class MctsCardDiagnosticsCornerCaseTest {
     }
 
     @Test
-    fun `metadata-missing unknown spell is fail closed with an auditable route`() {
+    fun `metadata-missing unknown spell uses auditable brave fallback route`() {
         val card = card("CORNER_METADATA_MISSING_SPELL", CardTypeEnum.SPELL).apply {
             isUncertain = true
         }
 
-        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
-        assertEquals("unknown-effect-metadata", MctsCardDiagnostics.opaqueFallbackBlockReason(card))
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
+        assertEquals(null, MctsCardDiagnostics.opaqueFallbackBlockReason(card))
         val route = MctsCardDiagnostics.actionRoute(
             snapshotStatus = MctsCardSnapshotStatus.UNKNOWN_ENTITY_NAME,
             requiresDescriptionAction = true,
             actionIsCommon = true,
             parsedActionCount = 0,
-            opaqueFallbackAllowed = false,
+            opaqueFallbackAllowed = true,
             decisionModelInstalled = true,
-            opaqueFallbackBlockReason = MctsCardDiagnostics.opaqueFallbackBlockReason(card),
+            opaqueFallbackBlockReason = null,
         )
-        assertEquals("FAIL_CLOSED_UNKNOWN_EFFECT_METADATA", route)
-        assertEquals("SKIP_UNRECOGNIZED", MctsCardDiagnostics.safeAction(route))
-        assertFalse(MctsCardDiagnostics.isLiveActionableRoute(route, true))
+        assertEquals("OPAQUE_FALLBACK", route)
+        assertEquals("EXECUTE_GENERIC_WITH_REPLAN", MctsCardDiagnostics.safeAction(route))
+        assertTrue(MctsCardDiagnostics.isLiveActionableRoute(route, false))
     }
 
     @Test

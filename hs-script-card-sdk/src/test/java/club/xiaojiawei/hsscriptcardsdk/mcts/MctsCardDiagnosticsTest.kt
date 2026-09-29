@@ -105,15 +105,15 @@ class MctsCardDiagnosticsTest {
     }
 
     @Test
-    fun `unknown spell without explicit no-target metadata remains unchanged`() {
+    fun `unknown spell without explicit metadata uses late brave fallback`() {
         val spell = card("UNKNOWN_SPELL", CardTypeEnum.SPELL, "UNKNOWN ENTITY [cardType=SPELL]").apply {
             entityId = "entity-unknown-spell"
             cost = 1
             isUncertain = true
         }
 
-        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(spell))
-        assertEquals("unknown-effect-metadata", MctsCardDiagnostics.opaqueFallbackBlockReason(spell))
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(spell))
+        assertEquals(null, MctsCardDiagnostics.opaqueFallbackBlockReason(spell))
     }
 
     @Test
@@ -138,6 +138,27 @@ class MctsCardDiagnosticsTest {
             node.actions.any { it.creator?.entityId == spell.entityId },
             node.actions.map { it.creator?.entityId ?: it::class.simpleName }.toString(),
         )
+    }
+
+    @Test
+    fun `known targeted spell needs engine legal target action`() {
+        val war = testWar().apply { me.resources = 1 }
+        val targeted = Card(EngineLegalAction()).apply {
+            entityId = "entity-targeted-spell"
+            cardId = "CS2_029"
+            entityName = "UNKNOWN ENTITY [cardType=SPELL]"
+            cardType = CardTypeEnum.SPELL
+            cost = 1
+            isUncertain = true
+            action.belongCard = this
+        }
+        war.addCard(targeted, war.me.handArea)
+        assertTrue(rootNode(war).actions.any { it.creator?.entityId == targeted.entityId })
+
+        val noLegalTarget = rootNode(war, object : MctsDecisionModel {
+            override fun isActionLegal(action: club.xiaojiawei.hsscriptcardsdk.bean.Action, war: War): Boolean = false
+        })
+        assertFalse(noLegalTarget.actions.any { it.creator?.entityId == targeted.entityId })
     }
 
     @Test
