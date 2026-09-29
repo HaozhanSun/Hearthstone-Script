@@ -111,31 +111,20 @@ object MctsCardDiagnostics {
      * Bounded brave fallback for an otherwise valid but unresolved hand card.
      *
      * The fallback is intentionally shared by the tree builder and the live
-     * actionable-card scan.  Minions and weapons have a safe generic play
-     * gesture: Hearthstone resolves their battlecry/equip effect after the
-     * card is played.  A spell is only eligible when it does not advertise a
-     * discover/choice interaction; the tree builder separately accepts a
-     * non-common engine-provided legal action even when spell metadata is
-     * missing.  A missing entity/card type is always fail-closed.
+     * actionable-card scan.  The executor can initiate the normal hand-card
+     * gesture even when the semantic parser has no interceptor; Hearthstone
+     * then owns the battlecry, target, discover, trade, or choice prompt.
+     * The simulator does not invent those effects: the action is heavily
+     * penalized, marked for re-plan, and must never outrank a modeled action.
+     * A missing identity, type, or minion combat snapshot remains fail-closed.
      */
     fun braveOpaqueFallbackAllowed(card: Card): Boolean {
         if (!card.isUncertain || card.cardId.isBlank() || card.entityId.isBlank() || card.cost < 0) {
             return false
         }
         return when (card.cardType) {
-            // A battlecry minion may open a target/choice/drag prompt.  The
-            // generic play gesture is safe only for a minion whose live
-            // snapshot does not advertise that interaction.
-            CardTypeEnum.MINION -> hasUsableUnknownMinionStats(card) &&
-                !card.isBattlecry && !card.isChooseOne && !hasTargetOrChoiceText(card)
-            CardTypeEnum.WEAPON -> true
-            // A generic spell click is allowed as a late brave fallback when
-            // no target/choice signal is present.  If the card is actually
-            // targeted or requires a choice, the tree builder must instead
-            // find a legal engine-provided action; it must not fabricate a
-            // target click from incomplete metadata.
-            CardTypeEnum.SPELL -> !card.isDiscover && !card.isBattlecry && !card.isTradeable &&
-                opaqueEffectSafety(card) !== OpaqueEffectSafety.UNSAFE_TARGET_OR_CHOICE
+            CardTypeEnum.MINION -> hasUsableUnknownMinionStats(card)
+            CardTypeEnum.WEAPON, CardTypeEnum.SPELL -> true
             else -> false
         }
     }
@@ -146,19 +135,9 @@ object MctsCardDiagnostics {
             return "invalid-opaque-fallback-identity"
         }
         return when (card.cardType) {
-            CardTypeEnum.SPELL -> when {
-                card.isDiscover -> "unsafe-discover"
-                card.isBattlecry -> "unsafe-battlecry-spell"
-                card.isTradeable -> "tradeable-spell-needs-explicit-choice"
-                opaqueEffectSafety(card) === OpaqueEffectSafety.UNSAFE_TARGET_OR_CHOICE ->
-                    "unsafe-target-or-choice"
-                else -> null
-            }
+            CardTypeEnum.SPELL -> null
             CardTypeEnum.MINION -> when {
                 !hasUsableUnknownMinionStats(card) -> "missing-or-invalid-minion-stats"
-                card.isBattlecry -> "unsafe-battlecry-minion"
-                card.isChooseOne -> "unsafe-choose-one-minion"
-                hasTargetOrChoiceText(card) -> "unsafe-target-or-choice"
                 else -> null
             }
             CardTypeEnum.WEAPON -> null

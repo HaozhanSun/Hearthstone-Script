@@ -60,14 +60,14 @@ class MctsCardDiagnosticsCornerCaseTest {
     }
 
     @Test
-    fun `targeted unknown spell is not treated as a no-target opaque action`() {
+    fun `targeted unknown spell is eligible for one late opaque initiation`() {
         val card = card("CORNER_TARGETED_SPELL", CardTypeEnum.SPELL).apply {
             entityName = "对一个敌方随从造成伤害"
             isUncertain = true
         }
 
-        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
-        assertFalse(MctsCardDiagnostics.isLiveActionableRoute("FAIL_CLOSED_PARSER_UNAVAILABLE", true))
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
+        assertTrue(MctsCardDiagnostics.isLiveActionableRoute("OPAQUE_FALLBACK", false))
     }
 
     @Test
@@ -93,17 +93,17 @@ class MctsCardDiagnosticsCornerCaseTest {
     }
 
     @Test
-    fun `known directed spell text remains fail closed even when entity name is missing`() {
+    fun `known directed spell text remains last-priority and auditable`() {
         val card = card("CS2_024", CardTypeEnum.SPELL).apply {
             isUncertain = true
         }
 
-        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
-        assertEquals("unsafe-target-or-choice", MctsCardDiagnostics.opaqueFallbackBlockReason(card))
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
+        assertEquals(null, MctsCardDiagnostics.opaqueFallbackBlockReason(card))
     }
 
     @Test
-    fun `discover and choice flags remain fail closed even with a generic type`() {
+    fun `discover and choice flags remain late generic candidates`() {
         val discover = card("CORNER_DISCOVER", CardTypeEnum.SPELL).apply {
             isUncertain = true
             isDiscover = true
@@ -113,8 +113,8 @@ class MctsCardDiagnosticsCornerCaseTest {
             isChooseOne = true
         }
 
-        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(discover))
-        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(choiceMinion))
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(discover))
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(choiceMinion))
     }
 
     @Test

@@ -59,7 +59,7 @@ class MctsCardDiagnosticsTest {
         assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(weapon))
 
         minion.isBattlecry = true
-        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(minion))
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(minion))
     }
 
     @Test
@@ -86,7 +86,7 @@ class MctsCardDiagnosticsTest {
     }
 
     @Test
-    fun `uncertain discover or battlecry spell remains fail closed`() {
+    fun `uncertain discover battlecry and trade spell remain late generic candidates`() {
         val discover = card("NEW_DISCOVER", CardTypeEnum.SPELL, "UNKNOWN ENTITY [cardType=SPELL]").apply {
             entityId = "entity-discover"
             cost = 2
@@ -100,8 +100,10 @@ class MctsCardDiagnosticsTest {
             isBattlecry = true
         }
 
-        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(discover))
-        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(battlecry))
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(discover))
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(battlecry))
+        assertEquals(null, MctsCardDiagnostics.opaqueFallbackBlockReason(discover))
+        assertEquals(null, MctsCardDiagnostics.opaqueFallbackBlockReason(battlecry))
     }
 
     @Test
@@ -130,6 +132,28 @@ class MctsCardDiagnosticsTest {
 
         assertEquals(MctsCardDiagnostics.GENERIC_OPAQUE_FALLBACK_PRIOR, MctsCardDiagnostics.genericOpaqueFallbackPrior(opaque))
         assertEquals(0.0, MctsCardDiagnostics.genericOpaqueFallbackPrior(modeled))
+    }
+
+    @Test
+    fun `battlecry minion and targeted spell can be attempted only as opaque last resorts`() {
+        val battlecry = card("UNKNOWN_BATTLECRY", CardTypeEnum.MINION, "UNKNOWN ENTITY [cardType=MINION]").apply {
+            entityId = "entity-battlecry-minion"
+            cost = 2
+            atc = 3
+            health = 2
+            isBattlecry = true
+            isUncertain = true
+        }
+        val targeted = card("UNKNOWN_TARGETED", CardTypeEnum.SPELL, "对一个敌方随从造成伤害").apply {
+            entityId = "entity-targeted-spell"
+            cost = 2
+            isUncertain = true
+        }
+
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(battlecry))
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(targeted))
+        assertEquals(MctsCardDiagnostics.GENERIC_OPAQUE_FALLBACK_PRIOR, MctsCardDiagnostics.genericOpaqueFallbackPrior(PlayAction({}, {}, battlecry)))
+        assertEquals(MctsCardDiagnostics.GENERIC_OPAQUE_FALLBACK_PRIOR, MctsCardDiagnostics.genericOpaqueFallbackPrior(PlayAction({}, {}, targeted)))
     }
 
     @Test

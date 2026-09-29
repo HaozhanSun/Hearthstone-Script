@@ -51,7 +51,7 @@ class MctsOpaqueFallbackMatrixTest {
     }
 
     @Test
-    fun `battlecry discover and target hinted cards fail closed for every model`() {
+    fun `battlecry discover and target hinted cards remain late candidates for every model`() {
         models.forEach { (label, model) ->
             val cases = listOf(
                 card("MATRIX_BATTLECRY", CardTypeEnum.MINION).apply {
@@ -68,15 +68,15 @@ class MctsOpaqueFallbackMatrixTest {
                 },
             )
             cases.forEach { candidate ->
-                assertFalse(
+                assertTrue(
                     MctsCardDiagnostics.braveOpaqueFallbackAllowed(candidate),
-                    "$label should fail closed for ${candidate.cardId}",
+                    "$label should allow one late generic initiation for ${candidate.cardId} type=${candidate.cardType} uncertain=${candidate.isUncertain} stats=${candidate.atc}/${candidate.health} reason=${MctsCardDiagnostics.opaqueFallbackBlockReason(candidate)}",
                 )
                 val war = testWar()
                 war.addCard(candidate, war.me.handArea)
-                assertFalse(
+                assertTrue(
                     rootHasCandidate(war, model, candidate),
-                    "$label root scan must not blind-play ${candidate.cardId}",
+                    "$label root scan should expose one late generic attempt for ${candidate.cardId}",
                 )
             }
         }

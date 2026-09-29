@@ -576,10 +576,14 @@ class MonteCarloTreeNode(
     }
 
     /**
-     * A conservative fallback for a collectible card whose parser has no
-     * specialized action. The real executor still calls the card's real
-     * CardAction; the simulator only spends mana and removes the card. The
-     * experimental model marks the resulting node as requiring a re-plan.
+     * A bounded last-resort initiation for a collectible card whose parser has
+     * no specialized action. The real executor performs exactly one ordinary
+     * hand-card gesture through the card's CardAction, then recalculates; the
+     * simulator only spends mana/removes the card because it cannot model a
+     * Battlecry, target, discover, trade, or choice prompt. The shared prior
+     * keeps this action behind modeled actions, and the re-plan telemetry makes
+     * a failed/no-state-change attempt observable instead of silently skipping
+     * the card.
      */
     private fun createOpaquePlayAction(card: Card): PlayAction {
         val entityId = card.entityId
