@@ -122,9 +122,14 @@ object MctsCardDiagnostics {
         if ((!card.isUncertain && !card.action.common) || card.cardId.isBlank() || card.entityId.isBlank() || card.cost < 0) {
             return false
         }
+        if (card.isDiscover || card.isChooseOne) return false
         return when (card.cardType) {
             CardTypeEnum.MINION -> hasUsableUnknownMinionStats(card)
-            CardTypeEnum.WEAPON, CardTypeEnum.SPELL -> true
+            CardTypeEnum.WEAPON -> true
+            // A generic spell click is only safe when the local database
+            // positively proves that it has no target/choice semantics. The
+            // simulator cannot invent a target or resolve a choice prompt.
+            CardTypeEnum.SPELL -> opaqueEffectSafety(card) === OpaqueEffectSafety.KNOWN_NO_TARGET
             else -> false
         }
     }
@@ -134,8 +139,13 @@ object MctsCardDiagnostics {
         if ((!card.isUncertain && !card.action.common) || card.cardId.isBlank() || card.entityId.isBlank() || card.cost < 0) {
             return "invalid-opaque-fallback-identity"
         }
+        if (card.isDiscover || card.isChooseOne) return "unsafe-target-or-choice"
         return when (card.cardType) {
-            CardTypeEnum.SPELL -> null
+            CardTypeEnum.SPELL -> when (opaqueEffectSafety(card)) {
+                OpaqueEffectSafety.KNOWN_NO_TARGET -> null
+                OpaqueEffectSafety.UNSAFE_TARGET_OR_CHOICE -> "unsafe-target-or-choice"
+                OpaqueEffectSafety.UNKNOWN_METADATA -> "unknown-effect-metadata"
+            }
             CardTypeEnum.MINION -> when {
                 !hasUsableUnknownMinionStats(card) -> "missing-or-invalid-minion-stats"
                 else -> null

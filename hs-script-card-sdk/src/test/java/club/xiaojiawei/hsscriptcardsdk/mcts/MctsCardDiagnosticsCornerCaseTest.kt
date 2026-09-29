@@ -60,36 +60,37 @@ class MctsCardDiagnosticsCornerCaseTest {
     }
 
     @Test
-    fun `targeted unknown spell is eligible for one late opaque initiation`() {
+    fun `targeted unknown spell remains fail closed`() {
         val card = card("CORNER_TARGETED_SPELL", CardTypeEnum.SPELL).apply {
             entityName = "对一个敌方随从造成伤害"
             isUncertain = true
         }
 
-        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
-        assertTrue(MctsCardDiagnostics.isLiveActionableRoute("OPAQUE_FALLBACK", false))
+        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
+        assertEquals("unsafe-target-or-choice", MctsCardDiagnostics.opaqueFallbackBlockReason(card))
+        assertFalse(MctsCardDiagnostics.isLiveActionableRoute("FAIL_CLOSED_UNSAFE_TARGET_OR_CHOICE", false))
     }
 
     @Test
-    fun `metadata-missing unknown spell uses auditable brave fallback route`() {
+    fun `metadata-missing unknown spell uses auditable fail-closed route`() {
         val card = card("CORNER_METADATA_MISSING_SPELL", CardTypeEnum.SPELL).apply {
             isUncertain = true
         }
 
-        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
-        assertEquals(null, MctsCardDiagnostics.opaqueFallbackBlockReason(card))
+        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
+        assertEquals("unknown-effect-metadata", MctsCardDiagnostics.opaqueFallbackBlockReason(card))
         val route = MctsCardDiagnostics.actionRoute(
             snapshotStatus = MctsCardSnapshotStatus.UNKNOWN_ENTITY_NAME,
             requiresDescriptionAction = true,
             actionIsCommon = true,
             parsedActionCount = 0,
-            opaqueFallbackAllowed = true,
+            opaqueFallbackAllowed = false,
             decisionModelInstalled = true,
-            opaqueFallbackBlockReason = null,
+            opaqueFallbackBlockReason = "unknown-effect-metadata",
         )
-        assertEquals("OPAQUE_FALLBACK", route)
-        assertEquals("EXECUTE_GENERIC_WITH_REPLAN", MctsCardDiagnostics.safeAction(route))
-        assertTrue(MctsCardDiagnostics.isLiveActionableRoute(route, false))
+        assertEquals("FAIL_CLOSED_UNKNOWN_EFFECT_METADATA", route)
+        assertEquals("SKIP_UNRECOGNIZED", MctsCardDiagnostics.safeAction(route))
+        assertFalse(MctsCardDiagnostics.isLiveActionableRoute(route, false))
     }
 
     @Test
@@ -98,12 +99,12 @@ class MctsCardDiagnosticsCornerCaseTest {
             isUncertain = true
         }
 
-        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
-        assertEquals(null, MctsCardDiagnostics.opaqueFallbackBlockReason(card))
+        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
+        assertEquals("unsafe-target-or-choice", MctsCardDiagnostics.opaqueFallbackBlockReason(card))
     }
 
     @Test
-    fun `discover and choice flags remain late generic candidates`() {
+    fun `discover and choice flags remain fail closed until modeled`() {
         val discover = card("CORNER_DISCOVER", CardTypeEnum.SPELL).apply {
             isUncertain = true
             isDiscover = true
@@ -113,8 +114,10 @@ class MctsCardDiagnosticsCornerCaseTest {
             isChooseOne = true
         }
 
-        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(discover))
-        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(choiceMinion))
+        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(discover))
+        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(choiceMinion))
+        assertEquals("unsafe-target-or-choice", MctsCardDiagnostics.opaqueFallbackBlockReason(discover))
+        assertEquals("unsafe-target-or-choice", MctsCardDiagnostics.opaqueFallbackBlockReason(choiceMinion))
     }
 
     @Test
