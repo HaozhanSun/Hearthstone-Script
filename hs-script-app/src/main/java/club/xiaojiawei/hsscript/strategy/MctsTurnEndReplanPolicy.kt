@@ -35,7 +35,15 @@ internal object MctsTurnEndReplanPolicy {
         val enterRecoveryWatch: Boolean,
         val allowEndTurn: Boolean,
         val reason: String,
-    )
+    ) {
+        val outcome: String
+            get() = when {
+                retryFreshPlan -> "fresh-replan-retry"
+                enterRecoveryWatch -> "recovery-watch-no-end-turn"
+                allowEndTurn -> "end-turn-click-authorized"
+                else -> "no-end-turn"
+            }
+    }
 
     fun decide(completedReplans: Int, liveActionable: Boolean): Decision {
         require(completedReplans >= 0) { "completedReplans must not be negative" }

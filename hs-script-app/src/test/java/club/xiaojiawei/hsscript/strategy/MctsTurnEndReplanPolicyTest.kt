@@ -55,6 +55,7 @@ class MctsTurnEndReplanPolicyTest {
         assertFalse(exhausted.retryFreshPlan)
         assertTrue(exhausted.enterRecoveryWatch)
         assertFalse(exhausted.allowEndTurn)
+        assertEquals("recovery-watch-no-end-turn", exhausted.outcome)
     }
 
     @Test
@@ -71,6 +72,7 @@ class MctsTurnEndReplanPolicyTest {
         assertFalse(decision.retryFreshPlan)
         assertFalse(decision.enterRecoveryWatch)
         assertTrue(decision.allowEndTurn)
+        assertEquals("end-turn-click-authorized", decision.outcome)
     }
 
     @Test

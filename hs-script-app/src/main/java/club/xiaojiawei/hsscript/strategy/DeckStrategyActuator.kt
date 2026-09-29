@@ -510,12 +510,17 @@ object DeckStrategyActuator {
                     label = "turn-end-replan-exhausted",
                 )
                 log.error {
+                    val fallback = if (actionRecovery.allowEndTurn && replanDecision.allowEndTurnWhenExhausted) {
+                        "fallback=end-turn-click"
+                    } else {
+                        "fallback=none"
+                    }
                     "MCTS_TURN_END_REPLAN_EXHAUSTED turn=${war.me.turn} replans=$replans " +
                         "maxReplans=$MAX_MCTS_TURN_END_REPLANS planningPasses=${replanDecision.planningPass} " +
                         "remainingActions=${inspection.requiresReplan} reason=${replanDecision.reason}; " +
                         "freshLiveRescan=${replanDecision.freshLiveRescanRequired} " +
                         "reusedPreviousPlan=${replanDecision.reusePreviousPlan}; " +
-                        "fallback=end-turn-click " +
+                        "$fallback outcome=${actionRecovery.outcome} " +
                         "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                         "screenshotLink=${evidence?.link ?: "none"}"
                 }
