@@ -9,6 +9,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
+import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -89,6 +90,29 @@ class ElementalMageMctsStrategyTest {
 
         val face = AttackAction({}, {}, hero, targetEntityId = rivalHero.entityId, targetIsHero = true)
         assertTrue(ElementalMageMctsModel.isLethalAction(face, war))
+    }
+
+    @Test
+    fun `ready minion attack remains legal independently of spell phase ordering`() {
+        val war = testWar(turn = 7, mana = 1)
+        val attacker = testCard("TTN_475", "破链角斗士", 3, CardRaceEnum.UNKNOWN).apply {
+            isExhausted = false
+        }
+        val target = testCard("TAUNT_TEST", "嘲讽目标", 0, CardRaceEnum.UNKNOWN).apply {
+            health = 3
+        }
+        war.addCard(attacker, war.me.playArea)
+        war.addCard(target, war.rival.playArea)
+
+        val attack = AttackAction(
+            {}, {}, attacker,
+            targetEntityId = target.entityId,
+            targetIsHero = false,
+        )
+
+        assertTrue(CardTimingPolicy.isActionLegal(attack, war))
+        assertTrue(ElementalMageMctsModel.isActionLegal(attack, war))
+        assertEquals(null, ElementalMageMctsModel.actionFilterReason(attack, war))
     }
 
     @Test

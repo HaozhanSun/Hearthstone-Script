@@ -407,14 +407,30 @@ class MonteCarloTreeNode(
             if (illegalActions.isNotEmpty()) {
                 result.removeAll(illegalActions.toSet())
                 illegalActions.forEach { action ->
+                    // Keep the two legality predicates separate. A generic
+                    // fallback reason is not enough to explain why a live
+                    // attack disappeared before the phase fence; in
+                    // particular, it cannot distinguish a timing-policy
+                    // rejection from a strategy-model rejection or a
+                    // deployed model mismatch.
+                    val timingLegal = CardTimingPolicy.isActionLegal(action, war)
+                    val modelLegal = decisionModel?.isActionLegal(action, war) ?: true
+                    val modelReason = decisionModel?.actionFilterReason(action, war)
                     addScan(
                         mapOf(
                             "kind" to "ACTION_FILTER",
                             "outcome" to "FILTERED",
                             "reason" to (CardTimingPolicy.actionFilterReason(action, war)
-                                ?: decisionModel?.actionFilterReason(action, war)
+                                ?: modelReason
                                 ?: "decision-model-illegal-action"),
                             "action" to actionDescription(action),
+                            "timingLegal" to timingLegal,
+                            "modelLegal" to modelLegal,
+                            "modelClass" to (decisionModel?.javaClass?.name ?: "none"),
+                            "modelReason" to (modelReason ?: ""),
+                            "actionClass" to action::class.java.name,
+                            "creatorCardId" to (action.creator?.cardId ?: ""),
+                            "creatorEntityId" to (action.creator?.entityId ?: ""),
                         ),
                     )
                 }
