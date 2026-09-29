@@ -16,11 +16,13 @@ class MctsTurnSessionStateTest {
         state.nextCycle()
         state.markWeaponPlayed()
         state.suppressCreator("weapon-a")
+        state.suppressCard("GDB_305")
 
         assertTrue(state.begin(secondGame))
         assertEquals(0, state.cycle)
         assertFalse(state.weaponPlayed)
         assertTrue(state.suppressedCreatorIds().isEmpty())
+        assertTrue(state.suppressedCardIds().isEmpty())
     }
 
     @Test
@@ -32,10 +34,12 @@ class MctsTurnSessionStateTest {
         state.begin(firstStrategy)
         state.nextCycle()
         state.suppressCreator("location-a")
+        state.suppressCard("GDB_305")
 
         assertTrue(state.begin(secondStrategy))
         assertEquals(0, state.cycle)
         assertTrue(state.suppressedCreatorIds().isEmpty())
+        assertTrue(state.suppressedCardIds().isEmpty())
     }
 
     @Test
@@ -48,6 +52,7 @@ class MctsTurnSessionStateTest {
         state.nextCycle()
         state.markWeaponPlayed()
         state.suppressCreator("weapon-a")
+        state.suppressCard("GDB_305")
         assertFalse(state.begin(turnOne))
         assertEquals(1, state.cycle)
         assertTrue(state.weaponPlayed)
@@ -56,6 +61,7 @@ class MctsTurnSessionStateTest {
         assertEquals(0, state.cycle)
         assertFalse(state.weaponPlayed)
         assertTrue(state.suppressedCreatorIds().isEmpty())
+        assertTrue(state.suppressedCardIds().isEmpty())
     }
 
     private fun key(gameId: String, strategyId: String, turn: Int = 1) = MctsTurnSessionKey(

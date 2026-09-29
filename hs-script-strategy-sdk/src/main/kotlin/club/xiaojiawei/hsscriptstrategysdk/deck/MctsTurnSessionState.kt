@@ -33,6 +33,7 @@ internal class MctsTurnSessionState {
         private set
 
     private val suppressedCreatorIds = mutableSetOf<String>()
+    private val suppressedCardIds = mutableSetOf<String>()
 
     @Synchronized
     fun begin(nextKey: MctsTurnSessionKey): Boolean {
@@ -41,6 +42,7 @@ internal class MctsTurnSessionState {
         cycle = 0
         weaponPlayed = false
         suppressedCreatorIds.clear()
+        suppressedCardIds.clear()
         return true
     }
 
@@ -50,6 +52,7 @@ internal class MctsTurnSessionState {
         cycle = 0
         weaponPlayed = false
         suppressedCreatorIds.clear()
+        suppressedCardIds.clear()
     }
 
     @Synchronized
@@ -74,7 +77,15 @@ internal class MctsTurnSessionState {
     }
 
     @Synchronized
+    fun suppressCard(cardId: String) {
+        if (cardId.isNotBlank()) suppressedCardIds += cardId
+    }
+
+    @Synchronized
     fun suppressedCreatorIds(): Set<String> = suppressedCreatorIds.toSet()
+
+    @Synchronized
+    fun suppressedCardIds(): Set<String> = suppressedCardIds.toSet()
 
     @Synchronized
     fun currentKey(): MctsTurnSessionKey? = key

@@ -114,6 +114,40 @@ class MctsTurnEndReplanPolicyTest {
     }
 
     @Test
+    fun `repeated unconfirmed spell cycles never authorize end turn while live work remains`() {
+        var completedReplans = 0
+        repeat(MctsTurnEndReplanPolicy.MAX_REPLANS) {
+            val decision = MctsTurnEndReplanPolicy.decide(completedReplans, liveActionable = true)
+            assertTrue(decision.shouldReplan)
+            completedReplans++
+        }
+
+        repeat(2) {
+            val exhausted = MctsTurnEndReplanPolicy.decide(
+                completedReplans = MctsTurnEndReplanPolicy.MAX_REPLANS,
+                liveActionable = true,
+            )
+            assertFalse(exhausted.allowEndTurnWhenExhausted)
+
+            val retry = MctsTurnEndReplanPolicy.decideActionRecovery(
+                completedRecoveryRetries = 0,
+                liveActionable = true,
+                freshLiveScan = true,
+            )
+            assertTrue(retry.retryFreshPlan)
+            assertFalse(retry.allowEndTurn)
+
+            val terminalWatch = MctsTurnEndReplanPolicy.decideActionRecovery(
+                completedRecoveryRetries = MctsTurnEndReplanPolicy.MAX_ACTION_RECOVERY_RETRIES,
+                liveActionable = true,
+                freshLiveScan = true,
+            )
+            assertTrue(terminalWatch.enterRecoveryWatch)
+            assertFalse(terminalWatch.allowEndTurn)
+        }
+    }
+
+    @Test
     fun `no live action permits the normal end-turn path after a fresh scan`() {
         val noAction = MctsTurnEndReplanPolicy.decide(completedReplans = 3, liveActionable = false)
 

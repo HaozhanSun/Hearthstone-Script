@@ -114,6 +114,9 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
      */
     fun suppressedExperimentalCreatorIds(): Set<String> = experimentalTurnState.suppressedCreatorIds()
 
+    /** Card ids quarantined after an unconfirmed generic dispatch. */
+    fun suppressedExperimentalCardIds(): Set<String> = experimentalTurnState.suppressedCardIds()
+
     /**
      * Return only creators for which the same live action model used by MCTS
      * can currently expose an executable action.  This prevents the app-side
@@ -135,6 +138,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             experimentalTurnState.begin(experimentalSessionKey(war))
         }
         val suppressed = suppressedExperimentalCreatorIds()
+        val suppressedCardIds = suppressedExperimentalCardIds()
         val weaponAlreadyPlayedThisTurn = blockWeaponPlays || experimentalTurnState.weaponPlayed
         val result = linkedSetOf<String>()
         val decisions = mutableListOf<Map<String, Any?>>()
@@ -150,6 +154,10 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             }
             if (card.entityId in suppressed) {
                 decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "suppressed-after-unconfirmed-dispatch"))
+                return@forEach
+            }
+            if (card.cardId in suppressedCardIds) {
+                decision(mapOf("kind" to "HAND_CARD", "cardId" to card.cardId, "entityId" to card.entityId, "outcome" to "FILTERED", "reason" to "suppressed-card-after-unconfirmed-dispatch"))
                 return@forEach
             }
             val snapshotStatus = MctsCardDiagnostics.snapshotStatus(card)
@@ -565,6 +573,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
         var immediateLocationRetries = 0
         val immediateLocationFence = ImmediateLocationFenceState()
         val blockedCreatorIds = suppressedExperimentalCreatorIds().toMutableSet()
+        val blockedCardIds = suppressedExperimentalCardIds().toMutableSet()
         while (war.isMyTurn && System.currentTimeMillis() < turnDeadline && actionCount < 16) {
             val searchStart = System.currentTimeMillis()
             // Record the lethal snapshot before searching for an action as
@@ -583,7 +592,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             )
             val phaseDecisionModel = template.decisionModel?.let { model ->
                 if (blockedCreatorIds.isEmpty() && !weaponPlayedThisTurn && !phaseFence.isActive()) model
-                else TemporarilyBlockedActionModel(model, blockedCreatorIds, weaponPlayedThisTurn, phaseFence)
+                else TemporarilyBlockedActionModel(model, blockedCreatorIds, blockedCardIds, weaponPlayedThisTurn, phaseFence)
             }
             val freeSlotsForImmediateLocation =
                 (war.me.playArea.maxSize - war.me.playArea.cards.size).coerceAtLeast(0)
@@ -638,7 +647,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 val shouldRetryForPerception = liveCreators.isEmpty() &&
                     template.decisionModel?.shouldRetryAfterEmptySearch(war) == true
                 val fallback = if (liveCreators.isNotEmpty()) {
-                    liveFallbackAction(war, arg, blockedCreatorIds)
+                    liveFallbackAction(war, arg, blockedCreatorIds, blockedCardIds)
                 } else {
                     null
                 }
@@ -732,7 +741,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                     val nextCycle = phaseFence.startNewCycle()
                     cycle = nextCycle
                     experimentalTurnState.setCycle(nextCycle)
-                    val cycleAction = liveFallbackAction(war, arg, blockedCreatorIds)
+                    val cycleAction = liveFallbackAction(war, arg, blockedCreatorIds, blockedCardIds)
                     val cycleActionPhase = cycleAction?.let { template.decisionModel?.actionOrderPhase(it, war) }
                     MctsReplayTrace.record(
                         war,
@@ -1063,6 +1072,10 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                     // remainder of this turn and let MCTS choose another
                     // currently visible action.
                     experimentalTurnState.suppressCreator(creatorId)
+                    action.creator?.cardId?.takeIf { it.isNotBlank() }?.let {
+                        experimentalTurnState.suppressCard(it)
+                        blockedCardIds += it
+                    }
                     blockedCreatorIds += creatorId
                     log.info {
                         "MCTS_EXPERIMENT_ACTION_SUPPRESSED strategy=${name()} " +
@@ -1187,11 +1200,13 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
         war: War,
         arg: MCTSArg,
         blockedCreatorIds: Set<String>,
+        blockedCardIds: Set<String>,
     ): Action? {
         val root = MonteCarloTreeNode(war, InitAction, arg)
         val candidates = root.actions.filter { action ->
             action !== TurnOverAction &&
                 action.creator?.entityId?.let { it !in blockedCreatorIds } != false &&
+                action.creator?.cardId?.let { it !in blockedCardIds } != false &&
                 action !is EmptyAction
         }
         return candidates.maxWithOrNull(
@@ -1321,11 +1336,13 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
     private class TemporarilyBlockedActionModel(
         private val delegate: MctsDecisionModel,
         private val blockedCreatorIds: Set<String>,
+        private val blockedCardIds: Set<String>,
         private val blockWeaponPlays: Boolean = false,
         private val phaseFence: MctsTurnPhaseFence? = null,
     ) : MctsDecisionModel by delegate {
         private fun isBlocked(action: Action): Boolean =
             action.creator?.entityId?.let(blockedCreatorIds::contains) == true ||
+                action.creator?.cardId?.let(blockedCardIds::contains) == true ||
                 (blockWeaponPlays && action is PlayAction && action.creator?.cardType === CardTypeEnum.WEAPON)
 
         /**
@@ -1339,7 +1356,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
          */
         private inline fun <T> withBlockedCreatorsMasked(war: War, block: () -> T): T {
             val masked = war.cardMap.values
-                .filter { it.entityId in blockedCreatorIds }
+                .filter { it.entityId in blockedCreatorIds || it.cardId in blockedCardIds }
                 .distinct()
             val previous = masked.associateWith { it.isUncertain }
             masked.forEach { it.isUncertain = true }
