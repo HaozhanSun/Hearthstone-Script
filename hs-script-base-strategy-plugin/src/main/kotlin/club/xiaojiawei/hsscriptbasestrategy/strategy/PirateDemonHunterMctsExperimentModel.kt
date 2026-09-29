@@ -35,6 +35,8 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
     const val PATCHES_THE_PILOT = "VAC_933"
     const val SIGIL_OF_SKYDIVING = "VAC_925"
     const val BATTLEFIELD = "AV_661"
+    /** Fel Barrage: deal 2 damage twice to the lowest-health enemy. */
+    const val FEL_BARRAGE = "SW_040"
     const val TERROR_HARVEST = "EDR_840"
     const val ADRENALINE_FIEND = "VAC_927"
     const val PARACHUTE_BRIGAND = "DRG_056"
@@ -92,6 +94,8 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
         HOZEN_ROUGHHOUSER,
         "VAC_430",
         ETERNAL_AMALGAM,
+        BATTLEFIELD,
+        FEL_BARRAGE,
     )
 
     fun isKnownTunedCardId(cardId: String): Boolean {
@@ -619,6 +623,21 @@ object PirateDemonHunterMctsExperimentModel : MctsDecisionModel {
                 // last-resort development play instead of competing with
                 // immediate board actions.
                 if (friendlyMinions <= 1) -22.0 else 4.0 + friendlyMinions
+            isCard(card, FEL_BARRAGE) -> {
+                // SW_040 has no user-selected target: Hearthstone resolves
+                // both hits against the lowest-health enemy.  Keep the
+                // parser/engine action authoritative and only add a value
+                // signal from visible state; never manufacture a target.
+                val lowestHealth = war.rival.playArea.cards
+                    .filter { it.isAlive() }
+                    .minOfOrNull { it.blood() }
+                when {
+                    lowestHealth == null -> 1.0
+                    lowestHealth <= 4 -> 28.0
+                    lowestHealth <= 6 -> 12.0
+                    else -> 5.0
+                }
+            }
             isCard(card, ADRENALINE_FIEND) ->
                 // This is a board-development Pirate DH card.  A current
                 // attack is valuable, but its absence must not turn the card

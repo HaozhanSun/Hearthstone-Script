@@ -581,6 +581,35 @@ class PirateDemonHunterMctsExperimentModelTest {
     }
 
     @Test
+    fun `fel barrage is valued by the lowest visible enemy without inventing a target`() {
+        val war = testWar()
+        val barrage = testCard(PirateDemonHunterMctsExperimentModel.FEL_BARRAGE).apply {
+            cardType = CardTypeEnum.SPELL
+            cost = 2
+        }
+        val action = PlayAction({}, {}, barrage)
+
+        val noEnemyPrior = PirateDemonHunterMctsExperimentModel.actionPrior(action, war)
+        assertEquals(1.0, noEnemyPrior)
+
+        val safeEnemy = testCard("SAFE_BARRAGE_ENEMY").apply {
+            cardType = CardTypeEnum.MINION
+            health = 7
+            damage = 0
+        }
+        war.addCard(safeEnemy, war.rival.playArea)
+        val nonLethalPrior = PirateDemonHunterMctsExperimentModel.actionPrior(action, war)
+        assertTrue(nonLethalPrior > noEnemyPrior)
+
+        safeEnemy.damage = 3
+        val lethalPriority = PirateDemonHunterMctsExperimentModel.actionPrior(action, war)
+        assertTrue(lethalPriority > nonLethalPrior)
+        // The model only scores the engine-generated no-target action; it does
+        // not create a target-choice action for SW_040.
+        assertTrue(PirateDemonHunterMctsExperimentModel.isKnownTunedCardId("SW_040"))
+    }
+
+    @Test
     fun `affordable zilliax is the mandatory first play on a low risk enemy board`() {
         val war = testWar().apply { me.resources = 4 }
         val zilliax = testCard("TOY_330t7").apply {
