@@ -255,7 +255,15 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
 
     private fun selectGlobalTurnPlan(rootNode: MonteCarloTreeNode): GlobalPlanCandidate? {
         val rootWar = rootNode.state.war
-        val candidates = rootNode.children.map { child ->
+        // EndTurn is a legal terminal branch, but it must not win global-plan
+        // comparison merely because its one-node terminal is more stable
+        // while another executable root action is present.
+        val hasExecutableRootChild = rootNode.children.any {
+            it.applyAction !== TurnOverAction
+        }
+        val candidates = rootNode.children
+            .filter { !hasExecutableRootChild || it.applyAction !== TurnOverAction }
+            .map { child ->
             val path = buildGlobalPlan(rootWar, child)
             val terminal = path.last()
             GlobalPlanCandidate(
@@ -265,6 +273,13 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
                 terminalAverageValue = terminal.state.averageValue(),
                 terminalVisits = terminal.state.visitCount,
             )
+        }
+        if (rootNode.arg.debugName.isNotBlank() && hasExecutableRootChild && candidates.size < rootNode.children.size) {
+            log.info {
+                "MCTS_DEBUG_GLOBAL_PLAN_END_TURN_FILTERED strategy=${rootNode.arg.debugName} " +
+                    "reason=executable-root-action-present rootChildren=${rootNode.children.size} " +
+                    "candidateChildren=${candidates.size}"
+            }
         }
         val selected = candidates.maxWithOrNull(
             compareBy<GlobalPlanCandidate> { it.score }
