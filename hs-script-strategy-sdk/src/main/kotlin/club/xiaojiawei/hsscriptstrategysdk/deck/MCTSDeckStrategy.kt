@@ -651,6 +651,33 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 } else {
                     null
                 }
+                if (liveCreators.isNotEmpty() && fallback == null) {
+                    val root = MonteCarloTreeNode(war, InitAction, arg)
+                    val rootActions = root.actions.map(::describeAction)
+                    log.warn {
+                        "MCTS_LIVE_ROOT_ACTION_MISMATCH strategy=${name()} " +
+                            "step=${actionCount + 1} liveCreators=$liveCreators " +
+                            "rootActions=$rootActions blockedCreators=$blockedCreatorIds " +
+                            "blockedCardIds=$blockedCardIds mana=${war.me.usableResource} " +
+                            "board=${war.me.playArea.cards.map { describeActionCard(it) }}"
+                    }
+                    MctsReplayTrace.record(
+                        war,
+                        "controller_branch",
+                        "live scan found creator but fresh MCTS root produced no executable fallback",
+                        mapOf(
+                            "strategy" to name(),
+                            "step" to actionCount + 1,
+                            "liveActionableCreatorIds" to liveCreators,
+                            "rootActions" to rootActions,
+                            "blockedCreatorIds" to blockedCreatorIds,
+                            "blockedCardIds" to blockedCardIds,
+                            "mana" to war.me.usableResource,
+                            "board" to war.me.playArea.cards.map(::describeActionCard),
+                            "hand" to war.me.handArea.cards.map(::describeActionCard),
+                        ),
+                    )
+                }
                 if (fallback != null) {
                     emptySearchRescans = 0
                     action = fallback
