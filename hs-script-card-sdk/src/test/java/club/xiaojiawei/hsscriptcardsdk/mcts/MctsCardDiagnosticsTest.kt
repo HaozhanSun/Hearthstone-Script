@@ -276,6 +276,43 @@ class MctsCardDiagnosticsTest {
     }
 
     @Test
+    fun `only affordable parser-unresolved card is selected instead of ending the turn`() {
+        val war = testWar().apply { me.resources = 3 }
+        val placeholder = card(
+            "GDB_303",
+            CardTypeEnum.MINION,
+            "UNKNOWN ENTITY [cardType=INVALID]",
+        ).apply {
+            entityId = "entity-gdb-303-only-action"
+            cost = 3
+            atc = 3
+            health = 4
+            isBattlecry = true
+            isUncertain = false
+        }
+        war.addCard(placeholder, war.me.handArea)
+
+        val arg = MCTSArg(
+            endMillisTime = System.currentTimeMillis() + 500L,
+            turnCount = 1,
+            turnFactor = 0.5,
+            countPerTurn = 2,
+            scoreCalculator = { 0.0 },
+            enableMultiThread = false,
+            decisionModel = object : MctsDecisionModel {},
+            experimentalSearch = true,
+            experimentalActionBudgetMillis = 100L,
+        )
+        val root = rootNode(war, arg.decisionModel!!)
+        assertTrue(root.actions.none { it === club.xiaojiawei.hsscriptcardsdk.bean.TurnOverAction })
+        assertTrue(root.actions.any { it.creator?.entityId == placeholder.entityId && it.recalculate })
+
+        val selected = MonteCarloTreeSearch(maxDepth = 3).searchBestNode(war, arg)
+        assertTrue(selected.isNotEmpty())
+        assertEquals(placeholder.entityId, selected.first().applyAction.creator?.entityId)
+    }
+
+    @Test
     fun `known no-choice spell may use brave opaque fallback`() {
         // AT_016 is present in hs_cards.db and has no directed target.  The
         // policy should allow a brave click only when this positive metadata

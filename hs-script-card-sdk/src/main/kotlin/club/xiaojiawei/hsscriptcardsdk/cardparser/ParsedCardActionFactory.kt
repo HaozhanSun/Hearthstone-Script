@@ -100,11 +100,11 @@ object ParsedCardActionFactory {
                     cardId = cardId,
                     cardName = displayName,
                     reason = "cached-unresolved",
-                    action = "FAIL_CLOSED",
+                    action = "DEFER_TO_MCTS_OR_ENGINE",
                     sourceZone = sourceZone,
                     phase = "hand-action-resolution",
-                    route = "FAIL_CLOSED_PARSER_UNAVAILABLE",
-                    safeAction = "SKIP_UNRECOGNIZED",
+                    route = "PARSER_UNAVAILABLE_DEFER_TO_MCTS",
+                    safeAction = "DEFER_TO_MCTS_OR_ENGINE",
                 )
             }
             return supplierCache[cardId]
@@ -501,21 +501,21 @@ object ParsedCardActionFactory {
             ?.takeUnless { it.isBlank() || it.startsWith("UNKNOWN ENTITY") }
             ?: "未知卡牌($cardId)"
         log.warn {
-            "CARD_ACTION_UNRECOGNIZED cardName=$readableName cardId=$cardId " +
+            "CARD_ACTION_PARSER_UNAVAILABLE cardName=$readableName cardId=$cardId " +
                 "reason=$reason sourceZone=${sourceZone.name} " +
                 "identitySource=${identitySource ?: "UNKNOWN"} " +
-                "route=FAIL_CLOSED_PARSER_UNAVAILABLE safeAction=SKIP_UNRECOGNIZED"
+                "route=PARSER_UNAVAILABLE_DEFER_TO_MCTS safeAction=DEFER_TO_MCTS_OR_ENGINE"
         }
         UnknownCardCollector.record(
             cardId = cardId,
             cardName = readableName,
             reason = reason,
-            action = "FAIL_CLOSED",
+            action = "DEFER_TO_MCTS_OR_ENGINE",
             sourceZone = sourceZone,
             phase = "hand-action-resolution",
             identitySource = identitySource,
-            route = "FAIL_CLOSED_PARSER_UNAVAILABLE",
-            safeAction = "SKIP_UNRECOGNIZED",
+            route = "PARSER_UNAVAILABLE_DEFER_TO_MCTS",
+            safeAction = "DEFER_TO_MCTS_OR_ENGINE",
         )
     }
 

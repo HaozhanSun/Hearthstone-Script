@@ -8,6 +8,9 @@ import club.xiaojiawei.hsscriptcardsdk.bean.TEST_CARD_ACTION
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
+import club.xiaojiawei.hsscriptcardsdk.diagnostics.UnknownCardCollector
+import club.xiaojiawei.hsscriptcardsdk.diagnostics.UnknownCardSourceZone
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -17,6 +20,30 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class ParsedCardActionFactoryTest {
+
+    @Test
+    fun `missing parser interceptor is recorded as deferred to MCTS`() {
+        val file = Files.createTempFile("parser-unavailable-", ".jsonl")
+        try {
+            UnknownCardCollector.configureForTests(file)
+            ParsedCardActionFactory.clear()
+            assertNull(
+                ParsedCardActionFactory.getOrCreate(
+                    "GDB_303",
+                    "爆炎流星",
+                    UnknownCardSourceZone.HAND,
+                ),
+            )
+            val line = Files.readString(file)
+            assertTrue(line.contains("\"route\":\"PARSER_UNAVAILABLE_DEFER_TO_MCTS\""))
+            assertTrue(line.contains("\"safeAction\":\"DEFER_TO_MCTS_OR_ENGINE\""))
+            assertTrue(line.contains("\"action\":\"DEFER_TO_MCTS_OR_ENGINE\""))
+        } finally {
+            UnknownCardCollector.resetConfiguration()
+            ParsedCardActionFactory.clear()
+            Files.deleteIfExists(file)
+        }
+    }
 
     @Test
     fun testParseAsPlayActionInterceptor() {

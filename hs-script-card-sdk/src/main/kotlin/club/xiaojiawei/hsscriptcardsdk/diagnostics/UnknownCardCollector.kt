@@ -17,8 +17,8 @@ import java.util.concurrent.ConcurrentHashMap
  * Persistent, low-noise evidence for cards that did not resolve to an action.
  *
  * This is deliberately separate from the user-visible diagnostic log.  The
- * existing CARD_ACTION_UNRECOGNIZED messages stay intact; this collector adds
- * one append-only JSONL record per observation so later reports can distinguish
+ * parser-unavailable messages describe only a missing interceptor; this
+ * collector adds one append-only JSONL record per observation so later reports can distinguish
  * an actionable card in our hand from a provisional entity-discovery event.
  */
 enum class UnknownCardSourceZone {
