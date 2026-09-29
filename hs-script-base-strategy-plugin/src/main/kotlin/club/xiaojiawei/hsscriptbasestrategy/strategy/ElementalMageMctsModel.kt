@@ -134,6 +134,9 @@ object ElementalMageMctsModel : MctsDecisionModel {
     override fun shouldDefer(card: Card, war: War): Boolean =
         isSunfire(card) && !sunfireIsAllowed(card)
 
+    override fun canCreateOpaqueAction(card: Card, war: War): Boolean =
+        MctsCardDiagnostics.safeOpaqueMinionFallbackAllowed(card)
+
     override fun isMandatoryAction(action: Action, war: War): Boolean {
         if (!mustPlayElementalFirst(war)) return false
         return action is PlayAction && action.creator?.let(::isElemental) == true

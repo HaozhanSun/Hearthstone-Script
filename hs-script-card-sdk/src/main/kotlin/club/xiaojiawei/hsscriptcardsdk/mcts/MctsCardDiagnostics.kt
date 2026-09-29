@@ -108,6 +108,22 @@ object MctsCardDiagnostics {
     }
 
     /**
+     * A generic minion click is safe only when its combat snapshot is usable
+     * and a battlecry does not require a target or a choice that the
+     * simulator cannot provide.  Non-battlecry minions need no effect
+     * semantics; battlecry minions must have authoritative text in the local
+     * database and that text must be target/choice-free.
+     */
+    fun safeOpaqueMinionFallbackAllowed(card: Card): Boolean {
+        if (card.cardType !== CardTypeEnum.MINION || card.cardId.isBlank() || card.entityId.isBlank() || card.cost < 0) {
+            return false
+        }
+        if (card.isDiscover || card.isChooseOne || !hasUsableUnknownMinionStats(card)) return false
+        if (!card.isBattlecry) return true
+        return opaqueEffectSafety(card) === OpaqueEffectSafety.KNOWN_NO_TARGET
+    }
+
+    /**
      * Bounded brave fallback for an otherwise valid but unresolved hand card.
      *
      * The fallback is intentionally shared by the tree builder and the live
@@ -124,7 +140,7 @@ object MctsCardDiagnostics {
         }
         if (card.isDiscover || card.isChooseOne) return false
         return when (card.cardType) {
-            CardTypeEnum.MINION -> hasUsableUnknownMinionStats(card)
+            CardTypeEnum.MINION -> safeOpaqueMinionFallbackAllowed(card)
             CardTypeEnum.WEAPON -> true
             // A generic spell click is only safe when the local database
             // positively proves that it has no target/choice semantics. The
@@ -148,6 +164,8 @@ object MctsCardDiagnostics {
             }
             CardTypeEnum.MINION -> when {
                 !hasUsableUnknownMinionStats(card) -> "missing-or-invalid-minion-stats"
+                card.isDiscover || card.isChooseOne || (card.isBattlecry && opaqueEffectSafety(card) === OpaqueEffectSafety.UNSAFE_TARGET_OR_CHOICE) -> "unsafe-target-or-choice"
+                card.isBattlecry && opaqueEffectSafety(card) === OpaqueEffectSafety.UNKNOWN_METADATA -> "unknown-effect-metadata"
                 else -> null
             }
             CardTypeEnum.WEAPON -> null

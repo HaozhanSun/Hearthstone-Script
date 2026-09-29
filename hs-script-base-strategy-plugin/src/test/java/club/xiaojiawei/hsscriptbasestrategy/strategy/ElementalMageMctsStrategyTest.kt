@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardRaceEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
+import club.xiaojiawei.hsscriptcardsdk.mcts.MctsCardDiagnostics
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -115,6 +116,26 @@ class ElementalMageMctsStrategyTest {
         assertTrue(ElementalMageMctsModel.isActionLegal(attack, war))
         assertEquals(MctsActionOrderPhase.MINION_ATTACK, ElementalMageMctsModel.actionOrderPhase(attack, war))
         assertEquals(null, ElementalMageMctsModel.actionFilterReason(attack, war))
+    }
+
+    @Test
+    fun `safe unknown minion gets a low priority opaque play while target choice stays blocked`() {
+        val war = testWar(turn = 4, mana = 2)
+        val safe = testCard("UNKNOWN_SAFE_MINION", "未知无战吼随从", 2, CardRaceEnum.UNKNOWN).apply {
+            isUncertain = true
+            isBattlecry = false
+        }
+        val unresolvedBattlecry = testCard("UNKNOWN_TARGET_BATTLECRY", "未知战吼随从", 2, CardRaceEnum.UNKNOWN).apply {
+            isUncertain = true
+            isBattlecry = true
+        }
+        war.addCard(safe, war.me.handArea)
+        war.addCard(unresolvedBattlecry, war.me.handArea)
+
+        assertTrue(MctsCardDiagnostics.safeOpaqueMinionFallbackAllowed(safe))
+        assertTrue(ElementalMageMctsModel.canCreateOpaqueAction(safe, war))
+        assertFalse(MctsCardDiagnostics.safeOpaqueMinionFallbackAllowed(unresolvedBattlecry))
+        assertFalse(ElementalMageMctsModel.canCreateOpaqueAction(unresolvedBattlecry, war))
     }
 
     @Test

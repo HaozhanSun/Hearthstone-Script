@@ -41,7 +41,7 @@ class MctsCardDiagnosticsTest {
     }
 
     @Test
-    fun `uncertain minion and weapon may use brave opaque fallback`() {
+    fun `uncertain non-battlecry minion and weapon may use brave opaque fallback`() {
         val minion = card("NEW_MINION", CardTypeEnum.MINION, "UNKNOWN ENTITY [cardType=MINION]").apply {
             entityId = "entity-minion"
             cost = 2
@@ -59,7 +59,8 @@ class MctsCardDiagnosticsTest {
         assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(weapon))
 
         minion.isBattlecry = true
-        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(minion))
+        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(minion))
+        assertEquals("unknown-effect-metadata", MctsCardDiagnostics.opaqueFallbackBlockReason(minion))
     }
 
     @Test
@@ -135,7 +136,7 @@ class MctsCardDiagnosticsTest {
     }
 
     @Test
-    fun `battlecry minion and targeted spell can be attempted only as opaque last resorts`() {
+    fun `battlecry minion and targeted spell fail closed without authoritative effect metadata`() {
         val battlecry = card("UNKNOWN_BATTLECRY", CardTypeEnum.MINION, "UNKNOWN ENTITY [cardType=MINION]").apply {
             entityId = "entity-battlecry-minion"
             cost = 2
@@ -150,10 +151,11 @@ class MctsCardDiagnosticsTest {
             isUncertain = true
         }
 
-        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(battlecry))
+        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(battlecry))
+        assertEquals("unknown-effect-metadata", MctsCardDiagnostics.opaqueFallbackBlockReason(battlecry))
         assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(targeted))
         assertEquals("unsafe-target-or-choice", MctsCardDiagnostics.opaqueFallbackBlockReason(targeted))
-        assertEquals(MctsCardDiagnostics.GENERIC_OPAQUE_FALLBACK_PRIOR, MctsCardDiagnostics.genericOpaqueFallbackPrior(PlayAction({}, {}, battlecry, recalculate = true)))
+        assertEquals(0.0, MctsCardDiagnostics.genericOpaqueFallbackPrior(PlayAction({}, {}, battlecry, recalculate = true)))
         assertEquals(0.0, MctsCardDiagnostics.genericOpaqueFallbackPrior(PlayAction({}, {}, targeted, recalculate = true)))
     }
 
