@@ -45,18 +45,7 @@ $launcherPsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat
 $deploymentContractSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\deployment-contract.ps1'
 $manifestPath = Join-Path $runtimeRoot 'deployment-manifest.json'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-
-function Get-PomVersion([string]$Text) {
-    $match = [regex]::Match($Text, '(?s)(<artifactId>hs-script</artifactId>\s*<version>)([^<]+)(</version>)')
-    if (-not $match.Success) { throw 'Root hs-script version was not found in pom.xml' }
-    return $match.Groups[2].Value
-}
-
-function Get-BaseVersion([string]$Version) {
-    $match = [regex]::Match($Version, '^v(\d+)\.(\d+)\.(\d+)')
-    if (-not $match.Success) { throw "Unsupported application version: $Version" }
-    return [version]::new([int]$match.Groups[1].Value, [int]$match.Groups[2].Value, [int]$match.Groups[3].Value)
-}
+. (Join-Path $projectRoot 'build-version-utils.ps1')
 
 function Get-JarManifest([string]$JarPath) {
     $zip = [System.IO.Compression.ZipFile]::OpenRead($JarPath)
@@ -178,38 +167,40 @@ $currentVersion = Get-PomVersion $pomText
 $strategyPluginVersion = Get-PomProperty $pomText 'hs-script-base-strategy-plugin-version'
 $deployedVersion = $null
 if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
-    try {
-        $deployedJarName = [string](Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json).appJar
-        $deployedVersion = [regex]::Match($deployedJarName, '^hs-script_(v[^.]+\.[^.]+\.[^-]+[^.]*)\.jar$').Groups[1].Value
-    } catch { $deployedVersion = $null }
+    $deployedJarName = [string](Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json).appJar
+    $deployedVersion = Get-DeployedVersionFromJarName $deployedJarName
 }
 
-if (-not [string]::IsNullOrWhiteSpace($deployedVersion) -and $currentVersion -eq $deployedVersion) {
-    $base = Get-BaseVersion $currentVersion
+if (-not [string]::IsNullOrWhiteSpace($deployedVersion)) {
     $now = Get-Date
-    $zoneName = if ([System.TimeZoneInfo]::Local.IsDaylightSavingTime($now)) { 'PDT' } else { 'PST' }
-    $nextVersion = "v$($base.Major).$($base.Minor).$($base.Build + 1)-local-$($now.ToString('yyyyMMdd-HHmmss'))$zoneName"
-    $buildTimestampPacific = "$($now.ToString('yyyy-MM-dd HH:mm:ss')) $zoneName"
-    foreach ($versionFile in Get-ChildItem -LiteralPath $projectRoot -Filter 'pom.xml' -File -Recurse) {
-        $content = [System.IO.File]::ReadAllText($versionFile.FullName)
-        $updated = $content.Replace("<version>$currentVersion</version>", "<version>$nextVersion</version>")
-        if ($updated -ne $content) { [System.IO.File]::WriteAllText($versionFile.FullName, $updated, $utf8NoBom) }
+    $nextVersion = Get-NextApplicationVersion $currentVersion $deployedVersion $now
+    if ($nextVersion -eq $currentVersion) {
+        Write-Output "BUILD_VERSION_ALREADY_NEWER=$currentVersion deployed=$deployedVersion"
+    } else {
+        $zoneName = if ([System.TimeZoneInfo]::Local.IsDaylightSavingTime($now)) { 'PDT' } else { 'PST' }
+        $base = Get-BaseVersion $deployedVersion
+        $buildTimestampPacific = "$($now.ToString('yyyy-MM-dd HH:mm:ss')) $zoneName"
+        foreach ($versionFile in Get-ChildItem -LiteralPath $projectRoot -Filter 'pom.xml' -File -Recurse) {
+            $content = [System.IO.File]::ReadAllText($versionFile.FullName)
+            $updated = $content.Replace("<version>$currentVersion</version>", "<version>$nextVersion</version>")
+            if ($updated -ne $content) { [System.IO.File]::WriteAllText($versionFile.FullName, $updated, $utf8NoBom) }
+        }
+        $rootPomTimestampPattern = '(?s)(<local-build-timestamp-pacific>)[^<]*(</local-build-timestamp-pacific>)'
+        $rootPomTextBeforeTimestamp = [System.IO.File]::ReadAllText($pomPath)
+        $rootPomWithTimestamp = [regex]::new($rootPomTimestampPattern).Replace(
+            $rootPomTextBeforeTimestamp,
+            "`${1}$buildTimestampPacific`${2}",
+            1
+        )
+        if ($rootPomWithTimestamp -eq $rootPomTextBeforeTimestamp) {
+            throw 'Root POM local-build-timestamp-pacific property was not found while bumping the release version'
+        }
+        [System.IO.File]::WriteAllText($pomPath, $rootPomWithTimestamp, $utf8NoBom)
+        $currentVersion = $nextVersion
+        $pomText = [System.IO.File]::ReadAllText($pomPath)
+        $strategyPluginVersion = Get-PomProperty $pomText 'hs-script-base-strategy-plugin-version'
+        Write-Output "BUILD_TIMESTAMP_PACIFIC=$buildTimestampPacific"
     }
-    $rootPomTimestampPattern = '(?s)(<local-build-timestamp-pacific>)[^<]*(</local-build-timestamp-pacific>)'
-    $rootPomTextBeforeTimestamp = [System.IO.File]::ReadAllText($pomPath)
-    $rootPomWithTimestamp = [regex]::new($rootPomTimestampPattern).Replace(
-        $rootPomTextBeforeTimestamp,
-        "`${1}$buildTimestampPacific`${2}",
-        1
-    )
-    if ($rootPomWithTimestamp -eq $rootPomTextBeforeTimestamp) {
-        throw 'Root POM local-build-timestamp-pacific property was not found while bumping the release version'
-    }
-    [System.IO.File]::WriteAllText($pomPath, $rootPomWithTimestamp, $utf8NoBom)
-    $currentVersion = $nextVersion
-    $pomText = [System.IO.File]::ReadAllText($pomPath)
-    $strategyPluginVersion = Get-PomProperty $pomText 'hs-script-base-strategy-plugin-version'
-    Write-Output "BUILD_TIMESTAMP_PACIFIC=$buildTimestampPacific"
 }
 
 $mavenBaseArgs = @('-f', $pomPath, '-pl', 'hs-script-app', '-am', '-Pjvm', '-Djava.version=24', '-Dproject.build.outputTimestamp=0', "-Dbuild-channel=$Channel")
