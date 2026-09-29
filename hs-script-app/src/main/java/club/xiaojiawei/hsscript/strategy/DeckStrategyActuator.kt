@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.MctsDeckProfileTelemetry
 import club.xiaojiawei.hsscript.status.Mode
+import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
@@ -414,6 +415,7 @@ object DeckStrategyActuator {
      */
     private fun finishMctsTurn(strategy: MCTSDeckStrategy) {
         var replans = 0
+        var actionRecoveryRetries = 0
         var clearYellowRetries = 0
         while (war.isMyTurn && !PauseStatus.isPause) {
             if (Mode.currMode !== ModeEnum.GAMEPLAY || PowerLogListener.replayingExistingLog) {
@@ -472,6 +474,34 @@ object DeckStrategyActuator {
                 liveActionable = inspection.requiresReplan,
             )
             if (!replanDecision.shouldReplan) {
+                val actionRecovery = MctsTurnEndReplanPolicy.decideActionRecovery(
+                    completedRecoveryRetries = actionRecoveryRetries,
+                    liveActionable = inspection.requiresReplan,
+                    freshLiveScan = true,
+                )
+                if (actionRecovery.retryFreshPlan) {
+                    actionRecoveryRetries++
+                    replans = 0
+                    log.warn {
+                        "MCTS_TURN_END_ACTION_RECOVERY_RETRY " +
+                            "retry=$actionRecoveryRetries/${MctsTurnEndReplanPolicy.MAX_ACTION_RECOVERY_RETRIES} " +
+                            "reason=${actionRecovery.reason} liveActionable=${inspection.requiresReplan} " +
+                            "freshLiveScan=true"
+                    }
+                    MctsReplayTrace.record(
+                        war,
+                        "turn_end_action_recovery_retry",
+                        "fresh live scan required one bounded recovery planning retry",
+                        mapOf(
+                            "retry" to actionRecoveryRetries,
+                            "maxRetries" to MctsTurnEndReplanPolicy.MAX_ACTION_RECOVERY_RETRIES,
+                            "reason" to actionRecovery.reason,
+                            "liveActionable" to inspection.requiresReplan,
+                            "freshLiveScan" to true,
+                        ),
+                    )
+                    continue
+                }
                 val evidence = UnknownStateScreenshot.capture(
                     category = UnknownStateScreenshot.CATEGORY_TURN_END_STUCK,
                     trigger = "mcts-turn-end-replan-exhausted",
@@ -489,11 +519,10 @@ object DeckStrategyActuator {
                         "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                         "screenshotLink=${evidence?.link ?: "none"}"
                 }
-                val fallbackResult = MctsTurnEndReplanPolicy.dispatchExhaustionFallback(
-                    decision = replanDecision,
-                    paused = PauseStatus.isPause,
-                    turnActive = war.isMyTurn && Mode.currMode === ModeEnum.GAMEPLAY,
-                ) {
+                if (actionRecovery.enterRecoveryWatch) {
+                    LifecycleTrace.requestActionRecovery("mcts-turn-end-replan-exhausted")
+                }
+                if (actionRecovery.allowEndTurn && replanDecision.allowEndTurnWhenExhausted) {
                     MctsReplayTrace.record(
                         war,
                         "turn_end_fallback_selected",
@@ -505,7 +534,7 @@ object DeckStrategyActuator {
                             "replans" to replans,
                             "maxReplans" to MAX_MCTS_TURN_END_REPLANS,
                             "planningPass" to replanDecision.planningPass,
-                            "reason" to replanDecision.reason,
+                            "reason" to actionRecovery.reason,
                             "fallback" to "end-turn-click",
                             "fullRescan" to true,
                             "remainingMana" to war.me.usableResource,
@@ -513,15 +542,6 @@ object DeckStrategyActuator {
                     )
                     MctsRoundScreenshot.capture(war, war.me.turn)
                     clickEndTurnUntilTransition()
-                }
-                if (fallbackResult != MctsTurnEndReplanPolicy.ExhaustionFallbackResult.DISPATCHED &&
-                    fallbackResult != MctsTurnEndReplanPolicy.ExhaustionFallbackResult.NOT_SELECTED
-                ) {
-                    log.warn {
-                        "MCTS_TURN_END_FALLBACK_BLOCKED result=$fallbackResult " +
-                            "pause=${PauseStatus.isPause} myTurn=${war.isMyTurn} mode=${Mode.currMode} " +
-                            "automaticPause=false"
-                    }
                 }
                 return
             }
@@ -569,12 +589,9 @@ object DeckStrategyActuator {
 
     private fun clickEndTurnUntilTransition() {
         GameUtil.cancelAction()
-        MctsTurnEndReplanPolicy.runBoundedEndTurnAttempts(
-            shouldContinue = {
-                war.isMyTurn && !PauseStatus.isPause && Mode.currMode === ModeEnum.GAMEPLAY
-            },
-        ) { attemptNumber ->
-            if (attemptNumber > 4) {
+        for (i in 0 until 20) {
+            if (!war.isMyTurn) break
+            if (i > 3) {
                 GameUtil.getThreeDiscoverCardRect(0).lClick()
                 SystemUtil.delayShortMedium()
             }
