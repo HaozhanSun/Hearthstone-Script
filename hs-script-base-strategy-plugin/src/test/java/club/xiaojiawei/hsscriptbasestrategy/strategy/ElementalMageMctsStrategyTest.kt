@@ -134,8 +134,8 @@ class ElementalMageMctsStrategyTest {
 
         assertTrue(MctsCardDiagnostics.safeOpaqueMinionFallbackAllowed(safe))
         assertTrue(ElementalMageMctsModel.canCreateOpaqueAction(safe, war))
-        assertFalse(MctsCardDiagnostics.safeOpaqueMinionFallbackAllowed(unresolvedBattlecry))
-        assertFalse(ElementalMageMctsModel.canCreateOpaqueAction(unresolvedBattlecry, war))
+        assertTrue(MctsCardDiagnostics.safeOpaqueMinionFallbackAllowed(unresolvedBattlecry))
+        assertTrue(ElementalMageMctsModel.canCreateOpaqueAction(unresolvedBattlecry, war))
     }
 
     @Test

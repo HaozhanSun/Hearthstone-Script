@@ -59,8 +59,8 @@ class MctsCardDiagnosticsTest {
         assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(weapon))
 
         minion.isBattlecry = true
-        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(minion))
-        assertEquals("unknown-effect-metadata", MctsCardDiagnostics.opaqueFallbackBlockReason(minion))
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(minion))
+        assertEquals(null, MctsCardDiagnostics.opaqueFallbackBlockReason(minion))
     }
 
     @Test
@@ -136,7 +136,7 @@ class MctsCardDiagnosticsTest {
     }
 
     @Test
-    fun `battlecry minion and targeted spell fail closed without authoritative effect metadata`() {
+    fun `battlecry minion may use body fallback while targeted spell fails closed`() {
         val battlecry = card("UNKNOWN_BATTLECRY", CardTypeEnum.MINION, "UNKNOWN ENTITY [cardType=MINION]").apply {
             entityId = "entity-battlecry-minion"
             cost = 2
@@ -151,11 +151,11 @@ class MctsCardDiagnosticsTest {
             isUncertain = true
         }
 
-        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(battlecry))
-        assertEquals("unknown-effect-metadata", MctsCardDiagnostics.opaqueFallbackBlockReason(battlecry))
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(battlecry))
+        assertEquals(null, MctsCardDiagnostics.opaqueFallbackBlockReason(battlecry))
         assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(targeted))
         assertEquals("unsafe-target-or-choice", MctsCardDiagnostics.opaqueFallbackBlockReason(targeted))
-        assertEquals(0.0, MctsCardDiagnostics.genericOpaqueFallbackPrior(PlayAction({}, {}, battlecry, recalculate = true)))
+        assertEquals(MctsCardDiagnostics.GENERIC_OPAQUE_FALLBACK_PRIOR, MctsCardDiagnostics.genericOpaqueFallbackPrior(PlayAction({}, {}, battlecry, recalculate = true)))
         assertEquals(0.0, MctsCardDiagnostics.genericOpaqueFallbackPrior(PlayAction({}, {}, targeted, recalculate = true)))
     }
 

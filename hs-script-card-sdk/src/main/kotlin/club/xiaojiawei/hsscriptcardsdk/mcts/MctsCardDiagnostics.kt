@@ -109,10 +109,11 @@ object MctsCardDiagnostics {
 
     /**
      * A generic minion click is safe only when its combat snapshot is usable
-     * and a battlecry does not require a target or a choice that the
-     * simulator cannot provide.  Non-battlecry minions need no effect
-     * semantics; battlecry minions must have authoritative text in the local
-     * database and that text must be target/choice-free.
+     * and a battlecry does not have explicit target/choice evidence.  A
+     * battlecry minion with reliable combat stats is still a useful late
+     * generic play when its text is unknown: the engine owns the battlecry
+     * resolution, while the simulator values only the body and replans.
+     * Discover/choice/target evidence remains fail-closed.
      */
     fun safeOpaqueMinionFallbackAllowed(card: Card): Boolean {
         if (card.cardType !== CardTypeEnum.MINION || card.cardId.isBlank() || card.entityId.isBlank() || card.cost < 0) {
@@ -120,7 +121,7 @@ object MctsCardDiagnostics {
         }
         if (card.isDiscover || card.isChooseOne || !hasUsableUnknownMinionStats(card)) return false
         if (!card.isBattlecry) return true
-        return opaqueEffectSafety(card) === OpaqueEffectSafety.KNOWN_NO_TARGET
+        return opaqueEffectSafety(card) !== OpaqueEffectSafety.UNSAFE_TARGET_OR_CHOICE
     }
 
     /**
@@ -165,7 +166,6 @@ object MctsCardDiagnostics {
             CardTypeEnum.MINION -> when {
                 !hasUsableUnknownMinionStats(card) -> "missing-or-invalid-minion-stats"
                 card.isDiscover || card.isChooseOne || (card.isBattlecry && opaqueEffectSafety(card) === OpaqueEffectSafety.UNSAFE_TARGET_OR_CHOICE) -> "unsafe-target-or-choice"
-                card.isBattlecry && opaqueEffectSafety(card) === OpaqueEffectSafety.UNKNOWN_METADATA -> "unknown-effect-metadata"
                 else -> null
             }
             CardTypeEnum.WEAPON -> null

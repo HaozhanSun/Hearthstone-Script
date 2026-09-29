@@ -54,13 +54,21 @@ class MctsOpaqueFallbackMatrixTest {
     }
 
     @Test
-    fun `battlecry discover and target hinted cards remain late candidates for every model`() {
+    fun `battlecry minion remains a late fallback while discover and target hints fail closed`() {
         models.forEach { (label, model) ->
-            val cases = listOf(
-                card("MATRIX_BATTLECRY", CardTypeEnum.MINION).apply {
-                    isUncertain = true
-                    isBattlecry = true
-                },
+            val battlecry = card("MATRIX_BATTLECRY", CardTypeEnum.MINION).apply {
+                isUncertain = true
+                isBattlecry = true
+            }
+            assertTrue(
+                MctsCardDiagnostics.braveOpaqueFallbackAllowed(battlecry),
+                "$label should allow a stat-backed battlecry body as a late fallback",
+            )
+            val battlecryWar = testWar()
+            battlecryWar.addCard(battlecry, battlecryWar.me.handArea)
+            assertTrue(rootHasCandidate(battlecryWar, model, battlecry), "$label should expose the battlecry body")
+
+            val unsafeCases = listOf(
                 card("MATRIX_DISCOVER", CardTypeEnum.SPELL).apply {
                     isUncertain = true
                     isDiscover = true
@@ -70,16 +78,16 @@ class MctsOpaqueFallbackMatrixTest {
                     entityName = "选择一个敌方目标"
                 },
             )
-            cases.forEach { candidate ->
-                assertTrue(
+            unsafeCases.forEach { candidate ->
+                assertFalse(
                     MctsCardDiagnostics.braveOpaqueFallbackAllowed(candidate),
-                    "$label should allow one late generic initiation for ${candidate.cardId} type=${candidate.cardType} uncertain=${candidate.isUncertain} stats=${candidate.atc}/${candidate.health} reason=${MctsCardDiagnostics.opaqueFallbackBlockReason(candidate)}",
+                    "$label must not invent an opaque action for ${candidate.cardId} type=${candidate.cardType} uncertain=${candidate.isUncertain} stats=${candidate.atc}/${candidate.health} reason=${MctsCardDiagnostics.opaqueFallbackBlockReason(candidate)}",
                 )
                 val war = testWar()
                 war.addCard(candidate, war.me.handArea)
-                assertTrue(
+                assertFalse(
                     rootHasCandidate(war, model, candidate),
-                    "$label root scan should expose one late generic attempt for ${candidate.cardId}",
+                    "$label root scan must reject unsafe opaque action for ${candidate.cardId}",
                 )
             }
         }
