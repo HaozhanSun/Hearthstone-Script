@@ -6,11 +6,14 @@ import club.xiaojiawei.hsscriptcardsdk.bean.MCTSArg
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.CardAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
+import club.xiaojiawei.hsscriptcardsdk.bean.TurnOverAction
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsCardDiagnostics
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeNode
+import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -97,6 +100,34 @@ class MctsOpaqueFallbackMatrixTest {
                 "$label root scan must reject an invalid snapshot",
             )
         }
+    }
+
+    @Test
+    fun `experimental search does not return end turn when root has an unexpanded legal card`() {
+        val candidate = card("MATRIX_UNEXPANDED_CARD", CardTypeEnum.MINION).apply {
+            isUncertain = true
+        }
+        val war = testWar()
+        war.addCard(candidate, war.me.handArea)
+
+        val path = MonteCarloTreeSearch().searchBestNode(
+            war,
+            MCTSArg(
+                endMillisTime = System.currentTimeMillis() + 30L,
+                turnCount = 1,
+                turnFactor = 0.5,
+                countPerTurn = 1,
+                scoreCalculator = { 0.0 },
+                enableMultiThread = false,
+                decisionModel = PirateDemonHunterMctsExperimentModel,
+                experimentalSearch = true,
+                debugName = "unexpanded-root-regression",
+            ),
+        )
+
+        assertTrue(path.isNotEmpty(), "root legal action must produce a recovery path")
+        assertTrue(path.first().applyAction !== TurnOverAction, "EndTurn must not win over an unexpanded legal card")
+        assertEquals(candidate.entityId, path.first().applyAction.creator?.entityId)
     }
 
     private fun rootHasCandidate(war: War, model: MctsDecisionModel, candidate: Card): Boolean {
