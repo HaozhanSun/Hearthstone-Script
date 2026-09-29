@@ -1,5 +1,6 @@
 package club.xiaojiawei.hsscriptbasestrategy.strategy
 
+import club.xiaojiawei.hsscriptbasestrategy.HsBaseStrategyPlugin
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
 import club.xiaojiawei.hsscriptcardsdk.bean.InitAction
@@ -23,6 +24,11 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class PirateWarriorMctsModelTest {
+    @Test
+    fun `runtime strategy plugin descriptor reports current strategy version`() {
+        assertEquals("1.1.12", HsBaseStrategyPlugin().version())
+    }
+
     @Test
     fun `battlefield is downranked until warrior has two friendly minions`() {
         val emptyBoard = testWar(turn = 2, mana = 3)
