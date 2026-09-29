@@ -77,6 +77,18 @@ abstract class MainView : Initializable {
     protected lateinit var exp: Text
 
     @FXML
+    protected lateinit var logGameCount: Text
+
+    @FXML
+    protected lateinit var logWinningPercentage: Text
+
+    @FXML
+    protected lateinit var logGameTime: Text
+
+    @FXML
+    protected lateinit var logExp: Text
+
+    @FXML
     protected lateinit var runModeBox: ComboBox<RunModeEnum>
 
     @FXML

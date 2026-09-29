@@ -217,12 +217,50 @@
                 </VBox>
             </TitledPane>
             <TitledPane text="日志" fx:id="titledPaneLog">
-                <ScrollPane fx:id="logScrollPane" hbarPolicy="NEVER"
-                            fitToWidth="true"
-                            onMouseEntered="#mouseEnteredLog" onMouseExited="#mouseExitedLog"
-                            onMouseClicked="#mouseClickedLog">
-                    <VBox fillWidth="true" maxWidth="Infinity" spacing="5" fx:id="logVBox"/>
-                </ScrollPane>
+                <VBox minWidth="0" fillWidth="true" spacing="5">
+                    <GridPane fx:id="logStatisticsPane" minWidth="0" maxWidth="Infinity"
+                              hgap="6" vgap="2" style="-fx-padding: 2 5 2 5;">
+                        <columnConstraints>
+                            <ColumnConstraints halignment="CENTER" hgrow="ALWAYS"/>
+                            <ColumnConstraints halignment="CENTER" hgrow="ALWAYS"/>
+                        </columnConstraints>
+                        <rowConstraints>
+                            <RowConstraints prefHeight="24" vgrow="NEVER"/>
+                            <RowConstraints prefHeight="24" vgrow="NEVER"/>
+                        </rowConstraints>
+                        <Label GridPane.rowIndex="0" GridPane.columnIndex="0"
+                               text="游戏局数：" contentDisplay="RIGHT">
+                            <graphic>
+                                <Text text="0" fx:id="logGameCount"/>
+                            </graphic>
+                        </Label>
+                        <Label GridPane.rowIndex="0" GridPane.columnIndex="1"
+                               text="胜率：" contentDisplay="RIGHT">
+                            <graphic>
+                                <Text text="?" fx:id="logWinningPercentage"/>
+                            </graphic>
+                        </Label>
+                        <Label GridPane.rowIndex="1" GridPane.columnIndex="0"
+                               text="游戏时长：" contentDisplay="RIGHT">
+                            <graphic>
+                                <Text text="0" fx:id="logGameTime"/>
+                            </graphic>
+                        </Label>
+                        <Label GridPane.rowIndex="1" GridPane.columnIndex="1"
+                               text="经验：" contentDisplay="RIGHT">
+                            <graphic>
+                                <Text text="0" fx:id="logExp"/>
+                            </graphic>
+                        </Label>
+                    </GridPane>
+                    <Separator/>
+                    <ScrollPane fx:id="logScrollPane" hbarPolicy="NEVER"
+                                fitToWidth="true" VBox.vgrow="ALWAYS"
+                                onMouseEntered="#mouseEnteredLog" onMouseExited="#mouseExitedLog"
+                                onMouseClicked="#mouseClickedLog">
+                        <VBox fillWidth="true" maxWidth="Infinity" minWidth="0" spacing="5" fx:id="logVBox"/>
+                    </ScrollPane>
+                </VBox>
             </TitledPane>
         </panes>
     </Accordion>

@@ -48,6 +48,8 @@ import club.xiaojiawei.hsscriptstrategysdk.DeckStrategy
 import javafx.animation.RotateTransition
 import javafx.animation.Timeline
 import javafx.application.Platform
+import javafx.beans.property.SimpleStringProperty
+import javafx.beans.value.ChangeListener
 import javafx.beans.value.ObservableValue
 import javafx.collections.SetChangeListener
 import javafx.event.ActionEvent
@@ -92,6 +94,11 @@ class MainController : MainView() {
     private val uiLogTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     private var isNotHoverLog = true
 
+    private val displayedGameCount = SimpleStringProperty("0")
+    private val displayedWinningPercentage = SimpleStringProperty("?")
+    private val displayedGameTime = SimpleStringProperty("0")
+    private val displayedExperience = SimpleStringProperty("0")
+
     private val runModeMap: MutableMap<RunModeEnum, MutableList<DeckStrategy>> = EnumMap(RunModeEnum::class.java)
 
     private val workTimeChangeId = "main-ui"
@@ -107,6 +114,8 @@ class MainController : MainView() {
         val startupDebugRun = DebugRunController.enableDefaultAfterRestart()
         debugRunModeCheckBox.isSelected = startupDebugRun.state == DebugRunLease.State.ACTIVE
         updateDebugRunStatus()
+        bindStatisticsViews()
+        refreshStatisticsViews()
         addListener()
         initModeAndDeck()
         reloadWorkTime()
@@ -126,6 +135,30 @@ class MainController : MainView() {
                 runUI { updateDebugRunStatus() }
             }
         }
+    }
+
+    private fun bindStatisticsViews() {
+        gameCount.textProperty().bind(displayedGameCount)
+        winningPercentage.textProperty().bind(displayedWinningPercentage)
+        gameTime.textProperty().bind(displayedGameTime)
+        exp.textProperty().bind(displayedExperience)
+        logGameCount.textProperty().bind(displayedGameCount)
+        logWinningPercentage.textProperty().bind(displayedWinningPercentage)
+        logGameTime.textProperty().bind(displayedGameTime)
+        logExp.textProperty().bind(displayedExperience)
+    }
+
+    private fun refreshStatisticsViews() {
+        val snapshot = MainStatisticsSnapshot.from(
+            gameCount = WarEx.playedCount,
+            winCount = WarEx.playedWinCount,
+            hangingTimeMinutes = WarEx.hangingTime,
+            experience = WarEx.hangingEXP,
+        )
+        displayedGameCount.set(snapshot.gameCount)
+        displayedWinningPercentage.set(snapshot.winningPercentage)
+        displayedGameTime.set(snapshot.gameTime)
+        displayedExperience.set(snapshot.experience)
     }
 
     @FXML
@@ -478,25 +511,16 @@ class MainController : MainView() {
             }
         }
 
-        //        游戏局数监听
-        WarEx.warCountProperty.addListener { _, _, _ ->
-            // WarEx is updated by the Power.log listener pool.  Every
-            // control mutation must be marshalled to the JavaFX event
-            // thread; otherwise a game-end update throws from the listener
-            // pool and can make the script appear to close by itself.
-            runUI {
-                gameCount.text = WarEx.playedCount.toString()
-                winningPercentage.text = (
-                        String.format(
-                            "%.1f",
-                            if (WarEx.playedCount == 0) 0.0 else
-                                WarEx.playedWinCount.toDouble() / WarEx.playedCount * 100.0,
-                        ) + "%"
-                        )
-                gameTime.text = formatTime(WarEx.hangingTime)
-                exp.text = WarEx.hangingEXP.toString()
-            }
+        // WarEx is updated by the Power.log listener pool. Every telemetry
+        // mutation must be marshalled to the JavaFX event thread so both panes
+        // always show the same played-game values.
+        val refreshStatistics = ChangeListener<Number> { _, _, _ ->
+            runUI { refreshStatisticsViews() }
         }
+        WarEx.playedCountProperty.addListener(refreshStatistics)
+        WarEx.playedWinCountProperty.addListener(refreshStatistics)
+        WarEx.hangingTimeProperty.addListener(refreshStatistics)
+        WarEx.hangingEXPProperty.addListener(refreshStatistics)
         DeckStrategyManager.deckStrategies.addListener(
             SetChangeListener { _: SetChangeListener.Change<out DeckStrategy?>? ->
                 runUI { reloadRunMode() }
@@ -662,10 +686,7 @@ class MainController : MainView() {
                 {
                     Platform.runLater {
                         resetStatistics()
-                        gameCount.text = "0"
-                        winningPercentage.text = "?"
-                        gameTime.text = "0"
-                        exp.text = "0"
+                        refreshStatisticsViews()
                         notificationManger.showSuccess("统计数据已重置", 2)
                     }
                 },
@@ -732,30 +753,6 @@ class MainController : MainView() {
     @FXML
     protected fun editWorkTime() {
         WindowUtil.showStage(WindowEnum.TIME_SETTINGS)
-    }
-
-    companion object {
-        private fun formatTime(time: Int): String {
-            val timeStr =
-                if (time == 0) {
-                    String.format("%d", time)
-                } else if (time < 60) {
-                    String.format("%dm", time)
-                } else if (time < 1440) {
-                    if (time % 60 == 0) {
-                        String.format("%dh", time / 60)
-                    } else {
-                        String.format("%dh%dm", time / 60, time % 60)
-                    }
-                } else {
-                    if (time % 1440 == 0) {
-                        String.format("%dd", time / 1440)
-                    } else {
-                        String.format("%dd%dh", time / 1440, time % 1440 / 60)
-                    }
-                }
-            return timeStr
-        }
     }
 
     fun getNotificationManagerInstance(): NotificationManager<Any> = notificationManger
