@@ -164,6 +164,36 @@ class MctsCardDiagnosticsTest {
     }
 
     @Test
+    fun `common parser placeholders for observed elemental minions use database-backed late fallback`() {
+        listOf(
+            "GDB_303" to 3, // 爆炎流星
+            "TTN_095" to 2, // 流水档案管理员
+            "DEEP_034" to 2, // 页岩蛛
+            "DMF_100" to 2, // 甜点飓风
+        ).forEach { (cardId, cost) ->
+            val war = testWar().apply { me.resources = cost }
+            val placeholder = card(
+                cardId,
+                CardTypeEnum.MINION,
+                "UNKNOWN ENTITY [cardType=MINION]",
+            ).apply {
+                entityId = "entity-$cardId"
+                this.cost = cost
+                // Reproduce the Power.log placeholder: the card identity is
+                // known, but the live entity snapshot carried no stats.
+                atc = 0
+                health = 0
+                isUncertain = true
+            }
+            war.addCard(placeholder, war.me.handArea)
+
+            assertTrue(MctsCardDiagnostics.hasUsableUnknownMinionStats(placeholder), cardId)
+            assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(placeholder), cardId)
+            assertTrue(rootNode(war).actions.any { it.creator?.entityId == placeholder.entityId }, cardId)
+        }
+    }
+
+    @Test
     fun `known no-choice spell may use brave opaque fallback`() {
         // AT_016 is present in hs_cards.db and has no directed target.  The
         // policy should allow a brave click only when this positive metadata
