@@ -117,6 +117,22 @@ class MctsCardDiagnosticsTest {
     }
 
     @Test
+    fun `common opaque fallback is last priority while modeled action keeps normal prior`() {
+        val unknown = card("UNKNOWN_OPAQUE", CardTypeEnum.MINION, "UNKNOWN ENTITY [cardType=MINION]").apply {
+            entityId = "entity-opaque"
+            cost = 1
+            atc = 2
+            health = 2
+            isUncertain = true
+        }
+        val opaque = PlayAction({}, {}, unknown)
+        val modeled = PlayAction({}, {}, card("MODELED", CardTypeEnum.MINION, "modeled"))
+
+        assertEquals(MctsCardDiagnostics.GENERIC_OPAQUE_FALLBACK_PRIOR, MctsCardDiagnostics.genericOpaqueFallbackPrior(opaque))
+        assertEquals(0.0, MctsCardDiagnostics.genericOpaqueFallbackPrior(modeled))
+    }
+
+    @Test
     fun `engine legal unknown spell action bypasses missing parser metadata`() {
         val war = testWar().apply { me.resources = 2 }
         val spell = Card(EngineLegalAction()).apply {

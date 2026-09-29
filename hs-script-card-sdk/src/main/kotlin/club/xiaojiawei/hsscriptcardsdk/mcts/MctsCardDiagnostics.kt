@@ -2,6 +2,8 @@ package club.xiaojiawei.hsscriptcardsdk.mcts
 
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.Entity
+import club.xiaojiawei.hsscriptcardsdk.bean.Action
+import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.util.CardDBUtil
 import club.xiaojiawei.hsscriptcardsdk.util.CardIdentityCatalog
@@ -33,6 +35,7 @@ private enum class OpaqueEffectSafety {
 }
 
 object MctsCardDiagnostics {
+    const val GENERIC_OPAQUE_FALLBACK_PRIOR = -1_000_000.0
     private val targetHintCache = ConcurrentHashMap<String, Int>()
     private val minionStatCache = ConcurrentHashMap<String, Boolean>()
     private val targetOrChoiceHints = listOf(
@@ -244,5 +247,23 @@ object MctsCardDiagnostics {
         "OPAQUE_FALLBACK" -> true
         "PARSED", "COMMON_GENERIC" -> hasLegalParsedAction
         else -> false
+    }
+
+    /**
+     * Generic opaque cards are executable last resorts, not normal semantic
+     * candidates.  Their simulator spends mana/removes the card but cannot
+     * prove an unknown effect or target, so all experimental MCTS selectors
+     * must put them behind modeled actions.  The live turn guard can still
+     * reach this route when it is the only affordable action.
+     */
+    fun genericOpaqueFallbackPrior(action: Action): Double {
+        val card = action.creator ?: return 0.0
+        return if (action is PlayAction && card.isUncertain && card.action.common &&
+            braveOpaqueFallbackAllowed(card)
+        ) {
+            GENERIC_OPAQUE_FALLBACK_PRIOR
+        } else {
+            0.0
+        }
     }
 }

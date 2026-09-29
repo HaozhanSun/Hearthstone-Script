@@ -72,7 +72,7 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
             val unExpanded = node.getUnExpanded()
             val action = if (node.arg.experimentalSearch && node.arg.decisionModel != null) {
                 unExpanded.maxWithOrNull(
-                    compareBy<Action> { node.arg.decisionModel.actionPrior(it, node.state.war) }
+                    compareBy<Action> { node.arg.decisionModel.actionPrior(it, node.state.war) + MctsCardDiagnostics.genericOpaqueFallbackPrior(it) }
                         .thenBy { it.javaClass.simpleName },
                 ) ?: unExpanded.randomSelect()
             } else {
@@ -92,7 +92,7 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
             val decisionModel = tempNode.arg.decisionModel
             val action = if (tempNode.arg.experimentalSearch && decisionModel != null) {
                 actions.maxWithOrNull(
-                    compareBy<Action> { decisionModel.actionPrior(it, tempNode.state.war) }
+                    compareBy<Action> { decisionModel.actionPrior(it, tempNode.state.war) + MctsCardDiagnostics.genericOpaqueFallbackPrior(it) }
                         .thenBy { it.javaClass.simpleName },
                 ) ?: actions.randomSelect()
             } else {
@@ -607,7 +607,7 @@ class MonteCarloTreeSearch(val maxDepth: Int = MCTS_DEFAULT_DEPTH) {
             val fallback = rootNode.actions
                 .filterNot { it === TurnOverAction }
                 .maxWithOrNull(
-                    compareBy<Action> { arg.decisionModel?.actionPrior(it, rootNode.state.war) ?: 0.0 }
+                    compareBy<Action> { (arg.decisionModel?.actionPrior(it, rootNode.state.war) ?: 0.0) + MctsCardDiagnostics.genericOpaqueFallbackPrior(it) }
                         .thenBy { it.javaClass.simpleName },
                 ) ?: rootNode.actions.first()
             rootNode.expand(fallback)?.let { expanded ->
