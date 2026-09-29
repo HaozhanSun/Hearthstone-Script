@@ -119,7 +119,7 @@ object MctsCardDiagnostics {
      * A missing identity, type, or minion combat snapshot remains fail-closed.
      */
     fun braveOpaqueFallbackAllowed(card: Card): Boolean {
-        if (!card.isUncertain || card.cardId.isBlank() || card.entityId.isBlank() || card.cost < 0) {
+        if ((!card.isUncertain && !card.action.common) || card.cardId.isBlank() || card.entityId.isBlank() || card.cost < 0) {
             return false
         }
         return when (card.cardType) {
@@ -131,7 +131,7 @@ object MctsCardDiagnostics {
 
     /** Stable reason for a refused brave fallback; null means eligible. */
     fun opaqueFallbackBlockReason(card: Card): String? {
-        if (!card.isUncertain || card.cardId.isBlank() || card.entityId.isBlank() || card.cost < 0) {
+        if ((!card.isUncertain && !card.action.common) || card.cardId.isBlank() || card.entityId.isBlank() || card.cost < 0) {
             return "invalid-opaque-fallback-identity"
         }
         return when (card.cardType) {
@@ -237,7 +237,7 @@ object MctsCardDiagnostics {
      */
     fun genericOpaqueFallbackPrior(action: Action): Double {
         val card = action.creator ?: return 0.0
-        return if (action is PlayAction && card.isUncertain && card.action.common &&
+        return if (action is PlayAction && action.recalculate && card.action.common &&
             braveOpaqueFallbackAllowed(card)
         ) {
             GENERIC_OPAQUE_FALLBACK_PRIOR

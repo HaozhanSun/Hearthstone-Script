@@ -127,7 +127,7 @@ class MctsCardDiagnosticsTest {
             health = 2
             isUncertain = true
         }
-        val opaque = PlayAction({}, {}, unknown)
+        val opaque = PlayAction({}, {}, unknown, recalculate = true)
         val modeled = PlayAction({}, {}, card("MODELED", CardTypeEnum.MINION, "modeled"))
 
         assertEquals(MctsCardDiagnostics.GENERIC_OPAQUE_FALLBACK_PRIOR, MctsCardDiagnostics.genericOpaqueFallbackPrior(opaque))
@@ -152,8 +152,8 @@ class MctsCardDiagnosticsTest {
 
         assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(battlecry))
         assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(targeted))
-        assertEquals(MctsCardDiagnostics.GENERIC_OPAQUE_FALLBACK_PRIOR, MctsCardDiagnostics.genericOpaqueFallbackPrior(PlayAction({}, {}, battlecry)))
-        assertEquals(MctsCardDiagnostics.GENERIC_OPAQUE_FALLBACK_PRIOR, MctsCardDiagnostics.genericOpaqueFallbackPrior(PlayAction({}, {}, targeted)))
+        assertEquals(MctsCardDiagnostics.GENERIC_OPAQUE_FALLBACK_PRIOR, MctsCardDiagnostics.genericOpaqueFallbackPrior(PlayAction({}, {}, battlecry, recalculate = true)))
+        assertEquals(MctsCardDiagnostics.GENERIC_OPAQUE_FALLBACK_PRIOR, MctsCardDiagnostics.genericOpaqueFallbackPrior(PlayAction({}, {}, targeted, recalculate = true)))
     }
 
     @Test
@@ -252,6 +252,27 @@ class MctsCardDiagnosticsTest {
             assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(placeholder), cardId)
             assertTrue(rootNode(war).actions.any { it.creator?.entityId == placeholder.entityId }, cardId)
         }
+    }
+
+    @Test
+    fun `database-known parser-unresolved common minion remains eligible when uncertainty flag is false`() {
+        val war = testWar().apply { me.resources = 3 }
+        val placeholder = card(
+            "GDB_303",
+            CardTypeEnum.MINION,
+            "UNKNOWN ENTITY [cardType=INVALID]",
+        ).apply {
+            entityId = "entity-gdb-303-live"
+            cost = 3
+            atc = 3
+            health = 4
+            isUncertain = false
+        }
+        war.addCard(placeholder, war.me.handArea)
+
+        assertTrue(placeholder.action.common)
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(placeholder))
+        assertTrue(rootNode(war).actions.any { it.creator?.entityId == placeholder.entityId })
     }
 
     @Test
