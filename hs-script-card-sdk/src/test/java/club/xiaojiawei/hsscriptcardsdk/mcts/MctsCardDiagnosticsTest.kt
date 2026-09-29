@@ -44,6 +44,8 @@ class MctsCardDiagnosticsTest {
         val minion = card("NEW_MINION", CardTypeEnum.MINION, "UNKNOWN ENTITY [cardType=MINION]").apply {
             entityId = "entity-minion"
             cost = 2
+            atc = 2
+            health = 3
             isUncertain = true
         }
         val weapon = card("NEW_WEAPON", CardTypeEnum.WEAPON, "UNKNOWN ENTITY [cardType=WEAPON]").apply {
@@ -57,6 +59,29 @@ class MctsCardDiagnosticsTest {
 
         minion.isBattlecry = true
         assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(minion))
+    }
+
+    @Test
+    fun `unknown minion with missing or zero stats remains fail closed`() {
+        val missing = card("UNKNOWN_MISSING_STATS", CardTypeEnum.MINION, "UNKNOWN ENTITY [cardType=MINION]").apply {
+            entityId = "entity-missing-stats"
+            cost = 2
+            isUncertain = true
+        }
+        val zeroAttack = missing.clone() as Card
+        zeroAttack.entityId = "entity-zero-attack"
+        zeroAttack.atc = 0
+        zeroAttack.health = 3
+        val zeroHealth = missing.clone() as Card
+        zeroHealth.entityId = "entity-zero-health"
+        zeroHealth.atc = 2
+        zeroHealth.health = 0
+
+        assertFalse(MctsCardDiagnostics.hasUsableUnknownMinionStats(missing))
+        assertFalse(MctsCardDiagnostics.hasUsableUnknownMinionStats(zeroAttack))
+        assertFalse(MctsCardDiagnostics.hasUsableUnknownMinionStats(zeroHealth))
+        assertEquals("missing-or-invalid-minion-stats", MctsCardDiagnostics.opaqueFallbackBlockReason(missing))
+        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(missing))
     }
 
     @Test
@@ -76,6 +101,18 @@ class MctsCardDiagnosticsTest {
 
         assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(discover))
         assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(battlecry))
+    }
+
+    @Test
+    fun `unknown spell without explicit no-target metadata remains unchanged`() {
+        val spell = card("UNKNOWN_SPELL", CardTypeEnum.SPELL, "UNKNOWN ENTITY [cardType=SPELL]").apply {
+            entityId = "entity-unknown-spell"
+            cost = 1
+            isUncertain = true
+        }
+
+        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(spell))
+        assertEquals("unknown-effect-metadata", MctsCardDiagnostics.opaqueFallbackBlockReason(spell))
     }
 
     @Test
@@ -165,6 +202,8 @@ class MctsCardDiagnosticsTest {
         val unknown = card("NEW_MINION", CardTypeEnum.MINION, "UNKNOWN ENTITY [cardType=MINION]").apply {
             entityId = "entity-minion"
             cost = 2
+            atc = 2
+            health = 3
             isUncertain = true
         }
         war.addCard(unknown, war.me.handArea)
@@ -186,6 +225,53 @@ class MctsCardDiagnosticsTest {
 
         assertTrue(node.actions.any { it.creator?.cardId == "NEW_MINION" })
     }
+
+    @Test
+    fun `planner excludes unknown minion when unaffordable or board is full`() {
+        val unaffordableWar = testWar().apply { me.resources = 1 }
+        val expensive = card("EXPENSIVE_UNKNOWN_MINION", CardTypeEnum.MINION, "UNKNOWN ENTITY [cardType=MINION]").apply {
+            entityId = "entity-expensive"
+            cost = 2
+            atc = 2
+            health = 3
+            isUncertain = true
+        }
+        unaffordableWar.addCard(expensive, unaffordableWar.me.handArea)
+        assertTrue(rootNode(unaffordableWar).actions.none { it.creator?.cardId == expensive.cardId })
+
+        val fullWar = testWar().apply { me.resources = 2 }
+        repeat(fullWar.me.playArea.maxSize) { index ->
+            fullWar.addCard(card("BOARD_$index", CardTypeEnum.MINION, "board-$index").apply {
+                entityId = "board-entity-$index"
+                atc = 1
+                health = 1
+            }, fullWar.me.playArea)
+        }
+        val blocked = card("FULL_BOARD_UNKNOWN_MINION", CardTypeEnum.MINION, "UNKNOWN ENTITY [cardType=MINION]").apply {
+            entityId = "entity-full-board"
+            cost = 1
+            atc = 2
+            health = 2
+            isUncertain = true
+        }
+        fullWar.addCard(blocked, fullWar.me.handArea)
+        assertTrue(rootNode(fullWar).actions.none { it.creator?.cardId == blocked.cardId })
+    }
+
+    private fun rootNode(war: War): MonteCarloTreeNode = MonteCarloTreeNode(
+        war,
+        InitAction,
+        MCTSArg(
+            endMillisTime = Long.MAX_VALUE,
+            turnCount = 1,
+            turnFactor = 0.5,
+            countPerTurn = 1,
+            scoreCalculator = { 0.0 },
+            enableMultiThread = false,
+            decisionModel = object : MctsDecisionModel {},
+            experimentalSearch = true,
+        ),
+    )
 
     private fun card(id: String, type: CardTypeEnum, name: String): Card =
         Card(object : CardAction(createDefaultAction = false, common = true) {

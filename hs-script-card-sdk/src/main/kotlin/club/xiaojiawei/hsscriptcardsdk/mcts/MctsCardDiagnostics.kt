@@ -34,6 +34,7 @@ private enum class OpaqueEffectSafety {
 
 object MctsCardDiagnostics {
     private val targetHintCache = ConcurrentHashMap<String, Int>()
+    private val minionStatCache = ConcurrentHashMap<String, Boolean>()
     private val targetOrChoiceHints = listOf(
         "目标",
         "选择",
@@ -82,6 +83,28 @@ object MctsCardDiagnostics {
         card.cardType === CardTypeEnum.SPELL || card.isBattlecry
 
     /**
+     * Unknown minions may use the ordinary generic-play fallback only when
+     * the live entity or the local card DB supplies usable combat stats.
+     * Zero/default stats are not enough evidence: they are also what an
+     * incomplete entity snapshot uses for missing attack/health.
+     */
+    fun hasUsableUnknownMinionStats(card: Card): Boolean {
+        if (card.cardType !== CardTypeEnum.MINION) return false
+        if (card.atc > 0 && card.health > 0) return true
+        val cardId = card.cardId
+        if (cardId.isBlank()) return false
+        return minionStatCache.getOrPut(cardId) {
+            runCatching { CardDBUtil.queryCardById(cardId).firstOrNull() }
+                .getOrNull()
+                ?.let { dbCard ->
+                    val attack = dbCard.attack
+                    val health = dbCard.health
+                    attack != null && attack > 0 && health != null && health > 0
+                } == true
+        }
+    }
+
+    /**
      * Bounded brave fallback for an otherwise valid but unresolved hand card.
      *
      * The fallback is intentionally shared by the tree builder and the live
@@ -100,7 +123,8 @@ object MctsCardDiagnostics {
             // A battlecry minion may open a target/choice/drag prompt.  The
             // generic play gesture is safe only for a minion whose live
             // snapshot does not advertise that interaction.
-            CardTypeEnum.MINION -> !card.isBattlecry && !card.isChooseOne && !hasTargetOrChoiceText(card)
+            CardTypeEnum.MINION -> hasUsableUnknownMinionStats(card) &&
+                !card.isBattlecry && !card.isChooseOne && !hasTargetOrChoiceText(card)
             CardTypeEnum.WEAPON -> true
             // A generic spell click is only safe when the local DB (or the
             // live name) positively tells us that no target/choice is needed.
@@ -129,6 +153,7 @@ object MctsCardDiagnostics {
                 else -> null
             }
             CardTypeEnum.MINION -> when {
+                !hasUsableUnknownMinionStats(card) -> "missing-or-invalid-minion-stats"
                 card.isBattlecry -> "unsafe-battlecry-minion"
                 card.isChooseOne -> "unsafe-choose-one-minion"
                 hasTargetOrChoiceText(card) -> "unsafe-target-or-choice"
