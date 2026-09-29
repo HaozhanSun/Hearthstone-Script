@@ -254,6 +254,21 @@ class MonteCarloTreeNode(
                     emptyList()
                 }
                 if (playActionsResult.isFailure) continue
+                // A non-common CardAction is an engine-provided action route:
+                // it may be available even when the description parser and
+                // local DB have no useful metadata.  Keep only actions that
+                // pass the same hard legality hooks used by the final root
+                // filter.  This lets an unknown targeted spell/minion use a
+                // real legal target without fabricating an opaque click, but
+                // still blocks a stale/illegal generated action.
+                val engineLegalPlayActions = if (!card.action.common) {
+                    playActions.filter { action ->
+                        CardTimingPolicy.isActionLegal(action, war) &&
+                            (arg.decisionModel?.isActionLegal(action, war) != false)
+                    }
+                } else {
+                    emptyList()
+                }
                 val parserSensitiveGenericAction =
                     card.action.common &&
                         MctsCardDiagnostics.requiresDescriptionAction(card) &&
@@ -271,6 +286,8 @@ class MonteCarloTreeNode(
                     opaqueFallbackBlockReason = if (opaqueAllowed) null else MctsCardDiagnostics.opaqueFallbackBlockReason(card),
                 )
                 val actionsToAdd = when {
+                    engineLegalPlayActions.isNotEmpty() -> engineLegalPlayActions
+                    !card.action.common -> emptyList()
                     parserSensitiveGenericAction && opaqueAllowed -> listOf(createOpaquePlayAction(card))
                     parserSensitiveGenericAction -> emptyList()
                     else -> playActions
@@ -288,6 +305,7 @@ class MonteCarloTreeNode(
                     card,
                     if (actionsToAdd.isNotEmpty() || (!parserSensitiveGenericAction && opaqueAllowed)) "ADDED" else "FILTERED",
                     when {
+                        engineLegalPlayActions.isNotEmpty() -> "engine-legal-actions"
                         braveOpaqueFallback -> "brave-opaque-fallback"
                         parserSensitiveGenericAction && opaqueAllowed -> "parser-unavailable-opaque-fallback"
                         parserSensitiveGenericAction -> "parser-unavailable-fail-closed"

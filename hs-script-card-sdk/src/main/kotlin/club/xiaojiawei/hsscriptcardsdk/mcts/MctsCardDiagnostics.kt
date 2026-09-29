@@ -111,9 +111,9 @@ object MctsCardDiagnostics {
      * actionable-card scan.  Minions and weapons have a safe generic play
      * gesture: Hearthstone resolves their battlecry/equip effect after the
      * card is played.  A spell is only eligible when it does not advertise a
-     * discover/choice interaction; blindly clicking a targeted or choice card
-     * is more likely to create a stuck turn than to make progress.  A missing
-     * entity/card type is always fail-closed.
+     * discover/choice interaction; the tree builder separately accepts a
+     * non-common engine-provided legal action even when spell metadata is
+     * missing.  A missing entity/card type is always fail-closed.
      */
     fun braveOpaqueFallbackAllowed(card: Card): Boolean {
         if (!card.isUncertain || card.cardId.isBlank() || card.entityId.isBlank() || card.cost < 0) {

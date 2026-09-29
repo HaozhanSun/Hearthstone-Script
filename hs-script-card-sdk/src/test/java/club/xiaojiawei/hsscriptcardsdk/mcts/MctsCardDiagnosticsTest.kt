@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscriptcardsdk.CardAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.InitAction
 import club.xiaojiawei.hsscriptcardsdk.bean.MCTSArg
+import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
@@ -113,6 +114,53 @@ class MctsCardDiagnosticsTest {
 
         assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(spell))
         assertEquals("unknown-effect-metadata", MctsCardDiagnostics.opaqueFallbackBlockReason(spell))
+    }
+
+    @Test
+    fun `engine legal unknown spell action bypasses missing parser metadata`() {
+        val war = testWar().apply { me.resources = 2 }
+        val spell = Card(EngineLegalAction()).apply {
+            entityId = "entity-engine-spell"
+            cardId = "GDB_303"
+            entityName = "UNKNOWN ENTITY [cardType=SPELL]"
+            cardType = CardTypeEnum.SPELL
+            cost = 2
+            damage = 4
+            isUncertain = true
+            action.belongCard = this
+        }
+        war.addCard(spell, war.me.handArea)
+        assertEquals(1, spell.action.generatePlayActions(war, war.me).size)
+
+        val node = rootNode(war)
+
+        assertTrue(
+            node.actions.any { it.creator?.entityId == spell.entityId },
+            node.actions.map { it.creator?.entityId ?: it::class.simpleName }.toString(),
+        )
+    }
+
+    @Test
+    fun `engine legal targeted battlecry action is retained but illegal target is blocked`() {
+        val war = testWar().apply { me.resources = 2 }
+        val minion = Card(EngineLegalAction()).apply {
+            entityId = "entity-engine-battlecry"
+            cardId = "UNKNOWN_BATTLECRY_MINION"
+            entityName = "UNKNOWN ENTITY [cardType=MINION]"
+            cardType = CardTypeEnum.MINION
+            cost = 2
+            isBattlecry = true
+            isUncertain = true
+            action.belongCard = this
+        }
+        war.addCard(minion, war.me.handArea)
+        assertTrue(rootNode(war).actions.any { it.creator?.entityId == minion.entityId })
+
+        val blocked = rootNode(war, object : MctsDecisionModel {
+            override fun isActionLegal(action: club.xiaojiawei.hsscriptcardsdk.bean.Action, war: War): Boolean =
+                action.creator?.entityId != minion.entityId
+        })
+        assertFalse(blocked.actions.any { it.creator?.entityId == minion.entityId })
     }
 
     @Test
@@ -258,7 +306,10 @@ class MctsCardDiagnosticsTest {
         assertTrue(rootNode(fullWar).actions.none { it.creator?.cardId == blocked.cardId })
     }
 
-    private fun rootNode(war: War): MonteCarloTreeNode = MonteCarloTreeNode(
+    private fun rootNode(
+        war: War,
+        model: MctsDecisionModel = object : MctsDecisionModel {},
+    ): MonteCarloTreeNode = MonteCarloTreeNode(
         war,
         InitAction,
         MCTSArg(
@@ -268,10 +319,39 @@ class MctsCardDiagnosticsTest {
             countPerTurn = 1,
             scoreCalculator = { 0.0 },
             enableMultiThread = false,
-            decisionModel = object : MctsDecisionModel {},
+            decisionModel = model,
             experimentalSearch = true,
         ),
     )
+
+    private class EngineLegalAction : CardAction(createDefaultAction = false, common = false) {
+        override fun getCardId(): Array<String> = emptyArray()
+
+        override fun generatePlayActions(war: War, player: Player): List<PlayAction> = listOf(
+            PlayAction(
+                { },
+                { newWar ->
+                    newWar.me.usedResources += belongCard?.cost ?: 0
+                    belongCard?.entityId?.let(newWar.me.handArea::removeByEntityId)
+                },
+                belongCard,
+            ),
+        )
+
+        override fun createNewInstance(): CardAction = this
+        override fun execPower(): Boolean = true
+        override fun execPower(card: Card): Boolean = true
+        override fun execPower(index: Int): Boolean = true
+        override fun execAttack(card: Card): Boolean = true
+        override fun execAttackHero(): Boolean = true
+        override fun execPointTo(card: Card, click: Boolean): Boolean = true
+        override fun execPointTo(index: Int, click: Boolean): Boolean = true
+        override fun execLClick(): Boolean = true
+        override fun execLaunch(): Boolean = true
+        override fun execTrade(): Boolean = true
+        override fun execChooseOne(index: Int): Boolean = true
+        override fun execForge(): Boolean = true
+    }
 
     private fun card(id: String, type: CardTypeEnum, name: String): Card =
         Card(object : CardAction(createDefaultAction = false, common = true) {
