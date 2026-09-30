@@ -791,7 +791,13 @@ object SurrenderPolicy {
         // The rank preflight is complete after the first allowed, blocked, or
         // surrendering decision. Later Power.log bursts must not re-enter the
         // streak guard or replay the same continuation decision.
-        if (rankCheckCompleted) return null
+        if (rankCheckCompleted) {
+            log.info {
+                "RANK_POLICY_INSPECT_SKIPPED reason=rank-check-completed " +
+                    "rankContinueAuthorized=$rankContinueAuthorized attempts=$rankInspectionAttempts"
+            }
+            return null
+        }
         enforcePersistentStreakGuardForCurrentPolicy()?.let { streakDecision ->
             if (!streakDecision.blocksAutomaticSurrender) return streakDecision
             rankCheckCompleted = true
@@ -812,7 +818,7 @@ object SurrenderPolicy {
             OpponentHeroInspectionState.NOT_RESOLVED,
             OpponentHeroInspectionState.WAITING_FOR_HERO,
             -> {
-                log.debug {
+                log.info {
                     "RANK_POLICY_PROBE_WITHOUT_OPPONENT_HERO state=$opponentHeroInspectionState " +
                         "action=CONTINUE_RANK_PROBE rankDetector=true"
                 }
@@ -831,8 +837,9 @@ object SurrenderPolicy {
         if (rankCheckCompleted) return null
         if (!ReplaceCardPhaseStrategy.isRankInspectionReady()) {
             setRankInspectionState(RankInspectionState.NOT_READY)
-            log.debug {
+            log.info {
                 "RANK_POLICY_WAITING_FOR_RANK reason=mulligan-input-not-confirmed " +
+                    "readiness=${ReplaceCardPhaseStrategy.rankInspectionReadinessDiagnostic()} " +
                     "phase=${WAR.currentPhase.name} inWar=${WarEx.inWar} " +
                     "action=WAIT provider=NONE"
             }
@@ -854,7 +861,7 @@ object SurrenderPolicy {
         val grace = rankInspectionGraceDecision(rankInspectionEligibleAt, now)
         if (!grace.probeAllowed) {
             setRankInspectionState(RankInspectionState.WAITING_FOR_RANK)
-            log.debug {
+            log.info {
                 "RANK_POLICY_WAITING_FOR_INITIAL_GRACE trigger=game-entry-mulligan " +
                     "eligibleAt=$rankInspectionEligibleAt delayMs=$INITIAL_RANK_INSPECTION_GRACE_MS " +
                     "remainingMs=${grace.remainingMs} action=WAIT rankDetector=false"

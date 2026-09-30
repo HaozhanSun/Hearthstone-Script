@@ -324,6 +324,13 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             war.currentPhase === WarPhaseEnum.REPLACE_CARD &&
             !PowerLogListener.replayingExistingLog
 
+    internal fun rankInspectionReadinessDiagnostic(): String =
+        "inputConfirmed=${mulliganInputConfirmed.get()}" +
+            ",latestState=${latestMyMulliganState?.name ?: "NONE"}" +
+            ",phase=${war.currentPhase.name}" +
+            ",replaying=${PowerLogListener.replayingExistingLog}" +
+            ",ready=${isRankInspectionReady()}"
+
     private fun hasPlayerIdentity(): Boolean =
         war.me.gameId.isNotBlank() ||
             (war.me.playerId.isNotBlank() && war.firstPlayerGameId.isNotBlank())
