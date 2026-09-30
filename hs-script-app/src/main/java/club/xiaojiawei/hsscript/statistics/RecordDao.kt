@@ -23,6 +23,8 @@ import java.time.LocalDateTime
  */
 data class Record(
     val id: Int? = null,
+    /** Canonical all-match ordinal; null is retained for legacy rows. */
+    val gameNumber: Int? = null,
     val strategyId: String? = null,
     val strategyName: String? = null,
     val runMode: RunModeEnum? = null,
@@ -60,6 +62,7 @@ class RecordDao(
         private const val SQL_CREATE = """
             CREATE TABLE IF NOT EXISTS $TABLE_NAME (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_number INTEGER,
                 strategy_id TEXT NOT NULL,
                 strategy_name TEXT NOT NULL,
                 run_mode TEXT NOT NULL,
@@ -73,13 +76,14 @@ class RecordDao(
 
         private const val SQL_INSERT = """
             INSERT INTO $TABLE_NAME (
-                strategy_id, strategy_name, run_mode, result,
+                game_number, strategy_id, strategy_name, run_mode, result,
                 surrendered, experience, start_time, end_time
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
         private const val SQL_UPDATE = """
             UPDATE $TABLE_NAME SET
+                game_number = ?,
                 strategy_id = ?,
                 strategy_name = ?,
                 run_mode = ?,
@@ -105,12 +109,18 @@ class RecordDao(
         if (!hasSurrenderColumn) {
             jdbcTemplate.execute("ALTER TABLE $TABLE_NAME ADD COLUMN surrendered INTEGER")
         }
+        val hasGameNumberColumn = jdbcTemplate.queryForList("PRAGMA table_info($TABLE_NAME)")
+            .any { it["name"]?.toString() == "game_number" }
+        if (!hasGameNumberColumn) {
+            jdbcTemplate.execute("ALTER TABLE $TABLE_NAME ADD COLUMN game_number INTEGER")
+        }
     }
 
     private val recordMapper =
         RowMapper { rs: ResultSet, _: Int ->
             Record(
                 id = rs.getInt("id"),
+                gameNumber = rs.getObject("game_number")?.let { rs.getInt("game_number") },
                 strategyId = rs.getString("strategy_id"),
                 strategyName = rs.getString("strategy_name"),
                 runMode = RunModeEnum.fromString(rs.getString("run_mode")),
@@ -126,14 +136,15 @@ class RecordDao(
         val keyHolder = GeneratedKeyHolder()
         jdbcTemplate.update({ connection: Connection ->
             val ps = connection.prepareStatement(SQL_INSERT, Statement.RETURN_GENERATED_KEYS)
-            ps.setString(1, record.strategyId)
-            ps.setString(2, record.strategyName)
-            ps.setString(3, record.runMode?.name)
-            ps.setBoolean(4, record.result ?: false)
-            ps.setObject(5, record.surrendered?.let { if (it) 1 else 0 })
-            ps.setInt(6, record.experience ?: 0)
-            ps.setLong(7, record.startTime?.toEpochSecond(ZONE_OFFSET) ?: 0)
-            ps.setLong(8, record.endTime?.toEpochSecond(ZONE_OFFSET) ?: 0)
+            ps.setObject(1, record.gameNumber)
+            ps.setString(2, record.strategyId)
+            ps.setString(3, record.strategyName)
+            ps.setString(4, record.runMode?.name)
+            ps.setBoolean(5, record.result ?: false)
+            ps.setObject(6, record.surrendered?.let { if (it) 1 else 0 })
+            ps.setInt(7, record.experience ?: 0)
+            ps.setLong(8, record.startTime?.toEpochSecond(ZONE_OFFSET) ?: 0)
+            ps.setLong(9, record.endTime?.toEpochSecond(ZONE_OFFSET) ?: 0)
             ps
         }, keyHolder)
         val id = keyHolder.key?.toInt() ?: throw RuntimeException("获取生成的ID失败")
@@ -143,6 +154,7 @@ class RecordDao(
     fun update(record: Record): Int =
         jdbcTemplate.update(
             SQL_UPDATE,
+            record.gameNumber,
             record.strategyId,
             record.strategyName,
             record.runMode?.name,
@@ -172,6 +184,10 @@ class RecordDao(
         record?.let {
             record.id?.let {
                 conditions.add("id = ?")
+                params.add(it)
+            }
+            record.gameNumber?.let {
+                conditions.add("game_number = ?")
                 params.add(it)
             }
             record.strategyId?.let {

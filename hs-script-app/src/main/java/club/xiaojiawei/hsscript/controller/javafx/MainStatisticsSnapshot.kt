@@ -4,21 +4,24 @@ import java.util.Locale
 
 /** Shared display values for the compact Control and Log pane telemetry. */
 data class MainStatisticsSnapshot(
-    val gameCount: String,
+    val totalGameCount: String,
+    val playedGameCount: String,
     val winningPercentage: String,
     val gameTime: String,
     val experience: String,
 ) {
     companion object {
         fun from(
-            gameCount: Int,
-            winCount: Int,
+            totalGameCount: Int,
+            playedGameCount: Int,
+            playedWinCount: Int,
             hangingTimeMinutes: Int,
             experience: Int,
         ): MainStatisticsSnapshot = MainStatisticsSnapshot(
-            gameCount = gameCount.toString(),
-            winningPercentage = if (gameCount > 0) {
-                String.format(Locale.ROOT, "%.1f%%", winCount.toDouble() / gameCount * 100.0)
+            totalGameCount = totalGameCount.toString(),
+            playedGameCount = playedGameCount.toString(),
+            winningPercentage = if (playedGameCount > 0) {
+                String.format(Locale.ROOT, "%.1f%%", playedWinCount.toDouble() / playedGameCount * 100.0)
             } else {
                 "?"
             },

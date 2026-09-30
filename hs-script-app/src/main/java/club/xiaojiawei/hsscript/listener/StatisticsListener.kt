@@ -33,7 +33,8 @@ object StatisticsListener {
                             club.xiaojiawei.hsscript.status.E2ETrace.surrenderRequested,
                 )
                 log.info {
-                    "STATISTICS_SURRENDER_LABEL conceded=${conceded.ifBlank { "<blank>" }} " +
+                    "STATISTICS_RECORD game=${WarEx.currentCompletedGameNumber ?: "UNKNOWN"} " +
+                            "conceded=${conceded.ifBlank { "<blank>" }} " +
                             "ourGameId=${me.gameId.ifBlank { "<blank>" }} " +
                             "opponentGameId=${rival.gameId.ifBlank { "<blank>" }} " +
                             "requestByUs=${WarEx.surrenderRequested} " +
@@ -42,6 +43,7 @@ object StatisticsListener {
                 }
                 recordDao.insert(
                     Record(
+                        gameNumber = WarEx.currentCompletedGameNumber,
                         strategyId = deckStrategy.id(),
                         strategyName = deckStrategy.name(),
                         runMode = runModeEnum,

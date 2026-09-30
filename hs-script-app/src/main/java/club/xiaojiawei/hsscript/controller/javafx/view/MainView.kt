@@ -65,7 +65,10 @@ abstract class MainView : Initializable {
     protected lateinit var titledPaneLog: TitledPane
 
     @FXML
-    protected lateinit var gameCount: Text
+    protected lateinit var totalGameCount: Text
+
+    @FXML
+    protected lateinit var playedGameCount: Text
 
     @FXML
     protected lateinit var winningPercentage: Text
@@ -77,7 +80,10 @@ abstract class MainView : Initializable {
     protected lateinit var exp: Text
 
     @FXML
-    protected lateinit var logGameCount: Text
+    protected lateinit var logTotalGameCount: Text
+
+    @FXML
+    protected lateinit var logPlayedGameCount: Text
 
     @FXML
     protected lateinit var logWinningPercentage: Text

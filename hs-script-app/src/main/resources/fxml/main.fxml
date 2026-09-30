@@ -109,28 +109,40 @@
                         <rowConstraints>
                             <RowConstraints prefHeight="${dataRowHeight}" vgrow="NEVER" valignment="CENTER"/>
                             <RowConstraints prefHeight="${dataRowHeight}" vgrow="NEVER" valignment="CENTER"/>
+                            <RowConstraints prefHeight="${dataRowHeight}" vgrow="NEVER" valignment="CENTER"/>
                         </rowConstraints>
 
                         <Label GridPane.rowIndex="0" GridPane.columnIndex="0"
-                               text="实战局数（未投降）："
+                               text="总对局数："
                                contentDisplay="RIGHT">
                             <tooltip>
-                                <Tooltip text="已完成且未记录为我方主动投降的对局；结算日志中的总第 N 局包含全部结束对局。"/>
+                                <Tooltip text="全部已提交结算的对局；结算日志、截图和记录使用同一个总第 N 局序号。"/>
                             </tooltip>
                             <graphic>
-                                <Text text="0" fx:id="gameCount"/>
+                                <Text text="0" fx:id="totalGameCount"/>
                             </graphic>
                         </Label>
 
                         <Label GridPane.rowIndex="0" GridPane.columnIndex="1"
-                               text="胜率："
+                               text="实战局数（未投降）："
+                               contentDisplay="RIGHT">
+                            <tooltip>
+                                <Tooltip text="已完成且未记录为我方主动投降的对局；仅用于实战胜率分母。"/>
+                            </tooltip>
+                            <graphic>
+                                <Text text="0" fx:id="playedGameCount"/>
+                            </graphic>
+                        </Label>
+
+                        <Label GridPane.rowIndex="1" GridPane.columnIndex="0"
+                               text="实战胜率："
                                contentDisplay="RIGHT">
                             <graphic>
                                 <Text text="?" fx:id="winningPercentage"/>
                             </graphic>
                         </Label>
 
-                        <Label GridPane.rowIndex="1" GridPane.columnIndex="0"
+                        <Label GridPane.rowIndex="1" GridPane.columnIndex="1"
                                text="游戏时长："
                                contentDisplay="RIGHT">
                             <graphic>
@@ -138,7 +150,7 @@
                             </graphic>
                         </Label>
 
-                        <Label GridPane.rowIndex="1" GridPane.columnIndex="1"
+                        <Label GridPane.rowIndex="2" GridPane.columnIndex="0"
                                text="经验："
                                contentDisplay="RIGHT">
                             <tooltip>
@@ -149,7 +161,7 @@
                             </graphic>
                         </Label>
 
-                        <Group GridPane.rowIndex="0" GridPane.rowSpan="2" GridPane.columnIndex="2">
+                        <Group GridPane.rowIndex="0" GridPane.rowSpan="3" GridPane.columnIndex="2">
                             <ClearIco styleClass="resetDataIcon" onMouseClicked="#resetStatistics"/>
                         </Group>
                     </GridPane>
@@ -230,29 +242,39 @@
                         <rowConstraints>
                             <RowConstraints prefHeight="24" vgrow="NEVER"/>
                             <RowConstraints prefHeight="24" vgrow="NEVER"/>
+                            <RowConstraints prefHeight="24" vgrow="NEVER"/>
                         </rowConstraints>
                         <Label GridPane.rowIndex="0" GridPane.columnIndex="0"
-                               text="实战局数（未投降）：" contentDisplay="RIGHT">
+                               text="总对局数：" contentDisplay="RIGHT">
                             <tooltip>
-                                <Tooltip text="已完成且未记录为我方主动投降的对局；结算日志中的总第 N 局包含全部结束对局。"/>
+                                <Tooltip text="全部已提交结算的对局；结算日志、截图和记录使用同一个总第 N 局序号。"/>
                             </tooltip>
                             <graphic>
-                                <Text text="0" fx:id="logGameCount"/>
+                                <Text text="0" fx:id="logTotalGameCount"/>
                             </graphic>
                         </Label>
                         <Label GridPane.rowIndex="0" GridPane.columnIndex="1"
-                               text="胜率：" contentDisplay="RIGHT">
+                               text="实战局数（未投降）：" contentDisplay="RIGHT">
+                            <tooltip>
+                                <Tooltip text="已完成且未记录为我方主动投降的对局；仅用于实战胜率分母。"/>
+                            </tooltip>
+                            <graphic>
+                                <Text text="0" fx:id="logPlayedGameCount"/>
+                            </graphic>
+                        </Label>
+                        <Label GridPane.rowIndex="1" GridPane.columnIndex="0"
+                               text="实战胜率：" contentDisplay="RIGHT">
                             <graphic>
                                 <Text text="?" fx:id="logWinningPercentage"/>
                             </graphic>
                         </Label>
-                        <Label GridPane.rowIndex="1" GridPane.columnIndex="0"
+                        <Label GridPane.rowIndex="1" GridPane.columnIndex="1"
                                text="游戏时长：" contentDisplay="RIGHT">
                             <graphic>
                                 <Text text="0" fx:id="logGameTime"/>
                             </graphic>
                         </Label>
-                        <Label GridPane.rowIndex="1" GridPane.columnIndex="1"
+                        <Label GridPane.rowIndex="2" GridPane.columnIndex="0"
                                text="经验：" contentDisplay="RIGHT">
                             <graphic>
                                 <Text text="0" fx:id="logExp"/>

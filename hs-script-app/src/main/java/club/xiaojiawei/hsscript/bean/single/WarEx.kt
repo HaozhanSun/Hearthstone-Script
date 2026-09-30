@@ -40,6 +40,9 @@ object WarEx {
         get() = warCountProperty.get()
         set(value) {
             warCountProperty.set(value)
+            if (reservedCompletedGameNumber == null) {
+                effectiveGameCountProperty.set(value)
+            }
             if (value > 0) {
                 log.info {
                     "已完成总第 $value 把游戏"
@@ -56,7 +59,60 @@ object WarEx {
      * intentionally distinct from [playedCount], which excludes our
      * proactive surrenders.
      */
-    fun nextCompletedGameNumber(): Int = warCount + 1
+    private var reservedCompletedGameNumber: Int? = null
+
+    /**
+     * UI-facing total. During result handling it advances to the reserved
+     * ordinal before the committed counter changes, so the header cannot show
+     * N while the result screenshot is already labelled N+1.
+     */
+    val effectiveGameCountProperty: IntegerProperty = SimpleIntegerProperty(0)
+
+    val effectiveGameCount: Int
+        get() = effectiveGameCountProperty.get()
+
+    /** Last ordinal committed by endWar(), retained while record listeners run. */
+    @Volatile
+    var lastCompletedGameNumber: Int? = null
+        private set
+
+    /**
+     * Ordinal visible to result/record callbacks. While a result is pending,
+     * the reserved ordinal takes precedence over the previous committed one.
+     */
+    val currentCompletedGameNumber: Int?
+        get() = reservedCompletedGameNumber ?: lastCompletedGameNumber
+
+    /** Prevent duplicate terminal callbacks from committing the same game twice. */
+    private var terminalCommitted = false
+
+    @Synchronized
+    fun reserveCompletedGameNumber(): Int {
+        return reservedCompletedGameNumber ?: (warCount + 1).also {
+            reservedCompletedGameNumber = it
+            effectiveGameCountProperty.set(it)
+        }
+    }
+
+    /** Backward-compatible name for callers that only need to inspect/reserve the ordinal. */
+    @Synchronized
+    fun nextCompletedGameNumber(): Int = reserveCompletedGameNumber()
+
+    @Synchronized
+    private fun commitCompletedGameNumber(gameNumber: Int) {
+        check(gameNumber == warCount + 1) {
+            "completed game ordinal must advance exactly once: expected=${warCount + 1}, actual=$gameNumber"
+        }
+        check(reservedCompletedGameNumber == null || reservedCompletedGameNumber == gameNumber) {
+            "completed game ordinal changed while result was pending: reserved=$reservedCompletedGameNumber actual=$gameNumber"
+        }
+        lastCompletedGameNumber = gameNumber
+        // Publish the ordinal before warCount's JavaFX listener fires. The
+        // statistics listener persists its Record from that notification.
+        warCount = gameNumber
+        effectiveGameCountProperty.set(gameNumber)
+        reservedCompletedGameNumber = null
+    }
 
     val inWarProperty: BooleanProperty = SimpleBooleanProperty(false)
 
@@ -144,6 +200,10 @@ object WarEx {
         winStreak = 0
         hangingTime = 0
         hangingEXP = 0
+        reservedCompletedGameNumber = null
+        effectiveGameCountProperty.set(0)
+        lastCompletedGameNumber = null
+        terminalCommitted = false
     }
 
     @Synchronized
@@ -176,6 +236,9 @@ object WarEx {
         aEXP = 0L
         surrenderRequested = false
         surrenderReason = null
+        reservedCompletedGameNumber = null
+        effectiveGameCountProperty.set(warCount)
+        terminalCommitted = false
         print.isTrue {
             log.info { "已重置游戏状态" }
         }
@@ -209,6 +272,12 @@ object WarEx {
 
     @Synchronized
     fun endWar(resultOverride: Boolean? = null) {
+        if (terminalCommitted) {
+            log.debug { "GAME_COMPLETION_DUPLICATE_IGNORED committedGame=$lastCompletedGameNumber" }
+            return
+        }
+        terminalCommitted = true
+        val completedGameNumber = reserveCompletedGameNumber()
         inWar = false
         // Set the result before entering Player.safeRun.  Fast surrender and
         // pre-mulligan GAME_OVER events can leave war.me as
@@ -275,7 +344,7 @@ object WarEx {
             for (runnable in endCallbackList) {
                 runnable.run()
             }
-            warCount++
+            commitCompletedGameNumber(completedGameNumber)
         }
         ParsedCardActionFactory.clear()
     }

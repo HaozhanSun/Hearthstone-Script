@@ -94,7 +94,8 @@ class MainController : MainView() {
     private val uiLogTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     private var isNotHoverLog = true
 
-    private val displayedGameCount = SimpleStringProperty("0")
+    private val displayedTotalGameCount = SimpleStringProperty("0")
+    private val displayedPlayedGameCount = SimpleStringProperty("0")
     private val displayedWinningPercentage = SimpleStringProperty("?")
     private val displayedGameTime = SimpleStringProperty("0")
     private val displayedExperience = SimpleStringProperty("0")
@@ -138,11 +139,13 @@ class MainController : MainView() {
     }
 
     private fun bindStatisticsViews() {
-        gameCount.textProperty().bind(displayedGameCount)
+        totalGameCount.textProperty().bind(displayedTotalGameCount)
+        playedGameCount.textProperty().bind(displayedPlayedGameCount)
         winningPercentage.textProperty().bind(displayedWinningPercentage)
         gameTime.textProperty().bind(displayedGameTime)
         exp.textProperty().bind(displayedExperience)
-        logGameCount.textProperty().bind(displayedGameCount)
+        logTotalGameCount.textProperty().bind(displayedTotalGameCount)
+        logPlayedGameCount.textProperty().bind(displayedPlayedGameCount)
         logWinningPercentage.textProperty().bind(displayedWinningPercentage)
         logGameTime.textProperty().bind(displayedGameTime)
         logExp.textProperty().bind(displayedExperience)
@@ -150,12 +153,14 @@ class MainController : MainView() {
 
     private fun refreshStatisticsViews() {
         val snapshot = MainStatisticsSnapshot.from(
-            gameCount = WarEx.playedCount,
-            winCount = WarEx.playedWinCount,
+            totalGameCount = WarEx.effectiveGameCount,
+            playedGameCount = WarEx.playedCount,
+            playedWinCount = WarEx.playedWinCount,
             hangingTimeMinutes = WarEx.hangingTime,
             experience = WarEx.hangingEXP,
         )
-        displayedGameCount.set(snapshot.gameCount)
+        displayedTotalGameCount.set(snapshot.totalGameCount)
+        displayedPlayedGameCount.set(snapshot.playedGameCount)
         displayedWinningPercentage.set(snapshot.winningPercentage)
         displayedGameTime.set(snapshot.gameTime)
         displayedExperience.set(snapshot.experience)
@@ -517,6 +522,7 @@ class MainController : MainView() {
         val refreshStatistics = ChangeListener<Number> { _, _, _ ->
             runUI { refreshStatisticsViews() }
         }
+        WarEx.effectiveGameCountProperty.addListener(refreshStatistics)
         WarEx.playedCountProperty.addListener(refreshStatistics)
         WarEx.playedWinCountProperty.addListener(refreshStatistics)
         WarEx.hangingTimeProperty.addListener(refreshStatistics)

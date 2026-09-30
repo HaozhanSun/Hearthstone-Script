@@ -97,6 +97,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
             }
             return false
         }
+        val completedGameNumber = WarEx.reserveCompletedGameNumber()
         resultOverride?.let { WarEx.endWar(it) }
         val outcome = resolution.outcome
         club.xiaojiawei.hsscriptbase.config.log.warn {
@@ -104,7 +105,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
                 "action=RECORD_RESULT_AND_CLEAR_PAGE evidence=$evidence"
         }
         resultScreenshotCaptured.compareAndSet(false, true)
-        GameResultScreenshot.capture(outcome, WarEx.warCount)
+        GameResultScreenshot.capture(outcome, completedGameNumber)
         // Generic RESULT OCR can miss the localized WIN/LOST banner. When
         // Power.log has already proven the terminal state, reset the stale
         // in-war model here and let the caller use its bounded, postchecked
@@ -236,7 +237,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         // Reserve one all-matches ordinal before endWar() increments
         // warCount. The same ID must appear in the pre-finalization wait log,
         // the saved result screenshot, and the completion log.
-        val completedGameNumber = WarEx.nextCompletedGameNumber()
+        val completedGameNumber = WarEx.reserveCompletedGameNumber()
 
         val modelResultOutcome = if (e2eEnabled && !scriptControlledGame && authoritativeTerminal == null) {
             "draw-or-unknown"
