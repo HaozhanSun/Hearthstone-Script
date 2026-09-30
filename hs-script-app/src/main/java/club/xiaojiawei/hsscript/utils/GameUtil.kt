@@ -717,7 +717,11 @@ object GameUtil {
     /**
      * 游戏里投降
      */
-    fun surrender(skipEndTurn: Boolean = false, reason: String? = null): Boolean {
+    fun surrender(
+        skipEndTurn: Boolean = false,
+        reason: String? = null,
+        mandatoryRank: Boolean = false,
+    ): Boolean {
         if (PowerLogListener.replayingExistingLog) {
             log.info { "Power.log恢复回放：跳过历史投降请求" }
             return false
@@ -731,7 +735,7 @@ object GameUtil {
             }
             return false
         }
-        if (NeverSurrenderPolicy.blockSurrender("GameUtil.surrender")) return false
+        if (NeverSurrenderPolicy.blockSurrender("GameUtil.surrender", mandatoryRank)) return false
         if (!ActionDispatchGate.allow("surrender.request")) return false
 //        SystemUtil.frontWindow(ScriptStaticData.getGameHWND());
 //        按ESC键弹出投降界面

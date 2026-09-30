@@ -27,13 +27,27 @@ object NeverSurrenderPolicy {
     internal fun rankIsIneligible(rank: Int): Boolean =
         rank in 1..10 && rank != 5 && rank != 10
 
+    /** Rank-floor decisions are an explicit safety policy, not ordinary strategy surrender. */
+    internal fun isMandatoryRankRule(ruleId: String?): Boolean =
+        ruleId == "current-rank-is-not-silver-target" || ruleId == "rank-ocr-unresolved"
+
     /** Returns true when the caller must stop before enqueueing any surrender work. */
-    fun blockSurrender(source: String): Boolean {
-        if (!enabled()) return false
+    fun blockSurrender(source: String, mandatoryRank: Boolean = false): Boolean {
+        if (mandatoryRank) {
+            log.info {
+                "SURRENDER_ALLOWED reason=mandatory-rank-policy channel=beta source=$source " +
+                    "dispatch=true queue=true retry=false replan=false"
+            }
+            return false
+        }
+        if (!shouldBlock(enabled(), mandatoryRank = false)) return false
         log.warn {
             "SURRENDER_BLOCKED reason=never-surrender channel=beta source=$source " +
                 "dispatch=false queue=false retry=false replan=false"
         }
         return true
     }
+
+    internal fun shouldBlock(enabled: Boolean, mandatoryRank: Boolean): Boolean =
+        enabled && !mandatoryRank
 }

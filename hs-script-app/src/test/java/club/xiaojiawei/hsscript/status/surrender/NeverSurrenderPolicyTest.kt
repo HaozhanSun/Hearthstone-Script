@@ -26,6 +26,17 @@ class NeverSurrenderPolicyTest {
     }
 
     @Test
+    fun `mandatory rank rules are exempt from the ordinary never surrender kill switch`() {
+        assertTrue(NeverSurrenderPolicy.isMandatoryRankRule("current-rank-is-not-silver-target"))
+        assertTrue(NeverSurrenderPolicy.isMandatoryRankRule("rank-ocr-unresolved"))
+        assertFalse(NeverSurrenderPolicy.isMandatoryRankRule("opponent-hero-not-original"))
+        assertFalse(NeverSurrenderPolicy.shouldBlock(enabled = true, mandatoryRank = true))
+        assertTrue(NeverSurrenderPolicy.shouldBlock(enabled = true, mandatoryRank = false))
+        assertFalse(NeverSurrenderPolicy.shouldBlock(enabled = false, mandatoryRank = false))
+        assertFalse(NeverSurrenderPolicy.blockSurrender("rank-policy", mandatoryRank = true))
+    }
+
+    @Test
     fun `streak guard thresholds retain seven-concession block and five-win surrender semantics`() {
         val surrenderGuard = SurrenderPolicy.evaluatePersistentStreakGuard(
             PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),

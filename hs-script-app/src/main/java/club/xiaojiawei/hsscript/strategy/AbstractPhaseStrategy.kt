@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscript.interfaces.closer.ThreadCloser
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.TaskManager
+import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
@@ -205,7 +206,12 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
             "SURRENDER_ACTION_REQUESTED source=$source rule=${result.ruleId} " +
                 "reason=${result.reason ?: "none"} dispatch=requested"
         }
-        val dispatched = GameUtil.surrender(skipEndTurn = true, reason = result.reason)
+        val dispatched = GameUtil.surrender(
+            skipEndTurn = true,
+            reason = result.reason,
+            mandatoryRank = source == "current-rank" &&
+                NeverSurrenderPolicy.isMandatoryRankRule(result.ruleId),
+        )
         if (!dispatched) {
             log.warn {
                 "SURRENDER_ACTION_BLOCKED source=$source rule=${result.ruleId} " +
