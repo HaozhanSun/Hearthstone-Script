@@ -164,6 +164,7 @@ object SurrenderPolicy {
     @Volatile
     private var rankContinueAuthorized = false
     private var rankCompletionDiagnosticLogged = false
+    private var rankCompletionDiagnosticCount = 0
     private var rankInspectionAttempts = 0
     private var lastRankInspectionAt = 0L
     private var rankInspectionEligibleAt = 0L
@@ -312,6 +313,7 @@ object SurrenderPolicy {
         rankCheckCompleted = false
         rankContinueAuthorized = false
         rankCompletionDiagnosticLogged = false
+        rankCompletionDiagnosticCount = 0
         rankInspectionAttempts = 0
         lastRankInspectionAt = 0L
         rankInspectionEligibleAt = 0L
@@ -796,6 +798,7 @@ object SurrenderPolicy {
         if (rankCheckCompleted) {
             if (!rankCompletionDiagnosticLogged) {
                 rankCompletionDiagnosticLogged = true
+                rankCompletionDiagnosticCount++
                 log.info {
                     "RANK_POLICY_INSPECT_SKIPPED reason=rank-check-completed " +
                         "rankContinueAuthorized=$rankContinueAuthorized attempts=$rankInspectionAttempts"
@@ -1043,6 +1046,23 @@ object SurrenderPolicy {
 
     /** True only after the current game positively resolved Silver 5 or 10. */
     internal fun currentRankContinueAuthorized(): Boolean = rankContinueAuthorized
+
+    internal fun rankInspectionAttemptsForTest(): Int = rankInspectionAttempts
+
+    internal fun rankCompletionDiagnosticCountForTest(): Int = rankCompletionDiagnosticCount
+
+    /** Narrow seam for proving lifecycle reset of a latched preflight state. */
+    internal fun forceRankInspectionLatchForTest(
+        completed: Boolean,
+        authorized: Boolean,
+        attempts: Int,
+    ) {
+        rankCheckCompleted = completed
+        rankContinueAuthorized = authorized
+        rankInspectionAttempts = attempts
+        rankCompletionDiagnosticLogged = false
+        rankCompletionDiagnosticCount = 0
+    }
 
     data class WinRateSnapshot(
         val games: Int,

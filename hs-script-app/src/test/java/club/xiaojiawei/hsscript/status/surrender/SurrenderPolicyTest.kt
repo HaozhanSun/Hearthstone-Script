@@ -13,6 +13,7 @@ import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
 import club.xiaojiawei.hsscript.status.DebugScreenshotRing
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
@@ -369,15 +370,35 @@ class SurrenderPolicyTest {
 
     @Test
     fun `new game reset clears completed rank state after canceled preflight`() {
-        SurrenderPolicy.resetForNewGame()
-        assertFalse(SurrenderPolicy.currentRankCheckCompleted())
+        SurrenderPolicy.forceRankInspectionLatchForTest(
+            completed = true,
+            authorized = false,
+            attempts = 3,
+        )
+        assertTrue(SurrenderPolicy.currentRankCheckCompleted())
         assertFalse(SurrenderPolicy.currentRankContinueAuthorized())
+        assertEquals(3, SurrenderPolicy.rankInspectionAttemptsForTest())
 
-        // The reset contract is intentionally repeatable: a canceled startup
-        // preflight must not poison the next game's first rank inspection.
-        SurrenderPolicy.resetForNewGame()
+        // This is the same entry point used by the live Power.log/FillDeck
+        // lifecycle after a new game is recognized.
+        ReplaceCardPhaseStrategy.resetForNewGame()
+
         assertFalse(SurrenderPolicy.currentRankCheckCompleted())
         assertFalse(SurrenderPolicy.currentRankContinueAuthorized())
+        assertEquals(0, SurrenderPolicy.rankInspectionAttemptsForTest())
+    }
+
+    @Test
+    fun `completed rank diagnostic is emitted once across repeated callbacks`() {
+        SurrenderPolicy.forceRankInspectionLatchForTest(
+            completed = true,
+            authorized = false,
+            attempts = 0,
+        )
+
+        assertNull(SurrenderPolicy.evaluateCurrentRankBeforeMulligan())
+        assertNull(SurrenderPolicy.evaluateCurrentRankBeforeMulligan())
+        assertEquals(1, SurrenderPolicy.rankCompletionDiagnosticCountForTest())
     }
 
     @Test
