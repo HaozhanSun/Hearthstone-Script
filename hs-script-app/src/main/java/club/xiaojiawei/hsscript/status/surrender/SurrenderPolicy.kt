@@ -163,6 +163,7 @@ object SurrenderPolicy {
     private var rankCheckCompleted = false
     @Volatile
     private var rankContinueAuthorized = false
+    private var rankCompletionDiagnosticLogged = false
     private var rankInspectionAttempts = 0
     private var lastRankInspectionAt = 0L
     private var rankInspectionEligibleAt = 0L
@@ -310,6 +311,7 @@ object SurrenderPolicy {
         earlySurrenderTriggered = false
         rankCheckCompleted = false
         rankContinueAuthorized = false
+        rankCompletionDiagnosticLogged = false
         rankInspectionAttempts = 0
         lastRankInspectionAt = 0L
         rankInspectionEligibleAt = 0L
@@ -792,9 +794,12 @@ object SurrenderPolicy {
         // surrendering decision. Later Power.log bursts must not re-enter the
         // streak guard or replay the same continuation decision.
         if (rankCheckCompleted) {
-            log.info {
-                "RANK_POLICY_INSPECT_SKIPPED reason=rank-check-completed " +
-                    "rankContinueAuthorized=$rankContinueAuthorized attempts=$rankInspectionAttempts"
+            if (!rankCompletionDiagnosticLogged) {
+                rankCompletionDiagnosticLogged = true
+                log.info {
+                    "RANK_POLICY_INSPECT_SKIPPED reason=rank-check-completed " +
+                        "rankContinueAuthorized=$rankContinueAuthorized attempts=$rankInspectionAttempts"
+                }
             }
             return null
         }

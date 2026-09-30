@@ -66,6 +66,11 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
      */
     fun resetForNewGame() {
         cancelRankPreflight("new-game")
+        // Keep the rank gate scoped to the same game lifecycle as the
+        // mulligan state. FillDeck normally performs this reset too, but the
+        // recovery/startup path can enter a new INPUT without replaying that
+        // callback in the same ordering.
+        SurrenderPolicy.resetForNewGame()
         changeCardScheduled.reset()
         mulliganStageConfirmed.set(false)
         mulliganInputConfirmed.set(false)

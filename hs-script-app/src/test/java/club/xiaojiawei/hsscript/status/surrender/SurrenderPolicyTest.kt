@@ -368,6 +368,19 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun `new game reset clears completed rank state after canceled preflight`() {
+        SurrenderPolicy.resetForNewGame()
+        assertFalse(SurrenderPolicy.currentRankCheckCompleted())
+        assertFalse(SurrenderPolicy.currentRankContinueAuthorized())
+
+        // The reset contract is intentionally repeatable: a canceled startup
+        // preflight must not poison the next game's first rank inspection.
+        SurrenderPolicy.resetForNewGame()
+        assertFalse(SurrenderPolicy.currentRankCheckCompleted())
+        assertFalse(SurrenderPolicy.currentRankContinueAuthorized())
+    }
+
+    @Test
     fun originalHeroIsTheOnlyEarlyStateThatAllowsRankInspection() {
         val war = warWithRivalHero("雷克萨")
 
