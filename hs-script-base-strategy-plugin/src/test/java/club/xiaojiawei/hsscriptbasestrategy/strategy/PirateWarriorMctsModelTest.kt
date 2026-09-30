@@ -26,7 +26,7 @@ import kotlin.test.assertTrue
 class PirateWarriorMctsModelTest {
     @Test
     fun `runtime strategy plugin descriptor reports current strategy version`() {
-        assertEquals("1.1.12", HsBaseStrategyPlugin().version())
+        assertEquals("1.1.13", HsBaseStrategyPlugin().version())
     }
 
     @Test

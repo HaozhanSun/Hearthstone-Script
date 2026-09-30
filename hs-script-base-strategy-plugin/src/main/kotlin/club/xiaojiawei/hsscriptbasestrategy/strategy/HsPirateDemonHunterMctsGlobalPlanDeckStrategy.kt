@@ -44,6 +44,7 @@ class HsPirateDemonHunterMctsGlobalPlanDeckStrategy : MCTSDeckStrategy() {
     }
 
     override fun executeMCTSOutCard(war: War): List<MCTSArg> {
+        PirateLethalAttackPolicy.recordTelemetry(war, "MCTS_START")
         val start = System.currentTimeMillis()
         return listOf(
             MCTSArg(

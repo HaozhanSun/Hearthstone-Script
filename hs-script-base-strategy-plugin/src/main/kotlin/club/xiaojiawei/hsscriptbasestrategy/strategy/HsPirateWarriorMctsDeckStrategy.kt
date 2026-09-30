@@ -53,6 +53,7 @@ class HsPirateWarriorMctsDeckStrategy : MCTSDeckStrategy() {
     }
 
     override fun executeMCTSOutCard(war: War): List<MCTSArg> {
+        PirateLethalAttackPolicy.recordTelemetry(war, "MCTS_START")
         if (!openingHandRegistered) {
             PirateWarriorMctsModel.registerOpeningHandSnapshot(war, preMulliganHand)
             openingHandRegistered = true
