@@ -811,7 +811,7 @@ class SurrenderPolicyTest {
             assertEquals(233, detection?.rank)
             assertEquals(CurrentRankDetector.RankTier.LEGEND, detection?.tier)
             assertTrue(SurrenderPolicy.isLegendaryDetection(detection))
-            assertNull(SurrenderPolicy.evaluateCurrentRank(233, detection!!.tier))
+        assertTrue(SurrenderPolicy.evaluateCurrentRank(233, detection!!.tier)?.shouldSurrender == true)
             assertEquals(listOf(105 to 108), roiSizes)
         } finally {
             OcrRuntime.settingsProvider = originalSettingsProvider
@@ -857,8 +857,8 @@ class SurrenderPolicyTest {
     fun activeRankFrameWithoutNumberOrLegendaryBlocksSurrenderInsteadOfRequestingIt() {
         val result = SurrenderPolicy.unresolvedRankDecision(attempts = 3)
 
-        assertFalse(result.shouldSurrender)
-        assertTrue(result.blocksAutomaticSurrender)
+        assertTrue(result.shouldSurrender)
+        assertFalse(result.blocksAutomaticSurrender)
         assertEquals("rank-ocr-unresolved", result.ruleId)
     }
 
@@ -866,8 +866,8 @@ class SurrenderPolicyTest {
     fun providerFailureStillUsesTheSeparateFailClosedDecision() {
         val result = SurrenderPolicy.unresolvedRankDecision(attempts = 3)
 
-        assertFalse(result.shouldSurrender)
-        assertTrue(result.blocksAutomaticSurrender)
+        assertTrue(result.shouldSurrender)
+        assertFalse(result.blocksAutomaticSurrender)
     }
 
     @Test
@@ -890,15 +890,22 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun rankTenIsAnAllowedTargetUnderTheCurrentRankPolicy() {
-        assertNull(SurrenderPolicy.evaluateCurrentRank(10))
+    fun silverRankTenIsAnAllowedTargetUnderTheCurrentRankPolicy() {
+        assertNull(SurrenderPolicy.evaluateCurrentRank(10, CurrentRankDetector.RankTier.SILVER))
     }
 
     @Test
-    fun ranksFiveAndTenAreAllowedRegardlessOfTier() {
+    fun onlySilverRanksFiveAndTenAreAllowed() {
         for (tier in CurrentRankDetector.RankTier.values()) {
-            assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 5, tier = tier))
-            assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 10, tier = tier))
+            val five = SurrenderPolicy.evaluateCurrentRank(rank = 5, tier = tier)
+            val ten = SurrenderPolicy.evaluateCurrentRank(rank = 10, tier = tier)
+            if (tier == CurrentRankDetector.RankTier.SILVER) {
+                assertNull(five)
+                assertNull(ten)
+            } else {
+                assertTrue(five?.shouldSurrender == true)
+                assertTrue(ten?.shouldSurrender == true)
+            }
         }
     }
 
@@ -1035,11 +1042,11 @@ class SurrenderPolicyTest {
         )
 
         val scenarios = listOf(
-            Scenario("legendary-233", "233", CurrentRankDetector.RankTier.LEGEND, true, false),
-            Scenario("legendary-257", "257", CurrentRankDetector.RankTier.LEGEND, true, false),
+            Scenario("legendary-233", "233", CurrentRankDetector.RankTier.LEGEND, true, true),
+            Scenario("legendary-257", "257", CurrentRankDetector.RankTier.LEGEND, true, true),
             Scenario("platinum-2", "2", CurrentRankDetector.RankTier.PLATINUM, false, true),
             Scenario("rank-5", "5", CurrentRankDetector.RankTier.SILVER, false, false),
-            Scenario("rank-10", "10", CurrentRankDetector.RankTier.GOLD, false, false),
+            Scenario("rank-10", "10", CurrentRankDetector.RankTier.GOLD, false, true),
             Scenario("rank-7", "7", CurrentRankDetector.RankTier.SILVER, false, true),
         )
 
@@ -1053,11 +1060,7 @@ class SurrenderPolicyTest {
                 captureBounds = Rectangle(0, 885, 105, 130),
             )
             assertEquals(scenario.legendary, SurrenderPolicy.isLegendaryDetection(detection), scenario.name)
-            val action = if (scenario.legendary) {
-                null
-            } else {
-                SurrenderPolicy.evaluateCurrentRank(rank!!, scenario.tier)
-            }
+            val action = SurrenderPolicy.evaluateCurrentRank(rank ?: 0, scenario.tier)
             assertEquals(scenario.surrender, action?.shouldSurrender == true, scenario.name)
         }
     }
@@ -1068,8 +1071,8 @@ class SurrenderPolicyTest {
 
         assertTrue(result != null)
         assertTrue(result!!.shouldSurrender)
-        assertEquals("current-rank-is-not-target", result.ruleId)
-        assertEquals("current-rank=9 target-ranks=5,10", result.reason)
+        assertEquals("current-rank-is-not-silver-target", result.ruleId)
+        assertEquals("current-rank=9 tier=UNKNOWN target-tier=SILVER target-ranks=5,10", result.reason)
     }
 
     @Test
@@ -1079,7 +1082,7 @@ class SurrenderPolicyTest {
                 val result = SurrenderPolicy.evaluateCurrentRank(rank = rank, tier = tier)
                 assertTrue(result != null)
                 assertTrue(result!!.shouldSurrender)
-                assertEquals("current-rank-is-not-target", result.ruleId)
+                assertEquals("current-rank-is-not-silver-target", result.ruleId)
             }
         }
     }
@@ -1089,7 +1092,7 @@ class SurrenderPolicyTest {
         for (tier in CurrentRankDetector.RankTier.values()) {
             val result = SurrenderPolicy.evaluateCurrentRank(rank = 7, tier = tier)
             assertTrue(result!!.shouldSurrender)
-            assertEquals("current-rank=7 target-ranks=5,10", result.reason)
+            assertEquals("current-rank=7 tier=${tier.name} target-tier=SILVER target-ranks=5,10", result.reason)
         }
     }
 
@@ -1131,7 +1134,7 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun exhaustedRankUnknownContinuesWithoutPausingOrRequestingSurrender() {
+    fun exhaustedRankUnknownFailsClosedWithoutPausing() {
         val decision = SurrenderPolicy.classifyRankInspection(
             rank = null,
             detectionAvailable = false,
@@ -1141,8 +1144,8 @@ class SurrenderPolicyTest {
         assertFalse(decision.pause)
         assertFalse(decision.wait)
         val action = SurrenderPolicy.unresolvedRankDecision(3)
-        assertFalse(action.shouldSurrender)
-        assertTrue(action.blocksAutomaticSurrender)
+        assertTrue(action.shouldSurrender)
+        assertFalse(action.blocksAutomaticSurrender)
     }
 
     @Test
@@ -1153,14 +1156,14 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun unresolvedRankBlocksOnlyTheSurrenderAndKeepsRuntimeActive() {
+    fun unresolvedRankRequestsBoundedSurrenderWithoutPausing() {
         val previousPause = PauseStatus.isPause
         try {
             PauseStatus.isPause = false
             val result = SurrenderPolicy.blockForUnresolvedRank(attempts = 8)
-            assertFalse(result.shouldSurrender)
+            assertTrue(result.shouldSurrender)
             assertEquals("rank-ocr-unresolved", result.ruleId)
-            assertTrue(result.blocksAutomaticSurrender)
+            assertFalse(result.blocksAutomaticSurrender)
             assertFalse(PauseStatus.isPause)
             assertEquals(RankInspectionState.RESOLVED, SurrenderPolicy.currentRankInspectionState())
         } finally {

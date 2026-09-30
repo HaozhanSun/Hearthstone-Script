@@ -871,12 +871,13 @@ object SurrenderPolicy {
         if (isLegendaryDetection(detection)) {
             rankCheckCompleted = true
             setRankInspectionState(RankInspectionState.RESOLVED)
-            log.info {
-                "RANK_POLICY_CONTINUE stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                    "rank=LEGENDARY tier=${detection?.tier?.name ?: "UNKNOWN"} reason=legendary-badge-confirmed " +
-                    "surrender=false pause=false"
+            val result = evaluateCurrentRank(detection?.rank ?: 0, detection?.tier ?: CurrentRankDetector.RankTier.UNKNOWN)
+            log.warn {
+                "RANK_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                    "rank=${detection?.rank ?: "LEGENDARY"} tier=${detection?.tier?.name ?: "UNKNOWN"} " +
+                    "action=SURRENDER reason=${result?.reason ?: "legendary-tier-not-silver-target"}"
             }
-            return null
+            return result
         }
         val rank = detection?.rank
         if (rank == null) {
@@ -901,44 +902,19 @@ object SurrenderPolicy {
                 }
                 return null
             }
-            evaluateWinRateGuard()?.let { result ->
-                rankCheckCompleted = true
-                log.warn {
-                    "WIN_RATE_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                        "rule=${result.ruleId} reason=${result.reason} fallback=rank-unresolved"
-                }
-                return result
-            }
-            // A blank/failed OCR read is retryable.  Returning a non-null
-            // SurrenderRuleResult here used to make the generic caller treat
-            // an unresolved read as a surrender request, while marking the
-            // check complete prevented any later retry.  The mulligan
-            // preflight owns the bounded retry and fail-soft decision.
+            rankCheckCompleted = true
+            setRankInspectionState(RankInspectionState.RESOLVED)
+            val result = unresolvedRankDecision(rankInspectionAttempts)
             log.warn {
-                "RANK_POLICY_WAITING_FOR_RANK stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                    "attempt=$rankInspectionAttempts provider=${if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"} " +
-                    "action=RETRY pause=false surrender=false"
+                "RANK_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                    "rank=UNKNOWN tier=${detection?.tier?.name ?: "UNKNOWN"} action=SURRENDER " +
+                    "reason=${result.reason}"
             }
-            return null
+            return result
         }
 
         rankCheckCompleted = true
         setRankInspectionState(RankInspectionState.RESOLVED)
-        if (NeverSurrenderPolicy.enabled()) {
-            if (NeverSurrenderPolicy.rankIsIneligible(rank)) {
-                log.info {
-                    "RANK_POLICY_CONTINUE stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                        "rank=$rank tier=${detection.tier.name} reason=never-surrender-rank-ineligible " +
-                        "action=CONTINUE surrender=false pause=false dispatch=false"
-                }
-                return null
-            }
-            log.info {
-                "SURRENDER_POLICY_BYPASS stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                    "rank=$rank tier=${detection.tier.name} reason=never-surrender action=CONTINUE"
-            }
-            return null
-        }
         val result = evaluateCurrentRank(rank, detection.tier) ?: run {
             evaluateWinRateGuard()?.let { winRateResult ->
                 rankCheckCompleted = true
@@ -967,12 +943,12 @@ object SurrenderPolicy {
         rank: Int,
         tier: CurrentRankDetector.RankTier = CurrentRankDetector.RankTier.UNKNOWN,
     ): SurrenderRuleResult? {
-        if (rank !in 1..10 || rank == 5 || rank == 10) return null
+        if (tier == CurrentRankDetector.RankTier.SILVER && rank in setOf(5, 10)) return null
         return SurrenderRuleResult(
-            ruleId = "current-rank-is-not-target",
+            ruleId = "current-rank-is-not-silver-target",
             matched = false,
             shouldSurrender = true,
-            reason = "current-rank=$rank target-ranks=5,10",
+            reason = "current-rank=$rank tier=${tier.name} target-tier=SILVER target-ranks=5,10",
         )
     }
 
@@ -984,16 +960,15 @@ object SurrenderPolicy {
         SurrenderRuleResult(
             ruleId = "rank-ocr-unresolved",
             matched = false,
-            shouldSurrender = false,
+            shouldSurrender = true,
             reason = "rank-ocr-unresolved attempts=$attempts",
-            blocksAutomaticSurrender = true,
+            blocksAutomaticSurrender = false,
         )
 
     /**
-     * An active rank frame with no valid number and no Legendary badge remains
-     * an explicit surrender decision. Provider/capture failure (detection ==
-     * null) is a non-surrender continuation after the retry budget; it must
-     * not pause the runtime.
+     * An active rank frame with no valid number is retried while bounded, then
+     * becomes an explicit fail-closed surrender decision. Unknown is never a
+     * playable continuation.
      */
     internal fun classifyRankInspection(
         rank: Int?,
@@ -1040,14 +1015,10 @@ object SurrenderPolicy {
     internal fun blockForUnresolvedRank(attempts: Int): SurrenderRuleResult {
         val result = unresolvedRankDecision(attempts)
         setRankInspectionState(RankInspectionState.RESOLVED)
-        // OCR uncertainty is not a script-fatal condition. The mulligan
-        // state machine owns the bounded retry/continue decision; pausing
-        // here strands the game in WAITING_FOR_RANK and makes a transient
-        // sidecar failure look like a user-visible crash.
         log.warn {
             "RANK_POLICY_BLOCKED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                "rule=${result.ruleId} reason=${result.reason} action=CONTINUE_MULLIGAN " +
-                "surrender=false pause=false ocrFailure=true"
+                "rule=${result.ruleId} reason=${result.reason} action=SURRENDER " +
+                "surrender=true pause=false ocrFailure=true"
         }
         return result
     }

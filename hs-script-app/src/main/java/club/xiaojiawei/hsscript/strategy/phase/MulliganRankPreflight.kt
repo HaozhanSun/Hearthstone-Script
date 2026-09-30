@@ -219,12 +219,21 @@ internal class MulliganRankPreflight(
                 scheduleNextLocked(context.expectedGeneration, config.retryIntervalMs)
             } else {
                 state = MulliganRankPreflightState.EXHAUSTED
+                val failClosed = SurrenderRuleResult(
+                    ruleId = "rank-ocr-unresolved",
+                    matched = false,
+                    shouldSurrender = true,
+                    reason = "rank-ocr-unresolved attempts=${context.attemptNumber}",
+                    blocksAutomaticSurrender = false,
+                )
                 log.warn {
                     "MULLIGAN_RANK_PREFLIGHT_EXHAUSTED attempt=${context.attemptNumber} " +
                         "maxAttempts=${config.maxAttempts} provider=${provider()} " +
-                        "action=CONTINUE_MULLIGAN pause=false surrender=false"
+                        "action=SURRENDER pause=false surrender=true rule=${failClosed.ruleId} " +
+                        "reason=${failClosed.reason}"
                 }
-                onContinue()
+                state = MulliganRankPreflightState.SURRENDER_REQUESTED
+                onSurrender(failClosed)
             }
         }
     }

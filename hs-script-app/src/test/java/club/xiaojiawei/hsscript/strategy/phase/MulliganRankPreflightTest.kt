@@ -60,7 +60,7 @@ class MulliganRankPreflightTest {
     fun `retries after seven second grace without another Power log line`() {
         val scheduler = ManualScheduler()
         val attempts = mutableListOf<Long>()
-        var continueCount = 0
+        var surrenderCount = 0
         var logLines = listOf("MULLIGAN_STATE=INPUT", "MULLIGAN_STATE=INPUT")
         val gate = MulliganActionGate()
         var changeCardSchedules = 0
@@ -84,8 +84,12 @@ class MulliganRankPreflightTest {
                 null
             },
             provider = { "PADDLEX" },
-            onSurrender = { result -> throw AssertionError("safe fixture must not surrender: $result") },
-            onContinue = { continueCount++ },
+            onSurrender = { result ->
+                assertEquals("rank-ocr-unresolved", result.ruleId)
+                assertTrue(result.shouldSurrender)
+                surrenderCount++
+            },
+            onContinue = { error("unresolved rank must not continue") },
         )
 
         preflight.start()
@@ -97,17 +101,17 @@ class MulliganRankPreflightTest {
         scheduler.runWorker()
 
         assertEquals(listOf(7_000L, 14_000L, 21_000L), attempts)
-        assertEquals(1, continueCount)
-        assertEquals(MulliganRankPreflightState.EXHAUSTED, preflight.snapshot().state)
+        assertEquals(1, surrenderCount)
+        assertEquals(MulliganRankPreflightState.SURRENDER_REQUESTED, preflight.snapshot().state)
         assertFalse(PauseStatus.isPause)
         logLines = emptyList()
         assertTrue(logLines.isEmpty(), "the retry schedule must not depend on a new log line")
     }
 
     @Test
-    fun `timeout is bounded and fails soft without pausing`() {
+    fun `timeout is bounded and fails closed without pausing`() {
         val scheduler = ManualScheduler()
-        var continueCount = 0
+        var surrenderCount = 0
         val preflight = MulliganRankPreflight(
             config = MulliganRankPreflightConfig(
                 initialDelayMs = 7_000,
@@ -119,26 +123,30 @@ class MulliganRankPreflightTest {
             isEligible = { true },
             inspect = { error("slow OCR should be cancelled before returning") },
             provider = { "PADDLEX" },
-            onSurrender = { result -> throw AssertionError("timeout must not surrender: $result") },
-            onContinue = { continueCount++ },
+            onSurrender = { result ->
+                assertEquals("rank-ocr-unresolved", result.ruleId)
+                assertTrue(result.shouldSurrender)
+                surrenderCount++
+            },
+            onContinue = { error("timeout must not continue mulligan") },
         )
 
         preflight.start()
         scheduler.runScheduledAfter(7_000)
         scheduler.runTimeout()
 
-        assertEquals(1, continueCount)
-        assertEquals(MulliganRankPreflightState.EXHAUSTED, preflight.snapshot().state)
+        assertEquals(1, surrenderCount)
+        assertEquals(MulliganRankPreflightState.SURRENDER_REQUESTED, preflight.snapshot().state)
         assertFalse(PauseStatus.isPause)
     }
 
     @Test
-    fun `empty unknown and exception reads exhaust into continue mulligan`() {
+    fun `empty unknown and exception reads exhaust into surrender`() {
         val outcomes = listOf("empty", "UNKNOWN", "PaddleOCR exception")
         outcomes.forEach { outcome ->
             val scheduler = ManualScheduler()
             var attempts = 0
-            var continueCount = 0
+            var surrenderCount = 0
             val preflight = MulliganRankPreflight(
                 config = MulliganRankPreflightConfig(
                     initialDelayMs = 7_000,
@@ -154,8 +162,12 @@ class MulliganRankPreflightTest {
                     null
                 },
                 provider = { "PADDLEX" },
-                onSurrender = { result -> throw AssertionError("$outcome must not surrender: $result") },
-                onContinue = { continueCount++ },
+                onSurrender = { result ->
+                    assertEquals("rank-ocr-unresolved", result.ruleId, outcome)
+                    assertTrue(result.shouldSurrender, outcome)
+                    surrenderCount++
+                },
+                onContinue = { error("$outcome must not continue mulligan") },
             )
 
             preflight.start()
@@ -165,8 +177,8 @@ class MulliganRankPreflightTest {
             }
 
             assertEquals(3, attempts, outcome)
-            assertEquals(1, continueCount, outcome)
-            assertEquals(MulliganRankPreflightState.EXHAUSTED, preflight.snapshot().state, outcome)
+            assertEquals(1, surrenderCount, outcome)
+            assertEquals(MulliganRankPreflightState.SURRENDER_REQUESTED, preflight.snapshot().state, outcome)
             assertFalse(PauseStatus.isPause, outcome)
         }
     }

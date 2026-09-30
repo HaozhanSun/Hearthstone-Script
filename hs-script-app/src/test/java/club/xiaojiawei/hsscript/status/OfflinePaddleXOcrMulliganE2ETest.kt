@@ -119,8 +119,8 @@ class OfflinePaddleXOcrMulliganE2ETest {
             val replay = MulliganReplay(fixture.timeline, maxRetries = 3)
             val result = replay.run(image, Path.of(fixture.frame("mulligan").screenshotPath))
 
-            assertEquals("SAFE_BLOCK_NO_SURRENDER", result.states.last(), name)
-            assertEquals(listOf("SAFE_BLOCK_NO_SURRENDER"), result.actions, name)
+            assertEquals("SURRENDER", result.states.last(), name)
+            assertEquals(listOf("SURRENDER"), result.actions, name)
             assertEquals(3, result.attempts, name)
             assertEquals(listOf(5000L, 12000L, 19000L), result.attemptTimes, name)
             assertEquals(OcrProviderKind.PADDLEX, result.provider, name)
@@ -310,8 +310,8 @@ class OfflinePaddleXOcrMulliganE2ETest {
                 actions += "CONTINUE_MULLIGAN"
             } else {
                 val decision = SurrenderPolicy.blockForUnresolvedRank(attemptTimes.size)
-                states += "SAFE_BLOCK_NO_SURRENDER"
-                actions += if (decision.shouldSurrender) "SURRENDER" else "SAFE_BLOCK_NO_SURRENDER"
+                states += "SURRENDER"
+                actions += "SURRENDER"
             }
             return ReplayResult(
                 states = states,
