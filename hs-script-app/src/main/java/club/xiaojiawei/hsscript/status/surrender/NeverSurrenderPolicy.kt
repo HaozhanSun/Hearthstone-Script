@@ -31,6 +31,10 @@ object NeverSurrenderPolicy {
     internal fun isMandatoryRankRule(ruleId: String?): Boolean =
         ruleId == "current-rank-is-not-silver-target" || ruleId == "rank-ocr-unresolved"
 
+    internal fun isMandatoryRankDispatch(source: String, ruleId: String?): Boolean =
+        (source == "current-rank" || source == "mulligan-rank-preflight") &&
+            isMandatoryRankRule(ruleId)
+
     /** Returns true when the caller must stop before enqueueing any surrender work. */
     fun blockSurrender(source: String, mandatoryRank: Boolean = false): Boolean {
         if (mandatoryRank) {

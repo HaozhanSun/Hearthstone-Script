@@ -209,8 +209,7 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
         val dispatched = GameUtil.surrender(
             skipEndTurn = true,
             reason = result.reason,
-            mandatoryRank = source == "current-rank" &&
-                NeverSurrenderPolicy.isMandatoryRankRule(result.ruleId),
+            mandatoryRank = NeverSurrenderPolicy.isMandatoryRankDispatch(source, result.ruleId),
         )
         if (!dispatched) {
             log.warn {

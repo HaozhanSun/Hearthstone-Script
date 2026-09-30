@@ -30,6 +30,15 @@ class NeverSurrenderPolicyTest {
         assertTrue(NeverSurrenderPolicy.isMandatoryRankRule("current-rank-is-not-silver-target"))
         assertTrue(NeverSurrenderPolicy.isMandatoryRankRule("rank-ocr-unresolved"))
         assertFalse(NeverSurrenderPolicy.isMandatoryRankRule("opponent-hero-not-original"))
+        assertTrue(NeverSurrenderPolicy.isMandatoryRankDispatch("current-rank", "rank-ocr-unresolved"))
+        assertTrue(
+            NeverSurrenderPolicy.isMandatoryRankDispatch(
+                "mulligan-rank-preflight",
+                "current-rank-is-not-silver-target",
+            ),
+        )
+        assertFalse(NeverSurrenderPolicy.isMandatoryRankDispatch("opponent-hero", "rank-ocr-unresolved"))
+        assertFalse(NeverSurrenderPolicy.isMandatoryRankDispatch("mulligan-rank-preflight", "opponent-hero-not-original"))
         assertFalse(NeverSurrenderPolicy.shouldBlock(enabled = true, mandatoryRank = true))
         assertTrue(NeverSurrenderPolicy.shouldBlock(enabled = true, mandatoryRank = false))
         assertFalse(NeverSurrenderPolicy.shouldBlock(enabled = false, mandatoryRank = false))
