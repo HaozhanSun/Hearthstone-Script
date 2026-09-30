@@ -42,6 +42,11 @@ object FillDeckPhaseStrategy : AbstractPhaseStrategy() {
         if (line.contains("CREATE_GAME")) {
             GameUtil.resetForNewGame()
             SurrenderPolicy.resetForNewGame()
+            // CREATE_GAME is the authoritative new-game boundary for runs
+            // where TURN=1 arrives after mulligan setup. Clear the rank gate
+            // here as well so a canceled preflight cannot poison the next
+            // match before ReplaceCardPhaseStrategy sees its own reset path.
+            resetForNewGame()
             if (ConfigUtil.getBoolean(ConfigEnum.AUTO_OPEN_GAME_ANALYSIS)) {
                 runUI {
                     WindowUtil.showStage(WindowEnum.GAME_DATA_ANALYSIS)

@@ -96,6 +96,29 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun `rank floor takes precedence over seven-surrender block for legend and unknown`() {
+        val streakBlock = SurrenderPolicy.persistentStreakDecision(
+            PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
+        )!!
+        assertTrue(streakBlock.blocksAutomaticSurrender)
+
+        val legendary = SurrenderPolicy.evaluateCurrentRank(
+            rank = 5220,
+            tier = CurrentRankDetector.RankTier.LEGEND,
+        )!!
+        val unresolved = SurrenderPolicy.unresolvedRankDecision(attempts = 3)
+
+        // The generic streak guard may block a duplicate surrender dispatch,
+        // but it must never replace the mandatory rank-floor decision with a
+        // continuation into gameplay.
+        assertTrue(NeverSurrenderPolicy.isMandatoryRankRule(legendary.ruleId))
+        assertTrue(NeverSurrenderPolicy.isMandatoryRankRule(unresolved.ruleId))
+        assertTrue(legendary.shouldSurrender)
+        assertTrue(unresolved.shouldSurrender)
+        assertFalse(streakBlock.shouldSurrender)
+    }
+
+    @Test
     fun `never surrender bypasses five-win request but preserves seven-surrender block`() {
         val fiveWins = SurrenderPolicy.persistentStreakDecision(
             PersistentStreakSnapshot(consecutiveSurrenders = 0, consecutiveWins = 5),

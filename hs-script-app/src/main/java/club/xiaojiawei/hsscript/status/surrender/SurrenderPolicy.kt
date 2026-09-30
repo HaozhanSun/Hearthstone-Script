@@ -806,12 +806,15 @@ object SurrenderPolicy {
             }
             return null
         }
-        enforcePersistentStreakGuardForCurrentPolicy()?.let { streakDecision ->
-            if (!streakDecision.blocksAutomaticSurrender) return streakDecision
-            rankCheckCompleted = true
-            setRankInspectionState(RankInspectionState.RESOLVED)
-            logPersistentStreakContinueOnce("rank", streakDecision)
-            return null
+        // A seven-surrender streak protects the next surrender dispatch, but
+        // it must not turn an unresolved or confirmed non-target rank into a
+        // playable game. Defer only the blocking branch until the rank probe
+        // has produced its authoritative result; mandatory rank decisions
+        // then take precedence over the generic streak safeguard.
+        val persistentStreakDecision = enforcePersistentStreakGuardForCurrentPolicy()
+        val persistentStreakBlock = persistentStreakDecision?.takeIf { it.blocksAutomaticSurrender }
+        if (persistentStreakDecision != null && persistentStreakBlock == null) {
+            return persistentStreakDecision
         }
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") return null
         when (opponentHeroInspectionState) {
@@ -942,6 +945,7 @@ object SurrenderPolicy {
                 }
                 return winRateResult
             }
+            persistentStreakBlock?.let { logPersistentStreakContinueOnce("rank", it) }
             rankContinueAuthorized = true
             log.info {
                 "RANK_POLICY_CONTINUE stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
