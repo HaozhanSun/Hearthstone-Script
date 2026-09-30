@@ -74,7 +74,7 @@ object UiLogFormatter {
             raw.startsWith("MULLIGAN_SCREENSHOT") ->
                 "换牌截图已保存 · ${gameAndStage(raw)}"
             raw.startsWith("GAME_RESULT_SCREENSHOT_FAILED") ->
-                "结算截图保存失败 · ${gameNumber(raw)}"
+                "结算截图保存失败 · ${totalGameNumber(raw)}"
             raw.startsWith("GAME_RESULT_SCREENSHOT") ->
                 "结算截图已保存 · ${gameAndOutcome(raw)}"
             raw.startsWith("RANK_OCR_EVIDENCE") ->
@@ -196,12 +196,14 @@ object UiLogFormatter {
     }
 
     private fun gameAndOutcome(raw: String): String {
-        val game = gameNumber(raw)
+        val game = totalGameNumber(raw)
         val outcome = value(raw, "outcome")
         return listOfNotNull(game.takeIf { it.isNotBlank() }, outcome).joinToString(" · ")
     }
 
     private fun gameNumber(raw: String): String = value(raw, "game")?.let { "第${it}局" }.orEmpty()
+
+    private fun totalGameNumber(raw: String): String = value(raw, "game")?.let { "总第${it}局" }.orEmpty()
 
     private fun tierLabel(value: String?): String? = when (value?.uppercase()) {
         "BRONZE" -> "青铜"

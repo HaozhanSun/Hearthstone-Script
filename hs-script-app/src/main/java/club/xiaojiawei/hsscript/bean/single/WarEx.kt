@@ -42,10 +42,21 @@ object WarEx {
             warCountProperty.set(value)
             if (value > 0) {
                 log.info {
-                    "已完成第 $value 把游戏"
+                    "已完成总第 $value 把游戏"
                 }
             }
         }
+
+    /**
+     * Stable ordinal for the game currently reaching the terminal state.
+     *
+     * [warCount] is incremented at the end of [endWar], so result-page
+     * evidence captured before that increment must reserve this number and
+     * reuse it after finalization. This is the all-matches ordinal; it is
+     * intentionally distinct from [playedCount], which excludes our
+     * proactive surrenders.
+     */
+    fun nextCompletedGameNumber(): Int = warCount + 1
 
     val inWarProperty: BooleanProperty = SimpleBooleanProperty(false)
 

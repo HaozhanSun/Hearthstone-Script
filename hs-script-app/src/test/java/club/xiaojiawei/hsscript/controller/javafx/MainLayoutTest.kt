@@ -21,6 +21,7 @@ class MainLayoutTest {
         assertTrue(logPane.contains("VBox.vgrow=\"ALWAYS\""))
         assertTrue(logPane.contains("fitToWidth=\"true\""))
         assertTrue(logPane.contains("hbarPolicy=\"NEVER\""))
+        assertTrue(logPane.contains("实战局数（未投降）："))
         assertTrue(logPane.contains("fx:id=\"logGameCount\""))
         assertTrue(logPane.contains("fx:id=\"logWinningPercentage\""))
         assertTrue(logPane.contains("fx:id=\"logGameTime\""))

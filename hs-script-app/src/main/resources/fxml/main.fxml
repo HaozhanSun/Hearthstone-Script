@@ -112,8 +112,11 @@
                         </rowConstraints>
 
                         <Label GridPane.rowIndex="0" GridPane.columnIndex="0"
-                               text="游戏局数："
+                               text="实战局数（未投降）："
                                contentDisplay="RIGHT">
+                            <tooltip>
+                                <Tooltip text="已完成且未记录为我方主动投降的对局；结算日志中的总第 N 局包含全部结束对局。"/>
+                            </tooltip>
                             <graphic>
                                 <Text text="0" fx:id="gameCount"/>
                             </graphic>
@@ -229,7 +232,10 @@
                             <RowConstraints prefHeight="24" vgrow="NEVER"/>
                         </rowConstraints>
                         <Label GridPane.rowIndex="0" GridPane.columnIndex="0"
-                               text="游戏局数：" contentDisplay="RIGHT">
+                               text="实战局数（未投降）：" contentDisplay="RIGHT">
+                            <tooltip>
+                                <Tooltip text="已完成且未记录为我方主动投降的对局；结算日志中的总第 N 局包含全部结束对局。"/>
+                            </tooltip>
                             <graphic>
                                 <Text text="0" fx:id="logGameCount"/>
                             </graphic>

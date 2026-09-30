@@ -233,6 +233,11 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
             return
         }
 
+        // Reserve one all-matches ordinal before endWar() increments
+        // warCount. The same ID must appear in the pre-finalization wait log,
+        // the saved result screenshot, and the completion log.
+        val completedGameNumber = WarEx.nextCompletedGameNumber()
+
         val modelResultOutcome = if (e2eEnabled && !scriptControlledGame && authoritativeTerminal == null) {
             "draw-or-unknown"
         } else {
@@ -252,7 +257,8 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         var screenshotOutcome = modelResultOutcome
         val screenshotDelayMs = RandomUtil.getActionInterval(RESULT_SCREENSHOT_DELAY_BASE_MS.toInt())
         club.xiaojiawei.hsscriptbase.config.log.info {
-            "GAME_RESULT_SCREENSHOT_WAIT delayMs=$screenshotDelayMs outcome=$modelResultOutcome game=${WarEx.warCount}"
+            "GAME_RESULT_SCREENSHOT_WAIT delayMs=$screenshotDelayMs outcome=$modelResultOutcome " +
+                "game=$completedGameNumber scope=all-matches"
         }
         SystemUtil.delay(screenshotDelayMs)
         capturedResultImage = GameResultScreenshot.captureImage()
@@ -333,7 +339,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         // fully painted. The image above was captured after that transition;
         // save it under the evidence-backed outcome before cleanup clicks.
         capturedResultImage?.let { image ->
-            resultOutcome?.let { GameResultScreenshot.save(image, it, WarEx.warCount) }
+            resultOutcome?.let { GameResultScreenshot.save(image, it, completedGameNumber) }
         }
         val accessFile = PowerLogListener.logFile
         accessFile?.seek(accessFile.length())

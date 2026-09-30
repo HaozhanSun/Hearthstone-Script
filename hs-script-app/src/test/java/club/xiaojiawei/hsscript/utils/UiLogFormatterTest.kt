@@ -19,6 +19,17 @@ class UiLogFormatterTest {
     }
 
     @Test
+    fun `result screenshot messages identify the all matches ordinal`() {
+        val message = UiLogFormatter.format(
+            "GAME_RESULT_SCREENSHOT outcome=win game=133 scope=all-matches " +
+                "path=C:\\Users\\test\\game-0133-win.png",
+        )
+
+        assertEquals("结算截图已保存 · 总第133局 · win", message)
+        assertFalse(message.contains("scope="))
+    }
+
+    @Test
     fun `screenshot diagnostics expose a clickable Windows file target`() {
         val target = UiLogFormatter.fileTarget(
             "DEBUG_SCREENSHOT event=screen-recovery " +
