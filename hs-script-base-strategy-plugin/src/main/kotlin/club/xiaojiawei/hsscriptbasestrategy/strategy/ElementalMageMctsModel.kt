@@ -102,6 +102,15 @@ object ElementalMageMctsModel : MctsDecisionModel {
         if (liveChainStates.size > 32) {
             liveChainStates.keys.take(liveChainStates.size - 32).forEach(liveChainStates::remove)
         }
+        // Keep the common, read-only lethal telemetry active for this strategy
+        // too.  The shared recorder deduplicates repeated rescans, while the
+        // Elemental model remains responsible only for its chain bookkeeping.
+        MctsLethalTelemetry.recordBeforeAttackDecision(
+            war = war,
+            strategy = "元素法 V1.3",
+            step = turn,
+            selectedAction = null,
+        )
     }
 
     fun currentConsecutiveElementalTurns(war: War): Int {

@@ -159,6 +159,37 @@ class MctsLethalTelemetryTest {
         }
     }
 
+    @Test
+    fun `elemental mage live observation records health versus max reachable damage`() {
+        MctsLethalTelemetry.clearDedupForTests()
+        val war = war(gameId = "elemental-lethal", enemyHealth = 4).apply {
+            addCard(faceAttacker("elemental-attacker", 4), me.playArea)
+        }
+        val root = java.nio.file.Files.createTempDirectory("mcts-elemental-lethal-").toFile()
+        val previousRoot = System.getProperty("hs.script.mcts-replay.dir")
+        try {
+            System.setProperty("hs.script.mcts-replay.dir", root.absolutePath)
+            val assessment = MctsLethalTelemetry.recordBeforeAttackDecision(
+                war = war,
+                strategy = "元素法 V1.3",
+                step = 3,
+                selectedAction = null,
+            )
+            val file = root.resolve("game-${war.me.gameId}-${war.startTime}/decisions.jsonl")
+            val text = file.readText()
+            assertEquals(4, assessment.enemyHeroHealth)
+            assertEquals(4, assessment.totalAttack)
+            assertTrue(assessment.canLethal)
+            assertTrue(text.contains("\"strategy\":\"元素法 V1.3\""))
+            assertTrue(text.contains("\"totalAttack\":4"))
+            assertTrue(text.contains("\"enemyHeroHealth\":4"))
+        } finally {
+            if (previousRoot == null) System.clearProperty("hs.script.mcts-replay.dir")
+            else System.setProperty("hs.script.mcts-replay.dir", previousRoot)
+            root.deleteRecursively()
+        }
+    }
+
     private fun war(gameId: String = "lethal-game", enemyHealth: Int = 30): War = War(false).apply {
         startTime = 123L
         me = Player(playerId = "me", gameId = gameId, war = this)
