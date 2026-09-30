@@ -46,19 +46,25 @@ class PirateLethalTelemetryTest {
     }
 
     @Test
-    fun `taunt lifesteal healing impact is measured from legal simulation`() {
+    fun `opponent taunt lifesteal healing is subtracted from reachable net damage`() {
         val war = testWar(mana = 0, enemyHealth = 20)
         val hero = hero("MY_HERO", health = 20).apply { damage = 6 }
-        val attacker = minion("LIFESTEAL_ATTACKER", 4, exhausted = false).apply { isLifesteal = true }
-        val taunt = minion("TAUNT_LIFE", 5, exhausted = false).apply { isTaunt = true }
+        val attacker = minion("ATTACKER", 4, exhausted = false).apply { health = 10 }
+        val taunt = minion("TAUNT_LIFE", 5, exhausted = false).apply {
+            isTaunt = true
+            isLifesteal = true
+        }
         war.addCard(hero, war.me.playArea)
         war.addCard(attacker, war.me.playArea)
         war.addCard(taunt, war.rival.playArea)
+        war.rival.playArea.hero?.let { it.damage = 6 }
 
         val result = PirateLethalAttackPolicy.telemetry(war)
 
-        assertTrue(result.tauntLifestealHealImpact >= 0)
+        assertEquals(5, result.opponentHeroHealImpact)
+        assertEquals(0, result.maxReachableNetFaceDamage)
         assertEquals(0, result.readyAttackDamage)
+        assertFalse(result.canLethal)
     }
 
     @Test

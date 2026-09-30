@@ -31,7 +31,7 @@ object PirateLethalAttackPolicy {
         val legalFaceSpellDamage: Int,
         val tauntCount: Int,
         val tauntBarrierHealth: Int,
-        val tauntLifestealHealImpact: Int,
+        val opponentHeroHealImpact: Int,
         val unknownDamageEffects: List<String>,
         val maxReachableNetFaceDamage: Int,
         val canLethal: Boolean,
@@ -43,7 +43,7 @@ object PirateLethalAttackPolicy {
             "legalFaceSpellDamage" to legalFaceSpellDamage,
             "tauntCount" to tauntCount,
             "tauntBarrierHealth" to tauntBarrierHealth,
-            "tauntLifestealHealImpact" to tauntLifestealHealImpact,
+            "opponentHeroHealImpact" to opponentHeroHealImpact,
             "unknownDamageEffects" to unknownDamageEffects,
             "maxReachableNetFaceDamage" to maxReachableNetFaceDamage,
             "canLethal" to canLethal,
@@ -64,14 +64,18 @@ object PirateLethalAttackPolicy {
         val attackActions = attackActions(war)
         val faceActions = attackActions.filter { isFaceAction(it, war) && isLegalFaceAction(it, war) }
         val readyAttackDamage = faceActions.sumOf { attackDamage(it, war) }
-        val tauntHealing = tauntAttackHealing(war, attackActions, taunts)
+        val tauntHealing = opponentHeroHealFromTaunt(war, attackActions, taunts)
         val spellResult = spellDamage(war)
-        val maxDamage = readyAttackDamage + spellResult.damage
-        val lethal = enemyHealth > 0 && maxDamage >= enemyHealth && spellResult.unknownEffects.isEmpty()
+        val unknownEffects = (spellResult.unknownEffects + tauntHealing.unknownEffects).distinct()
+        // Taunt-clearing attack sequences are intentionally not projected here:
+        // only legal face attacks are counted, so a taunt can never be silently
+        // cleared and followed by an optimistic face attack in the same estimate.
+        val maxDamage = (readyAttackDamage + spellResult.damage - tauntHealing.heal).coerceAtLeast(0)
+        val lethal = enemyHealth > 0 && maxDamage >= enemyHealth && unknownEffects.isEmpty()
         val reason = when {
             lethal -> "reachable-face-damage-confirmed"
             enemyHealth <= 0 -> "enemy-hero-already-dead"
-            spellResult.unknownEffects.isNotEmpty() -> "unknown-damage-effects-not-claimed"
+            unknownEffects.isNotEmpty() -> "unknown-damage-effects-not-claimed"
             taunts.isNotEmpty() && readyAttackDamage == 0 -> "taunt-blocks-face-attacks"
             maxDamage == 0 -> "no-reachable-face-damage"
             else -> "reachable-damage-below-health"
@@ -82,8 +86,8 @@ object PirateLethalAttackPolicy {
             spellResult.damage,
             taunts.size,
             taunts.sumOf { it.blood().coerceAtLeast(0) },
-            tauntHealing,
-            spellResult.unknownEffects,
+            tauntHealing.heal,
+            unknownEffects,
             maxDamage,
             lethal,
             reason,
@@ -229,14 +233,51 @@ object PirateLethalAttackPolicy {
     private fun isLegalFaceAction(action: AttackAction, war: War): Boolean =
         CardUtil.getTauntCards(war.rival.playArea.cards, false).isEmpty()
 
-    private fun tauntAttackHealing(war: War, actions: List<AttackAction>, taunts: List<club.xiaojiawei.hsscriptcardsdk.bean.Card>): Int {
-        if (taunts.isEmpty()) return 0
-        val before = war.me.playArea.hero?.blood() ?: return 0
-        return actions.filter { action -> taunts.any { it.entityId == action.targetEntityId } }
-            .mapNotNull { action ->
-                val simulated = runCatching { war.clone().also { action.simulate.accept(it) } }.getOrNull() ?: return@mapNotNull null
-                ((simulated.me.playArea.hero?.blood() ?: before) - before).coerceAtLeast(0)
-            }.maxOrNull() ?: 0
+    private data class OpponentHeroHealResult(val heal: Int, val unknownEffects: List<String>)
+
+    /**
+     * A lifesteal taunt heals its own hero from the retaliation damage it
+     * deals, not from our attacker's lifesteal flag.  The generic attack
+     * simulator currently models the combat damage but does not apply that
+     * opposing-hero heal, so apply only that bounded effect on the clone used
+     * for telemetry.  If the action cannot be replayed on a clone, report the
+     * effect as unknown instead of claiming lethal optimistically.
+     */
+    private fun opponentHeroHealFromTaunt(
+        war: War,
+        actions: List<AttackAction>,
+        taunts: List<club.xiaojiawei.hsscriptcardsdk.bean.Card>,
+    ): OpponentHeroHealResult {
+        if (taunts.isEmpty()) return OpponentHeroHealResult(0, emptyList())
+        val candidates = actions.filter { action -> taunts.any { it.entityId == action.targetEntityId } }
+        if (candidates.isEmpty()) return OpponentHeroHealResult(0, emptyList())
+        val impacts = mutableListOf<Int>()
+        val unknown = mutableListOf<String>()
+        candidates.forEach { action ->
+            val taunt = taunts.firstOrNull { it.entityId == action.targetEntityId }
+                ?: return@forEach
+            if (!taunt.isLifesteal) return@forEach
+            val creator = action.creator
+            val beforeAttackerDamage = creator?.damage ?: 0
+            val simulated = runCatching { war.clone().also { action.simulate.accept(it) } }.getOrNull()
+            if (simulated == null) {
+                unknown += "opponent-taunt-lifesteal:${taunt.cardId}:clone-failed"
+                return@forEach
+            }
+            val simulatedAttacker = creator?.entityId?.let { simulated.cardMap[it] }
+            val retaliation = ((simulatedAttacker?.damage ?: beforeAttackerDamage) - beforeAttackerDamage).coerceAtLeast(0)
+            val enemyHero = simulated.rival.playArea.hero
+            if (enemyHero == null) {
+                unknown += "opponent-taunt-lifesteal:${taunt.cardId}:missing-enemy-hero"
+                return@forEach
+            }
+            val beforeHeroDamage = enemyHero.damage
+            // Lifesteal restores hero health; damage is the model's inverse
+            // representation of missing health.
+            enemyHero.damage = (beforeHeroDamage - retaliation).coerceAtLeast(0)
+            impacts += (enemyHero.blood() - (war.rival.playArea.hero?.blood() ?: enemyHero.blood())).coerceAtLeast(0)
+        }
+        return OpponentHeroHealResult(impacts.maxOrNull() ?: 0, unknown.distinct())
     }
 
     private fun isFaceAction(action: AttackAction, war: War): Boolean {
