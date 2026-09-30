@@ -5,7 +5,9 @@ import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.War
+import club.xiaojiawei.hsscriptcardsdk.cardparser.ParsedCardActionFactory
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
+import club.xiaojiawei.hsscriptcardsdk.util.CardUtil
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -190,6 +192,73 @@ class MctsLethalTelemetryTest {
         }
     }
 
+    @Test
+    fun `shared telemetry includes legal face spell damage`() {
+        val war = war(enemyHealth = 6)
+        val fireball = Card(
+            requireNotNull(ParsedCardActionFactory.getOrCreate("CORE_CS2_029"))
+                .invoke(),
+        ).apply {
+            entityId = "fireball-entity"
+            cardId = "CORE_CS2_029"
+            cardType = CardTypeEnum.SPELL
+            cost = 2
+            action.belongCard = this
+        }
+        war.me.resources = 2
+        war.addCard(fireball, war.me.handArea)
+
+        val assessment = MctsLethalTelemetry.assess(war)
+
+        assertEquals(6, assessment.legalFaceSpellDamage)
+        assertEquals(6, assessment.maxReachableNetFaceDamage)
+        assertTrue(assessment.canLethal)
+    }
+
+    @Test
+    fun `shared telemetry reports enemy lifesteal taunt healing`() {
+        val war = war(enemyHealth = 20)
+        war.rival.playArea.hero?.let { it.damage = 6 }
+        val taunt = card("lifesteal-taunt", CardTypeEnum.MINION, 5).apply {
+            health = 6
+            isTaunt = true
+            isLifesteal = true
+        }
+        val attacker = Card(CombatAction(taunt.entityId)).apply {
+            entityId = "combat-attacker"
+            cardId = "combat-attacker"
+            cardType = CardTypeEnum.MINION
+            atc = 4
+            health = 10
+            isExhausted = false
+        }
+        attacker.action.belongCard = attacker
+        war.addCard(taunt, war.rival.playArea)
+        war.addCard(attacker, war.me.playArea)
+
+        val assessment = MctsLethalTelemetry.assess(war)
+
+        assertEquals(5, assessment.opponentHeroHealImpact)
+        assertEquals(0, assessment.maxReachableNetFaceDamage)
+        assertFalse(assessment.canLethal)
+    }
+
+    @Test
+    fun `shared telemetry refuses unknown damage effect`() {
+        val war = war(enemyHealth = 1)
+        val unknown = card("unknown-damage", CardTypeEnum.SPELL, 0).apply {
+            cost = 1
+            isUncertain = true
+        }
+        war.me.resources = 1
+        war.addCard(unknown, war.me.handArea)
+
+        val assessment = MctsLethalTelemetry.assess(war)
+
+        assertTrue(assessment.unknownDamageEffects.contains("unknown-damage"))
+        assertFalse(assessment.canLethal)
+    }
+
     private fun war(gameId: String = "lethal-game", enemyHealth: Int = 30): War = War(false).apply {
         startTime = 123L
         me = Player(playerId = "me", gameId = gameId, war = this)
@@ -231,7 +300,7 @@ class MctsLethalTelemetryTest {
 
     private fun faceAttackAction(): CardAction = FixtureAction(face = true)
 
-    private class FixtureAction(
+    private open class FixtureAction(
         private val face: Boolean,
         private val targetId: String? = null,
     ) : CardAction(createDefaultAction = false) {
@@ -262,5 +331,22 @@ class MctsLethalTelemetryTest {
         override fun execChooseOne(index: Int): Boolean = true
         override fun execForge(): Boolean = true
         override fun createNewInstance(): CardAction = this
+    }
+
+    private class CombatAction(private val targetId: String) : FixtureAction(face = false, targetId = targetId) {
+        override fun generateAttackActions(war: War, player: Player): List<AttackAction> = listOf(
+            AttackAction(
+                {},
+                { simulated ->
+                    val attacker = belongCard?.entityId?.let { simulated.cardMap[it] }
+                    val target = simulated.cardMap[targetId]
+                    if (attacker != null && target != null) CardUtil.simulateAttack(simulated, attacker, target)
+                },
+                belongCard,
+                targetEntityId = targetId,
+            ),
+        )
+
+        override fun createNewInstance(): CardAction = CombatAction(targetId)
     }
 }

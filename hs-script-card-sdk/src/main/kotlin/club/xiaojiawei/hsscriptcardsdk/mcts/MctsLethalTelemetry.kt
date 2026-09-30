@@ -5,7 +5,11 @@ import club.xiaojiawei.hsscriptcardsdk.bean.Action
 import club.xiaojiawei.hsscriptcardsdk.bean.AttackAction
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.War
+import club.xiaojiawei.hsscriptcardsdk.data.CardInfoData
+import club.xiaojiawei.hsscriptcardsdk.enums.CardActionEnum
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
+import club.xiaojiawei.hsscriptcardsdk.util.CardUtil
+import kotlin.math.max
 
 /**
  * Read-only lethal telemetry for the common MCTS controller.
@@ -26,6 +30,10 @@ object MctsLethalTelemetry {
         val attackableAttackers: Int,
         val faceAttackers: Int,
         val tauntCount: Int,
+        val legalFaceSpellDamage: Int,
+        val opponentHeroHealImpact: Int,
+        val unknownDamageEffects: List<String>,
+        val maxReachableNetFaceDamage: Int,
         val stateKey: String,
     )
 
@@ -83,7 +91,11 @@ object MctsLethalTelemetry {
             if (card.cardType === CardTypeEnum.HERO) heroAttack else card.atc.coerceAtLeast(0)
         }
         val enemyHeroHealth = rivalHero?.let { (it.bloodLimit() - it.damage).coerceAtLeast(0) } ?: 0
-        val canLethal = rivalHero != null && faceAttackers.isNotEmpty() && totalAttack >= enemyHeroHealth
+        val spellResult = spellDamage(war)
+        val tauntHeal = opponentHeroHealFromTaunt(war)
+        val unknown = (spellResult.unknownEffects + tauntHeal.unknownEffects).distinct()
+        val maxReachable = (totalAttack + spellResult.damage - tauntHeal.heal).coerceAtLeast(0)
+        val canLethal = rivalHero != null && maxReachable >= enemyHeroHealth && unknown.isEmpty()
         val decision = when (selectedAction) {
             is AttackAction -> if (isFace(selectedAction)) "HERO" else "TRADE"
             null -> "NONE"
@@ -93,6 +105,7 @@ object MctsLethalTelemetry {
             canLethal && selectedAction is AttackAction && decision == "HERO" -> "lethal-face-route-selected"
             canLethal && selectedAction is AttackAction && decision == "TRADE" -> "lethal-route-available-trade-selected"
             canLethal -> "lethal-route-available-non-attack-selected"
+            unknown.isNotEmpty() -> "unknown-damage-effects-not-claimed"
             faceAttackers.isEmpty() && tauntCount > 0 -> "taunt-blocks-face"
             faceAttackers.isEmpty() -> "no-current-face-attack"
             else -> "current-face-damage-below-health"
@@ -106,6 +119,10 @@ object MctsLethalTelemetry {
             attackableAttackers = attackableAttackers,
             faceAttackers = faceAttackers.size,
             tauntCount = tauntCount,
+            legalFaceSpellDamage = spellResult.damage,
+            opponentHeroHealImpact = tauntHeal.heal,
+            unknownDamageEffects = unknown,
+            maxReachableNetFaceDamage = maxReachable,
             stateKey = stateKey(war, faceAttackers),
         )
     }
@@ -134,6 +151,10 @@ object MctsLethalTelemetry {
                     "strategy" to strategy,
                     "step" to step,
                     "totalAttack" to assessment.totalAttack,
+                    "legalFaceSpellDamage" to assessment.legalFaceSpellDamage,
+                    "opponentHeroHealImpact" to assessment.opponentHeroHealImpact,
+                    "unknownDamageEffects" to assessment.unknownDamageEffects,
+                    "maxReachableNetFaceDamage" to assessment.maxReachableNetFaceDamage,
                     "enemyHeroHealth" to assessment.enemyHeroHealth,
                     "canLethal" to assessment.canLethal,
                     "decision" to assessment.decision,
@@ -146,7 +167,10 @@ object MctsLethalTelemetry {
             )
             log.info {
                 "MCTS_LETHAL_TELEMETRY strategy=$strategy step=$step " +
-                    "totalAttack=${assessment.totalAttack} " +
+                "totalAttack=${assessment.totalAttack} " +
+                    "legalFaceSpellDamage=${assessment.legalFaceSpellDamage} " +
+                    "opponentHeroHealImpact=${assessment.opponentHeroHealImpact} " +
+                    "maxReachableNetFaceDamage=${assessment.maxReachableNetFaceDamage} " +
                     "enemyHeroHealth=${assessment.enemyHeroHealth} " +
                     "canLethal=${assessment.canLethal} decision=${assessment.decision} " +
                     "reason=${assessment.reason}"
@@ -164,6 +188,70 @@ object MctsLethalTelemetry {
 
     /** Test-only reset that also makes isolated replay tests deterministic. */
     internal fun clearDedupForTests() = synchronized(emittedKeys) { emittedKeys.clear() }
+
+    private data class SpellDamageResult(val damage: Int, val unknownEffects: List<String>)
+    private data class OpponentHeroHealResult(val heal: Int, val unknownEffects: List<String>)
+
+    private fun spellDamage(war: War): SpellDamageResult {
+        val candidates = mutableListOf<Pair<Int, Int>>()
+        val unknown = mutableListOf<String>()
+        war.me.handArea.cards.forEach { card ->
+            if (card.cost < 0 || card.cost > war.me.usableResource) return@forEach
+            val damageText = CardUtil.getCardText(card.cardId)?.replace("$", "")?.let(CardUtil::getDamageValue)
+            if (card.cardType !== CardTypeEnum.SPELL && damageText == null) return@forEach
+            val actions = runCatching { card.action.generatePlayActions(war, war.me) }.getOrDefault(emptyList())
+            val damage = actions.mapIndexedNotNull { index, _ ->
+                val simulated = runCatching { war.clone() }.getOrNull() ?: return@mapIndexedNotNull null
+                val clonedCard = simulated.me.handArea.findByEntityId(card.entityId)
+                    ?: return@mapIndexedNotNull null
+                val clonedAction = runCatching {
+                    clonedCard.action.generatePlayActions(simulated, simulated.me).getOrNull(index)
+                }.getOrNull() ?: return@mapIndexedNotNull null
+                runCatching { clonedAction.simulate.accept(simulated) }.getOrNull()
+                    ?: return@mapIndexedNotNull null
+                val before = war.rival.playArea.hero?.blood() ?: return@mapIndexedNotNull null
+                val after = simulated.rival.playArea.hero?.blood() ?: return@mapIndexedNotNull null
+                (before - after).takeIf { it > 0 }
+            }.maxOrNull()
+            val parsedRivalEffect = CardInfoData.parsePlayAction(card.cardId).contains(CardActionEnum.POINT_RIVAL)
+            if (damage != null) candidates += card.cost to damage
+            else if (damageText != null && parsedRivalEffect) candidates += card.cost to damageText
+            else if (damageText != null || card.isUncertain) unknown += card.cardId
+        }
+        val maxMana = war.me.usableResource.coerceAtLeast(0)
+        val dp = IntArray(maxMana + 1)
+        candidates.forEach { (cost, damage) ->
+            for (mana in maxMana downTo cost) dp[mana] = max(dp[mana], dp[mana - cost] + damage)
+        }
+        return SpellDamageResult(dp.maxOrNull() ?: 0, unknown.distinct())
+    }
+
+    private fun opponentHeroHealFromTaunt(war: War): OpponentHeroHealResult {
+        val taunts = war.rival.playArea.cards.filter { it.isTaunt && it.canBeAttacked() && it.isLifesteal }
+        if (taunts.isEmpty()) return OpponentHeroHealResult(0, emptyList())
+        val unknown = mutableListOf<String>()
+        val impacts = mutableListOf<Int>()
+        val rivalHeroBefore = war.rival.playArea.hero?.blood() ?: return OpponentHeroHealResult(0, listOf("opponent-taunt-lifesteal:missing-enemy-hero"))
+        war.me.playArea.cards.filter { it.canAttack() }.forEach { attacker ->
+            val action = runCatching { attacker.action.generateAttackActions(war, war.me) }
+                .getOrDefault(emptyList())
+                .firstOrNull { candidate -> taunts.any { it.entityId == candidate.targetEntityId } }
+                ?: return@forEach
+            val beforeDamage = attacker.damage
+            val simulated = runCatching { war.clone().also { action.simulate.accept(it) } }.getOrNull()
+            if (simulated == null) {
+                unknown += "opponent-taunt-lifesteal:clone-failed"
+                return@forEach
+            }
+            val clonedAttacker = simulated.cardMap[attacker.entityId]
+            val retaliation = ((clonedAttacker?.damage ?: beforeDamage) - beforeDamage).coerceAtLeast(0)
+            val clonedHero = simulated.rival.playArea.hero
+                ?: return@forEach
+            clonedHero.damage = (clonedHero.damage - retaliation).coerceAtLeast(0)
+            impacts += (clonedHero.blood() - rivalHeroBefore).coerceAtLeast(0)
+        }
+        return OpponentHeroHealResult(impacts.maxOrNull() ?: 0, unknown.distinct())
+    }
 
     private fun gameKey(war: War): String =
         war.me.gameId.takeIf { it.isNotBlank() } ?: war.startTime.toString()
