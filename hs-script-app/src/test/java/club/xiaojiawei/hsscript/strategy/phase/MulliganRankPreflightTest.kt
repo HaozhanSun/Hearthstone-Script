@@ -57,6 +57,34 @@ class MulliganRankPreflightTest {
     }
 
     @Test
+    fun `resolved callback without explicit rank authorization still fails closed`() {
+        val scheduler = ManualScheduler()
+        var surrenderCount = 0
+        var continueCount = 0
+        val preflight = MulliganRankPreflight(
+            config = MulliganRankPreflightConfig(initialDelayMs = 7_000, maxAttempts = 1),
+            scheduler = scheduler,
+            isEligible = { true },
+            inspect = { null },
+            isResolved = { true },
+            provider = { "PADDLEX" },
+            onSurrender = { result ->
+                assertEquals("rank-ocr-unresolved", result.ruleId)
+                surrenderCount++
+            },
+            onContinue = { continueCount++ },
+        )
+
+        preflight.start()
+        scheduler.runScheduledAfter(7_000)
+        scheduler.runWorker()
+
+        assertEquals(1, surrenderCount)
+        assertEquals(0, continueCount)
+        assertEquals(MulliganRankPreflightState.SURRENDER_REQUESTED, preflight.snapshot().state)
+    }
+
+    @Test
     fun `retries after seven second grace without another Power log line`() {
         val scheduler = ManualScheduler()
         val attempts = mutableListOf<Long>()

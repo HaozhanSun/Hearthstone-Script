@@ -9,6 +9,7 @@ import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator.changeCard
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
+import club.xiaojiawei.hsscript.status.surrender.SurrenderRuleResult
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
@@ -210,8 +211,23 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         rankPreflight?.cancel("replaced-by-new-input")
         rankPreflight = MulliganRankPreflight(
             isEligible = ::isRankPreflightEligible,
-            inspect = { SurrenderPolicy.evaluateCurrentRankBeforeMulligan() },
-            isResolved = { SurrenderPolicy.currentRankCheckCompleted() },
+            inspect = {
+                SurrenderPolicy.evaluateCurrentRankBeforeMulligan()
+                    ?: if (SurrenderPolicy.currentRankContinueAuthorized()) {
+                        SurrenderRuleResult(
+                            ruleId = "rank-continue-authorized",
+                            matched = true,
+                            shouldSurrender = false,
+                            reason = "confirmed-silver-target",
+                        )
+                    } else {
+                        null
+                    }
+            },
+            // A null inspection result is never enough to continue: it can
+            // mean OCR is unavailable, the policy is waiting, or a stale
+            // completion flag leaked from another lifecycle.
+            isResolved = { false },
             provider = {
                 if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
             },

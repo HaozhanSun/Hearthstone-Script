@@ -161,6 +161,8 @@ object SurrenderPolicy {
     private var earlySurrenderTriggered = false
     @Volatile
     private var rankCheckCompleted = false
+    @Volatile
+    private var rankContinueAuthorized = false
     private var rankInspectionAttempts = 0
     private var lastRankInspectionAt = 0L
     private var rankInspectionEligibleAt = 0L
@@ -307,6 +309,7 @@ object SurrenderPolicy {
         lastPreMulliganHeroName = ""
         earlySurrenderTriggered = false
         rankCheckCompleted = false
+        rankContinueAuthorized = false
         rankInspectionAttempts = 0
         lastRankInspectionAt = 0L
         rankInspectionEligibleAt = 0L
@@ -925,6 +928,7 @@ object SurrenderPolicy {
                 }
                 return winRateResult
             }
+            rankContinueAuthorized = true
             log.info {
                 "RANK_POLICY_CONTINUE stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
                     "rank=$rank tier=${detection.tier.name} reason=rank-is-safe-and-win-rate-guard-clear"
@@ -1025,6 +1029,9 @@ object SurrenderPolicy {
 
     /** True when a rank read already produced a final safe or unsafe result. */
     internal fun currentRankCheckCompleted(): Boolean = rankCheckCompleted
+
+    /** True only after the current game positively resolved Silver 5 or 10. */
+    internal fun currentRankContinueAuthorized(): Boolean = rankContinueAuthorized
 
     data class WinRateSnapshot(
         val games: Int,

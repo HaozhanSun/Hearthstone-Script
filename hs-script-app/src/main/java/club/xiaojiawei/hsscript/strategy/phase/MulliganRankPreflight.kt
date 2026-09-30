@@ -189,7 +189,7 @@ internal class MulliganRankPreflight(
                 }
             }
 
-            if (!timeout && result == null && isResolved()) {
+            if (!timeout && result?.ruleId == "rank-continue-authorized") {
                 state = MulliganRankPreflightState.RESOLVED
                 log.info {
                     "MULLIGAN_RANK_PREFLIGHT_RESOLVED attempt=${context.attemptNumber} " +
