@@ -94,7 +94,11 @@ object MctsLethalTelemetry {
         val spellResult = spellDamage(war)
         val tauntHeal = opponentHeroHealFromTaunt(war)
         val unknown = (spellResult.unknownEffects + tauntHeal.unknownEffects).distinct()
-        val maxReachable = (totalAttack + spellResult.damage - tauntHeal.heal).coerceAtLeast(0)
+        // The taunt-heal value is diagnostic for a possible taunt attack. It
+        // is not part of the route being counted here: with an active Taunt,
+        // totalAttack contains no face attacks, so a direct spell route must
+        // not pay a hypothetical retaliation-heal cost.
+        val maxReachable = (totalAttack + spellResult.damage).coerceAtLeast(0)
         val canLethal = rivalHero != null && maxReachable >= enemyHeroHealth && unknown.isEmpty()
         val decision = when (selectedAction) {
             is AttackAction -> if (isFace(selectedAction)) "HERO" else "TRADE"

@@ -70,7 +70,10 @@ object PirateLethalAttackPolicy {
         // Taunt-clearing attack sequences are intentionally not projected here:
         // only legal face attacks are counted, so a taunt can never be silently
         // cleared and followed by an optimistic face attack in the same estimate.
-        val maxDamage = (readyAttackDamage + spellResult.damage - tauntHealing.heal).coerceAtLeast(0)
+        // The Taunt lifesteal value is a diagnostic for an optional Taunt
+        // attack, not a cost of a spell-only route. Since face attacks are
+        // excluded while Taunt is active, do not subtract hypothetical heal.
+        val maxDamage = (readyAttackDamage + spellResult.damage).coerceAtLeast(0)
         val lethal = enemyHealth > 0 && maxDamage >= enemyHealth && unknownEffects.isEmpty()
         val reason = when {
             lethal -> "reachable-face-damage-confirmed"

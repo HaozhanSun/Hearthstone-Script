@@ -206,6 +206,11 @@ class MctsLethalTelemetryTest {
             action.belongCard = this
         }
         war.me.resources = 2
+        war.addCard(card("lifesteal-taunt-for-spell", CardTypeEnum.MINION, 5).apply {
+            health = 5
+            isTaunt = true
+            isLifesteal = true
+        }, war.rival.playArea)
         war.addCard(fireball, war.me.handArea)
 
         val assessment = MctsLethalTelemetry.assess(war)
