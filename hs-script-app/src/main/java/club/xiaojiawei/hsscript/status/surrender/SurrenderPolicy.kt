@@ -813,10 +813,9 @@ object SurrenderPolicy {
             OpponentHeroInspectionState.WAITING_FOR_HERO,
             -> {
                 log.debug {
-                    "RANK_POLICY_WAITING_FOR_OPPONENT_HERO state=$opponentHeroInspectionState " +
-                        "action=WAIT rankDetector=false"
+                    "RANK_POLICY_PROBE_WITHOUT_OPPONENT_HERO state=$opponentHeroInspectionState " +
+                        "action=CONTINUE_RANK_PROBE rankDetector=true"
                 }
-                return null
             }
         }
         // Historical Power.log replay reconstructs the in-memory model but

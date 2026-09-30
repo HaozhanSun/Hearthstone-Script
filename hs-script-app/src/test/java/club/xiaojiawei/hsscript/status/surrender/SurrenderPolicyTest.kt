@@ -354,13 +354,16 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun unresolvedOpponentHeroWaitsAndNeverStartsRankDetector() {
+    fun unresolvedOpponentHeroDoesNotBlockRankGateLifecycle() {
         val war = warWithRivalHero("")
 
         SurrenderPolicy.resetForNewGame()
         assertNull(SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war))
         assertEquals(OpponentHeroInspectionState.WAITING_FOR_HERO, SurrenderPolicy.currentOpponentHeroInspectionState())
         assertNull(SurrenderPolicy.evaluateCurrentRankBeforeMulligan())
+        // Initial rank grace still prevents an immediate OCR call, but the
+        // unresolved opponent portrait must not permanently suppress the rank
+        // gate or make the preflight treat null as safe.
         assertEquals(0, SurrenderPolicy.rankDetectorInvocationCountForTest())
     }
 
