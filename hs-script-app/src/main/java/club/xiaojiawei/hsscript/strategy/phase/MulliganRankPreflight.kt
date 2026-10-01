@@ -1,5 +1,6 @@
 package club.xiaojiawei.hsscript.strategy.phase
 
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.status.surrender.SurrenderRuleResult
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
@@ -29,6 +30,24 @@ internal data class MulliganRankPreflightConfig(
         require(attemptTimeoutMs > 0)
     }
 
+    /**
+     * PaddleX may perform two serialized rank probes, each with a bounded
+     * queue wait and provider request. Do not let the older 5s task timeout
+     * cancel a valid cold start before the provider's own deadline.
+     */
+    internal fun effectiveAttemptTimeoutMs(provider: String, paddleXRequestTimeoutMs: Long): Long {
+        if (!provider.equals("PADDLEX", ignoreCase = true)) return attemptTimeoutMs
+        val requestBudget = paddleXRequestTimeoutMs.coerceAtLeast(1L)
+        val multiplier = 4L // two probes × (coordinator queue + provider request)
+        val safetyMarginMs = 1_000L
+        val paddlexBudget = if (requestBudget > (Long.MAX_VALUE - safetyMarginMs) / multiplier) {
+            Long.MAX_VALUE
+        } else {
+            requestBudget * multiplier + safetyMarginMs
+        }
+        return maxOf(attemptTimeoutMs, paddlexBudget)
+    }
+
     private companion object {
         fun property(name: String, default: Long): Long =
             System.getProperty(name)?.toLongOrNull()?.coerceAtLeast(0L) ?: default
@@ -41,12 +60,16 @@ internal data class MulliganRankPreflightConfig(
 internal interface MulliganRankPreflightScheduler {
     fun schedule(delayMs: Long, task: () -> Unit): ScheduledFuture<*>
 
+    fun scheduleTimeout(delayMs: Long, task: () -> Unit): ScheduledFuture<*> = schedule(delayMs, task)
+
     fun submit(task: () -> Unit): Future<*>
 }
 
 internal object ProductionMulliganRankPreflightScheduler : MulliganRankPreflightScheduler {
     override fun schedule(delayMs: Long, task: () -> Unit): ScheduledFuture<*> =
         EXTRA_THREAD_POOL.schedule({ task() }, delayMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+
+    override fun scheduleTimeout(delayMs: Long, task: () -> Unit): ScheduledFuture<*> = schedule(delayMs, task)
 
     override fun submit(task: () -> Unit): Future<*> = EXTRA_THREAD_POOL.submit { task() }
 }
@@ -62,6 +85,7 @@ internal object ProductionMulliganRankPreflightScheduler : MulliganRankPreflight
 internal class MulliganRankPreflight(
     private val config: MulliganRankPreflightConfig = MulliganRankPreflightConfig(),
     private val scheduler: MulliganRankPreflightScheduler = ProductionMulliganRankPreflightScheduler,
+    private val paddleXRequestTimeoutMs: () -> Long = OcrRuntime::paddleXRequestTimeoutMs,
     private val isEligible: () -> Boolean,
     private val inspect: () -> SurrenderRuleResult?,
     private val isResolved: () -> Boolean = { false },
@@ -122,6 +146,8 @@ internal class MulliganRankPreflight(
 
     private fun startAttempt(expectedGeneration: Long) {
         val attemptNumber: Int
+        lateinit var providerName: String
+        var attemptTimeoutMs = config.attemptTimeoutMs
         synchronized(lock) {
             if (expectedGeneration != generation || state == MulliganRankPreflightState.CANCELLED) return
             if (!isEligible()) {
@@ -135,39 +161,57 @@ internal class MulliganRankPreflight(
             attemptNumber = ++attempt
             state = MulliganRankPreflightState.RETRYING
             nextTask = null
+            providerName = provider()
+            attemptTimeoutMs = config.effectiveAttemptTimeoutMs(
+                providerName,
+                if (providerName.equals("PADDLEX", ignoreCase = true)) paddleXRequestTimeoutMs() else 0L,
+            )
             log.info {
                 "MULLIGAN_RANK_PREFLIGHT_RETRY attempt=$attemptNumber maxAttempts=${config.maxAttempts} " +
-                    "provider=${provider()} action=INSPECT pause=false"
+                    "provider=$providerName timeoutMs=$attemptTimeoutMs action=INSPECT pause=false"
             }
         }
 
-        val context = Attempt(expectedGeneration, attemptNumber)
+        val context = Attempt(expectedGeneration, attemptNumber, attemptTimeoutMs)
         synchronized(lock) {
             if (expectedGeneration != generation) return
             activeAttempt = context
             context.worker = scheduler.submit {
-                val result = runCatching { inspect() }
-                    .onFailure { error ->
+                if (!context.workerStarted.compareAndSet(false, true) || context.completed.get()) return@submit
+                var result: SurrenderRuleResult? = null
+                try {
+                    result = inspect()
+                } catch (error: Throwable) {
+                    if (OcrRuntime.isCancellation(error)) {
+                        log.info {
+                            "MULLIGAN_RANK_PREFLIGHT_CANCELLED attempt=$attemptNumber " +
+                                "provider=${provider()} reason=${error.javaClass.simpleName} action=NO_ACTION"
+                        }
+                    } else {
                         log.warn(error) {
                             "MULLIGAN_RANK_PREFLIGHT_ERROR attempt=$attemptNumber " +
                                 "provider=${provider()} reason=${error.javaClass.simpleName} " +
                                 "action=RETRY pause=false"
                         }
                     }
-                    .getOrNull()
-                complete(context, result, timeout = false)
+                } finally {
+                    complete(context, result, timeout = context.timeoutRequested.get())
+                }
             }
-            context.timeout = scheduler.schedule(config.attemptTimeoutMs) {
-                if (!context.completed.compareAndSet(false, true)) return@schedule
+            context.timeout = scheduler.scheduleTimeout(attemptTimeoutMs) {
+                if (context.completed.get()) return@scheduleTimeout
+                context.timeoutRequested.set(true)
                 context.worker?.cancel(true)
-                complete(context, null, timeout = true)
+                // If cancellation won before the task entered its body there
+                // will be no worker finally-block to finish this attempt.
+                if (!context.workerStarted.get()) complete(context, null, timeout = true)
             }
         }
     }
 
     private fun complete(context: Attempt, result: SurrenderRuleResult?, timeout: Boolean) {
         synchronized(lock) {
-            if (context.completed.get() && !timeout) return
+            if (!context.completed.compareAndSet(false, true)) return
             if (context.expectedGeneration != generation || activeAttempt !== context) return
             context.timeout?.cancel(false)
             activeAttempt = null
@@ -184,7 +228,7 @@ internal class MulliganRankPreflight(
             if (timeout) {
                 log.warn {
                     "MULLIGAN_RANK_PREFLIGHT_TIMEOUT attempt=${context.attemptNumber} " +
-                        "timeoutMs=${config.attemptTimeoutMs} provider=${provider()} " +
+                    "timeoutMs=${context.timeoutMs} provider=${provider()} " +
                         "action=RETRY pause=false"
                 }
             }
@@ -242,6 +286,7 @@ internal class MulliganRankPreflight(
         nextTask?.cancel(true)
         nextTask = null
         activeAttempt?.let { context ->
+            context.completed.set(true)
             context.timeout?.cancel(true)
             context.worker?.cancel(true)
         }
@@ -251,7 +296,10 @@ internal class MulliganRankPreflight(
     private class Attempt(
         val expectedGeneration: Long,
         val attemptNumber: Int,
+        val timeoutMs: Long,
         val completed: AtomicBoolean = AtomicBoolean(false),
+        val workerStarted: AtomicBoolean = AtomicBoolean(false),
+        val timeoutRequested: AtomicBoolean = AtomicBoolean(false),
         var worker: Future<*>? = null,
         var timeout: ScheduledFuture<*>? = null,
     )

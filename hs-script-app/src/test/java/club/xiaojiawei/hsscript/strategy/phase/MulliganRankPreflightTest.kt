@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test
 import java.awt.image.BufferedImage
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Delayed
 import java.util.concurrent.Future
 import java.util.concurrent.ScheduledFuture
@@ -148,6 +149,7 @@ class MulliganRankPreflightTest {
                 attemptTimeoutMs = 5_000,
             ),
             scheduler = scheduler,
+            paddleXRequestTimeoutMs = { 1_000L },
             isEligible = { true },
             inspect = { error("slow OCR should be cancelled before returning") },
             provider = { "PADDLEX" },
@@ -169,6 +171,150 @@ class MulliganRankPreflightTest {
     }
 
     @Test
+    fun `cold PaddleX rank read lasting longer than five seconds is not preempted`() {
+        val scheduler = ManualScheduler()
+        var continued = 0
+        var attempts = 0
+        val preflight = MulliganRankPreflight(
+            config = MulliganRankPreflightConfig(
+                initialDelayMs = 7_000,
+                maxAttempts = 1,
+                attemptTimeoutMs = 5_000,
+            ),
+            scheduler = scheduler,
+            paddleXRequestTimeoutMs = { 10_000L },
+            isEligible = { true },
+            inspect = {
+                attempts++
+                SurrenderRuleResult(
+                    ruleId = "rank-continue-authorized",
+                    matched = true,
+                    shouldSurrender = false,
+                    reason = "rank=10",
+                    blocksAutomaticSurrender = true,
+                )
+            },
+            provider = { "PADDLEX" },
+            onSurrender = { error("resolved rank must not surrender") },
+            onContinue = { continued++ },
+        )
+
+        preflight.start()
+        scheduler.runScheduledAfter(7_000)
+        assertEquals(41_000L, scheduler.nextTimeoutDelayMs())
+        scheduler.runWorker(elapsedAfterStartMs = 9_000L)
+
+        assertEquals(1, attempts)
+        assertEquals(1, continued)
+        assertEquals(MulliganRankPreflightState.RESOLVED, preflight.snapshot().state)
+    }
+
+    @Test
+    fun `timeout before worker starts cannot overlap a retry with the cancelled attempt`() {
+        val scheduler = ManualScheduler()
+        var attempts = 0
+        var continued = 0
+        val preflight = MulliganRankPreflight(
+            config = MulliganRankPreflightConfig(
+                initialDelayMs = 7_000,
+                retryIntervalMs = 7_000,
+                maxAttempts = 2,
+                attemptTimeoutMs = 5_000,
+            ),
+            scheduler = scheduler,
+            paddleXRequestTimeoutMs = { 1_000L },
+            isEligible = { true },
+            inspect = {
+                attempts++
+                SurrenderRuleResult(
+                    ruleId = "rank-continue-authorized",
+                    matched = true,
+                    shouldSurrender = false,
+                    reason = "rank=10",
+                    blocksAutomaticSurrender = true,
+                )
+            },
+            provider = { "PADDLEX" },
+            onSurrender = { error("resolved rank must not surrender") },
+            onContinue = { continued++ },
+        )
+
+        preflight.start()
+        scheduler.runScheduledAfter(7_000)
+        scheduler.runTimeout()
+        scheduler.runScheduledAfter(7_000)
+        scheduler.runWorker()
+
+        assertEquals(1, attempts, "the timed-out queued worker must not later inspect rank")
+        assertEquals(1, continued)
+        assertEquals(MulliganRankPreflightState.RESOLVED, preflight.snapshot().state)
+    }
+
+    @Test
+    fun `timed out in-flight worker exits before the retry is scheduled`() {
+        val scheduler = ManualScheduler()
+        val workerEntered = CountDownLatch(1)
+        var inspectCalls = 0
+        var continued = 0
+        val preflight = MulliganRankPreflight(
+            config = MulliganRankPreflightConfig(
+                initialDelayMs = 7_000,
+                retryIntervalMs = 7_000,
+                maxAttempts = 2,
+                attemptTimeoutMs = 5_000,
+            ),
+            scheduler = scheduler,
+            paddleXRequestTimeoutMs = { 1_000L },
+            isEligible = { true },
+            inspect = {
+                inspectCalls++
+                if (inspectCalls == 1) {
+                    workerEntered.countDown()
+                    try {
+                        check(CountDownLatch(1).await(3, TimeUnit.SECONDS)) {
+                            "timed rank worker was not interrupted"
+                        }
+                    } catch (interrupted: InterruptedException) {
+                        throw club.xiaojiawei.hsscript.ocr.PaddleXOcrCancelledException(
+                            "rank preflight timed out",
+                            interrupted,
+                        )
+                    }
+                    null
+                } else {
+                    SurrenderRuleResult(
+                        ruleId = "rank-continue-authorized",
+                        matched = true,
+                        shouldSurrender = false,
+                        reason = "rank=10",
+                        blocksAutomaticSurrender = true,
+                    )
+                }
+            },
+            provider = { "PADDLEX" },
+            onSurrender = { error("resolved rank must not surrender") },
+            onContinue = { continued++ },
+        )
+
+        preflight.start()
+        scheduler.runScheduledAfter(7_000)
+        val worker = scheduler.runWorkerAsync()
+        assertTrue(workerEntered.await(1, TimeUnit.SECONDS))
+        scheduler.runTimeout()
+        worker.join(1_000)
+
+        assertFalse(worker.isAlive, "cancelled PaddleX worker must unwind before retry")
+        assertEquals(MulliganRankPreflightState.WAITING_FOR_RANK, preflight.snapshot().state)
+        assertEquals(1, inspectCalls)
+        scheduler.runScheduledAfter(7_000)
+        scheduler.runWorker()
+
+        assertEquals(2, inspectCalls)
+        assertEquals(1, continued)
+        assertEquals(MulliganRankPreflightState.RESOLVED, preflight.snapshot().state)
+    }
+
+    @Test
     fun `empty unknown and exception reads exhaust into surrender`() {
         val outcomes = listOf("empty", "UNKNOWN", "PaddleOCR exception")
         outcomes.forEach { outcome ->
@@ -183,6 +329,7 @@ class MulliganRankPreflightTest {
                     attemptTimeoutMs = 5_000,
                 ),
                 scheduler = scheduler,
+                paddleXRequestTimeoutMs = { 1_000L },
                 isEligible = { true },
                 inspect = {
                     attempts++
@@ -280,6 +427,35 @@ class MulliganRankPreflightTest {
         assertFalse(PauseStatus.isPause)
     }
 
+    @Test
+    fun `phase exit during active rank inspection suppresses all callbacks`() {
+        val scheduler = ManualScheduler()
+        lateinit var preflight: MulliganRankPreflight
+        var surrenderCount = 0
+        var continueCount = 0
+        preflight = MulliganRankPreflight(
+            config = MulliganRankPreflightConfig(initialDelayMs = 7_000, maxAttempts = 2),
+            scheduler = scheduler,
+            paddleXRequestTimeoutMs = { 1_000L },
+            isEligible = { true },
+            inspect = {
+                preflight.cancel("phase-transition")
+                null
+            },
+            provider = { "PADDLEX" },
+            onSurrender = { surrenderCount++ },
+            onContinue = { continueCount++ },
+        )
+
+        preflight.start()
+        scheduler.runScheduledAfter(7_000)
+        scheduler.runWorker()
+
+        assertEquals(MulliganRankPreflightState.CANCELLED, preflight.snapshot().state)
+        assertEquals(0, surrenderCount)
+        assertEquals(0, continueCount)
+    }
+
     private class ManualScheduler : MulliganRankPreflightScheduler {
         private data class Entry(
             val dueAt: Long,
@@ -298,8 +474,11 @@ class MulliganRankPreflightTest {
 
         override fun schedule(delayMs: Long, task: () -> Unit): ScheduledFuture<*> {
             scheduledCount++
-            return add(delayMs, if (delayMs == 5_000L) Kind.TIMEOUT else Kind.SCHEDULED, task)
+            return add(delayMs, Kind.SCHEDULED, task)
         }
+
+        override fun scheduleTimeout(delayMs: Long, task: () -> Unit): ScheduledFuture<*> =
+            add(delayMs, Kind.TIMEOUT, task)
 
         override fun submit(task: () -> Unit): Future<*> = add(0, Kind.WORKER, task)
 
@@ -310,12 +489,28 @@ class MulliganRankPreflightTest {
             run(entry)
         }
 
-        fun runWorker() {
+        fun nextTimeoutDelayMs(): Long = entries.firstOrNull {
+            it.kind == Kind.TIMEOUT && !it.future.isCancelled && !it.future.isDone
+        }?.let { it.dueAt - now } ?: error("no pending timeout")
+
+        fun runWorker(elapsedAfterStartMs: Long = 0L) {
             val entry = entries.firstOrNull {
                 it.kind == Kind.WORKER && !it.future.isCancelled && !it.future.isDone
             }
                 ?: error("no worker task; entries=${entries.map { it.kind to it.dueAt }}")
+            now = maxOf(now, entry.dueAt + elapsedAfterStartMs)
             run(entry)
+        }
+
+        fun runWorkerAsync(): Thread {
+            val entry = entries.firstOrNull {
+                it.kind == Kind.WORKER && !it.future.isCancelled && !it.future.isDone
+            }
+                ?: error("no worker task; entries=${entries.map { it.kind to it.dueAt }}")
+            val worker = Thread({ run(entry) }, "mulligan-rank-preflight-test")
+            entry.future.workerThread = worker
+            worker.start()
+            return worker
         }
 
         fun runTimeout() {
@@ -343,6 +538,8 @@ class MulliganRankPreflightTest {
     private class ManualFuture : ScheduledFuture<Unit> {
         private var cancelled = false
         private var done = false
+        @Volatile
+        var workerThread: Thread? = null
 
         fun complete() {
             done = true
@@ -351,6 +548,7 @@ class MulliganRankPreflightTest {
         override fun cancel(mayInterruptIfRunning: Boolean): Boolean {
             cancelled = true
             done = true
+            if (mayInterruptIfRunning) workerThread?.interrupt()
             return true
         }
 

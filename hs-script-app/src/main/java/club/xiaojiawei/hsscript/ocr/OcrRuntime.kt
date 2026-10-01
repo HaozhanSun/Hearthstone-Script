@@ -38,6 +38,9 @@ object OcrRuntime {
 
     fun isLegacySelected(): Boolean = currentProvider() == OcrProviderKind.LEGACY
 
+    /** Request deadline used by the serialized provider bridge. */
+    internal fun paddleXRequestTimeoutMs(): Long = settingsProvider().timeoutMs.coerceAtLeast(1L)
+
     fun recognize(
         image: BufferedImage?,
         desc: String = "",
@@ -226,7 +229,7 @@ object OcrRuntime {
         }
     }
 
-    private fun isCancellation(error: Throwable): Boolean {
+    internal fun isCancellation(error: Throwable): Boolean {
         if (Thread.currentThread().isInterrupted) return true
         var current: Throwable? = error
         while (current != null) {

@@ -258,6 +258,13 @@ object CurrentRankDetector {
         )
     }.getOrElse { error ->
         val provider = if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
+        if (OcrRuntime.isCancellation(error)) {
+            log.info {
+                "RANK_OCR_CANCELLED provider=$provider trigger=$trigger phase=$phase " +
+                    "reason=${error.javaClass.simpleName} action=PROPAGATE_CANCELLATION"
+            }
+            throw error
+        }
         log.warn(error) {
             "RANK_OCR_FAILED provider=$provider trigger=$trigger phase=$phase " +
                 "unknownReason=${error.javaClass.simpleName}:${error.message ?: "no-message"}"
@@ -464,6 +471,13 @@ object CurrentRankDetector {
         Detection(rank, tier, ocrText, confidence, bounds)
     }.getOrElse { error ->
         val provider = if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
+        if (OcrRuntime.isCancellation(error)) {
+            log.info {
+                "RANK_OCR_CANCELLED provider=$provider trigger=$evidenceTrigger phase=$evidencePhase " +
+                    "reason=${error.javaClass.simpleName} action=PROPAGATE_CANCELLATION"
+            }
+            throw error
+        }
         log.warn(error) {
             "RANK_OCR_FAILED provider=$provider trigger=$evidenceTrigger phase=$evidencePhase confidence=unavailable " +
                 "unknownReason=${error.javaClass.simpleName}:${error.message ?: "no-message"}"
