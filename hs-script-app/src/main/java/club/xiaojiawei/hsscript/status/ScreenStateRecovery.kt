@@ -9,6 +9,8 @@ import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.strategy.mode.HubModeStrategy
 import club.xiaojiawei.hsscript.strategy.mode.LoginModeStrategy
+import club.xiaojiawei.hsscript.strategy.mode.MatchmakingDialogRecoveryPolicy
+import club.xiaojiawei.hsscript.strategy.mode.StartGameErrorDialogClassifier
 import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.MouseUtil
@@ -138,6 +140,15 @@ object ScreenStateRecovery {
         val mode: ModeEnum,
         val confidence: Int,
         val evidence: String,
+    )
+
+    internal data class StartGameErrorDialogProbe(
+        val state: MatchmakingDialogRecoveryPolicy.Probe,
+        val title: String = "",
+        val body: String = "",
+        val confirm: String = "",
+        val screenshot: String? = null,
+        val reason: String,
     )
 
     internal data class RecoveryTransitionForTest(
@@ -338,6 +349,76 @@ object ScreenStateRecovery {
             return InspectionResult.NO_ACTION
         }
         return if (apply(detection, recoveryToken)) InspectionResult.APPLIED else InspectionResult.NO_ACTION
+    }
+
+    /**
+     * Observe only the exact start-game error modal. This probe has no state
+     * transition or input side effect; missing capture/OCR evidence is UNKNOWN.
+     */
+    internal fun probeStartGameErrorDialogForMatchmaking(): StartGameErrorDialogProbe {
+        val tessData = File(TESS_DATA_PATH)
+        val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
+        if (!chiSim.isFile) {
+            return StartGameErrorDialogProbe(
+                MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+                reason = "missing-tessdata",
+            )
+        }
+        val gameWindow = resolveLiveGameWindow()
+            ?: return StartGameErrorDialogProbe(
+                MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+                reason = "game-window-unavailable",
+            )
+        val captureResult = if (RuntimeSafety.safeNative) {
+            MouseUtil.withRecoveryForeground(gameWindow) {
+                captureScreen(ScriptStatus.gameHWND ?: gameWindow, allowCachedGameRect = false)
+            }
+        } else {
+            MouseUtil.RecoveryForegroundResult(true, captureScreen(gameWindow, allowCachedGameRect = false))
+        }
+        if (!captureResult.foregroundConfirmed) {
+            return StartGameErrorDialogProbe(
+                MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+                reason = "foreground-unconfirmed",
+            )
+        }
+        val capture = captureResult.value
+            ?: return StartGameErrorDialogProbe(
+                MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+                reason = "capture-unavailable",
+            )
+
+        return runCatching {
+            val values = ScreenStateRoiSelector
+                .selectStartGameError(capture.image.width, capture.image.height)
+                .associate { roi ->
+                    log.info {
+                        "MATCHMAKING_ERROR_DIALOG_OCR_ROI name=${roi.name} " +
+                            "x=${roi.bounds.x} y=${roi.bounds.y} " +
+                            "w=${roi.bounds.width} h=${roi.bounds.height} space=capture-local"
+                    }
+                    roi.name to ocrScreenRoi(crop(capture.image, roi.bounds), tessData, targeted = true)
+                }
+            val title = values[ScreenStateRoiSelector.START_GAME_ERROR_TITLE_ROI].orEmpty()
+            val body = values[ScreenStateRoiSelector.START_GAME_ERROR_BODY_ROI].orEmpty()
+            val confirm = values[ScreenStateRoiSelector.START_GAME_ERROR_CONFIRM_ROI].orEmpty()
+            val state = StartGameErrorDialogClassifier.classify(title, body, confirm)
+            StartGameErrorDialogProbe(
+                state = state,
+                title = title,
+                body = body,
+                confirm = confirm,
+                screenshot = capture.file?.absolutePath,
+                reason = "ocr-complete",
+            )
+        }.getOrElse { error ->
+            log.warn(error) { "MATCHMAKING_ERROR_DIALOG_OCR_FAILED" }
+            StartGameErrorDialogProbe(
+                MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+                screenshot = capture.file?.absolutePath,
+                reason = "ocr-failed-${error.javaClass.simpleName}",
+            )
+        }
     }
 
     private fun captureScreen(

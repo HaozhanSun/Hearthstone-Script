@@ -9,6 +9,9 @@ internal object ScreenStateRoiSelector {
     const val RECONNECT_DIALOG_TITLE_ROI = "screen-state-reconnect-dialog-title"
     const val RECONNECT_DIALOG_STATUS_ROI = "screen-state-reconnect-dialog-status"
     const val RECONNECT_DIALOG_MESSAGE_ROI = "screen-state-reconnect-dialog-message"
+    const val START_GAME_ERROR_TITLE_ROI = "screen-state-start-game-error-title"
+    const val START_GAME_ERROR_BODY_ROI = "screen-state-start-game-error-body"
+    const val START_GAME_ERROR_CONFIRM_ROI = "screen-state-start-game-error-confirm"
 
     data class Roi(val name: String, val bounds: Rectangle)
 
@@ -55,6 +58,14 @@ internal object ScreenStateRoiSelector {
         NormalizedRoi(RECONNECT_DIALOG_MESSAGE_ROI, 0.300, 0.475, 0.750, 0.555),
     )
 
+    // Kept out of normal screen recovery's OCR pass: these three crops are
+    // probed only while matchmaking, before any ERROR_RECT click.
+    private val startGameErrorNormalized = listOf(
+        NormalizedRoi(START_GAME_ERROR_TITLE_ROI, 0.405, 0.345, 0.595, 0.425),
+        NormalizedRoi(START_GAME_ERROR_BODY_ROI, 0.285, 0.430, 0.715, 0.565),
+        NormalizedRoi(START_GAME_ERROR_CONFIRM_ROI, 0.425, 0.570, 0.575, 0.675),
+    )
+
     // Secondary probes are deliberately smaller than the old center crop.
     // The center crop covered most of the client and made every recovery
     // attempt pay for a slow OCR pass even when a screen-specific anchor was
@@ -96,6 +107,21 @@ internal object ScreenStateRoiSelector {
     fun selectTargeted(width: Int, height: Int): List<Roi> {
         if (width <= 0 || height <= 0) return emptyList()
         return targetedNormalized.map { roi ->
+            Roi(
+                roi.name,
+                Rectangle(
+                    (width * roi.left).toInt().coerceAtLeast(0),
+                    (height * roi.top).toInt().coerceAtLeast(0),
+                    ((width * roi.right).toInt() - (width * roi.left).toInt()).coerceAtLeast(1),
+                    ((height * roi.bottom).toInt() - (height * roi.top).toInt()).coerceAtLeast(1),
+                ),
+            )
+        }
+    }
+
+    fun selectStartGameError(width: Int, height: Int): List<Roi> {
+        if (width <= 0 || height <= 0) return emptyList()
+        return startGameErrorNormalized.map { roi ->
             Roi(
                 roi.name,
                 Rectangle(

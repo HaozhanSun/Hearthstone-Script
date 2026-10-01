@@ -9,6 +9,7 @@ import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
+import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
@@ -287,10 +288,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         captureMatchmakingCheckpoint(traceId, "after-final-start-click")
         if (abortMatchmakingIfGameStarted(traceId, "after-final-start-click")) return
         generateTimer(traceId)
-        log.info {
-            "MATCHMAKING_POPUP_WATCHDOG_SKIPPED reason=no-positive-dialog-evidence " +
-                "fallback=bounded-match-timeout trace=$traceId"
-        }
+        scheduleMatchmakingDialogRecovery(traceId)
     }
 
     private fun abortMatchmakingIfGameStarted(traceId: Long, stage: String): Boolean {
@@ -371,13 +369,13 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
     }
 
     /**
-     * A failed opponent connection can leave a modal confirmation dialog on
-     * top of the tournament screen long before the normal matchmaking timeout
-     * fires.  It is safe to probe this centered button while the mode is still
-     * TOURNAMENT, but never keep probing after a game starts.
+     * A failed start can leave the exact error modal above deck selection.
+     * Probe the live client and click the upstream ERROR_RECT only after a
+     * fresh capture positively matches the title, body, and confirm label.
      */
     private fun scheduleMatchmakingDialogRecovery(traceId: Long) {
         var attempts = 0
+        var priorClickSent = false
         lateinit var recoveryTask: ScheduledFuture<*>
         recoveryTask = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
             LRunnable {
@@ -389,32 +387,89 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                     recoveryTask.cancel(false)
                     return@LRunnable
                 }
-                attempts++
-                if (attempts > 20) {
-                    val evidence = UnknownStateScreenshot.capture(
-                        category = UnknownStateScreenshot.CATEGORY_POPUP_RECOVERY,
-                        trigger = "matchmaking-popup-recovery-exhausted",
-                        state = "mode=${Mode.currMode?.name ?: "NONE"}|attempts=$attempts",
-                        phase = "tournament-matchmaking",
-                        label = "popup-recovery-exhausted",
-                    )
-                    log.warn {
-                        "匹配入口弹窗恢复结束：未再检测到可处理对话框 " +
-                            "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
-                            "screenshotLink=${evidence?.link ?: "none"}"
+                val probe = ScreenStateRecovery.probeStartGameErrorDialogForMatchmaking()
+                val gameStarted = MatchmakingGuardPolicy.decide(liveGameEvidence()) ==
+                    MatchmakingGuardPolicy.Decision.ABORT_GAME_STARTED
+                val decision = MatchmakingDialogRecoveryPolicy.decide(
+                    context = MatchmakingDialogRecoveryPolicy.Context(
+                        paused = PauseStatus.isPause,
+                        tournamentMode = Mode.currMode === ModeEnum.TOURNAMENT,
+                        gameStarted = gameStarted,
+                    ),
+                    probe = probe.state,
+                    completedAttempts = attempts,
+                    priorClickSent = priorClickSent,
+                )
+                log.info {
+                    "MATCHMAKING_ERROR_DIALOG_PROBE trace=$traceId attempt=${attempts + 1} " +
+                        "state=${probe.state} reason=${probe.reason} action=${decision.action} " +
+                        "title=${probe.title.ifBlank { "<empty>" }} " +
+                        "body=${probe.body.ifBlank { "<empty>" }} " +
+                        "confirm=${probe.confirm.ifBlank { "<empty>" }} " +
+                        "screenshot=${probe.screenshot ?: "none"}"
+                }
+                when (decision.action) {
+                    MatchmakingDialogRecoveryPolicy.Action.CLICK_CONFIRM -> {
+                        if (abortMatchmakingIfGameStarted(traceId, "popup-recovery-before-error-click")) {
+                            recoveryTask.cancel(false)
+                            return@LRunnable
+                        }
+                        val accepted = MouseUtil.leftButtonClickForRecovery(ERROR_RECT.getCenterClickPos())
+                        attempts++
+                        priorClickSent = true
+                        log.warn {
+                            "MATCHMAKING_ERROR_DIALOG_CLICK trace=$traceId attempt=$attempts " +
+                                "inputAccepted=$accepted targetSystemConfirmed=false " +
+                                "rect=ERROR_RECT reason=${decision.reason}"
+                        }
                     }
-                    recoveryTask.cancel(false)
-                    return@LRunnable
-                }
-                if (abortMatchmakingIfGameStarted(traceId, "popup-recovery-before-error-click")) {
-                    recoveryTask.cancel(false)
-                    return@LRunnable
-                }
-                val accepted = clickMatchmakingControl(ERROR_RECT)
-                if (accepted || attempts == 1 || attempts % 5 == 0) {
-                    log.info {
-                        "MATCHMAKING_POPUP_RECOVERY trace=$traceId attempt=$attempts " +
-                            "accepted=$accepted"
+
+                    MatchmakingDialogRecoveryPolicy.Action.WAIT_AND_RETRY -> {
+                        attempts++
+                        log.warn {
+                            "MATCHMAKING_ERROR_DIALOG_WAIT trace=$traceId attempt=$attempts " +
+                                "reason=${decision.reason} input=none"
+                        }
+                    }
+
+                    MatchmakingDialogRecoveryPolicy.Action.CONFIRMED_DISMISSED -> {
+                        log.warn {
+                            "MATCHMAKING_ERROR_DIALOG_CONFIRMED trace=$traceId " +
+                                "evidence=fresh-post-click-visual-state input=none"
+                        }
+                        recoveryTask.cancel(false)
+                    }
+
+                    MatchmakingDialogRecoveryPolicy.Action.STOP_NOT_PRESENT -> {
+                        log.info {
+                            "MATCHMAKING_ERROR_DIALOG_NOT_PRESENT trace=$traceId " +
+                                "evidence=positive-non-error-screen input=none"
+                        }
+                        recoveryTask.cancel(false)
+                    }
+
+                    MatchmakingDialogRecoveryPolicy.Action.CANCEL -> {
+                        log.info {
+                            "MATCHMAKING_ERROR_DIALOG_CANCELLED trace=$traceId reason=${decision.reason} input=none"
+                        }
+                        recoveryTask.cancel(false)
+                    }
+
+                    MatchmakingDialogRecoveryPolicy.Action.EXHAUSTED -> {
+                        val evidence = UnknownStateScreenshot.capture(
+                            category = UnknownStateScreenshot.CATEGORY_POPUP_RECOVERY,
+                            trigger = "matchmaking-popup-recovery-exhausted",
+                            state = "mode=${Mode.currMode?.name ?: "NONE"}|attempts=$attempts",
+                            phase = "tournament-matchmaking",
+                            label = "popup-recovery-exhausted",
+                        )
+                        PauseStatus.setAutomaticPause(true)
+                        log.error {
+                            "MATCHMAKING_ERROR_DIALOG_EXHAUSTED trace=$traceId attempts=$attempts " +
+                                "pause=true dispatch=false input=none screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
+                                "screenshotLink=${evidence?.link ?: "none"}"
+                        }
+                        recoveryTask.cancel(false)
                     }
                 }
             },
@@ -450,8 +505,9 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                         SystemUtil.delayLong()
 //                点击错误按钮
                         if (abortMatchmakingIfGameStarted(traceId, "match-timeout-before-error")) return@LRunnable
-                        ERROR_RECT.lClick()
-                        SystemUtil.delayShort()
+                        // ERROR_RECT is only reachable through the exact-dialog
+                        // watchdog above, which verifies disappearance after click.
+                        log.info { "MATCHMAKING_TIMEOUT_ERROR_DIALOG_CLICK_SKIPPED reason=exact-dialog-watchdog-only" }
                         if (abortMatchmakingIfGameStarted(traceId, "match-timeout-before-reconnect")) return@LRunnable
                         reconnectAction()
                         val seed = RandomUtil.rerollSeed()
