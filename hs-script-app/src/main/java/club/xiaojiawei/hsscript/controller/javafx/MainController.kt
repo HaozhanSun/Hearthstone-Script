@@ -111,7 +111,11 @@ class MainController : MainView() {
         url: URL?,
         resourceBundle: ResourceBundle?,
     ) {
-        versionText.text = formatVersionText(VersionListener.currentRelease.tagName, BuildInfo.RELEASE_CHANNEL_LABEL)
+        versionText.text = formatVersionText(
+            version = BuildInfo.VERSION,
+            channelLabel = BuildInfo.RELEASE_CHANNEL_LABEL,
+            buildTimestampPacific = BuildInfo.BUILD_TIMESTAMP_PACIFIC,
+        )
         val startupDebugRun = DebugRunController.enableDefaultAfterRestart()
         debugRunModeCheckBox.isSelected = startupDebugRun.state == DebugRunLease.State.ACTIVE
         updateDebugRunStatus()
@@ -764,5 +768,8 @@ class MainController : MainView() {
     fun getNotificationManagerInstance(): NotificationManager<Any> = notificationManger
 }
 
-internal fun formatVersionText(version: String, channelLabel: String): String =
-    "当前版本：$version · 渠道：$channelLabel"
+internal fun formatVersionText(
+    version: String,
+    channelLabel: String,
+    buildTimestampPacific: String,
+): String = "当前版本：$version · 渠道：$channelLabel\n构建时间（Pacific）：${buildTimestampPacific.ifBlank { "UNKNOWN" }}"

@@ -58,6 +58,38 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
   must assert that no matchmaking dispatch occurs unless the rank gate allows
   it, and preserve this precedence against future strategy/streak changes.
 
+## Visible build-footer timestamp verification
+
+- The main-window footer must display the embedded artifact's version, channel,
+  and `BuildInfo.BUILD_TIMESTAMP_PACIFIC` in readable Pacific local time. Do
+  not derive the footer time from the current machine clock at launch.
+- Before every deployment, run the offline UI contract test and verify it
+  covers both Beta and Stable footer strings plus the timestamp source in
+  filtered `build.info`/`BuildInfo`.
+- After deployment and launch, capture the visible app footer and compare its
+  timestamp to `buildTimestampPacific` embedded in the exact deployed JAR.
+  Retain the screenshot or an equivalent visible-app assertion with the
+  release evidence. A successful build, manifest/hash update, and shortcut sync
+  do not prove the requested UI reached the user.
+- The prior check missed this because `BuildChannelUiContractTest` asserted
+  only version and channel, while release verification checked artifact,
+  manifest, launcher, and shortcuts without asserting the visible footer's
+  build timestamp. Keep the footer assertion and post-launch comparison as
+  separate required gates.
+
+## Post-deployment completion notice and queue reconciliation
+
+- After every deployment, send the user a concise completion notice containing
+  the deployed version and artifact timestamp, deployment ID and artifact hash,
+  Taskbar shortcut verification, running process PID/channel/active log path,
+  online E2E status, and an explicit list of requested or worker changes still
+  pending.
+- Before saying that all requested changes were deployed, reconcile the active
+  worker/commit queue against the deployed manifest and artifact. A successful
+  latest deployment alone does not prove earlier or parallel requested changes
+  are included; never use a blanket “all changes deployed” statement without
+  that reconciliation.
+
 ## Stable and beta release channels
 
 - GitHub `main` is the stable branch. Keep it on the last known-good source
