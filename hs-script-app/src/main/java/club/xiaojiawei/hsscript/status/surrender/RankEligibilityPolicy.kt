@@ -28,15 +28,22 @@ internal object RankEligibilityPolicy {
         if (detection.capturedAtMs <= 0L || ageMs < 0L || ageMs > MAX_EVIDENCE_AGE_MS) {
             return Decision(false, "rank-evidence-stale")
         }
-        if (detection.rank !in setOf(5, 10)) {
-            return Decision(false, if (detection.rank == null) "rank-unresolved" else "rank-not-5-or-10")
-        }
+        val rank = detection.rank
+            ?: return Decision(false, "rank-unresolved")
         if (detection.agreementCount < 1) return Decision(false, "rank-number-not-read-by-ocr")
-        // A Legendary tier and an ordinary rank numeral cannot both describe
-        // the same badge. Treat the contradiction as unsafe rather than letting
-        // either OCR route override the other.
-        if (detection.tier == CurrentRankDetector.RankTier.LEGEND) {
-            return Decision(false, "rank-tier-conflict-legend")
+        // The pre-match visual tier probe also sees the red/orange backdrop
+        // around the badge and can label a clear rank-10 numeral as LEGEND.
+        // The fresh, high-confidence numeric contract is authoritative for 5
+        // and 10; only ratings above 20 require independent Legend tier support.
+        val eligibleRank = rank == 5 || rank == 10
+        val eligibleLegendRating = rank > 20 && detection.tier == CurrentRankDetector.RankTier.LEGEND
+        if (!eligibleRank && !eligibleLegendRating) {
+            val reason = when {
+                rank > 20 -> "legend-rating-tier-unconfirmed"
+                rank in 11..20 -> "rank-not-5-or-10"
+                else -> "rank-not-5-or-10"
+            }
+            return Decision(false, reason)
         }
         when (detection.provider.uppercase()) {
             "PADDLEX" -> {
@@ -50,6 +57,6 @@ internal object RankEligibilityPolicy {
             }
             else -> return Decision(false, "rank-provider-unverified")
         }
-        return Decision(true, "verified-exact-rank-${detection.rank}")
+        return Decision(true, if (eligibleRank) "verified-exact-rank-$rank" else "verified-legend-rating-$rank")
     }
 }

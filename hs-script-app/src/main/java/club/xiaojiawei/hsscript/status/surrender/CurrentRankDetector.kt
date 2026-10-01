@@ -227,7 +227,7 @@ object CurrentRankDetector {
         }
         val counts = parsed.groupingBy { it }.eachCount()
         val best = counts.entries
-            .filter { (rank, _) -> rank in MIN_RANK..MAX_RANK || rank > 50 }
+            .filter { (rank, _) -> rank in MIN_RANK..MAX_RANK || rank > 20 }
             .maxWithOrNull(compareBy<Map.Entry<Int, Int>> { it.value }.thenBy { if (it.key == 10) 1 else 0 })
             ?: return null
         return RankCandidate(

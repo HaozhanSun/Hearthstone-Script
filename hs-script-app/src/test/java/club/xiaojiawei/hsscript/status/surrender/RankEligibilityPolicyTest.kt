@@ -10,13 +10,16 @@ class RankEligibilityPolicyTest {
     private val now = 50_000L
 
     @Test
-    fun `exact five and ten authorize regardless of Silver Gold or Platinum label`() {
+    fun `exact five and ten authorize despite secondary tier labels`() {
         for (rank in listOf(5, 10)) {
             for (tier in listOf(
                 CurrentRankDetector.RankTier.SILVER,
                 CurrentRankDetector.RankTier.GOLD,
                 CurrentRankDetector.RankTier.PLATINUM,
                 CurrentRankDetector.RankTier.UNKNOWN,
+                // Regression fixture: the pre-match crop's red backdrop can
+                // fool the visual-only Legendary signature despite OCR=10.
+                CurrentRankDetector.RankTier.LEGEND,
             )) {
                 val decision = evaluate(detection(rank = rank, tier = tier))
                 assertTrue(decision.eligible, "rank=$rank tier=$tier reason=${decision.reason}")
@@ -25,17 +28,20 @@ class RankEligibilityPolicyTest {
     }
 
     @Test
-    fun `adjacent ranks and Legendary numeric ratings are never eligible`() {
-        for (rank in listOf(4, 6, 9, 11, 21, 233)) {
-            val decision = evaluate(detection(rank = rank, tier = if (rank > 20) {
-                CurrentRankDetector.RankTier.LEGEND
-            } else {
-                CurrentRankDetector.RankTier.SILVER
-            }))
+    fun `ranks one through four six through nine and eleven through twenty are denied`() {
+        for (rank in (1..4) + (6..9) + (11..20)) {
+            val decision = evaluate(detection(rank = rank))
             assertFalse(decision.eligible, "rank=$rank must fail closed")
         }
-        val legendWithoutNumericRank = evaluate(detection(rank = null, tier = CurrentRankDetector.RankTier.LEGEND))
-        assertFalse(legendWithoutNumericRank.eligible)
+    }
+
+    @Test
+    fun `numeric rating above twenty requires Legend tier confirmation`() {
+        assertTrue(evaluate(detection(rank = 21, tier = CurrentRankDetector.RankTier.LEGEND)).eligible)
+        assertTrue(evaluate(detection(rank = 233, tier = CurrentRankDetector.RankTier.LEGEND)).eligible)
+        assertFalse(evaluate(detection(rank = 21, tier = CurrentRankDetector.RankTier.UNKNOWN)).eligible)
+        assertFalse(evaluate(detection(rank = 21, tier = CurrentRankDetector.RankTier.GOLD)).eligible)
+        assertFalse(evaluate(detection(rank = null, tier = CurrentRankDetector.RankTier.LEGEND)).eligible)
     }
 
     @Test
@@ -62,6 +68,7 @@ class RankEligibilityPolicyTest {
         // Detector/provider exceptions are normalized to absent evidence unless
         // cancellation propagates; neither path can reuse a prior rank value.
         assertEquals("rank-evidence-missing", evaluate(null).reason)
+        assertEquals("rank-unresolved", evaluate(detection(rank = null)).reason)
         assertFalse(evaluate(detection(rank = 5, provider = "UNKNOWN")).eligible)
     }
 

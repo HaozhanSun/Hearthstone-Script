@@ -478,6 +478,7 @@ class SurrenderPolicyTest {
         assertEquals(233, CurrentRankDetector.parseRankText("233"))
         assertEquals(257, CurrentRankDetector.parseRankText("257"))
         assertEquals(21, CurrentRankDetector.parseRankText("21"))
+        assertNull(CurrentRankDetector.parseRankText("20"))
     }
 
     @Test
@@ -541,8 +542,10 @@ class SurrenderPolicyTest {
 
     @Test
     fun rankResolverPreservesClearlyLargeLegendaryRatings() {
+        assertEquals(21, CurrentRankDetector.resolveRankCandidates(listOf("21")))
         assertEquals(233, CurrentRankDetector.resolveRankCandidates(listOf("233")))
         assertEquals(257, CurrentRankDetector.resolveRankCandidates(listOf("257")))
+        assertNull(CurrentRankDetector.resolveRankCandidates(listOf("20")))
     }
 
     @Test
