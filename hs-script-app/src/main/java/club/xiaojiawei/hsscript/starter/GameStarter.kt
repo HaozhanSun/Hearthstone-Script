@@ -85,7 +85,7 @@ class GameStarter : AbstractStarter() {
         handoffState = GameStartupHandoffPolicy.State()
         log.info { "开始检查$GAME_CN_NAME" }
         val gameHWND = ScriptStatus.gameHWND
-        if (gameHWND != null && User32.INSTANCE.IsWindow(gameHWND)) {
+        if (gameHWND != null && GameUtil.isVerifiedCurrentGameWindow(gameHWND)) {
             next(gameHWND)
             return
         }
@@ -93,7 +93,7 @@ class GameStarter : AbstractStarter() {
         // ScriptStatus is reset between launcher stages, so checking only the
         // cached handle made a visible Hearthstone window look absent and
         // triggered repeated launch attempts.
-        GameUtil.findGameHWND()?.let {
+        GameUtil.findGameHWND()?.takeIf(GameUtil::isVerifiedCurrentGameWindow)?.let {
             // Match the upstream starter's fast path: a visible existing
             // Hearthstone client is already the handoff target, regardless of
             // whether this run was started by the E2E harness or by F1/UI.
@@ -162,7 +162,7 @@ class GameStarter : AbstractStarter() {
                         }
                         if (GameUtil.isAliveOfGame()) {
 //                    游戏刚启动时可能找不到窗口句柄
-                            GameUtil.findGameHWND()?.let {
+                            GameUtil.findGameHWND()?.takeIf(GameUtil::isVerifiedCurrentGameWindow)?.let {
                                 val evaluation = GameStartupHandoffPolicy.observe(
                                     state = handoffState,
                                     processAlive = true,

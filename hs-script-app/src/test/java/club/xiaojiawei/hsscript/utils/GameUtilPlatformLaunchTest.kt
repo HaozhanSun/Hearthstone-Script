@@ -27,6 +27,27 @@ class GameUtilPlatformLaunchTest {
     }
 
     @Test
+    fun `Beta startup selects Beta app and configured game directory`() {
+        val platform = "C:\\Program Files\\Battle.net\\Battle.net.exe"
+        val game = "D:\\Hearthstone"
+
+        assertEquals(
+            listOf(platform, "--game=hs_beta", "--gamepath=$game", "-uid", "hs_beta"),
+            GameUtil.buildPlatformCommand(platform, true, AppRuntimeChannel.BETA, game),
+        )
+    }
+
+    @Test
+    fun `Stable startup retains the established WTCG command`() {
+        val platform = "C:\\Program Files\\Battle.net\\Battle.net.exe"
+
+        assertEquals(
+            listOf(platform, "--exec=launch WTCG"),
+            GameUtil.buildPlatformCommand(platform, true, AppRuntimeChannel.STABLE, "D:\\Hearthstone"),
+        )
+    }
+
+    @Test
     fun `blank platform path is rejected before process creation`() {
         assertFailsWith<IllegalArgumentException> {
             GameUtil.buildPlatformCommand("  ", launchGame = true)

@@ -74,13 +74,32 @@ object GameUtil {
      * Battle.net installations under paths such as "OneDrive - Duke
      * University" and can surface as a misleading Windows Script Host error.
      */
-    internal fun buildPlatformCommand(platformPath: String, launchGame: Boolean): List<String> {
+    internal fun buildPlatformCommand(platformPath: String, launchGame: Boolean): List<String> =
+        buildPlatformCommand(platformPath, launchGame, AppRuntimeChannel.UNKNOWN, "")
+
+    internal fun buildPlatformCommand(
+        platformPath: String,
+        launchGame: Boolean,
+        runtimeChannel: AppRuntimeChannel,
+        gamePath: String,
+    ): List<String> {
         require(platformPath.isNotBlank()) { "platformPath must not be blank" }
         return if (launchGame) {
-            listOf(platformPath, "--exec=launch WTCG")
+            if (runtimeChannel == AppRuntimeChannel.BETA) {
+                require(gamePath.isNotBlank()) { "gamePath must not be blank for Beta launch" }
+                listOf(platformPath, "--game=hs_beta", "--gamepath=$gamePath", "-uid", "hs_beta")
+            } else {
+                listOf(platformPath, "--exec=launch WTCG")
+            }
         } else {
             listOf(platformPath)
         }
+    }
+
+    internal fun isVerifiedCurrentGameWindow(hwnd: WinDef.HWND?): Boolean {
+        if (hwnd == null || !User32.INSTANCE.IsWindow(hwnd) || !User32.INSTANCE.IsWindowVisible(hwnd)) return false
+        val livePid = findGameProcessIdForDiagnostics() ?: return false
+        return windowProcessId(hwnd).toLong() == livePid
     }
 
     internal fun isSurrenderStateConfirmed(mode: ModeEnum?, inWar: Boolean): Boolean =
@@ -641,6 +660,12 @@ object GameUtil {
             }
             val forceNormalUser = RuntimeSafety.safeNative
             val preventAdminLaunch = ConfigUtil.getBoolean(ConfigEnum.PREVENT_ADMIN_LAUNCH_GAME)
+            val platformArguments = buildPlatformCommand(
+                platformPath = platformPath,
+                launchGame = true,
+                runtimeChannel = AppRuntimeChannelDetector.installedChannel(),
+                gamePath = ConfigUtil.getString(ConfigEnum.GAME_PATH),
+            ).drop(1)
             if (NormalUserPlatformLaunch.shouldUseHelper(preventAdminLaunch)) {
                 log.info {
                     "NORMAL_USER_PLATFORM_LAUNCH_REQUEST source=config " +
@@ -648,14 +673,14 @@ object GameUtil {
                 }
                 val helper = NormalUserPlatformLaunch.startFromCurrentJar(
                     platformExecutable = platformPath,
-                    platformArguments = listOf("""--exec="launch WTCG""""),
+                    platformArguments = platformArguments,
                 )
                 log.info {
                     "NORMAL_USER_PLATFORM_LAUNCH_HELPER_STARTED helperPid=${helper.pid()} " +
                         "controllerPid=${ProcessHandle.current().pid()} acceptance=awaiting-game-process-window"
                 }
             } else {
-                val process = ProcessBuilder(buildPlatformCommand(platformPath, launchGame = true)).start()
+                val process = ProcessBuilder(listOf(platformPath) + platformArguments).start()
                 log.info {
                     "PLATFORM_ARG_STARTUP_DISPATCH pid=${process.pid()} " +
                         "source=${if (forceNormalUser) "safe-native-direct" else "default-direct"} " +

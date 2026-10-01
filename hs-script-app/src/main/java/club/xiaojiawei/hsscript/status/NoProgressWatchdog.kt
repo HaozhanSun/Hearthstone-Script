@@ -21,6 +21,7 @@ internal class NoProgressWatchdog(
         PADDLEX_INITIALIZATION,
         OPPONENT_TURN,
         ANIMATION,
+        MULLIGAN,
         RESULT,
         EXTERNAL_MODAL,
         ACTIVE_GAMEPLAY,
@@ -57,6 +58,9 @@ internal class NoProgressWatchdog(
         val powerLogAgeMs: Long,
         val authoritativeTransition: Boolean = false,
         val paddlexInitializing: Boolean = false,
+        val powerLogUsable: Boolean = false,
+        val authoritativeLiveMatch: Boolean = false,
+        val screenConfirmed: Boolean = false,
     )
 
     data class Decision(
@@ -67,7 +71,7 @@ internal class NoProgressWatchdog(
     )
 
     companion object {
-        const val DEFAULT_NO_PROGRESS_TIMEOUT_MS = 120_000L
+        const val DEFAULT_NO_PROGRESS_TIMEOUT_MS = 180_000L
         const val DEFAULT_FOREGROUND_FAILURE_THRESHOLD = 3
         const val DEFAULT_MAX_RECOVERY_ATTEMPTS = 2
     }
@@ -83,6 +87,39 @@ internal class NoProgressWatchdog(
     }
 
     fun observe(snapshot: Snapshot): Decision {
+        if (snapshot.screen == ScreenExpectation.RESULT) {
+            return decision(RecoveryAction.NOOP_RESULT, "result-screen-priority", snapshot.nowMs)
+        }
+        // A reconstructed live match (including Mulligan) is stronger evidence
+        // than stale STARTUP mode. Never feed it to the starter/relaunch chain.
+        if (snapshot.authoritativeLiveMatch) {
+            val processLineageChanged = snapshot.currentPid != null && snapshot.boundPid != null &&
+                snapshot.currentPid != snapshot.boundPid
+            return decision(
+                if (snapshot.processAlive && snapshot.currentPid != null && !processLineageChanged) {
+                    RecoveryAction.WAIT_EXPECTED
+                } else {
+                    RecoveryAction.ESCALATE_PAUSE
+                },
+                if (processLineageChanged) {
+                    "live-match-process-lineage-changed-fail-closed"
+                } else if (snapshot.processAlive && snapshot.currentPid != null) {
+                    "live-match-preserved"
+                } else {
+                    "live-match-process-missing-fail-closed"
+                },
+                snapshot.nowMs,
+            )
+        }
+        // An absent/unbound/unreadable Power.log is UNKNOWN, not evidence that
+        // a live process is stuck. Keep the bounded observation window armed,
+        // but do not rebind/restart based on mode text or sentinel positions.
+        if (!snapshot.powerLogUsable) {
+            return decision(RecoveryAction.WAIT_EXPECTED, "power-log-unbound-or-unusable", snapshot.nowMs)
+        }
+        if (!snapshot.screenConfirmed) {
+            return decision(RecoveryAction.WAIT_EXPECTED, "screen-evidence-unconfirmed", snapshot.nowMs)
+        }
         val firstObservation = baselineFingerprint == null
         val processLineageChanged = !firstObservation &&
             snapshot.currentPid != null && snapshot.boundPid != null &&
@@ -116,14 +153,11 @@ internal class NoProgressWatchdog(
         }
         if (noProgressSinceMs == null) noProgressSinceMs = snapshot.nowMs
 
-        if (snapshot.screen == ScreenExpectation.RESULT) {
-            return decision(RecoveryAction.NOOP_RESULT, "result-screen-priority", snapshot.nowMs)
-        }
-
         val elapsed = snapshot.nowMs - (noProgressSinceMs ?: snapshot.nowMs)
-        if (snapshot.paddlexInitializing || snapshot.screen == ScreenExpectation.STARTUP ||
-            snapshot.screen == ScreenExpectation.MENU_OR_MATCHING
-        ) {
+        if (snapshot.screen == ScreenExpectation.MENU_OR_MATCHING) {
+            return decision(RecoveryAction.WAIT_EXPECTED, "visible-menu-or-matchmaking", snapshot.nowMs)
+        }
+        if (snapshot.paddlexInitializing || snapshot.screen == ScreenExpectation.STARTUP) {
             if (elapsed < noProgressTimeoutMs) {
                 return decision(RecoveryAction.WAIT_EXPECTED, "expected-startup-or-initialization", snapshot.nowMs)
             }
@@ -131,9 +165,10 @@ internal class NoProgressWatchdog(
         }
 
         if (snapshot.screen == ScreenExpectation.OPPONENT_TURN ||
-            snapshot.screen == ScreenExpectation.ANIMATION
+            snapshot.screen == ScreenExpectation.ANIMATION ||
+            snapshot.screen == ScreenExpectation.MULLIGAN
         ) {
-            return decision(RecoveryAction.WAIT_EXPECTED, "expected-opponent-turn-or-animation", snapshot.nowMs)
+            return decision(RecoveryAction.WAIT_EXPECTED, "expected-live-match-phase", snapshot.nowMs)
         }
         if (!snapshot.processAlive || snapshot.currentPid == null) {
             return recoverOrPause("process-missing", snapshot.nowMs)

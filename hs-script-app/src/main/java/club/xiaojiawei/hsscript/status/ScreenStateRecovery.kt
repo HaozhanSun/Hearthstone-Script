@@ -52,11 +52,22 @@ object ScreenStateRecovery {
         DEFERRED_GAME_FOREGROUND,
     }
 
+    internal data class FreshScreenObservation(
+        val screen: String,
+        val confidence: Int,
+        val pid: Long,
+        val hwnd: String,
+        val screenshot: String?,
+    )
+
     private const val MAX_OCR_TEXT_LENGTH = 500
     private const val OCR_MAX_WIDTH = 1280
     private const val RESULT_CONTINUE_GRAY_LIGHT_MIN = 0.025
     private const val RESULT_BANNER_LOW_SATURATION_MIN = 0.30
     private const val RECONNECT_RETRY_INTERVAL_MS = 60_000L
+    private const val RECOVERY_POSTCHECK_TIMEOUT_MS = 3_000L
+    private const val RECOVERY_POSTCHECK_POLL_MS = 300L
+    private const val STARTUP_QUEST_OVERLAY_MAX_PROBES = 5
     private const val RECONNECT_SPINNER_CHECK_DELAY_MS = 10_000L
     /**
      * The client displays a distinct slow-connection warning only after a
@@ -81,6 +92,7 @@ object ScreenStateRecovery {
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
         HOME("HOME"),
+        HOME_TASK_OVERLAY("HOME_TASK_OVERLAY"),
         TOURNAMENT("TOURNAMENT"),
         MATCHMAKING("MATCHMAKING"),
         RESULT("RESULT"),
@@ -179,6 +191,45 @@ object ScreenStateRecovery {
         }
         return inspectBetaAndRecover(stuckForMs, stateFingerprint, startupProbe, stateStillCurrent) ==
             InspectionResult.APPLIED
+    }
+
+    /** Read-only, fresh screenshot observation for the Beta no-progress guard. */
+    internal fun observeFreshScreenForWatchdog(): FreshScreenObservation? {
+        val recoveryToken = ScreenRecoveryRuntime.tokenOrNull() ?: return null
+        val initialPid = GameUtil.findGameProcessIdForDiagnostics() ?: return null
+        val gameWindow = resolveLiveGameWindow() ?: return null
+        val captureResult = MouseUtil.withRecoveryForeground(gameWindow) {
+            val currentWindow = resolveLiveGameWindow()
+            val currentPid = GameUtil.findGameProcessIdForDiagnostics()
+            if (currentWindow == null || currentWindow.toString() != gameWindow.toString() ||
+                currentPid != initialPid
+            ) {
+                null
+            } else {
+                captureScreen(currentWindow, allowCachedGameRect = false)
+            }
+        }
+        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken) || !captureResult.foregroundConfirmed) return null
+        val capture = captureResult.value ?: return null
+        if (GameUtil.findGameProcessIdForDiagnostics() != initialPid ||
+            !GameUtil.isVerifiedCurrentGameWindow(gameWindow)
+        ) return null
+        val detection = detect(runOCR(capture), capture.visual)
+            ?.takeIf { it.confidence >= 85 }
+            ?: return null
+        val observation = FreshScreenObservation(
+            screen = detection.kind.code,
+            confidence = detection.confidence,
+            pid = initialPid,
+            hwnd = gameWindow.toString(),
+            screenshot = capture.file?.absolutePath,
+        )
+        log.info {
+            "SCREEN_RECOVERY_FRESH_OBSERVATION detected=${observation.screen} " +
+                "confidence=${observation.confidence} pid=${observation.pid} hwnd=${observation.hwnd} " +
+                "screenshot=${observation.screenshot ?: "not-saved"}"
+        }
+        return observation
     }
 
     /** Optional Beta-specific recovery pipeline; never used for baseline OFF behavior. */
@@ -348,7 +399,15 @@ object ScreenStateRecovery {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-before-apply state=$stateFingerprint" }
             return InspectionResult.NO_ACTION
         }
-        return if (apply(detection, recoveryToken)) InspectionResult.APPLIED else InspectionResult.NO_ACTION
+        val sourcePid = GameUtil.findGameProcessIdForDiagnostics()
+        if (!apply(detection, recoveryToken)) return InspectionResult.NO_ACTION
+        val verified = confirmRecoveryTransition(detection, recoveryToken, sourcePid)
+        log.info {
+            "SCREEN_RECOVERY_POSTCHECK screen=${detection.kind.code} " +
+                "result=${if (verified) "VERIFIED" else "UNCONFIRMED"} " +
+                "mode=${Mode.currMode?.name ?: "NONE"} pid=${GameUtil.findGameProcessIdForDiagnostics() ?: "none"}"
+        }
+        return if (verified) InspectionResult.APPLIED else InspectionResult.NO_ACTION
     }
 
     /**
@@ -469,8 +528,10 @@ object ScreenStateRecovery {
 
         val foregroundBefore = User32.INSTANCE.GetForegroundWindow()
         val targetPid = hwnd?.let(::windowProcessId) ?: 0
+        val currentGamePid = GameUtil.findGameProcessIdForDiagnostics()
         val foregroundPidBefore = foregroundBefore?.let(::windowProcessId) ?: 0
         val foregroundBeforeOk = hwnd != null &&
+            targetPid > 0 && currentGamePid == targetPid.toLong() &&
             GameWindowReadiness.sameVisibleGameProcess(
                 targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
                 foregroundVisible = foregroundBefore?.let(User32.INSTANCE::IsWindowVisible) ?: false,
@@ -482,7 +543,7 @@ object ScreenStateRecovery {
                 "foreground=$foregroundBefore targetPid=$targetPid foregroundPid=$foregroundPidBefore " +
                 "accepted=$foregroundBeforeOk bounds=$bounds"
         }
-        if (RuntimeSafety.safeNative && !foregroundBeforeOk) {
+        if (!foregroundBeforeOk) {
             log.warn { "SCREEN_RECOVERY_CAPTURE_REJECTED phase=before reason=foreground-mismatch hwnd=$hwnd" }
             return null
         }
@@ -490,13 +551,16 @@ object ScreenStateRecovery {
         val foregroundAfter = User32.INSTANCE.GetForegroundWindow()
         val foregroundPidAfter = foregroundAfter?.let(::windowProcessId) ?: 0
         val foregroundAfterOk = hwnd != null &&
+            targetPid > 0 && currentGamePid == targetPid.toLong() &&
+            GameUtil.findGameProcessIdForDiagnostics() == targetPid.toLong() &&
             GameWindowReadiness.sameVisibleGameProcess(
                 targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
                 foregroundVisible = foregroundAfter?.let(User32.INSTANCE::IsWindowVisible) ?: false,
                 targetPid = targetPid,
                 foregroundPid = foregroundPidAfter,
             )
-        val captureAccepted = !RuntimeSafety.safeNative ||
+        val captureAccepted = targetPid > 0 && currentGamePid == targetPid.toLong() &&
+            GameUtil.findGameProcessIdForDiagnostics() == targetPid.toLong() &&
             GameWindowReadiness.captureRemainsOnGame(
                 targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
                 foregroundVisibleBefore = foregroundBefore?.let(User32.INSTANCE::IsWindowVisible) ?: false,
@@ -777,6 +841,9 @@ object ScreenStateRecovery {
         if (looksLikeShopOverlayText(text) && looksLikeShopOverlayVisual(visual)) {
             return Detection(ScreenKind.SHOP_OVERLAY, ModeEnum.HUB, 94, "shop-overlay-text-and-visual")
         }
+        if (looksLikeStartupQuestOverlayText(text)) {
+            return Detection(ScreenKind.HOME_TASK_OVERLAY, ModeEnum.HUB, 96, "startup-your-quests-overlay")
+        }
         // The live client uses "搜寻对手" while some localized/client builds
         // use "寻找对手". OCR also commonly separates the cancel label, so
         // accept both forms but require a matchmaking-specific phrase.
@@ -926,6 +993,13 @@ object ScreenStateRecovery {
             text.contains("库存") ||
             text.contains("流浪者")
         return market && detail
+    }
+
+    /** The startup modal title is distinct from the persistent Home task button. */
+    internal fun looksLikeStartupQuestOverlayText(ocrText: String): Boolean {
+        val normalized = ocrText.lowercase(Locale.ROOT)
+            .replace(Regex("[\\s\\p{Punct}，。、“”‘’：:！!？?]"), "")
+        return normalized.contains("你的任务") || normalized.contains("yourquests")
     }
 
     internal fun looksLikeReconnectFailureDialogRoiText(ocrText: String): Boolean {
@@ -1199,6 +1273,7 @@ object ScreenStateRecovery {
             screen = detection.kind.code,
             mode = detection.mode,
             enterStrategy = detection.kind != ScreenKind.DECK_SELECTION &&
+                detection.kind != ScreenKind.HOME_TASK_OVERLAY &&
                 detection.kind != ScreenKind.RESULT &&
                 detection.kind != ScreenKind.MATCHMAKING &&
                 detection.kind != ScreenKind.RECONNECT &&
@@ -1206,6 +1281,7 @@ object ScreenStateRecovery {
                 detection.kind != ScreenKind.RECONNECT_SPINNER &&
                 detection.kind != ScreenKind.LOADING,
             action = when (detection.kind) {
+                ScreenKind.HOME_TASK_OVERLAY -> "DISMISS_HOME_TASK_OVERLAY"
                 ScreenKind.DECK_SELECTION -> "START_MATCHING"
                 ScreenKind.HOME,
                 ScreenKind.TOURNAMENT,
@@ -1237,8 +1313,10 @@ object ScreenStateRecovery {
             screen = detection.kind.code,
             mode = detection.mode,
             enterStrategy = detection.kind != ScreenKind.DECK_SELECTION &&
+                detection.kind != ScreenKind.HOME_TASK_OVERLAY &&
                 detection.kind != ScreenKind.RECONNECT_FAILURE,
             action = when (detection.kind) {
+                ScreenKind.HOME_TASK_OVERLAY -> "DISMISS_HOME_TASK_OVERLAY"
                 ScreenKind.DECK_SELECTION -> "START_MATCHING"
                 ScreenKind.RECONNECT_FAILURE -> "RESTART_CLIENT"
                 else -> "OTHER"
@@ -1321,9 +1399,7 @@ object ScreenStateRecovery {
             return null
         }
         val discovered = GameUtil.findGameHWND()
-        val live = discovered?.takeIf {
-            User32.INSTANCE.IsWindow(it) && User32.INSTANCE.IsWindowVisible(it)
-        }
+        val live = discovered?.takeIf(GameUtil::isVerifiedCurrentGameWindow)
         if (live == null) {
             log.warn {
                 "SCREEN_RECOVERY_WINDOW_UNAVAILABLE cached=${cached ?: "none"} " +
@@ -1385,6 +1461,185 @@ object ScreenStateRecovery {
         }
     }
 
+    /**
+     * Recovery is not complete when an input was queued or Mode.recover was
+     * called. Require a fresh PID-verified Hearthstone screenshot and state
+     * consistent with the requested workflow transition.
+     */
+    private fun confirmRecoveryTransition(
+        detection: Detection,
+        recoveryToken: Long,
+        sourcePid: Long?,
+    ): Boolean {
+        val deadline = System.currentTimeMillis() + RECOVERY_POSTCHECK_TIMEOUT_MS
+        do {
+            if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return false
+            val liveWindow = resolveLiveGameWindow()
+            if (liveWindow != null) {
+                val capture = captureScreen(liveWindow, allowCachedGameRect = false)
+                if (capture != null) {
+                    val observed = detect(runOCR(capture), capture.visual)
+                    val mode = Mode.currMode
+                    val confirmed = when (detection.kind) {
+                        ScreenKind.HOME -> observed?.kind == ScreenKind.HOME && mode == ModeEnum.HUB
+                        ScreenKind.HOME_TASK_OVERLAY ->
+                            (observed?.kind == ScreenKind.HOME && mode == ModeEnum.HUB) ||
+                                (observed?.kind in setOf(
+                                    ScreenKind.TOURNAMENT, ScreenKind.DECK_SELECTION, ScreenKind.MATCHMAKING,
+                                ) && mode == ModeEnum.TOURNAMENT) || WarEx.inWar
+                        ScreenKind.TOURNAMENT -> observed?.kind in setOf(
+                            ScreenKind.TOURNAMENT, ScreenKind.DECK_SELECTION, ScreenKind.MATCHMAKING,
+                        ) && mode == ModeEnum.TOURNAMENT
+                        ScreenKind.DECK_SELECTION -> observed?.kind == ScreenKind.MATCHMAKING || WarEx.inWar
+                        ScreenKind.MATCHMAKING -> observed?.kind == ScreenKind.MATCHMAKING && mode == ModeEnum.TOURNAMENT
+                        ScreenKind.SHOP_OVERLAY -> observed?.kind != ScreenKind.SHOP_OVERLAY && mode == ModeEnum.HUB
+                        ScreenKind.LOADING -> observed?.kind == ScreenKind.LOADING && mode == ModeEnum.STARTUP
+                        ScreenKind.RECONNECT -> observed?.kind != ScreenKind.RECONNECT && mode == ModeEnum.LOGIN
+                        ScreenKind.RECONNECT_SPINNER -> observed?.kind != null &&
+                            observed.kind != ScreenKind.RECONNECT_SPINNER && mode != ModeEnum.STARTUP
+                        ScreenKind.RECONNECT_FAILURE -> observed?.kind != null &&
+                            observed.kind != ScreenKind.RECONNECT_FAILURE &&
+                            GameUtil.findGameProcessIdForDiagnostics()?.let { it != sourcePid } == true
+                        ScreenKind.RESULT -> observed?.kind != ScreenKind.RESULT || GameUtil.isTerminalGameState()
+                        else -> observed?.kind == detection.kind && mode == detection.mode
+                    }
+                    log.info {
+                        "SCREEN_RECOVERY_POSTCHECK_OBSERVATION expected=${detection.kind.code} " +
+                            "observed=${observed?.kind?.code ?: "UNKNOWN"} mode=${mode?.name ?: "NONE"} " +
+                            "pid=${GameUtil.findGameProcessIdForDiagnostics() ?: "none"} hwnd=$liveWindow " +
+                            "screenshot=${capture.file?.absolutePath ?: "not-saved"} confirmed=$confirmed"
+                    }
+                    if (confirmed) return true
+                }
+            }
+            if (System.currentTimeMillis() < deadline) Thread.sleep(RECOVERY_POSTCHECK_POLL_MS)
+        } while (System.currentTimeMillis() < deadline)
+        return false
+    }
+
+    private fun scheduleHomeTaskOverlayRecovery(
+        recoveryToken: Long,
+        dismissDispatches: Int,
+        probeAttempts: Int,
+        delayMs: Long,
+    ) {
+        val task = EXTRA_THREAD_POOL.schedule({
+            if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@schedule
+            if ((!WorkTimeListener.working && !PauseStatus.isAutomaticPause) ||
+                !PauseStatus.canRunAutomaticRecovery() ||
+                PauseStatus.pauseOrigin == PauseStatus.Origin.MANUAL ||
+                WarEx.inWar || Mode.currMode != ModeEnum.HUB
+            ) {
+                log.info {
+                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_SKIPPED reason=state-changed " +
+                        "working=${WorkTimeListener.working} pauseOrigin=${PauseStatus.pauseOrigin} " +
+                        "mode=${Mode.currMode?.name ?: "NONE"} inWar=${WarEx.inWar}"
+                }
+                return@schedule
+            }
+            if (probeAttempts >= STARTUP_QUEST_OVERLAY_MAX_PROBES) {
+                PauseStatus.setAutomaticPause(true)
+                log.error {
+                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_PAUSED reason=probe-limit " +
+                        "probes=$probeAttempts dispatches=$dismissDispatches action=NO_INPUT"
+                }
+                return@schedule
+            }
+
+            val sourcePid = GameUtil.findGameProcessIdForDiagnostics()
+            val hwnd = resolveLiveGameWindow()
+            if (sourcePid == null || hwnd == null) {
+                PauseStatus.setAutomaticPause(true)
+                log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=game-window-unavailable action=PAUSE" }
+                return@schedule
+            }
+            val frameResult = MouseUtil.withRecoveryForeground(hwnd) {
+                val currentWindow = resolveLiveGameWindow()
+                val currentPid = GameUtil.findGameProcessIdForDiagnostics()
+                if (currentWindow == null || currentWindow.toString() != hwnd.toString() || currentPid != sourcePid) {
+                    null
+                } else {
+                    captureScreen(currentWindow, allowCachedGameRect = false)
+                }
+            }
+            val capture = frameResult.value
+            val captureTrusted = frameResult.foregroundConfirmed && capture != null &&
+                GameUtil.findGameProcessIdForDiagnostics() == sourcePid &&
+                GameUtil.isVerifiedCurrentGameWindow(hwnd)
+            if (!captureTrusted) {
+                PauseStatus.setAutomaticPause(true)
+                log.warn {
+                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=trusted-capture-unavailable " +
+                        "foregroundConfirmed=${frameResult.foregroundConfirmed} capture=${capture != null} " +
+                        "probe=${probeAttempts + 1} action=PAUSE"
+                }
+                return@schedule
+            }
+
+            val freshCapture = requireNotNull(capture)
+            val evidence = runOCR(freshCapture)
+            val captureStillTrusted = GameUtil.findGameProcessIdForDiagnostics() == sourcePid &&
+                GameUtil.isVerifiedCurrentGameWindow(hwnd)
+            val detection = if (captureStillTrusted) detect(evidence, freshCapture.visual) else null
+            val observation = when (detection?.kind) {
+                ScreenKind.HOME_TASK_OVERLAY -> StartupQuestOverlayPolicy.Observation.QUEST_OVERLAY
+                ScreenKind.HOME -> StartupQuestOverlayPolicy.Observation.HUB
+                else -> StartupQuestOverlayPolicy.Observation.UNKNOWN
+            }
+            val action = StartupQuestOverlayPolicy.decide(
+                observation = observation,
+                captureTrusted = captureStillTrusted,
+                dismissDispatches = dismissDispatches,
+            )
+            log.info {
+                "SCREEN_RECOVERY_HOME_TASK_OVERLAY_PROBE observation=$observation " +
+                    "detected=${detection?.kind?.code ?: "UNKNOWN"} confidence=${detection?.confidence ?: 0} " +
+                    "action=$action dismissDispatches=$dismissDispatches probe=${probeAttempts + 1} " +
+                    "pid=$sourcePid hwnd=$hwnd screenshot=${freshCapture.file?.absolutePath ?: "none"}"
+            }
+            when (action) {
+                StartupQuestOverlayPolicy.Action.DISMISS_OVERLAY -> {
+                    val accepted = MouseUtil.leftButtonClickForRecovery(
+                        HubModeStrategy.HIDE_TASK_RECT.getCenterClickPos(),
+                    )
+                    log.warn {
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_DISMISS dispatched=$accepted " +
+                            "uiAccepted=unverified attempt=${dismissDispatches + 1}"
+                    }
+                    scheduleHomeTaskOverlayRecovery(
+                        recoveryToken,
+                        dismissDispatches + if (accepted) 1 else 0,
+                        probeAttempts + 1,
+                        900L,
+                    )
+                }
+                StartupQuestOverlayPolicy.Action.ENTER_HUB -> {
+                    if (PauseStatus.resumeAutomaticPause("verified-hub-after-quest-overlay")) {
+                        log.warn { "SCREEN_RECOVERY_AUTO_RESUME reason=verified-hub-after-quest-overlay" }
+                    }
+                    Mode.recover(ModeEnum.HUB, "verified-hub-after-quest-overlay", enterStrategy = true)
+                    log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_CONFIRMED state=HUB strategyStarted=true" }
+                }
+                StartupQuestOverlayPolicy.Action.WAIT_FOR_TRUSTED_CAPTURE -> {
+                    log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_WAIT reason=screen-unclassified action=NO_INPUT" }
+                    scheduleHomeTaskOverlayRecovery(recoveryToken, dismissDispatches, probeAttempts + 1, 900L)
+                }
+                StartupQuestOverlayPolicy.Action.BLOCK_UNTRUSTED -> {
+                    PauseStatus.setAutomaticPause(true)
+                    log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=provenance-changed action=PAUSE" }
+                }
+                StartupQuestOverlayPolicy.Action.EXHAUSTED -> {
+                    PauseStatus.setAutomaticPause(true)
+                    log.error {
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_EXHAUSTED dismissDispatches=$dismissDispatches " +
+                            "state=HUB strategyStarted=false action=PAUSE"
+                    }
+                }
+            }
+        }, delayMs, TimeUnit.MILLISECONDS)
+        ScreenRecoveryRuntime.track(recoveryToken, task)
+    }
+
     private fun apply(detection: Detection, recoveryToken: Long): Boolean {
         if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return false
         // A strongly identified cannot-reconnect modal is authoritative over a
@@ -1397,6 +1652,7 @@ object ScreenStateRecovery {
                 ScreenKind.HOME,
                 ScreenKind.TOURNAMENT,
                 ScreenKind.DECK_SELECTION,
+                ScreenKind.HOME_TASK_OVERLAY,
                 ScreenKind.MATCHMAKING,
                 ScreenKind.RESULT,
                 ScreenKind.GAME_MODE,
@@ -1413,6 +1669,16 @@ object ScreenStateRecovery {
         }
 
         when (detection.kind) {
+            ScreenKind.HOME_TASK_OVERLAY -> {
+                Mode.recover(ModeEnum.HUB, "visible-home-task-overlay", enterStrategy = false)
+                log.warn { "SCREEN_RECOVERY_ACTION_REQUESTED screen=HOME_TASK_OVERLAY action=PROBE_THEN_DISMISS" }
+                scheduleHomeTaskOverlayRecovery(
+                    recoveryToken = recoveryToken,
+                    dismissDispatches = 0,
+                    probeAttempts = 0,
+                    delayMs = 300L,
+                )
+            }
             ScreenKind.DECK_SELECTION -> {
                 if (DeckStrategyManager.currentDeckStrategy == null ||
                     DeckStrategyManager.currentRunMode == null
@@ -1422,7 +1688,7 @@ object ScreenStateRecovery {
                 }
                 Mode.recover(ModeEnum.TOURNAMENT, "visible-deck-selection", enterStrategy = false)
                 log.warn {
-                    "SCREEN_RECOVERY_APPLIED screen=DECK_SELECTION next=START_MATCHING " +
+                    "SCREEN_RECOVERY_ACTION_REQUESTED screen=DECK_SELECTION next=START_MATCHING " +
                         "deck=${DeckStrategyManager.currentDeckStrategy?.name()} " +
                         "deckSlot=${DeckStrategyManager.currentDeckStrategy?.let(TournamentModeStrategy::expectedDeckSlot)}"
                 }
@@ -1448,13 +1714,13 @@ object ScreenStateRecovery {
 
             ScreenKind.RESULT -> {
                 Mode.recover(ModeEnum.GAMEPLAY, "visible-result-screen", enterStrategy = false)
-                log.warn { "SCREEN_RECOVERY_APPLIED screen=RESULT next=DISMISS_STALE_RESULT" }
+                log.warn { "SCREEN_RECOVERY_ACTION_REQUESTED screen=RESULT next=DISMISS_STALE_RESULT" }
                 GameUtil.dismissStaleGameEndScreen(resultAlreadyObserved = true)
             }
 
             ScreenKind.MATCHMAKING -> {
                 Mode.recover(ModeEnum.TOURNAMENT, "visible-matchmaking-screen", enterStrategy = false)
-                log.info { "SCREEN_RECOVERY_APPLIED screen=MATCHMAKING action=WAIT_FOR_GAMEPLAY" }
+                log.info { "SCREEN_RECOVERY_ACTION_REQUESTED screen=MATCHMAKING action=WAIT_FOR_GAMEPLAY" }
             }
 
             ScreenKind.SHOP_OVERLAY -> {
@@ -1475,7 +1741,7 @@ object ScreenStateRecovery {
                     ) {
                         val accepted = HubModeStrategy.closeShopOverlayForRecovery()
                         log.warn {
-                            "SCREEN_RECOVERY_APPLIED screen=SHOP_OVERLAY " +
+                            "SCREEN_RECOVERY_ACTION_REQUESTED screen=SHOP_OVERLAY " +
                                 "action=CLOSE_OVERLAY accepted=$accepted"
                         }
                         if (accepted) {
@@ -1516,7 +1782,7 @@ object ScreenStateRecovery {
                     reconnectAcceptedAt.compareAndSet(acceptedReconnectAt, 0L)
                 ) {
                     log.warn {
-                        "SCREEN_RECOVERY_APPLIED screen=RECONNECT action=RESTART_CLIENT " +
+                        "SCREEN_RECOVERY_ACTION_REQUESTED screen=RECONNECT action=RESTART_CLIENT " +
                             "reason=stalled-reconnect elapsedMs=${now - acceptedReconnectAt} " +
                             "thresholdMs=$STALLED_RECONNECT_LOADING_RESTART_MS"
                     }
@@ -1531,7 +1797,7 @@ object ScreenStateRecovery {
                     shouldAttemptReconnect(now)
                 ) {
                     log.warn {
-                        "SCREEN_RECOVERY_APPLIED screen=RECONNECT mode=LOGIN " +
+                        "SCREEN_RECOVERY_ACTION_REQUESTED screen=RECONNECT mode=LOGIN " +
                             "action=CLICK_RECONNECT retryIntervalMs=$RECONNECT_RETRY_INTERVAL_MS"
                     }
                     EXTRA_THREAD_POOL.schedule({
@@ -1595,7 +1861,7 @@ object ScreenStateRecovery {
                         when (recovery.decision) {
                             ReconnectFailureRecoveryPolicy.Decision.RESTART_CLIENT -> {
                                 log.warn {
-                                    "SCREEN_RECOVERY_APPLIED screen=RECONNECT_FAILURE action=RESTART_CLIENT " +
+                                    "SCREEN_RECOVERY_ACTION_REQUESTED screen=RECONNECT_FAILURE action=RESTART_CLIENT " +
                                         "reason=cannot-reconnect-dialog attempt=${recovery.attempt} " +
                                         "maxAttempts=${ReconnectFailureRecoveryPolicy.DEFAULT_MAX_RESTARTS}"
                                 }
@@ -1697,7 +1963,7 @@ object ScreenStateRecovery {
                     consumeStalledLoadingAnchor(loadingStartedAt)
                 if (slowReconnectStalled || genericLoadingStalled) {
                     log.warn {
-                        "SCREEN_RECOVERY_APPLIED screen=LOADING action=RESTART_CLIENT " +
+                        "SCREEN_RECOVERY_ACTION_REQUESTED screen=LOADING action=RESTART_CLIENT " +
                             "reason=${if (slowReconnectStalled) "stalled-reconnect-loading" else "stale-loading"} " +
                             "elapsedMs=${now - if (slowReconnectStalled) reconnectStartedAt else loadingStartedAt} " +
                             "thresholdMs=$STALLED_RECONNECT_LOADING_RESTART_MS"
@@ -1710,7 +1976,7 @@ object ScreenStateRecovery {
                     if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) Core.restart()
                 } else {
                     log.info {
-                        "SCREEN_RECOVERY_APPLIED screen=LOADING action=WAIT_FOR_CLIENT " +
+                        "SCREEN_RECOVERY_ACTION_REQUESTED screen=LOADING action=WAIT_FOR_CLIENT " +
                             "loadingObservedForMs=${now - loadingStartedAt} " +
                             "restartThresholdMs=$STALLED_RECONNECT_LOADING_RESTART_MS"
                     }
@@ -1736,7 +2002,7 @@ object ScreenStateRecovery {
                 }
                 Mode.recover(detection.mode, "visible-${detection.kind.code.lowercase(Locale.ROOT)}", enterStrategy = true)
                 log.warn {
-                    "SCREEN_RECOVERY_APPLIED screen=${detection.kind.code} mode=${detection.mode.name} " +
+                    "SCREEN_RECOVERY_ACTION_REQUESTED screen=${detection.kind.code} mode=${detection.mode.name} " +
                         "action=ENTER_MODE_STRATEGY"
                 }
             }

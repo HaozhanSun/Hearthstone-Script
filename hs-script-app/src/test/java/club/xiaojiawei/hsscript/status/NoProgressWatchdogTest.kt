@@ -7,14 +7,23 @@ import org.junit.jupiter.api.Test
 class NoProgressWatchdogTest {
 
     @Test
-    fun `zero byte startup retries stay alive after bounded recovery exhaustion`() {
+    fun `verified Power log startup retries stay alive after bounded recovery exhaustion`() {
         val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 120_000L)
-        val first = watchdog.observe(snapshot(now = 0L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
-        val second = watchdog.observe(snapshot(now = 120_000L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
-        val third = watchdog.observe(snapshot(now = 240_000L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
-        val fourth = watchdog.observe(snapshot(now = 360_000L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
-        val nextWindow = watchdog.observe(snapshot(now = 360_001L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
-        val nextRetryCycle = watchdog.observe(snapshot(now = 480_000L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
+        val startup = { now: Long ->
+            snapshot(
+                now = now,
+                screen = NoProgressWatchdog.ScreenExpectation.STARTUP,
+                powerLogLength = 1024L,
+                powerLogPosition = 1024L,
+                screenConfirmed = true,
+            )
+        }
+        val first = watchdog.observe(startup(0L))
+        val second = watchdog.observe(startup(120_000L))
+        val third = watchdog.observe(startup(240_000L))
+        val fourth = watchdog.observe(startup(360_000L))
+        val nextWindow = watchdog.observe(startup(360_001L))
+        val nextRetryCycle = watchdog.observe(startup(480_000L))
 
         assertEquals(NoProgressWatchdog.RecoveryAction.WAIT, first.action)
         assertEquals(NoProgressWatchdog.RecoveryAction.REBIND, second.action)
@@ -24,6 +33,147 @@ class NoProgressWatchdogTest {
         assertEquals(1L, nextWindow.elapsedNoProgressMs)
         assertEquals(NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, nextWindow.action)
         assertEquals(NoProgressWatchdog.RecoveryAction.REBIND, nextRetryCycle.action)
+    }
+
+    @Test
+    fun `unbound or sentinel Power log never starts destructive recovery`() {
+        val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1_000L)
+        val first = watchdog.observe(
+            snapshot(now = 0L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP, powerLogUsable = false),
+        )
+        val late = watchdog.observe(
+            snapshot(
+                now = 900_000L,
+                screen = NoProgressWatchdog.ScreenExpectation.STARTUP,
+                powerLogUsable = false,
+                powerLogPath = null,
+                powerLogPosition = Long.MIN_VALUE,
+                powerLogLength = 0L,
+            ),
+        )
+
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, first.action)
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, late.action)
+        assertEquals("power-log-unbound-or-unusable", late.reason)
+    }
+
+    @Test
+    fun `stale startup mode without fresh loading screenshot never restarts`() {
+        val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1_000L)
+        watchdog.observe(snapshot(now = 0L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
+        val late = watchdog.observe(snapshot(now = 900_000L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
+
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, late.action)
+        assertEquals("screen-evidence-unconfirmed", late.reason)
+    }
+
+    @Test
+    fun `visible menu and matchmaking are safe expected states regardless of inactivity`() {
+        val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1L)
+        watchdog.observe(snapshot(now = 0L, screen = NoProgressWatchdog.ScreenExpectation.MENU_OR_MATCHING))
+        val decision = watchdog.observe(
+            snapshot(now = 900_000L, screen = NoProgressWatchdog.ScreenExpectation.MENU_OR_MATCHING),
+        )
+
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, decision.action)
+        assertEquals("visible-menu-or-matchmaking", decision.reason)
+    }
+
+    @Test
+    fun `confirmed loading with readable stagnant log only recovers after three minutes`() {
+        val watchdog = NoProgressWatchdog()
+        val loading = { now: Long ->
+            snapshot(
+                now = now,
+                screen = NoProgressWatchdog.ScreenExpectation.STARTUP,
+                screenConfirmed = true,
+                powerLogLength = 4096L,
+                powerLogPosition = 4096L,
+            )
+        }
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT, watchdog.observe(loading(0L)).action)
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, watchdog.observe(loading(179_999L)).action)
+        val stalled = watchdog.observe(loading(180_000L))
+        assertEquals(NoProgressWatchdog.RecoveryAction.REBIND, stalled.action)
+        assertEquals("startup-or-initialization-timeout", stalled.reason)
+    }
+
+    @Test
+    fun `authoritative mulligan survives stale startup mode and no progress`() {
+        val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1_000L)
+        val mulligan = snapshot(
+            now = 500_000L,
+            screen = NoProgressWatchdog.ScreenExpectation.MULLIGAN,
+            authoritativeLiveMatch = true,
+        ).copy(mode = "STARTUP", expectedMode = "STARTUP")
+
+        val decision = watchdog.observe(mulligan)
+
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, decision.action)
+        assertEquals("live-match-preserved", decision.reason)
+    }
+
+    @Test
+    fun `live match with missing process fails closed instead of relaunching`() {
+        val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1L)
+        val decision = watchdog.observe(
+            snapshot(
+                now = 500_000L,
+                screen = NoProgressWatchdog.ScreenExpectation.MULLIGAN,
+                currentPid = null,
+                authoritativeLiveMatch = true,
+            ),
+        )
+
+        assertEquals(NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE, decision.action)
+        assertEquals("live-match-process-missing-fail-closed", decision.reason)
+    }
+
+    @Test
+    fun `live match with replaced process lineage fails closed instead of reattaching stale state`() {
+        val watchdog = NoProgressWatchdog()
+        val decision = watchdog.observe(
+            snapshot(
+                now = 50_000L,
+                screen = NoProgressWatchdog.ScreenExpectation.MULLIGAN,
+                currentPid = 222L,
+                boundPid = 111L,
+                authoritativeLiveMatch = true,
+            ),
+        )
+
+        assertEquals(NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE, decision.action)
+        assertEquals("live-match-process-lineage-changed-fail-closed", decision.reason)
+    }
+
+    @Test
+    fun `late current session log binding resets startup baseline and growing log is progress`() {
+        val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1_000L)
+        watchdog.observe(snapshot(now = 0L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP, powerLogUsable = false))
+        val attached = watchdog.observe(
+            snapshot(
+                now = 20_000L,
+                screen = NoProgressWatchdog.ScreenExpectation.STARTUP,
+                powerLogUsable = true,
+                powerLogLength = 512L,
+                powerLogPosition = 512L,
+                screenConfirmed = true,
+            ),
+        )
+        val growing = watchdog.observe(
+            snapshot(
+                now = 20_500L,
+                screen = NoProgressWatchdog.ScreenExpectation.STARTUP,
+                powerLogUsable = true,
+                powerLogLength = 768L,
+                powerLogPosition = 768L,
+                screenConfirmed = true,
+            ),
+        )
+
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT, attached.action)
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT, growing.action)
+        assertEquals("authoritative-progress", growing.reason)
     }
 
     @Test
@@ -146,6 +296,11 @@ class NoProgressWatchdogTest {
         boundPowerLogPath: String? = "run/Power.log",
         foregroundMatches: Boolean = true,
         foregroundFailureCount: Int = 0,
+        powerLogUsable: Boolean = true,
+        authoritativeLiveMatch: Boolean = false,
+        screenConfirmed: Boolean = false,
+        powerLogPosition: Long = 0L,
+        powerLogLength: Long = 0L,
     ) = NoProgressWatchdog.Snapshot(
         nowMs = now,
         mode = "GAMEPLAY",
@@ -159,9 +314,18 @@ class NoProgressWatchdogTest {
         foregroundFailureCount = foregroundFailureCount,
         powerLogPath = powerLogPath,
         boundPowerLogPath = boundPowerLogPath,
-        powerLogPosition = 0L,
-        powerLogLength = 0L,
+        powerLogPosition = powerLogPosition,
+        powerLogLength = powerLogLength,
         powerLogAgeMs = now,
+        powerLogUsable = powerLogUsable,
+        authoritativeLiveMatch = authoritativeLiveMatch,
+        screenConfirmed = screenConfirmed || screen == NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY ||
+            screen == NoProgressWatchdog.ScreenExpectation.OPPONENT_TURN ||
+            screen == NoProgressWatchdog.ScreenExpectation.ANIMATION ||
+            screen == NoProgressWatchdog.ScreenExpectation.MULLIGAN ||
+            screen == NoProgressWatchdog.ScreenExpectation.RESULT ||
+            screen == NoProgressWatchdog.ScreenExpectation.MENU_OR_MATCHING ||
+            screen == NoProgressWatchdog.ScreenExpectation.EXTERNAL_MODAL,
     )
 }
 

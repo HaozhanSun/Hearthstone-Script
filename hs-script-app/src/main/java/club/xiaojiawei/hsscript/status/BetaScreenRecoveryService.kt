@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import java.io.File
 
 /**
  * Optional Beta recovery orchestration. The upstream lifecycle loop remains
@@ -263,6 +264,30 @@ internal object BetaScreenRecoveryService {
         }
 
         val now = System.currentTimeMillis()
+        val liveGamePid = GameUtil.findGameProcessIdForDiagnostics()
+        val latestPowerLog = GameUtil.getLatestLogDir()?.resolve(club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME)
+        val processStartedAt = liveGamePid?.let { pid ->
+            runCatching {
+                ProcessHandle.of(pid).orElse(null)?.info()?.startInstant()?.orElse(null)?.toEpochMilli()
+            }.getOrNull()
+        }
+        val latestPowerLogUsable = latestPowerLog?.let { candidate ->
+            candidate.isFile && candidate.canRead() && PowerLogSessionBindingPolicy.isCurrentSession(
+                powerLogPath = candidate.absolutePath,
+                gameLogsRoot = candidate.parentFile?.parent,
+                length = candidate.length(),
+                lastModifiedMs = candidate.lastModified(),
+                processStartedAtMs = processStartedAt,
+            )
+        } == true
+        if (latestPowerLogUsable && PowerLogListener.logFile?.path() != latestPowerLog?.absolutePath) {
+            val attached = runCatching { PowerLogListener.bindCurrentSessionIfAvailable() }.getOrDefault(false)
+            log.info {
+                "POWER_LOG_CURRENT_SESSION_BIND result=${if (attached) "BOUND" else "PENDING"} " +
+                    "pid=${liveGamePid ?: "none"} path=${latestPowerLog?.absolutePath} " +
+                    "length=${latestPowerLog?.length() ?: 0L}"
+            }
+        }
         val powerLog = PowerLogListener.logFile
         val powerLogPath = powerLog?.path()
         val powerLogPosition = powerLog?.getPosition() ?: Long.MIN_VALUE
@@ -271,21 +296,30 @@ internal object BetaScreenRecoveryService {
             runCatching { (now - java.io.File(path).lastModified()).coerceAtLeast(0L) }
                 .getOrNull()
         } ?: Long.MAX_VALUE
-        val currentPid = GameUtil.findGameProcessIdForDiagnostics()
+        val currentPid = liveGamePid
         if (noProgressBoundPid == null && currentPid != null) noProgressBoundPid = currentPid
         if (noProgressBoundPowerLogPath == null && powerLogPath != null) {
             noProgressBoundPowerLogPath = powerLogPath
         }
-        val screen = when {
+        val needsVisualConfirmation = Mode.nextMode == ModeEnum.STARTUP || powerLog == null
+        val visualObservation = if (needsVisualConfirmation && currentPid != null) {
+            runCatching { ScreenStateRecovery.observeFreshScreenForWatchdog() }.getOrNull()
+        } else null
+        val (screen, screenConfirmed) = when {
             WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState() ->
-                NoProgressWatchdog.ScreenExpectation.RESULT
-            Mode.nextMode == ModeEnum.STARTUP || powerLog == null ->
-                NoProgressWatchdog.ScreenExpectation.STARTUP
-            recoveryPending && WarEx.inWar -> NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY
-            WarEx.inWar && !WarEx.war.isMyTurn -> NoProgressWatchdog.ScreenExpectation.OPPONENT_TURN
-            WarEx.inWar && AbstractPhaseStrategy.dealing -> NoProgressWatchdog.ScreenExpectation.ANIMATION
-            WarEx.inWar -> NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY
-            else -> NoProgressWatchdog.ScreenExpectation.MENU_OR_MATCHING
+                NoProgressWatchdog.ScreenExpectation.RESULT to true
+            WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD ->
+                NoProgressWatchdog.ScreenExpectation.MULLIGAN to true
+            WarEx.inWar && !WarEx.war.isMyTurn -> NoProgressWatchdog.ScreenExpectation.OPPONENT_TURN to true
+            WarEx.inWar && AbstractPhaseStrategy.dealing -> NoProgressWatchdog.ScreenExpectation.ANIMATION to true
+            WarEx.inWar -> NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY to true
+            visualObservation?.screen == "LOADING" -> NoProgressWatchdog.ScreenExpectation.STARTUP to true
+            visualObservation?.screen in setOf(
+                "HOME", "HOME_TASK_OVERLAY", "TOURNAMENT", "DECK_SELECTION", "MATCHMAKING", "COLLECTION", "GAME_MODE",
+            ) -> NoProgressWatchdog.ScreenExpectation.MENU_OR_MATCHING to true
+            visualObservation != null -> NoProgressWatchdog.ScreenExpectation.EXTERNAL_MODAL to true
+            needsVisualConfirmation -> NoProgressWatchdog.ScreenExpectation.UNKNOWN to false
+            else -> NoProgressWatchdog.ScreenExpectation.MENU_OR_MATCHING to true
         }
         val expectedMode = Mode.nextMode?.name ?: Mode.currMode?.name ?: "NONE"
         val startupActivityContext = StartupHandoffActivityTracker.Context(
@@ -333,6 +367,13 @@ internal object BetaScreenRecoveryService {
                 powerLogPosition = powerLogPosition,
                 powerLogLength = powerLogLength,
                 powerLogAgeMs = powerLogAge,
+                powerLogUsable = powerLog?.path()?.let { path ->
+                    latestPowerLogUsable && File(path).absoluteFile.normalize() ==
+                        latestPowerLog?.absoluteFile?.normalize()
+                } == true,
+                authoritativeLiveMatch = WarEx.inWar ||
+                    WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+                screenConfirmed = screenConfirmed,
                 paddlexInitializing = runCatching {
                     OcrRuntime.currentProvider() == OcrProviderKind.PADDLEX &&
                         !PowerLogListener.replayingExistingLog && powerLogLength == 0L

@@ -12,6 +12,8 @@ import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.utils.PowerLogUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
+import club.xiaojiawei.hsscript.utils.GameUtil
+import club.xiaojiawei.hsscript.enums.GameLogModeEnum
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.StepEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
@@ -50,6 +52,37 @@ object PowerLogListener :
     private const val RESERVE_SIZE_B = 4 * 1024 * 1024
     private const val ACTIVE_GAME_SCAN_CHUNK_B = 4 * 1024 * 1024
     private const val ACTIVE_GAME_SCAN_MAX_B = 128 * 1024 * 1024
+
+    /**
+     * Retry a late disk-log attach when startup crossed the listener's initial
+     * wait window. The caller must first verify that this is the current game
+     * session's readable, non-empty Power.log; replay remains state-only.
+     */
+    @Synchronized
+    fun bindCurrentSessionIfAvailable(): Boolean {
+        if (ScriptStatus.gameLogMode != GameLogModeEnum.DISK) return false
+        val latestPowerLog = GameUtil.getLatestLogDir()
+            ?.resolve(GAME_WAR_LOG_NAME)
+            ?.takeIf { it.isFile && it.canRead() && it.length() > 0L }
+            ?: return false
+        val currentPath = logFile?.path()?.let { File(it).absoluteFile.normalize().path }
+        val latestPath = latestPowerLog.absoluteFile.normalize().path
+        if (currentPath == latestPath) return true
+        if (currentPath != null) {
+            // The already-running listener rotates itself on its next poll;
+            // do not restart/replay it concurrently from the watchdog thread.
+            return false
+        }
+
+        log.warn {
+            "POWER_LOG_LATE_BIND_REQUEST current=${currentPath ?: "none"} " +
+                "latest=$latestPath reason=current-session-file-verified"
+        }
+        // listen() applies the same unfinished-game replay semantics as a
+        // normal startup attach and rotates an already-running listener safely.
+        listen()
+        return logFile?.path()?.let { File(it).absoluteFile.normalize().path } == latestPath
+    }
 
     override fun dealOldLog() {
         WarEx.reset()

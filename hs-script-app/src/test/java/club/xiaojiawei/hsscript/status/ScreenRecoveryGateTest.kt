@@ -8,6 +8,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ScreenRecoveryGateTest {
@@ -68,6 +69,16 @@ class ScreenRecoveryGateTest {
 
         assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyForTest("选择套牌"))
         assertEquals("RESULT", UpstreamScreenStateRecovery.classifyForTest("胜利 点击继续"))
+        assertEquals("MATCHMAKING", UpstreamScreenStateRecovery.classifyForTest("搜寻对手 取消"))
+        assertNull(UpstreamScreenStateRecovery.classifyForTest(""))
+        assertNull(
+            UpstreamScreenStateRecovery.classifyWithVisualForTest(
+                ocrText = "",
+                centralDarkRatio = 0.499,
+                warmRatio = 0.195,
+                blueRatio = 0.01,
+            ),
+        )
     }
 
     @Test

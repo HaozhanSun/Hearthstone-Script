@@ -74,6 +74,56 @@ class ScreenStateRecoveryTest {
         assertTrue(ScreenStateRecovery.looksLikeMatchmakingText("正在匹配"))
         assertFalse(ScreenStateRecovery.looksLikeMatchmakingText("还有未领取的奖励"))
         assertEquals("MATCHMAKING", ScreenStateRecovery.classifyForTest("搜寻对手 取消"))
+        val queue = ScreenStateRecovery.recoveryTransitionForTest("搜寻对手 取消")
+        assertEquals(ModeEnum.TOURNAMENT, queue?.mode)
+        assertEquals("WAIT_FOR_GAMEPLAY", queue?.action)
+        assertFalse(queue?.enterStrategy ?: true)
+    }
+
+    @Test
+    fun `recovery screen fixtures map to the state machine action for each visible workflow`() {
+        val home = ScreenStateRecovery.recoveryTransitionForTest("传统对战 酒馆战棋 竞技模式 其他模式")
+        assertEquals("HOME", home?.screen)
+        assertEquals(ModeEnum.HUB, home?.mode)
+        assertEquals("ENTER_MODE_STRATEGY", home?.action)
+
+        val deck = ScreenStateRecovery.recoveryTransitionForTest("选择套牌 狂野对战")
+        assertEquals("DECK_SELECTION", deck?.screen)
+        assertEquals(ModeEnum.TOURNAMENT, deck?.mode)
+        assertEquals("START_MATCHING", deck?.action)
+
+        val loading = ScreenStateRecovery.recoveryTransitionForTest("正在加载，请稍候")
+        assertEquals("LOADING", loading?.screen)
+        assertEquals(ModeEnum.STARTUP, loading?.mode)
+        assertEquals("WAIT_FOR_CLIENT", loading?.action)
+
+        val questOverlay = ScreenStateRecovery.recoveryTransitionForTest(
+            "你的任务 召唤10个紫罗兰监狱的随从 4/10 施放12个火焰或自然法术 0/12",
+        )
+        assertEquals("HOME_TASK_OVERLAY", questOverlay?.screen)
+        assertEquals(ModeEnum.HUB, questOverlay?.mode)
+        assertEquals("DISMISS_HOME_TASK_OVERLAY", questOverlay?.action)
+        assertEquals(false, questOverlay?.enterStrategy)
+        assertEquals("HOME", ScreenStateRecovery.recoveryTransitionForTest("任务 对战 收藏")?.screen)
+    }
+
+    @Test
+    fun `exact matchmaking error dialog is not confused with generic reconnect or loading`() {
+        val probe = club.xiaojiawei.hsscript.strategy.mode.StartGameErrorDialogClassifier.classify(
+            title = "发生错误",
+            body = "开始游戏时发生了错误，请等待几分钟并再次尝试。",
+            confirm = "确定",
+        )
+        assertEquals(
+            club.xiaojiawei.hsscript.strategy.mode.MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE,
+            probe,
+        )
+        val unknown = club.xiaojiawei.hsscript.strategy.mode.StartGameErrorDialogClassifier.classify(
+            title = "发生错误",
+            body = "无法识别的错误内容",
+            confirm = "确定",
+        )
+        assertEquals(club.xiaojiawei.hsscript.strategy.mode.MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN, unknown)
     }
 
     @Test

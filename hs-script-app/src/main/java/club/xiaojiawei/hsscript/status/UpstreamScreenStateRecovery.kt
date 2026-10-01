@@ -477,14 +477,9 @@ object UpstreamScreenStateRecovery {
         if (looksLikeLoadingText(text)) {
             return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 88, "loading-text")
         }
-        if (looksLikeLoadingVisual(
-                centralDarkRatio = visual.loadingCentralDarkRatio,
-                warmRatio = visual.warmRatio,
-                blueRatio = visual.blueRatio,
-            )
-        ) {
-            return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 87, "loading-card-back-visual")
-        }
+        // Card-back/color ratios alone also occur behind Home quests, rewards,
+        // and modal overlays. Only explicit loading/reconnect text is strong
+        // enough to move the state machine to STARTUP.
         if (text.contains("登录") || text.contains("重新连接")) {
             return Detection(ScreenKind.LOGIN, ModeEnum.LOGIN, 90, "login-text")
         }
@@ -626,6 +621,23 @@ object UpstreamScreenStateRecovery {
             warmRatio = 0.0,
             blueRatio = 0.0,
             loadingCentralDarkRatio = 0.0,
+            resultContinueGrayLightRatio = 0.0,
+            resultBannerLowSaturationRatio = 0.0,
+        ),
+    )?.kind?.code
+
+    internal fun classifyWithVisualForTest(
+        ocrText: String,
+        centralDarkRatio: Double,
+        warmRatio: Double,
+        blueRatio: Double,
+    ): String? = detect(
+        ocrText,
+        VisualSignature(
+            sampleHash = 0L,
+            warmRatio = warmRatio,
+            blueRatio = blueRatio,
+            loadingCentralDarkRatio = centralDarkRatio,
             resultContinueGrayLightRatio = 0.0,
             resultBannerLowSaturationRatio = 0.0,
         ),
