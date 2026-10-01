@@ -633,6 +633,158 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun `deck selection rank crop targets the upper right badge from the 1920x1080 evidence`() {
+        val badge = CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(
+            1920,
+            1080,
+            "pre-match-deck-selection",
+        )
+        val digit = CurrentRankDetector.rankDigitBoundsForScreenPhaseForTest(
+            1920,
+            1080,
+            "pre-match-deck-selection",
+        )
+
+        assertEquals(Rectangle(1228, 21, 202, 324), badge)
+        assertEquals(Rectangle(1276, 221, 116, 49), digit)
+        assertTrue(badge.contains(digit))
+        assertTrue(digit.x > 1200 && digit.y < 300)
+        assertTrue(digit.x + digit.width < 1440, "exclude adjacent wins-remaining label")
+    }
+
+    @Test
+    fun `phase-specific rank crops scale with the captured game window`() {
+        val phase = "pre-match-deck-selection"
+        val referenceBadge = CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(1920, 1080, phase)
+        val referenceDigit = CurrentRankDetector.rankDigitBoundsForScreenPhaseForTest(1920, 1080, phase)
+
+        for ((width, height) in listOf(2560 to 1440, 1600 to 900, 1280 to 720)) {
+            val badge = CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(width, height, phase)
+            val digit = CurrentRankDetector.rankDigitBoundsForScreenPhaseForTest(width, height, phase)
+            assertTrue(kotlin.math.abs(badge.x.toDouble() / width - referenceBadge.x.toDouble() / 1920) < 0.001)
+            assertTrue(kotlin.math.abs(badge.y.toDouble() / height - referenceBadge.y.toDouble() / 1080) < 0.001)
+            assertTrue(kotlin.math.abs(digit.x.toDouble() / width - referenceDigit.x.toDouble() / 1920) < 0.001)
+            assertTrue(kotlin.math.abs(digit.y.toDouble() / height - referenceDigit.y.toDouble() / 1080) < 0.001)
+            assertTrue(badge.contains(digit))
+        }
+
+        assertEquals(
+            Rectangle(0, 885, 105, 108),
+            CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(1920, 1080, "REPLACE_CARD"),
+            "in-game Mulligan keeps its known-good lower-left HUD crop",
+        )
+    }
+
+    @Test
+    fun `pre-match OCR reads the upper-right numeral and unknown remains denied by exact-rank policy`() {
+        val originalSettingsProvider = OcrRuntime.settingsProvider
+        val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
+        val digitBounds = CurrentRankDetector.rankDigitBoundsForScreenPhaseForTest(
+            1920,
+            1080,
+            "pre-match-deck-selection",
+        )
+        val markerX = digitBounds.x + digitBounds.width / 2
+        val markerY = digitBounds.y + digitBounds.height / 2
+        val screen = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
+        val graphics = screen.createGraphics()
+        graphics.color = Color.BLACK
+        graphics.fillRect(0, 0, screen.width, screen.height)
+        // Synthetic numeral evidence at the same upper-right coordinate as
+        // the deployed 1920x1080 screenshot; the old lower-left crop is blank.
+        graphics.color = Color.WHITE
+        graphics.fillRect(markerX - 12, markerY - 8, 24, 16)
+        graphics.dispose()
+
+        var recognizedRank = "10"
+        val calls = mutableListOf<Pair<String?, Pair<Int, Int>>>()
+        try {
+            OcrRuntime.settingsProvider = {
+                PaddleXOcrSettings(
+                    enabled = true,
+                    pythonExecutable = "python",
+                    modulePath = "fake-module",
+                    device = "cpu",
+                    modelCachePath = "",
+                    timeoutMs = 1000,
+                )
+            }
+            OcrRuntime.paddleXBridgeFactory = {
+                object : OcrTextBridge {
+                    override fun recognize(image: BufferedImage, desc: String): String = ""
+
+                    override fun recognizeWithConfidence(
+                        image: BufferedImage,
+                        desc: String,
+                        roi: String?,
+                    ): OcrRecognition {
+                        calls += roi to (image.width to image.height)
+                        if (roi == "rank-badge") return OcrRecognition("", confidence = null)
+                        if (roi != "rank-badge-small") return OcrRecognition("", confidence = null)
+                        val containsObservedNumeral = (0 until image.height).any { y ->
+                            (0 until image.width).any { x ->
+                                val pixel = image.getRGB(x, y)
+                                ((pixel shr 16) and 0xff) > 200 &&
+                                    ((pixel shr 8) and 0xff) > 200 &&
+                                    (pixel and 0xff) > 200
+                            }
+                        }
+                        return OcrRecognition(if (containsObservedNumeral) recognizedRank else "", confidence = 0.99)
+                    }
+
+                    override fun healthCheck(): OcrHealth =
+                        OcrHealth(true, OcrProviderKind.PADDLEX, "ok")
+                }
+            }
+
+            fun detection() = CurrentRankDetector.detectCapturedImage(
+                screen = screen,
+                saveEvidence = false,
+                evidenceTrigger = "matchmaking-rank-gate-test",
+                evidencePhase = "pre-match-deck-selection",
+                capturedAtMs = 10_000L,
+            )
+
+            for (rank in listOf("5", "10", "7")) {
+                recognizedRank = rank
+                calls.clear()
+                val result = detection()
+                assertEquals(rank.toInt(), result?.rank)
+                assertEquals(listOf("rank-badge", "rank-badge-small"), calls.map { it.first })
+                assertEquals(202 to 324, calls[0].second)
+                assertEquals(464 to 196, calls[1].second)
+                val authorization = RankEligibilityPolicy.evaluate(
+                    detection = result,
+                    expectedMode = ModeEnum.TOURNAMENT.name,
+                    actualMode = ModeEnum.TOURNAMENT.name,
+                    expectedInWar = false,
+                    inWar = false,
+                    nowMs = 10_000L,
+                )
+                assertEquals(rank in setOf("5", "10"), authorization.eligible, "rank=$rank")
+            }
+
+            recognizedRank = ""
+            calls.clear()
+            val unresolved = detection()
+            assertNull(unresolved?.rank)
+            val denied = RankEligibilityPolicy.evaluate(
+                detection = unresolved,
+                expectedMode = ModeEnum.TOURNAMENT.name,
+                actualMode = ModeEnum.TOURNAMENT.name,
+                expectedInWar = false,
+                inWar = false,
+                nowMs = 10_000L,
+            )
+            assertFalse(denied.eligible)
+            assertEquals("rank-unresolved", denied.reason)
+        } finally {
+            OcrRuntime.settingsProvider = originalSettingsProvider
+            OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
+        }
+    }
+
+    @Test
     fun rankDetectionSelectsTallerSmallRoiWhenFullBadgeIsUnresolved() {
         fun probe(roi: String, rank: Int?, text: String = rank?.toString().orEmpty()) =
             CurrentRankDetector.RankProbeResult(
