@@ -12,7 +12,7 @@ import club.xiaojiawei.hsscriptbasestrategy.VersionInfo
 object PirateMctsStrategyVersion {
     // Bump whenever Pirate Warrior or Pirate Demon Hunter decision rules,
     // mode availability, or mulligan contracts change.
-    const val REVISION = "2.7"
+    const val REVISION = "2.8"
 
     private val buildVersion: String
         get() = VersionInfo.VERSION.removePrefix("v").substringBefore('-')
