@@ -6,13 +6,56 @@ import club.xiaojiawei.hsscript.ocr.OcrHealth
 import club.xiaojiawei.hsscript.ocr.OcrProviderKind
 import club.xiaojiawei.hsscript.ocr.OcrTextBridge
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrCancelledException
+import club.xiaojiawei.hsscript.ocr.PaddleXOcrException
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
 import java.awt.image.BufferedImage
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 
 class CurrentRankDetectorCancellationTest {
+
+    @Test
+    fun `translated PaddleX OCR exception becomes absent rank evidence not a cached allow`() {
+        val oldSettingsProvider = OcrRuntime.settingsProvider
+        val oldBridgeFactory = OcrRuntime.paddleXBridgeFactory
+        val oldModeProvider = OcrRuntime.providerModeProvider
+        OcrRuntime.providerModeProvider = { OcrProviderMode.PADDLEX_ONLY }
+        OcrRuntime.settingsProvider = {
+            PaddleXOcrSettings(true, "python", "test-module", "cpu", "", 10_000L)
+        }
+        OcrRuntime.paddleXBridgeFactory = {
+            object : OcrTextBridge {
+                override fun recognize(image: BufferedImage, desc: String): String =
+                    throw PaddleXOcrException("translated sidecar OCR failure")
+
+                override fun healthCheck() = OcrHealth(true, OcrProviderKind.PADDLEX, "ok")
+            }
+        }
+
+        try {
+            val detection = CurrentRankDetector.detectCapturedImage(
+                BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB),
+                saveEvidence = false,
+            )
+            assertEquals(null, detection)
+            assertFalse(
+                RankEligibilityPolicy.evaluate(
+                    detection = detection,
+                    expectedMode = "TOURNAMENT",
+                    actualMode = "TOURNAMENT",
+                    expectedInWar = false,
+                    inWar = false,
+                    nowMs = System.currentTimeMillis(),
+                ).eligible,
+            )
+        } finally {
+            OcrRuntime.settingsProvider = oldSettingsProvider
+            OcrRuntime.paddleXBridgeFactory = oldBridgeFactory
+            OcrRuntime.providerModeProvider = oldModeProvider
+        }
+    }
 
     @Test
     fun `PaddleX cancellation propagates without becoming unknown rank or fallback`() {

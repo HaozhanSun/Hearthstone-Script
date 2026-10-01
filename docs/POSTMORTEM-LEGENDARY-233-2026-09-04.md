@@ -1,5 +1,11 @@
 # Legendary 233 rank-detection postmortem
 
+> Historical behavior and analysis only. The later repository policy in
+> `AGENTS.md` supersedes this document's former Legendary exception: current
+> automation is authorized to enter/play only on fresh, positively verified
+> numeric rank 5 or 10. Legendary ratings, other ranks, and uncertain OCR must
+> not authorize matchmaking or gameplay.
+
 Date: 2026-09-04  
 Base: Beta `.199`, release commit `cc5168df`  
 Repository: `https://github.com/HaozhanSun/Hearthstone-Script.git`  

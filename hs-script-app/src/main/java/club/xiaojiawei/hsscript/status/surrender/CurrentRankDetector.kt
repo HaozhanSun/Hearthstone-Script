@@ -79,11 +79,15 @@ object CurrentRankDetector {
         val ocrText: String,
         val confidence: Double?,
         val captureBounds: Rectangle,
+        val provider: String = "UNKNOWN",
+        val capturedAtMs: Long = 0L,
+        val agreementCount: Int = 0,
     )
 
     data class RankCandidate(
         val rank: Int,
         val confidence: Double?,
+        val agreementCount: Int = 1,
     )
 
     /** One provider read, retaining enough provenance for fallback evidence. */
@@ -162,7 +166,7 @@ object CurrentRankDetector {
         val numeric = token.toIntOrNull() ?: return null
         return when {
             numeric in MIN_RANK..MAX_RANK -> numeric
-            numeric > 50 -> numeric
+            numeric > 20 -> numeric
             else -> null
         }
     }
@@ -203,7 +207,9 @@ object CurrentRankDetector {
         // rank.  Keep the numeric-evidence requirement so an empty/blank
         // screen cannot become rank 10 from the visual hint alone.
         if (visualTenHint && parsed.isEmpty() && candidates.any { it.any(Char::isDigit) }) {
-            return RankCandidate(rank = 10, confidence = nativeConfidence)
+            // A geometric hint is useful for diagnostics, but is not positive
+            // OCR evidence and must never authorize a queue or game action.
+            return RankCandidate(rank = 10, confidence = nativeConfidence, agreementCount = 0)
         }
         val counts = parsed.groupingBy { it }.eachCount()
         val best = counts.entries
@@ -213,6 +219,7 @@ object CurrentRankDetector {
         return RankCandidate(
             rank = best.key,
             confidence = nativeConfidence,
+            agreementCount = best.value,
         )
     }
 
@@ -249,12 +256,14 @@ object CurrentRankDetector {
         if (bounds.width < 400 || bounds.height < 300) return null
 
         val screen = Robot().createScreenCapture(bounds)
+        val capturedAtMs = System.currentTimeMillis()
         return@runCatching detectCapturedImage(
             screen,
             bounds,
             saveEvidence = true,
             evidenceTrigger = trigger,
             evidencePhase = phase,
+            capturedAtMs = capturedAtMs,
         )
     }.getOrElse { error ->
         val provider = if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
@@ -283,6 +292,7 @@ object CurrentRankDetector {
         saveEvidence: Boolean = false,
         evidenceTrigger: String = "current-rank-paddlex-badge",
         evidencePhase: String = "pre-mulligan-rank-check",
+        capturedAtMs: Long = System.currentTimeMillis(),
     ): Detection? = runCatching {
         val badgeRegion = cropRankRegion(screen)
         val badgeRegionBounds = rankBadgeBoundsForTest(screen.width, screen.height)
@@ -405,7 +415,16 @@ object CurrentRankDetector {
                     phase = evidencePhase,
                 )
             }
-            return Detection(rank, tier, ocrText, confidence, bounds)
+            return Detection(
+                rank = rank,
+                tier = tier,
+                ocrText = ocrText,
+                confidence = confidence,
+                captureBounds = bounds,
+                provider = rankProviderUsed(),
+                capturedAtMs = capturedAtMs,
+                agreementCount = selectedProbe?.candidate?.agreementCount ?: 0,
+            )
         }
         val ocrInputs = listOf(
             // Legacy remains on its established tight numeral window; the
@@ -468,7 +487,16 @@ object CurrentRankDetector {
                 phase = evidencePhase,
             )
         }
-        Detection(rank, tier, ocrText, confidence, bounds)
+        Detection(
+            rank = rank,
+            tier = tier,
+            ocrText = ocrText,
+            confidence = confidence,
+            captureBounds = bounds,
+            provider = rankProviderUsed(),
+            capturedAtMs = capturedAtMs,
+            agreementCount = rankCandidate?.agreementCount ?: 0,
+        )
     }.getOrElse { error ->
         val provider = if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
         if (OcrRuntime.isCancellation(error)) {
@@ -519,6 +547,9 @@ object CurrentRankDetector {
             confidence = recognition.confidence,
         )
     }
+
+    private fun rankProviderUsed(): String =
+        if (OcrRuntime.isLegacySelected()) "LEGACY" else OcrRuntime.lastProviderUsed().name
 
     private fun skippedRankProbe(
         roi: String,

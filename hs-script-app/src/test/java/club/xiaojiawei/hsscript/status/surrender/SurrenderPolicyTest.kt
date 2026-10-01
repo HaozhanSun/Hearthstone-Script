@@ -477,6 +477,7 @@ class SurrenderPolicyTest {
         assertEquals(8, CurrentRankDetector.parseRankText("商8"))
         assertEquals(233, CurrentRankDetector.parseRankText("233"))
         assertEquals(257, CurrentRankDetector.parseRankText("257"))
+        assertEquals(21, CurrentRankDetector.parseRankText("21"))
     }
 
     @Test
@@ -955,11 +956,11 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun onlySilverRanksFiveAndTenAreAllowed() {
+    fun exactRanksFiveAndTenAreAllowedIndependentOfNormalTierLabel() {
         for (tier in CurrentRankDetector.RankTier.values()) {
             val five = SurrenderPolicy.evaluateCurrentRank(rank = 5, tier = tier)
             val ten = SurrenderPolicy.evaluateCurrentRank(rank = 10, tier = tier)
-            if (tier == CurrentRankDetector.RankTier.SILVER) {
+            if (tier != CurrentRankDetector.RankTier.LEGEND) {
                 assertNull(five)
                 assertNull(ten)
             } else {
@@ -1092,7 +1093,7 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun offlineRankScenariosMapLegendaryToAllowAndOrdinaryNumbersToSurrender() {
+    fun offlineRankScenariosRejectLegendaryAndOtherRanksButAllowOnlyExactFiveOrTen() {
         data class Scenario(
             val name: String,
             val ocr: String,
@@ -1106,7 +1107,7 @@ class SurrenderPolicyTest {
             Scenario("legendary-257", "257", CurrentRankDetector.RankTier.LEGEND, true, true),
             Scenario("platinum-2", "2", CurrentRankDetector.RankTier.PLATINUM, false, true),
             Scenario("rank-5", "5", CurrentRankDetector.RankTier.SILVER, false, false),
-            Scenario("rank-10", "10", CurrentRankDetector.RankTier.GOLD, false, true),
+            Scenario("rank-10", "10", CurrentRankDetector.RankTier.GOLD, false, false),
             Scenario("rank-7", "7", CurrentRankDetector.RankTier.SILVER, false, true),
         )
 
@@ -1131,8 +1132,8 @@ class SurrenderPolicyTest {
 
         assertTrue(result != null)
         assertTrue(result!!.shouldSurrender)
-        assertEquals("current-rank-is-not-silver-target", result.ruleId)
-        assertEquals("current-rank=9 tier=UNKNOWN target-tier=SILVER target-ranks=5,10", result.reason)
+        assertEquals("current-rank-not-5-or-10", result.ruleId)
+        assertEquals("current-rank=9 tier=UNKNOWN target-ranks=5,10", result.reason)
     }
 
     @Test
@@ -1142,7 +1143,7 @@ class SurrenderPolicyTest {
                 val result = SurrenderPolicy.evaluateCurrentRank(rank = rank, tier = tier)
                 assertTrue(result != null)
                 assertTrue(result!!.shouldSurrender)
-                assertEquals("current-rank-is-not-silver-target", result.ruleId)
+                assertEquals("current-rank-not-5-or-10", result.ruleId)
             }
         }
     }
@@ -1152,7 +1153,7 @@ class SurrenderPolicyTest {
         for (tier in CurrentRankDetector.RankTier.values()) {
             val result = SurrenderPolicy.evaluateCurrentRank(rank = 7, tier = tier)
             assertTrue(result!!.shouldSurrender)
-            assertEquals("current-rank=7 tier=${tier.name} target-tier=SILVER target-ranks=5,10", result.reason)
+            assertEquals("current-rank=7 tier=${tier.name} target-ranks=5,10", result.reason)
         }
     }
 

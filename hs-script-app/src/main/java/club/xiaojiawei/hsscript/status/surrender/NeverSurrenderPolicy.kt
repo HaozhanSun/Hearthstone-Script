@@ -25,11 +25,13 @@ object NeverSurrenderPolicy {
         setting && BuildChannel.identityToken(channel) == "beta"
 
     internal fun rankIsIneligible(rank: Int): Boolean =
-        rank in 1..10 && rank != 5 && rank != 10
+        rank != 5 && rank != 10
 
     /** Rank-floor decisions are an explicit safety policy, not ordinary strategy surrender. */
     internal fun isMandatoryRankRule(ruleId: String?): Boolean =
-        ruleId == "current-rank-is-not-silver-target" || ruleId == "rank-ocr-unresolved"
+        ruleId == "current-rank-not-5-or-10" ||
+            ruleId == "current-rank-is-not-silver-target" ||
+            ruleId == "rank-ocr-unresolved"
 
     internal fun isMandatoryRankDispatch(source: String, ruleId: String?): Boolean =
         (source == "current-rank" || source == "mulligan-rank-preflight") &&

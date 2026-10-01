@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscript.status.DebugScreenshotRing
+import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.statistics.Record
@@ -781,9 +782,9 @@ object SurrenderPolicy {
     }
 
     /**
-     * The rank gate is the primary policy: ordinary numeric ranks other than
-     * 5 and 10 are not eligible to continue, so they surrender before
-     * mulligan. Clearly large ratings are handled as Legendary before this method. The old
+     * The rank gate is the primary policy: only fresh, positively verified
+     * numeric ranks 5 and 10 are eligible to continue, independent of ordinary
+     * league text. Every other number and Legendary is ineligible. The old
      * 45% win-rate gate is a secondary insurance and is evaluated from every
      * completed result for the selected strategy, including our own
      * concessions. Otherwise a win-rate-triggered surrender would never enter
@@ -888,25 +889,39 @@ object SurrenderPolicy {
             trigger = "rank-policy-${phase.name}",
             phase = phase.name,
         )
-        if (isLegendaryDetection(detection)) {
+        val authorization = RankEligibilityPolicy.evaluate(
+            detection = detection,
+            expectedMode = ModeEnum.GAMEPLAY.name,
+            actualMode = Mode.currMode?.name,
+            expectedInWar = true,
+            inWar = WarEx.inWar,
+            nowMs = System.currentTimeMillis(),
+        )
+        log.info {
+            "RANK_ELIGIBILITY_CHECK stage=MULLIGAN provider=${detection?.provider ?: "NONE"} " +
+                "rank=${detection?.rank ?: "UNKNOWN"} tier=${detection?.tier?.name ?: "UNKNOWN"} " +
+                "confidence=${detection?.confidence ?: "unavailable"} agreement=${detection?.agreementCount ?: 0} " +
+                "mode=${Mode.currMode?.name ?: "NONE"} decision=${if (authorization.eligible) "ALLOW" else "DENY"} " +
+                "reason=${authorization.reason}"
+        }
+        val recognizedIneligible = detection?.tier == CurrentRankDetector.RankTier.LEGEND ||
+            detection?.rank?.let { it !in setOf(5, 10) } == true
+        if (recognizedIneligible) {
             rankCheckCompleted = true
             setRankInspectionState(RankInspectionState.RESOLVED)
             val result = evaluateCurrentRank(detection?.rank ?: 0, detection?.tier ?: CurrentRankDetector.RankTier.UNKNOWN)
             log.warn {
                 "RANK_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
                     "rank=${detection?.rank ?: "LEGENDARY"} tier=${detection?.tier?.name ?: "UNKNOWN"} " +
-                    "action=SURRENDER reason=${result?.reason ?: "legendary-tier-not-silver-target"}"
+                    "action=SURRENDER reason=${result?.reason ?: authorization.reason}"
             }
             return result
         }
-        val rank = detection?.rank
-        if (rank == null) {
+        if (!authorization.eligible) {
             // A provider can return a Detection object even when it found no
-            // usable number (for example, a badge-color match with empty OCR).
-            // That is not evidence for a surrender: only a confirmed numeric
-            // rank 1..10 may trigger this rule, while a confirmed Legendary
-            // result is handled above. Retry the same way for provider output
-            // and provider failure, then block the surrender if unresolved.
+            // usable/verified number. Unknown, low-confidence, stale, translated
+            // exception, cancellation, and mode-mismatched evidence are all
+            // denied; bounded retries then request surrender if unresolved.
             val readDecision = classifyRankInspection(
                 rank = null,
                 detectionAvailable = detection != null,
@@ -917,7 +932,7 @@ object SurrenderPolicy {
                 log.debug {
                     "RANK_POLICY_WAITING_FOR_RANK stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
                         "attempt=$rankInspectionAttempts maxAttempts=$MAX_RANK_INSPECTION_ATTEMPTS " +
-                        "providerResult=${readDecision.reason} " +
+                        "providerResult=${authorization.reason} retry=${readDecision.reason} " +
                         "action=WAIT pause=false surrender=false"
                 }
                 return null
@@ -927,12 +942,13 @@ object SurrenderPolicy {
             val result = unresolvedRankDecision(rankInspectionAttempts)
             log.warn {
                 "RANK_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                    "rank=UNKNOWN tier=${detection?.tier?.name ?: "UNKNOWN"} action=SURRENDER " +
-                    "reason=${result.reason}"
+                    "rank=${detection?.rank ?: "UNKNOWN"} tier=${detection?.tier?.name ?: "UNKNOWN"} " +
+                    "action=SURRENDER reason=${authorization.reason} final=${result.reason}"
             }
             return result
         }
 
+        val rank = detection!!.rank!!
         rankCheckCompleted = true
         setRankInspectionState(RankInspectionState.RESOLVED)
         val result = evaluateCurrentRank(rank, detection.tier) ?: run {
@@ -965,18 +981,18 @@ object SurrenderPolicy {
         rank: Int,
         tier: CurrentRankDetector.RankTier = CurrentRankDetector.RankTier.UNKNOWN,
     ): SurrenderRuleResult? {
-        if (tier == CurrentRankDetector.RankTier.SILVER && rank in setOf(5, 10)) return null
+        if (rank in setOf(5, 10) && tier != CurrentRankDetector.RankTier.LEGEND) return null
         return SurrenderRuleResult(
-            ruleId = "current-rank-is-not-silver-target",
+            ruleId = "current-rank-not-5-or-10",
             matched = false,
             shouldSurrender = true,
-            reason = "current-rank=$rank tier=${tier.name} target-tier=SILVER target-ranks=5,10",
+            reason = "current-rank=$rank tier=${tier.name} target-ranks=5,10",
         )
     }
 
-    /** Legendary is a confirmed non-numeric or clearly large-rating result, not UNKNOWN. */
+    /** Classifier helper only: Legendary is known ineligible, never authorization to play. */
     internal fun isLegendaryDetection(detection: CurrentRankDetector.Detection?): Boolean =
-        detection?.tier == CurrentRankDetector.RankTier.LEGEND || detection?.rank?.let { it > 50 } == true
+        detection?.tier == CurrentRankDetector.RankTier.LEGEND || detection?.rank?.let { it > 20 } == true
 
     internal fun unresolvedRankDecision(attempts: Int): SurrenderRuleResult =
         SurrenderRuleResult(

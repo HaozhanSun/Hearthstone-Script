@@ -20,6 +20,8 @@ class NeverSurrenderPolicyTest {
     @Test
     fun `rank seven remains fail closed instead of being played when never surrender is enabled`() {
         assertTrue(NeverSurrenderPolicy.rankIsIneligible(7))
+        assertTrue(NeverSurrenderPolicy.rankIsIneligible(233))
+        assertTrue(NeverSurrenderPolicy.rankIsIneligible(0))
         assertFalse(NeverSurrenderPolicy.rankIsIneligible(5))
         assertFalse(NeverSurrenderPolicy.rankIsIneligible(10))
         assertTrue(SurrenderPolicy.evaluateCurrentRank(7)!!.shouldSurrender)
@@ -27,6 +29,7 @@ class NeverSurrenderPolicyTest {
 
     @Test
     fun `mandatory rank rules are exempt from the ordinary never surrender kill switch`() {
+        assertTrue(NeverSurrenderPolicy.isMandatoryRankRule("current-rank-not-5-or-10"))
         assertTrue(NeverSurrenderPolicy.isMandatoryRankRule("current-rank-is-not-silver-target"))
         assertTrue(NeverSurrenderPolicy.isMandatoryRankRule("rank-ocr-unresolved"))
         assertFalse(NeverSurrenderPolicy.isMandatoryRankRule("opponent-hero-not-original"))
@@ -34,7 +37,7 @@ class NeverSurrenderPolicyTest {
         assertTrue(
             NeverSurrenderPolicy.isMandatoryRankDispatch(
                 "mulligan-rank-preflight",
-                "current-rank-is-not-silver-target",
+                "current-rank-not-5-or-10",
             ),
         )
         assertFalse(NeverSurrenderPolicy.isMandatoryRankDispatch("opponent-hero", "rank-ocr-unresolved"))

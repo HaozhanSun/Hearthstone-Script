@@ -33,6 +33,31 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
 - Confirm Desktop, Start Menu, and Taskbar shortcuts all target `wscript.exe` with the stable launcher as their argument.
 - Confirm the stable launcher resolves the manifest's current JAR.
 
+## Rank authorization and surrender safety
+
+- Hard eligibility rule: the script may enter constructed matchmaking or
+  continue a constructed game only after fresh, positively verified OCR reads
+  the current constructed rank as exactly `5` or exactly `10`. League/tier text
+  (Silver, Gold, Platinum, etc.) is not required to authorize those two
+  numbers; Legendary and every other numeric value are ineligible.
+- Enforce this before the first matchmaking input and again at the active-game
+  rank preflight. A post-match/pre-mulligan check alone is too late to satisfy
+  the no-matchmaking rule.
+- Surrender-streak protection may block an automatic surrender, but it must
+  never grant rank eligibility or bypass the rank gate. Win-streak policy also
+  cannot turn an ineligible/unknown rank into an allowed match.
+- PaddleX timeout, cancellation, translated exception, missing/empty badge,
+  unknown or conflicting OCR, confidence below `0.90`, stale
+  cached evidence, invalid capture bounds, and mode/phase mismatch all fail
+  closed: do not queue or continue. Never reuse a prior game's rank as current
+  evidence. Legacy OCR may authorize only with repeated agreeing numeric reads.
+- Every rank-policy change must have deterministic offline tests for exact
+  boundaries `4/5/6`, `9/10/11`, Legendary numeric ratings `>20`, unknown and
+  missing evidence, low confidence, PaddleX failure/cancellation/translated
+  exception, stale cache, mode mismatch, and surrender-streak precedence. Tests
+  must assert that no matchmaking dispatch occurs unless the rank gate allows
+  it, and preserve this precedence against future strategy/streak changes.
+
 ## Stable and beta release channels
 
 - GitHub `main` is the stable branch. Keep it on the last known-good source
