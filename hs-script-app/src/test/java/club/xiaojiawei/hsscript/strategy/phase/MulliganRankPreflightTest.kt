@@ -1,6 +1,9 @@
 package club.xiaojiawei.hsscript.strategy.phase
 
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
+import club.xiaojiawei.hsscript.status.surrender.RankEligibilityPolicy
+import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.SurrenderRuleResult
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -35,6 +38,75 @@ class MulliganRankPreflightTest {
             gate.tryReserve { false },
             "the legacy predicate overload cannot reopen a reservation",
         )
+    }
+
+    @Test
+    fun `verified rank five and ten continue through mulligan after five second grace`() {
+        val now = System.currentTimeMillis()
+        for (rank in listOf(5, 10)) {
+            for (tier in listOf(
+                CurrentRankDetector.RankTier.GOLD,
+                CurrentRankDetector.RankTier.LEGEND,
+            )) {
+                SurrenderPolicy.resetForNewGame()
+                val detection = CurrentRankDetector.Detection(
+                    rank = rank,
+                    tier = tier,
+                    ocrText = rank.toString(),
+                    confidence = 1.0,
+                    captureBounds = java.awt.Rectangle(10, 20, 80, 90),
+                    provider = "PADDLEX",
+                    capturedAtMs = now,
+                    agreementCount = 1,
+                )
+                val authorization = RankEligibilityPolicy.evaluate(
+                    detection = detection,
+                    expectedMode = "GAMEPLAY",
+                    actualMode = "GAMEPLAY",
+                    expectedInWar = true,
+                    inWar = true,
+                    nowMs = now,
+                )
+                assertTrue(authorization.eligible, "rank=$rank tier=$tier must be authorized")
+                SurrenderPolicy.authorizeEligibleMulliganRank(
+                    rank = rank,
+                    tier = tier,
+                    reason = authorization.reason,
+                )
+
+                val scheduler = ManualScheduler()
+                var surrendered = 0
+                var continued = 0
+                val preflight = MulliganRankPreflight(
+                    config = MulliganRankPreflightConfig(initialDelayMs = 5_000, maxAttempts = 1),
+                    scheduler = scheduler,
+                    isEligible = { true },
+                    inspect = {
+                        if (SurrenderPolicy.currentRankContinueAuthorized()) {
+                            SurrenderRuleResult(
+                                ruleId = "rank-continue-authorized",
+                                matched = true,
+                                shouldSurrender = false,
+                                reason = "verified-exact-rank-$rank",
+                            )
+                        } else null
+                    },
+                    provider = { "PADDLEX" },
+                    onSurrender = { surrendered++ },
+                    onContinue = { continued++ },
+                )
+
+                preflight.start()
+                assertEquals(0, surrendered, "no surrender may occur during the five-second grace")
+                assertEquals(0, continued)
+                scheduler.runScheduledAfter(5_000)
+                scheduler.runWorker()
+
+                assertEquals(0, surrendered, "authorized rank=$rank tier=$tier must stay protected")
+                assertEquals(1, continued)
+                assertEquals(MulliganRankPreflightState.RESOLVED, preflight.snapshot().state)
+            }
+        }
     }
 
     @Test

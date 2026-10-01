@@ -1054,7 +1054,7 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun legendaryDetectionPrecedesUnknownRankFallback() {
+    fun legendaryDetectionRequiresNumericRatingAndTierConfirmation() {
         val detection = CurrentRankDetector.Detection(
             rank = null,
             tier = CurrentRankDetector.RankTier.LEGEND,
@@ -1062,7 +1062,8 @@ class SurrenderPolicyTest {
             confidence = null,
             captureBounds = Rectangle(0, 0, 57, 47),
         )
-        assertTrue(SurrenderPolicy.isLegendaryDetection(detection))
+        assertFalse(SurrenderPolicy.isLegendaryDetection(detection))
+        assertTrue(SurrenderPolicy.isLegendaryDetection(detection.copy(rank = 233)))
         assertFalse(SurrenderPolicy.isLegendaryDetection(null))
         assertFalse(
             SurrenderPolicy.isLegendaryDetection(detection.copy(tier = CurrentRankDetector.RankTier.UNKNOWN)),
@@ -1115,13 +1116,8 @@ class SurrenderPolicyTest {
         for (tier in CurrentRankDetector.RankTier.values()) {
             val five = SurrenderPolicy.evaluateCurrentRank(rank = 5, tier = tier)
             val ten = SurrenderPolicy.evaluateCurrentRank(rank = 10, tier = tier)
-            if (tier != CurrentRankDetector.RankTier.LEGEND) {
-                assertNull(five)
-                assertNull(ten)
-            } else {
-                assertTrue(five?.shouldSurrender == true)
-                assertTrue(ten?.shouldSurrender == true)
-            }
+            assertNull(five, "rank 5 remains eligible despite tier=$tier")
+            assertNull(ten, "rank 10 remains eligible despite tier=$tier")
         }
     }
 

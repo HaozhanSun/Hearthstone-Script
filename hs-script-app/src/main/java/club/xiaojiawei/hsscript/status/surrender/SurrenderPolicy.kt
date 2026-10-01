@@ -783,13 +783,10 @@ object SurrenderPolicy {
 
     /**
      * The rank gate is the primary policy: only fresh, positively verified
-     * numeric ranks 5 and 10 are eligible to continue, independent of ordinary
-     * league text. Every other number and Legendary is ineligible. The old
-     * 45% win-rate gate is a secondary insurance and is evaluated from every
-     * completed result for the selected strategy, including our own
-     * concessions. Otherwise a win-rate-triggered surrender would never enter
-     * its own denominator and the same stale percentage would trigger forever.
-     * A small/empty sample is ignored.
+     * numeric ranks 5 and 10 are eligible to continue, independent of tier
+     * classifier output. A streak or win-rate surrender suggestion cannot
+     * override verified rank authorization; uncertain rank evidence still
+     * follows the bounded fail-closed path.
      */
     @Synchronized
     fun evaluateCurrentRankBeforeMulligan(): SurrenderRuleResult? {
@@ -807,16 +804,11 @@ object SurrenderPolicy {
             }
             return null
         }
-        // A seven-surrender streak protects the next surrender dispatch, but
-        // it must not turn an unresolved or confirmed non-target rank into a
-        // playable game. Defer only the blocking branch until the rank probe
-        // has produced its authoritative result; mandatory rank decisions
-        // then take precedence over the generic streak safeguard.
+        // Defer both streak outcomes until rank evidence is checked. A
+        // verified allowed rank is the authoritative gate for whether to
+        // play; neither a win-streak suggestion nor a surrender-streak block
+        // may turn that eligible rank into a surrender.
         val persistentStreakDecision = enforcePersistentStreakGuardForCurrentPolicy()
-        val persistentStreakBlock = persistentStreakDecision?.takeIf { it.blocksAutomaticSurrender }
-        if (persistentStreakDecision != null && persistentStreakBlock == null) {
-            return persistentStreakDecision
-        }
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") return null
         when (opponentHeroInspectionState) {
             OpponentHeroInspectionState.ORIGINAL_HERO_ALLOWED -> Unit
@@ -904,8 +896,16 @@ object SurrenderPolicy {
                 "mode=${Mode.currMode?.name ?: "NONE"} decision=${if (authorization.eligible) "ALLOW" else "DENY"} " +
                 "reason=${authorization.reason}"
         }
-        val recognizedIneligible = detection?.tier == CurrentRankDetector.RankTier.LEGEND ||
-            detection?.rank?.let { it !in setOf(5, 10) } == true
+        if (authorization.eligible) {
+            authorizeEligibleMulliganRank(
+                rank = detection!!.rank!!,
+                tier = detection.tier,
+                reason = authorization.reason,
+                persistentStreakDecision = persistentStreakDecision,
+            )
+            return null
+        }
+        val recognizedIneligible = detection?.rank?.let { it !in setOf(5, 10) } == true
         if (recognizedIneligible) {
             rankCheckCompleted = true
             setRankInspectionState(RankInspectionState.RESOLVED)
@@ -948,32 +948,7 @@ object SurrenderPolicy {
             return result
         }
 
-        val rank = detection!!.rank!!
-        rankCheckCompleted = true
-        setRankInspectionState(RankInspectionState.RESOLVED)
-        val result = evaluateCurrentRank(rank, detection.tier) ?: run {
-            evaluateWinRateGuard()?.let { winRateResult ->
-                rankCheckCompleted = true
-                log.warn {
-                    "WIN_RATE_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                        "rule=${winRateResult.ruleId} reason=${winRateResult.reason} " +
-                        "rank=$rank tier=${detection.tier.name}"
-                }
-                return winRateResult
-            }
-            persistentStreakBlock?.let { logPersistentStreakContinueOnce("rank", it) }
-            rankContinueAuthorized = true
-            log.info {
-                "RANK_POLICY_CONTINUE stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                    "rank=$rank tier=${detection.tier.name} reason=rank-is-safe-and-win-rate-guard-clear"
-            }
-            return null
-        }
-        log.warn {
-            "SURRENDER_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-            "rank=$rank tier=${detection.tier.name} rule=${result.ruleId} reason=${result.reason}"
-        }
-        return result
+        return null
     }
 
     @Suppress("UNUSED_PARAMETER")
@@ -981,7 +956,9 @@ object SurrenderPolicy {
         rank: Int,
         tier: CurrentRankDetector.RankTier = CurrentRankDetector.RankTier.UNKNOWN,
     ): SurrenderRuleResult? {
-        if (rank in setOf(5, 10) && tier != CurrentRankDetector.RankTier.LEGEND) return null
+        // Exact numeric targets are authoritative even if the independent
+        // tier classifier mistakes their badge artwork for Legendary.
+        if (rank in setOf(5, 10)) return null
         return SurrenderRuleResult(
             ruleId = "current-rank-not-5-or-10",
             matched = false,
@@ -990,9 +967,36 @@ object SurrenderPolicy {
         )
     }
 
-    /** Classifier helper only: Legendary is known ineligible, never authorization to play. */
+    /** Shared by the live preflight and deterministic tests of its authorization hand-off. */
+    internal fun authorizeEligibleMulliganRank(
+        rank: Int,
+        tier: CurrentRankDetector.RankTier,
+        reason: String,
+        persistentStreakDecision: SurrenderRuleResult? = null,
+    ) {
+        rankCheckCompleted = true
+        setRankInspectionState(RankInspectionState.RESOLVED)
+        rankContinueAuthorized = true
+        persistentStreakDecision?.let { streakDecision ->
+            if (streakDecision.blocksAutomaticSurrender) {
+                logPersistentStreakContinueOnce("rank", streakDecision)
+            } else {
+                log.info {
+                    "SURRENDER_POLICY_BYPASS reason=verified-rank-eligibility " +
+                        "rule=${streakDecision.ruleId} action=CONTINUE rank=$rank"
+                }
+            }
+        }
+        log.info {
+            "RANK_POLICY_CONTINUE stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                "rank=$rank tier=${tier.name} reason=verified-eligibility-$reason " +
+                "streakGuard=OVERRIDDEN_FOR_ELIGIBLE_RANK"
+        }
+    }
+
+    /** Only a numeric rating above 20 with the matching tier confirms Legendary. */
     internal fun isLegendaryDetection(detection: CurrentRankDetector.Detection?): Boolean =
-        detection?.tier == CurrentRankDetector.RankTier.LEGEND || detection?.rank?.let { it > 20 } == true
+        detection?.let { it.rank != null && it.rank > 20 && it.tier == CurrentRankDetector.RankTier.LEGEND } == true
 
     internal fun unresolvedRankDecision(attempts: Int): SurrenderRuleResult =
         SurrenderRuleResult(
