@@ -94,6 +94,44 @@ class MctsCardDiagnosticsCornerCaseTest {
     }
 
     @Test
+    fun `metadata-absent expensive minion remains filtered`() {
+        val card = card("CORNER_EXPENSIVE_NEW_MINION", CardTypeEnum.MINION).apply {
+            entityName = "UNKNOWN ENTITY [cardType=MINION]"
+            entityId = "entity-expensive-new-minion"
+            cost = 3
+            atc = 0
+            health = 0
+            isUncertain = true
+        }
+
+        assertFalse(MctsCardDiagnostics.metadataAbsentMinionFallbackAllowed(card))
+        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
+        assertEquals(
+            "missing-or-invalid-minion-stats",
+            MctsCardDiagnostics.opaqueFallbackBlockReason(card),
+        )
+    }
+
+    @Test
+    fun `metadata-absent minion with stale entity remains filtered`() {
+        val card = card("CORNER_STALE_NEW_MINION", CardTypeEnum.MINION).apply {
+            entityName = "UNKNOWN ENTITY [cardType=MINION]"
+            entityId = ""
+            cost = 1
+            atc = 0
+            health = 0
+            isUncertain = true
+        }
+
+        assertFalse(MctsCardDiagnostics.metadataAbsentMinionFallbackAllowed(card))
+        assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
+        assertEquals(
+            "invalid-opaque-fallback-identity",
+            MctsCardDiagnostics.opaqueFallbackBlockReason(card),
+        )
+    }
+
+    @Test
     fun `known directed spell text remains last-priority and auditable`() {
         val card = card("CS2_024", CardTypeEnum.SPELL).apply {
             isUncertain = true
