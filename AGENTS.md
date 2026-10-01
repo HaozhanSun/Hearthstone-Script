@@ -60,6 +60,16 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
 
 ## Visible build-footer timestamp verification
 
+- On every Beta or Stable invocation of `build-and-deploy.ps1`, capture the
+  build time once and update the root POM's `local-build-timestamp-pacific`
+  before Maven packaging, even when the source version is already newer than
+  the deployed manifest or no manifest exists yet. Version bumping and
+  timestamp stamping are separate decisions.
+- Require the exact captured value to appear in the produced JAR's
+  `build.info`, verify it before stopping or modifying the deployed runtime,
+  and write that same value as `buildTimestampPacific` in the deployment
+  manifest. A mismatch is a release failure; do not infer artifact time from
+  manifest `generatedAt` or the machine clock after packaging.
 - The main-window footer must display the embedded artifact's version, channel,
   and `BuildInfo.BUILD_TIMESTAMP_PACIFIC` in readable Pacific local time. Do
   not derive the footer time from the current machine clock at launch.

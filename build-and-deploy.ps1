@@ -171,37 +171,33 @@ if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
     $deployedVersion = Get-DeployedVersionFromJarName $deployedJarName
 }
 
-if (-not [string]::IsNullOrWhiteSpace($deployedVersion)) {
     $now = Get-Date
-    $nextVersion = Get-NextApplicationVersion $currentVersion $deployedVersion $now
+    $zoneName = if ([System.TimeZoneInfo]::Local.IsDaylightSavingTime($now)) { 'PDT' } else { 'PST' }
+    $releaseMetadata = Get-ReleaseBuildMetadata $currentVersion $deployedVersion $now $zoneName
+    $nextVersion = $releaseMetadata.Version
+    $buildTimestampPacific = $releaseMetadata.BuildTimestampPacific
+
+if (-not [string]::IsNullOrWhiteSpace($deployedVersion)) {
     if ($nextVersion -eq $currentVersion) {
         Write-Output "BUILD_VERSION_ALREADY_NEWER=$currentVersion deployed=$deployedVersion"
     } else {
-        $zoneName = if ([System.TimeZoneInfo]::Local.IsDaylightSavingTime($now)) { 'PDT' } else { 'PST' }
-        $base = Get-BaseVersion $deployedVersion
-        $buildTimestampPacific = "$($now.ToString('yyyy-MM-dd HH:mm:ss')) $zoneName"
         foreach ($versionFile in Get-ChildItem -LiteralPath $projectRoot -Filter 'pom.xml' -File -Recurse) {
             $content = [System.IO.File]::ReadAllText($versionFile.FullName)
             $updated = $content.Replace("<version>$currentVersion</version>", "<version>$nextVersion</version>")
             if ($updated -ne $content) { [System.IO.File]::WriteAllText($versionFile.FullName, $updated, $utf8NoBom) }
         }
-        $rootPomTimestampPattern = '(?s)(<local-build-timestamp-pacific>)[^<]*(</local-build-timestamp-pacific>)'
-        $rootPomTextBeforeTimestamp = [System.IO.File]::ReadAllText($pomPath)
-        $rootPomWithTimestamp = [regex]::new($rootPomTimestampPattern).Replace(
-            $rootPomTextBeforeTimestamp,
-            "`${1}$buildTimestampPacific`${2}",
-            1
-        )
-        if ($rootPomWithTimestamp -eq $rootPomTextBeforeTimestamp) {
-            throw 'Root POM local-build-timestamp-pacific property was not found while bumping the release version'
-        }
-        [System.IO.File]::WriteAllText($pomPath, $rootPomWithTimestamp, $utf8NoBom)
-        $currentVersion = $nextVersion
-        $pomText = [System.IO.File]::ReadAllText($pomPath)
-        $strategyPluginVersion = Get-PomProperty $pomText 'hs-script-base-strategy-plugin-version'
-        Write-Output "BUILD_TIMESTAMP_PACIFIC=$buildTimestampPacific"
     }
 }
+
+$rootPomTextBeforeTimestamp = [System.IO.File]::ReadAllText($pomPath)
+$rootPomWithTimestamp = Set-PomBuildTimestampPacific $rootPomTextBeforeTimestamp $buildTimestampPacific
+if ($rootPomWithTimestamp -ne $rootPomTextBeforeTimestamp) {
+    [System.IO.File]::WriteAllText($pomPath, $rootPomWithTimestamp, $utf8NoBom)
+}
+$currentVersion = $nextVersion
+$pomText = [System.IO.File]::ReadAllText($pomPath)
+$strategyPluginVersion = Get-PomProperty $pomText 'hs-script-base-strategy-plugin-version'
+Write-Output "BUILD_TIMESTAMP_PACIFIC=$buildTimestampPacific"
 
 $mavenBaseArgs = @('-f', $pomPath, '-pl', 'hs-script-app', '-am', '-Pjvm', '-Djava.version=24', '-Dproject.build.outputTimestamp=0', "-Dbuild-channel=$Channel")
 if (-not $SkipTests) {
@@ -221,6 +217,21 @@ $builtZip = Join-Path $targetRoot "hs-script_$currentVersion.zip"
 foreach ($artifact in @($builtJar, $builtZip, $strategyTarget, $cardPluginTarget, $cardSdkTarget)) {
     if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) { throw "Expected build artifact missing: $artifact" }
 }
+
+$buildInfoArchive = [System.IO.Compression.ZipFile]::OpenRead($builtJar)
+try {
+    $buildInfoEntry = $buildInfoArchive.GetEntry('build.info')
+    if ($null -eq $buildInfoEntry) { throw "build.info missing from built JAR: $builtJar" }
+    $buildInfoReader = [System.IO.StreamReader]::new($buildInfoEntry.Open())
+    try { $embeddedBuildTimestampPacific = Get-BuildInfoTimestampPacific $buildInfoReader.ReadToEnd() }
+    finally { $buildInfoReader.Dispose() }
+} finally {
+    $buildInfoArchive.Dispose()
+}
+if ($embeddedBuildTimestampPacific -cne $buildTimestampPacific) {
+    throw "Built JAR timestamp mismatch: expected '$buildTimestampPacific' but found '$embeddedBuildTimestampPacific'"
+}
+Write-Output "ARTIFACT_TIMESTAMP_VERIFIED=$embeddedBuildTimestampPacific"
 
 $deploymentContractSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\deployment-contract.ps1'
 if (-not (Test-Path -LiteralPath $deploymentContractSource -PathType Leaf)) {
@@ -352,6 +363,7 @@ $manifest = [ordered]@{
     iconFile = $iconFileName
     deploymentId = "$(Split-Path -Leaf $deployedJar)|$($appHash.Substring(0, 16))"
     generatedAt = (Get-Date).ToUniversalTime().ToString('o')
+    buildTimestampPacific = $buildTimestampPacific
     appJar = Split-Path -Leaf $deployedJar
     appJarSha256 = $appHash
     strategyPluginLib = $strategyLibRelative

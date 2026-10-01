@@ -32,3 +32,43 @@ function Get-NextApplicationVersion([string]$CurrentVersion, [string]$DeployedVe
     $zoneName = if ([System.TimeZoneInfo]::Local.IsDaylightSavingTime($Now)) { 'PDT' } else { 'PST' }
     return "v$($deployedBase.Major).$($deployedBase.Minor).$($deployedBase.Build + 1)-local-$($Now.ToString('yyyyMMdd-HHmmss'))$zoneName"
 }
+
+function Get-ReleaseBuildMetadata(
+    [string]$CurrentVersion,
+    [string]$DeployedVersion,
+    [datetime]$Now,
+    [string]$PacificZoneName
+) {
+    if ($PacificZoneName -notin @('PDT', 'PST')) {
+        throw "Unsupported Pacific timezone label: $PacificZoneName"
+    }
+
+    $version = $CurrentVersion
+    if (-not [string]::IsNullOrWhiteSpace($DeployedVersion)) {
+        $version = Get-NextApplicationVersion $CurrentVersion $DeployedVersion $Now
+    }
+
+    return [pscustomobject]@{
+        Version = $version
+        BuildTimestampPacific = "$($Now.ToString('yyyy-MM-dd HH:mm:ss')) $PacificZoneName"
+    }
+}
+
+function Set-PomBuildTimestampPacific([string]$PomText, [string]$BuildTimestampPacific) {
+    $pattern = '(?s)(<local-build-timestamp-pacific>)[^<]*(</local-build-timestamp-pacific>)'
+    if (-not [regex]::IsMatch($PomText, $pattern)) {
+        throw 'Root POM local-build-timestamp-pacific property was not found'
+    }
+    $updated = [regex]::new($pattern).Replace(
+        $PomText,
+        { param($match) $match.Groups[1].Value + $BuildTimestampPacific + $match.Groups[2].Value },
+        1
+    )
+    return $updated
+}
+
+function Get-BuildInfoTimestampPacific([string]$BuildInfoText) {
+    $match = [regex]::Match($BuildInfoText, '(?m)^buildTimestampPacific=(.+)$')
+    if (-not $match.Success) { throw 'build.info buildTimestampPacific property was not found' }
+    return $match.Groups[1].Value.Trim()
+}
