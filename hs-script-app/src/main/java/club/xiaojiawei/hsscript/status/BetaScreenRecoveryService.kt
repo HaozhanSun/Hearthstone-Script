@@ -444,28 +444,24 @@ internal object BetaScreenRecoveryService {
                 if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return
                 log.error {
                     "NO_PROGRESS_RECOVERY attempt=${decision.recoveryAttempt} " +
-                        "decision=RESTART reason=${decision.reason} dispatch=false"
+                        "decision=RESTART reason=${decision.reason} dispatch=STARTER_CHAIN"
                 }
-                Mode.recover(ModeEnum.STARTUP, "no-progress-${decision.reason}", enterStrategy = false)
-                StarterConfig.starter.start()
+                NoProgressRecoveryDispatch.restartToStartup(
+                    recoverModeToStartup = {
+                        Mode.recover(ModeEnum.STARTUP, "no-progress-${decision.reason}", enterStrategy = false)
+                    },
+                    startConfiguredStarterChain = {
+                        StarterConfig.starter.start()
+                        log.info { "NO_PROGRESS_STARTER_CHAIN_DISPATCHED reason=${decision.reason}" }
+                    },
+                )
             }
-            NoProgressWatchdog.RecoveryAction.STARTUP_RETRY_BACKOFF -> {
+            NoProgressWatchdog.RecoveryAction.RECOVERY_RETRY_BACKOFF -> {
                 log.warn {
-                    "NO_PROGRESS_STARTUP_RETRY_BACKOFF attempt=${decision.recoveryAttempt} " +
-                        "reason=${decision.reason} watchdogRearmed=true automaticPause=false " +
-                        "startupRetryPolicy=bounded-rate"
+                    "NO_PROGRESS_RECOVERY_RETRY_BACKOFF attempt=${decision.recoveryAttempt} " +
+                        "reason=${decision.reason} watchdogRearmed=true scriptPaused=${PauseStatus.isPause} " +
+                        "workerCancelled=false nextCycle=bounded-recovery"
                 }
-            }
-            NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE -> {
-                if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return
-                log.error {
-                    "NO_PROGRESS_ESCALATED attempt=${decision.recoveryAttempt} " +
-                        "reason=${decision.reason} dispatch=false terminal=PAUSE"
-                }
-                stopRecoveryCascade(decision.reason)
-                AbstractModeStrategy.cancelAllTask()
-                foregroundRecoveryPending.set(false)
-                PauseStatus.isPause = true
             }
         }
     }

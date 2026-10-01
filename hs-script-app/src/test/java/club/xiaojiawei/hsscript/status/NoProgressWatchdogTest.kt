@@ -28,7 +28,7 @@ class NoProgressWatchdogTest {
         assertEquals(NoProgressWatchdog.RecoveryAction.WAIT, first.action)
         assertEquals(NoProgressWatchdog.RecoveryAction.REBIND, second.action)
         assertEquals(NoProgressWatchdog.RecoveryAction.RESTART, third.action)
-        assertEquals(NoProgressWatchdog.RecoveryAction.STARTUP_RETRY_BACKOFF, fourth.action)
+        assertEquals(NoProgressWatchdog.RecoveryAction.RECOVERY_RETRY_BACKOFF, fourth.action)
         assertEquals("startup-or-initialization-timeout-retry-exhausted-rearmed", fourth.reason)
         assertEquals(1L, nextWindow.elapsedNoProgressMs)
         assertEquals(NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, nextWindow.action)
@@ -125,8 +125,8 @@ class NoProgressWatchdogTest {
             ),
         )
 
-        assertEquals(NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE, decision.action)
-        assertEquals("live-match-process-missing-fail-closed", decision.reason)
+        assertEquals(NoProgressWatchdog.RecoveryAction.REBIND, decision.action)
+        assertEquals("live-match-process-missing", decision.reason)
     }
 
     @Test
@@ -142,8 +142,29 @@ class NoProgressWatchdogTest {
             ),
         )
 
-        assertEquals(NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE, decision.action)
-        assertEquals("live-match-process-lineage-changed-fail-closed", decision.reason)
+        assertEquals(NoProgressWatchdog.RecoveryAction.REBIND, decision.action)
+        assertEquals("live-match-process-lineage-changed", decision.reason)
+    }
+
+    @Test
+    fun `missing live-match process gets bounded rebind restart then backoff cycle`() {
+        val watchdog = NoProgressWatchdog()
+        fun missing(now: Long) = snapshot(
+            now = now,
+            screen = NoProgressWatchdog.ScreenExpectation.MULLIGAN,
+            currentPid = null,
+            authoritativeLiveMatch = true,
+        )
+
+        val rebind = watchdog.observe(missing(1_000L))
+        val restart = watchdog.observe(missing(2_000L))
+        val backoff = watchdog.observe(missing(3_000L))
+        val nextCycle = watchdog.observe(missing(4_000L))
+
+        assertEquals(NoProgressWatchdog.RecoveryAction.REBIND, rebind.action)
+        assertEquals(NoProgressWatchdog.RecoveryAction.RESTART, restart.action)
+        assertEquals(NoProgressWatchdog.RecoveryAction.RECOVERY_RETRY_BACKOFF, backoff.action)
+        assertEquals(NoProgressWatchdog.RecoveryAction.REBIND, nextCycle.action)
     }
 
     @Test
@@ -214,11 +235,11 @@ class NoProgressWatchdogTest {
         watchdog.observe(snapshot(now = 0L, screen = NoProgressWatchdog.ScreenExpectation.EXTERNAL_MODAL))
         val dismiss = watchdog.observe(snapshot(now = 10_000L, screen = NoProgressWatchdog.ScreenExpectation.EXTERNAL_MODAL))
         val restart = watchdog.observe(snapshot(now = 20_000L, screen = NoProgressWatchdog.ScreenExpectation.EXTERNAL_MODAL))
-        val pause = watchdog.observe(snapshot(now = 30_000L, screen = NoProgressWatchdog.ScreenExpectation.EXTERNAL_MODAL))
+        val backoff = watchdog.observe(snapshot(now = 30_000L, screen = NoProgressWatchdog.ScreenExpectation.EXTERNAL_MODAL))
 
         assertEquals(NoProgressWatchdog.RecoveryAction.DISMISS_EXTERNAL_MODAL, dismiss.action)
         assertEquals(NoProgressWatchdog.RecoveryAction.RESTART, restart.action)
-        assertEquals(NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE, pause.action)
+        assertEquals(NoProgressWatchdog.RecoveryAction.RECOVERY_RETRY_BACKOFF, backoff.action)
     }
 
     @Test
@@ -247,7 +268,7 @@ class NoProgressWatchdogTest {
     }
 
     @Test
-    fun `persistent foreground mismatch becomes rebind restart then pause`() {
+    fun `persistent foreground mismatch becomes rebind restart then bounded backoff without pausing`() {
         val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 120_000L)
         watchdog.observe(snapshot(now = 0L))
         val rebind = watchdog.observe(
@@ -256,17 +277,21 @@ class NoProgressWatchdogTest {
         val restart = watchdog.observe(
             snapshot(now = 2_000L, foregroundMatches = false, foregroundFailureCount = 4),
         )
-        val pause = watchdog.observe(
+        val backoff = watchdog.observe(
             snapshot(now = 3_000L, foregroundMatches = false, foregroundFailureCount = 5),
+        )
+        val nextCycle = watchdog.observe(
+            snapshot(now = 4_000L, foregroundMatches = false, foregroundFailureCount = 6),
         )
         assertEquals(NoProgressWatchdog.RecoveryAction.REBIND, rebind.action)
         assertEquals(NoProgressWatchdog.RecoveryAction.RESTART, restart.action)
-        assertEquals(NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE, pause.action)
-        assertEquals("foreground-mismatch-persistent-retry-exhausted", pause.reason)
+        assertEquals(NoProgressWatchdog.RecoveryAction.RECOVERY_RETRY_BACKOFF, backoff.action)
+        assertEquals("foreground-mismatch-persistent-retry-exhausted-rearmed", backoff.reason)
+        assertEquals(NoProgressWatchdog.RecoveryAction.REBIND, nextCycle.action)
     }
 
     @Test
-    fun `active gameplay timeout does not create an unbounded restart loop`() {
+    fun `active gameplay timeout re-arms bounded retry cycle without terminal pause`() {
         val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1_000L, maxRecoveryAttempts = 2)
         watchdog.observe(snapshot(now = 0L, screen = NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY))
         assertEquals(
@@ -277,14 +302,10 @@ class NoProgressWatchdogTest {
             NoProgressWatchdog.RecoveryAction.RESTART,
             watchdog.observe(snapshot(now = 2_000L, screen = NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY)).action,
         )
-        assertEquals(
-            NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE,
-            watchdog.observe(snapshot(now = 3_000L, screen = NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY)).action,
-        )
-        assertEquals(
-            NoProgressWatchdog.RecoveryAction.ESCALATE_PAUSE,
-            watchdog.observe(snapshot(now = 4_000L, screen = NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY)).action,
-        )
+        val backoff = watchdog.observe(snapshot(now = 3_000L, screen = NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY))
+        val retryCycle = watchdog.observe(snapshot(now = 4_000L, screen = NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY))
+        assertEquals(NoProgressWatchdog.RecoveryAction.RECOVERY_RETRY_BACKOFF, backoff.action)
+        assertEquals(NoProgressWatchdog.RecoveryAction.REBIND, retryCycle.action)
     }
 
     private fun snapshot(

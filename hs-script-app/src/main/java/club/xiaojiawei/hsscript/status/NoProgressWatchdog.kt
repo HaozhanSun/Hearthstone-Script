@@ -36,8 +36,7 @@ internal class NoProgressWatchdog(
         DISMISS_EXTERNAL_MODAL,
         REBIND,
         RESTART,
-        STARTUP_RETRY_BACKOFF,
-        ESCALATE_PAUSE,
+        RECOVERY_RETRY_BACKOFF,
     }
 
     data class Snapshot(
@@ -95,21 +94,13 @@ internal class NoProgressWatchdog(
         if (snapshot.authoritativeLiveMatch) {
             val processLineageChanged = snapshot.currentPid != null && snapshot.boundPid != null &&
                 snapshot.currentPid != snapshot.boundPid
-            return decision(
-                if (snapshot.processAlive && snapshot.currentPid != null && !processLineageChanged) {
-                    RecoveryAction.WAIT_EXPECTED
-                } else {
-                    RecoveryAction.ESCALATE_PAUSE
-                },
-                if (processLineageChanged) {
-                    "live-match-process-lineage-changed-fail-closed"
-                } else if (snapshot.processAlive && snapshot.currentPid != null) {
-                    "live-match-preserved"
-                } else {
-                    "live-match-process-missing-fail-closed"
-                },
-                snapshot.nowMs,
-            )
+            if (!snapshot.processAlive || snapshot.currentPid == null) {
+                return recoverOrBackoff("live-match-process-missing", snapshot.nowMs)
+            }
+            if (processLineageChanged) {
+                return recoverOrBackoff("live-match-process-lineage-changed", snapshot.nowMs)
+            }
+            return decision(RecoveryAction.WAIT_EXPECTED, "live-match-preserved", snapshot.nowMs)
         }
         // An absent/unbound/unreadable Power.log is UNKNOWN, not evidence that
         // a live process is stuck. Keep the bounded observation window armed,
@@ -128,7 +119,7 @@ internal class NoProgressWatchdog(
             if (recoveryAttempts > 0) {
                 return markRecoveryProgress(snapshot, "process-replaced-after-recovery")
             }
-            return recoverOrPause("process-replaced", snapshot.nowMs)
+            return recoverOrBackoff("process-replaced", snapshot.nowMs)
         }
         val logLineageChanged = !firstObservation && snapshot.boundPowerLogPath != null &&
             snapshot.powerLogPath != snapshot.boundPowerLogPath
@@ -136,7 +127,7 @@ internal class NoProgressWatchdog(
             if (recoveryAttempts > 0) {
                 return markRecoveryProgress(snapshot, "power-log-rebound-after-recovery")
             }
-            return recoverOrPause("stale-power-log-lineage", snapshot.nowMs)
+            return recoverOrBackoff("stale-power-log-lineage", snapshot.nowMs)
         }
 
         val fingerprint = fingerprint(snapshot)
@@ -161,7 +152,7 @@ internal class NoProgressWatchdog(
             if (elapsed < noProgressTimeoutMs) {
                 return decision(RecoveryAction.WAIT_EXPECTED, "expected-startup-or-initialization", snapshot.nowMs)
             }
-            return recoverOrPause("startup-or-initialization-timeout", snapshot.nowMs)
+            return recoverOrBackoff("startup-or-initialization-timeout", snapshot.nowMs)
         }
 
         if (snapshot.screen == ScreenExpectation.OPPONENT_TURN ||
@@ -171,16 +162,16 @@ internal class NoProgressWatchdog(
             return decision(RecoveryAction.WAIT_EXPECTED, "expected-live-match-phase", snapshot.nowMs)
         }
         if (!snapshot.processAlive || snapshot.currentPid == null) {
-            return recoverOrPause("process-missing", snapshot.nowMs)
+            return recoverOrBackoff("process-missing", snapshot.nowMs)
         }
         if (!snapshot.windowPresent) {
-            return recoverOrPause("game-window-missing", snapshot.nowMs)
+            return recoverOrBackoff("game-window-missing", snapshot.nowMs)
         }
 
         if (!snapshot.foregroundMatches &&
             snapshot.foregroundFailureCount >= foregroundFailureThreshold
         ) {
-            return recoverOrPause("foreground-mismatch-persistent", snapshot.nowMs)
+            return recoverOrBackoff("foreground-mismatch-persistent", snapshot.nowMs)
         }
 
         if (elapsed < noProgressTimeoutMs) {
@@ -188,36 +179,23 @@ internal class NoProgressWatchdog(
         }
 
         return when (snapshot.screen) {
-            ScreenExpectation.EXTERNAL_MODAL -> recoverOrPause("external-modal", snapshot.nowMs)
+            ScreenExpectation.EXTERNAL_MODAL -> recoverOrBackoff("external-modal", snapshot.nowMs)
             ScreenExpectation.ACTIVE_GAMEPLAY,
             ScreenExpectation.UNKNOWN,
-            -> recoverOrPause("authoritative-progress-stalled", snapshot.nowMs)
+            -> recoverOrBackoff("authoritative-progress-stalled", snapshot.nowMs)
             else -> decision(RecoveryAction.WAIT_EXPECTED, "expected-screen", snapshot.nowMs)
         }
     }
 
-    private fun recoverOrPause(reason: String, nowMs: Long): Decision {
+    private fun recoverOrBackoff(reason: String, nowMs: Long): Decision {
         val nextAttempt = recoveryAttempts + 1
         if (nextAttempt > maxRecoveryAttempts.coerceAtLeast(0)) {
-            if (reason == "startup-or-initialization-timeout") {
-                // A failed platform handoff is not grounds to pause the user's
-                // session. Re-arm the bounded watchdog window; GameStarter's
-                // own capped retry policy remains responsible for retries.
-                recoveryAttempts = 0
-                noProgressSinceMs = nowMs
-                return decision(
-                    RecoveryAction.STARTUP_RETRY_BACKOFF,
-                    "$reason-retry-exhausted-rearmed",
-                    nowMs,
-                    nextAttempt,
-                )
-            }
-            return decision(
-                RecoveryAction.ESCALATE_PAUSE,
-                "$reason-retry-exhausted",
-                nowMs,
-                nextAttempt,
-            )
+            // Recovery/error handling must not pause the user's session. Re-arm
+            // a bounded cycle; the caller keeps recovery alive and the starter
+            // chain retains its own capped backoff.
+            recoveryAttempts = 0
+            noProgressSinceMs = nowMs
+            return decision(RecoveryAction.RECOVERY_RETRY_BACKOFF, "$reason-retry-exhausted-rearmed", nowMs, nextAttempt)
         }
         recoveryAttempts = nextAttempt
         val action = when {
