@@ -98,8 +98,22 @@ object GameUtil {
 
     internal fun isVerifiedCurrentGameWindow(hwnd: WinDef.HWND?): Boolean {
         if (hwnd == null || !User32.INSTANCE.IsWindow(hwnd) || !User32.INSTANCE.IsWindowVisible(hwnd)) return false
-        val livePid = findGameProcessIdForDiagnostics() ?: return false
-        return windowProcessId(hwnd).toLong() == livePid
+        val ownerPid = windowProcessId(hwnd).toLong()
+        if (ownerPid <= 0L) return false
+        val ownerProcessName = runCatching {
+            ProcessHandle.of(ownerPid)
+                .filter { it.isAlive }
+                .flatMap { it.info().command() }
+                .map { File(it).name }
+                .orElse(null)
+        }.getOrNull()
+        return GameWindowDiscoveryPolicy.isVerifiedGameWindow(
+            ownerPid = ownerPid,
+            ownerProcessName = ownerProcessName,
+            valid = true,
+            visible = true,
+            expectedProcessName = GAME_PROGRAM_NAME,
+        )
     }
 
     internal fun isSurrenderStateConfirmed(mode: ModeEnum?, inWar: Boolean): Boolean =
@@ -1204,17 +1218,20 @@ object GameUtil {
 
     /** Read-only process lineage used by the bounded lifecycle watchdog. */
     fun findGameProcessIdForDiagnostics(): Long? = runCatching {
-        ProcessHandle.allProcesses().use { processes ->
+        val windowOwnerPid = ScriptStatus.gameHWND
+            ?.takeIf(::isVerifiedCurrentGameWindow)
+            ?.let { windowProcessId(it).toLong() }
+        val discoveredPids = ProcessHandle.allProcesses().use { processes ->
             processes
                 .filter { handle ->
                     handle.info().command().map { command ->
                         File(command).name.equals(GAME_PROGRAM_NAME, ignoreCase = true)
                     }.orElse(false)
                 }
-                .findFirst()
-                .orElse(null)
-                ?.pid()
+                .map { it.pid() }
+                .toList()
         }
+        GameWindowDiscoveryPolicy.selectDiagnosticPid(windowOwnerPid, discoveredPids)
     }.getOrNull()
 
 
@@ -1235,11 +1252,23 @@ object GameUtil {
         // Hearthstone window with a class name different from UnityWndClass;
         // relying on the class caused the E2E runner to repeatedly relaunch a
         // game that was already on screen.
-        val hwnd =
-            (SystemUtil.findHWND(null, GAME_CN_NAME) ?: User32.INSTANCE.FindWindow(null, GAME_CN_NAME)
-            ?: SystemUtil.findHWND(null, GAME_US_NAME) ?: User32.INSTANCE.FindWindow(null, GAME_US_NAME)
-            ?: SystemUtil.findHWND("UnityWndClass", GAME_CN_NAME) ?: SystemUtil.findHWND("UnityWndClass", GAME_US_NAME)
-            ?: if (isE2ERun()) null else CSystemDll.INSTANCE.findWindowsByProcessName(GAME_PROGRAM_NAME))
+        val titleCandidates = listOfNotNull(
+            SystemUtil.findHWND(null, GAME_CN_NAME),
+            User32.INSTANCE.FindWindow(null, GAME_CN_NAME),
+            SystemUtil.findHWND(null, GAME_US_NAME),
+            User32.INSTANCE.FindWindow(null, GAME_US_NAME),
+            SystemUtil.findHWND("UnityWndClass", GAME_CN_NAME),
+            SystemUtil.findHWND("UnityWndClass", GAME_US_NAME),
+        )
+        val nativeCandidate = runCatching {
+            CSystemDll.INSTANCE.findWindowsByProcessName(GAME_PROGRAM_NAME)
+        }.getOrNull()
+        // Keep the stable process-name fallback available in every mode, but
+        // validate each HWND by its own owner PID instead of comparing against
+        // an arbitrary first Hearthstone.exe returned by ProcessHandle.allProcesses().
+        val hwnd = (titleCandidates + listOfNotNull(nativeCandidate))
+            .firstOrNull(::isVerifiedCurrentGameWindow)
+            ?: discoverGameWindowByOwner()
         val e2eRun = isE2ERun()
         val gameAliveWithoutWindow = e2eRun && hwnd == null && isAliveOfGame()
         if (e2eRun) logE2EWindowDiscovery(hwnd, gameAliveWithoutWindow)
@@ -1252,6 +1281,51 @@ object GameUtil {
             return SAFE_INPUT_WINDOW
         }
         return null
+    }
+
+    /** EnumWindows fallback for startup windows whose localized title is not ready yet. */
+    private fun discoverGameWindowByOwner(): WinDef.HWND? {
+        val candidates = mutableListOf<GameWindowCandidate>()
+        var order = 0
+        val enumerated = runCatching {
+            User32.INSTANCE.EnumWindows(WinUser.WNDENUMPROC { hwnd, _ ->
+                val currentOrder = order++
+                val ownerPid = windowProcessId(hwnd).toLong()
+                val processName = runCatching {
+                    ProcessHandle.of(ownerPid)
+                        .filter { it.isAlive }
+                        .flatMap { it.info().command() }
+                        .map { File(it).name }
+                        .orElse(null)
+                }.getOrNull()
+                val rect = WinDef.RECT()
+                val hasRect = User32.INSTANCE.GetClientRect(hwnd, rect)
+                val width = if (hasRect) (rect.right - rect.left).toLong().coerceAtLeast(0L) else 0L
+                val height = if (hasRect) (rect.bottom - rect.top).toLong().coerceAtLeast(0L) else 0L
+                val title = CharArray(512).also { User32.INSTANCE.GetWindowText(hwnd, it, it.size) }
+                    .concatToString().trimEnd('\u0000').takeIf(String::isNotBlank)
+                candidates += GameWindowCandidate(
+                    handle = Pointer.nativeValue(hwnd.pointer),
+                    ownerPid = ownerPid,
+                    ownerProcessName = processName,
+                    valid = User32.INSTANCE.IsWindow(hwnd),
+                    visible = User32.INSTANCE.IsWindowVisible(hwnd),
+                    owned = User32.INSTANCE.GetWindow(hwnd, WinDef.DWORD(WinUser.GW_OWNER.toLong())) != null,
+                    title = title,
+                    clientArea = width * height,
+                    enumerationOrder = currentOrder,
+                )
+                true
+            }, null)
+        }.getOrDefault(false)
+        if (!enumerated) return null
+        val selected = GameWindowDiscoveryPolicy.select(
+            candidates = candidates,
+            expectedProcessName = GAME_PROGRAM_NAME,
+            preferredTitles = setOf(GAME_CN_NAME, GAME_US_NAME),
+        ) ?: return null
+        return WinDef.HWND(Pointer(selected.handle))
+            .takeIf(::isVerifiedCurrentGameWindow)
     }
 
     private fun logE2EWindowDiscovery(hwnd: WinDef.HWND?, gameAliveWithoutWindow: Boolean) {
