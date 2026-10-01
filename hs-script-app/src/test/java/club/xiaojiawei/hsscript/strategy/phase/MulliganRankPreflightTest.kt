@@ -2,7 +2,7 @@ package club.xiaojiawei.hsscript.strategy.phase
 
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
-import club.xiaojiawei.hsscript.status.surrender.RankEligibilityPolicy
+import club.xiaojiawei.hsscript.status.surrender.PersistentStreakSnapshot
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.SurrenderRuleResult
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -41,72 +41,124 @@ class MulliganRankPreflightTest {
     }
 
     @Test
-    fun `verified rank five and ten continue through mulligan after five second grace`() {
+    fun `verified rank five ten and numeric Legend continue through policy guards after grace`() {
         val now = System.currentTimeMillis()
-        for (rank in listOf(5, 10)) {
-            for (tier in listOf(
-                CurrentRankDetector.RankTier.GOLD,
-                CurrentRankDetector.RankTier.LEGEND,
-            )) {
-                SurrenderPolicy.resetForNewGame()
-                val detection = CurrentRankDetector.Detection(
-                    rank = rank,
-                    tier = tier,
-                    ocrText = rank.toString(),
-                    confidence = 1.0,
-                    captureBounds = java.awt.Rectangle(10, 20, 80, 90),
-                    provider = "PADDLEX",
-                    capturedAtMs = now,
-                    agreementCount = 1,
-                )
-                val authorization = RankEligibilityPolicy.evaluate(
-                    detection = detection,
-                    expectedMode = "GAMEPLAY",
-                    actualMode = "GAMEPLAY",
-                    expectedInWar = true,
-                    inWar = true,
-                    nowMs = now,
-                )
-                assertTrue(authorization.eligible, "rank=$rank tier=$tier must be authorized")
-                SurrenderPolicy.authorizeEligibleMulliganRank(
-                    rank = rank,
-                    tier = tier,
-                    reason = authorization.reason,
-                )
+        val winningStreakDecision = SurrenderPolicy.persistentStreakDecision(
+            PersistentStreakSnapshot(consecutiveSurrenders = 0, consecutiveWins = 5),
+        )!!
+        val surrenderStreakDecision = SurrenderPolicy.persistentStreakDecision(
+            PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
+        )!!
+        val winRateDecision = SurrenderPolicy.evaluateWinRate(
+            SurrenderPolicy.WinRateSnapshot(games = 20, wins = 12),
+        )!!
+        assertTrue(winningStreakDecision.shouldSurrender)
+        assertTrue(surrenderStreakDecision.blocksAutomaticSurrender)
+        assertTrue(winRateDecision.shouldSurrender)
 
-                val scheduler = ManualScheduler()
-                var surrendered = 0
-                var continued = 0
-                val preflight = MulliganRankPreflight(
-                    config = MulliganRankPreflightConfig(initialDelayMs = 5_000, maxAttempts = 1),
-                    scheduler = scheduler,
-                    isEligible = { true },
-                    inspect = {
-                        if (SurrenderPolicy.currentRankContinueAuthorized()) {
-                            SurrenderRuleResult(
-                                ruleId = "rank-continue-authorized",
-                                matched = true,
-                                shouldSurrender = false,
-                                reason = "verified-exact-rank-$rank",
+        for (rank in listOf(5, 10, 21)) {
+            for (tier in listOf(CurrentRankDetector.RankTier.GOLD, CurrentRankDetector.RankTier.UNKNOWN)) {
+                for (streakDecision in listOf(winningStreakDecision, surrenderStreakDecision)) {
+                    SurrenderPolicy.resetForNewGame()
+                    val detection = CurrentRankDetector.Detection(
+                        rank = rank,
+                        tier = tier,
+                        ocrText = rank.toString(),
+                        confidence = 1.0,
+                        captureBounds = java.awt.Rectangle(10, 20, 80, 90),
+                        provider = "PADDLEX",
+                        capturedAtMs = now,
+                        agreementCount = 1,
+                    )
+
+                    val scheduler = ManualScheduler()
+                    var surrendered = 0
+                    var continued = 0
+                    var inspections = 0
+                    val preflight = MulliganRankPreflight(
+                        config = MulliganRankPreflightConfig(initialDelayMs = 5_000, maxAttempts = 1),
+                        scheduler = scheduler,
+                        isEligible = { true },
+                        inspect = {
+                            inspections++
+                            val decision = SurrenderPolicy.evaluateMulliganRankEvidence(
+                                detection = detection,
+                                actualMode = "GAMEPLAY",
+                                inWar = true,
+                                nowMs = now,
+                                persistentStreakDecision = streakDecision,
+                                winRateDecisionProvider = { winRateDecision },
                             )
-                        } else null
-                    },
-                    provider = { "PADDLEX" },
-                    onSurrender = { surrendered++ },
-                    onContinue = { continued++ },
-                )
+                            if (decision?.shouldSurrender == true) {
+                                decision
+                            } else if (SurrenderPolicy.currentRankContinueAuthorized()) {
+                                SurrenderRuleResult(
+                                    ruleId = "rank-continue-authorized",
+                                    matched = true,
+                                    shouldSurrender = false,
+                                    reason = "verified-rank-$rank-tier-$tier",
+                                )
+                            } else null
+                        },
+                        provider = { "PADDLEX" },
+                        onSurrender = { surrendered++ },
+                        onContinue = { continued++ },
+                    )
 
-                preflight.start()
-                assertEquals(0, surrendered, "no surrender may occur during the five-second grace")
-                assertEquals(0, continued)
-                scheduler.runScheduledAfter(5_000)
-                scheduler.runWorker()
+                    preflight.start()
+                    assertEquals(0, surrendered, "no surrender may occur during the five-second grace")
+                    assertEquals(0, continued)
+                    assertEquals(0, inspections, "the policy must not run before the preflight delay")
+                    scheduler.runScheduledAfter(5_000)
+                    scheduler.runWorker()
 
-                assertEquals(0, surrendered, "authorized rank=$rank tier=$tier must stay protected")
-                assertEquals(1, continued)
-                assertEquals(MulliganRankPreflightState.RESOLVED, preflight.snapshot().state)
+                    assertEquals(0, surrendered, "authorized rank=$rank tier=$tier must stay protected")
+                    assertEquals(1, continued)
+                    assertEquals(1, inspections)
+                    assertEquals(MulliganRankPreflightState.RESOLVED, preflight.snapshot().state)
+                }
             }
         }
+    }
+
+    @Test
+    fun `rank policy surrenders verified non-target and fails closed for unknown evidence`() {
+        val now = System.currentTimeMillis()
+        val nonTarget = CurrentRankDetector.Detection(
+            rank = 7,
+            tier = CurrentRankDetector.RankTier.UNKNOWN,
+            ocrText = "7",
+            confidence = 1.0,
+            captureBounds = java.awt.Rectangle(10, 20, 80, 90),
+            provider = "PADDLEX",
+            capturedAtMs = now,
+            agreementCount = 1,
+        )
+
+        SurrenderPolicy.resetForNewGame()
+        val denied = SurrenderPolicy.evaluateMulliganRankEvidence(
+            detection = nonTarget,
+            actualMode = "GAMEPLAY",
+            inWar = true,
+            nowMs = now,
+            persistentStreakDecision = null,
+        )
+        assertEquals("current-rank-not-5-or-10", denied?.ruleId)
+        assertTrue(denied?.shouldSurrender == true)
+        assertFalse(SurrenderPolicy.currentRankContinueAuthorized())
+
+        SurrenderPolicy.resetForNewGame()
+        SurrenderPolicy.forceRankInspectionLatchForTest(completed = false, authorized = false, attempts = 3)
+        val unresolved = SurrenderPolicy.evaluateMulliganRankEvidence(
+            detection = null,
+            actualMode = "GAMEPLAY",
+            inWar = true,
+            nowMs = now,
+            persistentStreakDecision = null,
+        )
+        assertEquals("rank-ocr-unresolved", unresolved?.ruleId)
+        assertTrue(unresolved?.shouldSurrender == true)
+        assertFalse(SurrenderPolicy.currentRankContinueAuthorized())
     }
 
     @Test

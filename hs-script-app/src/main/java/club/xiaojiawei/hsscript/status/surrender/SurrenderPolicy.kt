@@ -782,8 +782,8 @@ object SurrenderPolicy {
     }
 
     /**
-     * The rank gate is the primary policy: only fresh, positively verified
-     * numeric ranks 5 and 10 are eligible to continue, independent of tier
+     * The rank gate is the primary policy: fresh, positively verified numeric
+     * ranks 5, 10, or above 20 are eligible to continue, independent of tier
      * classifier output. A streak or win-rate surrender suggestion cannot
      * override verified rank authorization; uncertain rank evidence still
      * follows the bounded fail-closed path.
@@ -881,32 +881,58 @@ object SurrenderPolicy {
             trigger = "rank-policy-${phase.name}",
             phase = phase.name,
         )
+        return evaluateMulliganRankEvidence(
+            detection = detection,
+            actualMode = Mode.currMode?.name,
+            inWar = WarEx.inWar,
+            nowMs = System.currentTimeMillis(),
+            persistentStreakDecision = persistentStreakDecision,
+            winRateDecisionProvider = ::evaluateWinRateGuard,
+        )
+    }
+
+    /**
+     * Apply the same rank/evidence decision used by the asynchronous mulligan
+     * preflight. Kept injectable so tests can drive the real policy from OCR
+     * evidence without capturing the desktop or calling its authorization
+     * latch directly.
+     */
+    internal fun evaluateMulliganRankEvidence(
+        detection: CurrentRankDetector.Detection?,
+        actualMode: String?,
+        inWar: Boolean,
+        nowMs: Long,
+        persistentStreakDecision: SurrenderRuleResult?,
+        winRateDecisionProvider: () -> SurrenderRuleResult? = { null },
+    ): SurrenderRuleResult? {
         val authorization = RankEligibilityPolicy.evaluate(
             detection = detection,
             expectedMode = ModeEnum.GAMEPLAY.name,
-            actualMode = Mode.currMode?.name,
+            actualMode = actualMode,
             expectedInWar = true,
-            inWar = WarEx.inWar,
-            nowMs = System.currentTimeMillis(),
+            inWar = inWar,
+            nowMs = nowMs,
         )
         log.info {
             "RANK_ELIGIBILITY_CHECK stage=MULLIGAN provider=${detection?.provider ?: "NONE"} " +
                 "rank=${detection?.rank ?: "UNKNOWN"} tier=${detection?.tier?.name ?: "UNKNOWN"} " +
                 "confidence=${detection?.confidence ?: "unavailable"} agreement=${detection?.agreementCount ?: 0} " +
-                "mode=${Mode.currMode?.name ?: "NONE"} decision=${if (authorization.eligible) "ALLOW" else "DENY"} " +
+                "mode=${actualMode ?: "NONE"} decision=${if (authorization.eligible) "ALLOW" else "DENY"} " +
                 "reason=${authorization.reason}"
         }
         if (authorization.eligible) {
-            authorizeEligibleMulliganRank(
-                rank = detection!!.rank!!,
-                tier = detection.tier,
-                reason = authorization.reason,
-                persistentStreakDecision = persistentStreakDecision,
-            )
+            val rank = detection!!.rank!!
+            val winRateDecision = winRateDecisionProvider()
+            authorizeEligibleMulliganRank(rank, detection.tier, authorization.reason, persistentStreakDecision)
+            if (winRateDecision != null) {
+                log.info {
+                    "WIN_RATE_POLICY_BYPASS reason=verified-rank-eligibility " +
+                        "rule=${winRateDecision.ruleId} action=CONTINUE rank=$rank"
+                }
+            }
             return null
         }
-        val recognizedIneligible = detection?.rank?.let { it !in setOf(5, 10) } == true
-        if (recognizedIneligible) {
+        if (authorization.reason == "rank-not-5-or-10") {
             rankCheckCompleted = true
             setRankInspectionState(RankInspectionState.RESOLVED)
             val result = evaluateCurrentRank(detection?.rank ?: 0, detection?.tier ?: CurrentRankDetector.RankTier.UNKNOWN)
@@ -917,48 +943,42 @@ object SurrenderPolicy {
             }
             return result
         }
-        if (!authorization.eligible) {
-            // A provider can return a Detection object even when it found no
-            // usable/verified number. Unknown, low-confidence, stale, translated
-            // exception, cancellation, and mode-mismatched evidence are all
-            // denied; bounded retries then request surrender if unresolved.
-            val readDecision = classifyRankInspection(
-                rank = null,
-                detectionAvailable = detection != null,
-                attempt = rankInspectionAttempts,
-            )
-            if (readDecision.wait) {
-                setRankInspectionState(readDecision.state)
-                log.debug {
-                    "RANK_POLICY_WAITING_FOR_RANK stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                        "attempt=$rankInspectionAttempts maxAttempts=$MAX_RANK_INSPECTION_ATTEMPTS " +
-                        "providerResult=${authorization.reason} retry=${readDecision.reason} " +
-                        "action=WAIT pause=false surrender=false"
-                }
-                return null
+        // Provider failures, low confidence, stale frames, mode mismatch, and
+        // unresolved/canceled OCR are not numeric-rank decisions. Retry them
+        // within the existing bound, then fail closed explicitly.
+        val readDecision = classifyRankInspection(
+            rank = null,
+            detectionAvailable = detection != null,
+            attempt = rankInspectionAttempts,
+        )
+        if (readDecision.wait) {
+            setRankInspectionState(readDecision.state)
+            log.debug {
+                "RANK_POLICY_WAITING_FOR_RANK stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                    "attempt=$rankInspectionAttempts maxAttempts=$MAX_RANK_INSPECTION_ATTEMPTS " +
+                    "providerResult=${authorization.reason} retry=${readDecision.reason} " +
+                    "action=WAIT pause=false surrender=false"
             }
-            rankCheckCompleted = true
-            setRankInspectionState(RankInspectionState.RESOLVED)
-            val result = unresolvedRankDecision(rankInspectionAttempts)
-            log.warn {
-                "RANK_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                    "rank=${detection?.rank ?: "UNKNOWN"} tier=${detection?.tier?.name ?: "UNKNOWN"} " +
-                    "action=SURRENDER reason=${authorization.reason} final=${result.reason}"
-            }
-            return result
+            return null
         }
-
-        return null
+        rankCheckCompleted = true
+        setRankInspectionState(RankInspectionState.RESOLVED)
+        val result = unresolvedRankDecision(rankInspectionAttempts)
+        log.warn {
+            "RANK_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
+                "rank=${detection?.rank ?: "UNKNOWN"} tier=${detection?.tier?.name ?: "UNKNOWN"} " +
+                "action=SURRENDER reason=${authorization.reason} final=${result.reason}"
+        }
+        return result
     }
 
-    @Suppress("UNUSED_PARAMETER")
     internal fun evaluateCurrentRank(
         rank: Int,
         tier: CurrentRankDetector.RankTier = CurrentRankDetector.RankTier.UNKNOWN,
     ): SurrenderRuleResult? {
         // Exact numeric targets are authoritative even if the independent
         // tier classifier mistakes their badge artwork for Legendary.
-        if (rank in setOf(5, 10)) return null
+        if (rank in setOf(5, 10) || rank > 20) return null
         return SurrenderRuleResult(
             ruleId = "current-rank-not-5-or-10",
             matched = false,
@@ -967,7 +987,7 @@ object SurrenderPolicy {
         )
     }
 
-    /** Shared by the live preflight and deterministic tests of its authorization hand-off. */
+    /** Shared by the live evidence evaluator and continuation hand-off. */
     internal fun authorizeEligibleMulliganRank(
         rank: Int,
         tier: CurrentRankDetector.RankTier,
@@ -994,9 +1014,9 @@ object SurrenderPolicy {
         }
     }
 
-    /** Only a numeric rating above 20 with the matching tier confirms Legendary. */
+    /** The verified numeric rating above 20 itself confirms Legendary. */
     internal fun isLegendaryDetection(detection: CurrentRankDetector.Detection?): Boolean =
-        detection?.let { it.rank != null && it.rank > 20 && it.tier == CurrentRankDetector.RankTier.LEGEND } == true
+        detection?.rank?.let { it > 20 } == true
 
     internal fun unresolvedRankDecision(attempts: Int): SurrenderRuleResult =
         SurrenderRuleResult(

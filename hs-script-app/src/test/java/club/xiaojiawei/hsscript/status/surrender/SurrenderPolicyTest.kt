@@ -96,24 +96,22 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun `rank floor takes precedence over seven-surrender block for legend and unknown`() {
+    fun `verified numeric Legend continues despite surrender streak while unknown still fails closed`() {
         val streakBlock = SurrenderPolicy.persistentStreakDecision(
             PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
         )!!
         assertTrue(streakBlock.blocksAutomaticSurrender)
 
-        val legendary = SurrenderPolicy.evaluateCurrentRank(
+        val eligibleLegend = SurrenderPolicy.evaluateCurrentRank(
             rank = 5220,
-            tier = CurrentRankDetector.RankTier.LEGEND,
-        )!!
+            tier = CurrentRankDetector.RankTier.UNKNOWN,
+        )
         val unresolved = SurrenderPolicy.unresolvedRankDecision(attempts = 3)
 
-        // The generic streak guard may block a duplicate surrender dispatch,
-        // but it must never replace the mandatory rank-floor decision with a
-        // continuation into gameplay.
-        assertTrue(NeverSurrenderPolicy.isMandatoryRankRule(legendary.ruleId))
+        // Fresh numeric Legend evidence is eligible despite noisy tier OCR;
+        // genuinely unresolved evidence still fails closed.
+        assertNull(eligibleLegend)
         assertTrue(NeverSurrenderPolicy.isMandatoryRankRule(unresolved.ruleId))
-        assertTrue(legendary.shouldSurrender)
         assertTrue(unresolved.shouldSurrender)
         assertFalse(streakBlock.shouldSurrender)
     }
@@ -1027,7 +1025,7 @@ class SurrenderPolicyTest {
             assertEquals(233, detection?.rank)
             assertEquals(CurrentRankDetector.RankTier.LEGEND, detection?.tier)
             assertTrue(SurrenderPolicy.isLegendaryDetection(detection))
-        assertTrue(SurrenderPolicy.evaluateCurrentRank(233, detection!!.tier)?.shouldSurrender == true)
+            assertNull(SurrenderPolicy.evaluateCurrentRank(233, detection!!.tier))
             assertEquals(listOf(105 to 108), roiSizes)
         } finally {
             OcrRuntime.settingsProvider = originalSettingsProvider
@@ -1054,7 +1052,7 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun legendaryDetectionRequiresNumericRatingAndTierConfirmation() {
+    fun numericLegendDetectionDoesNotDependOnSecondaryTierOCR() {
         val detection = CurrentRankDetector.Detection(
             rank = null,
             tier = CurrentRankDetector.RankTier.LEGEND,
@@ -1065,8 +1063,10 @@ class SurrenderPolicyTest {
         assertFalse(SurrenderPolicy.isLegendaryDetection(detection))
         assertTrue(SurrenderPolicy.isLegendaryDetection(detection.copy(rank = 233)))
         assertFalse(SurrenderPolicy.isLegendaryDetection(null))
-        assertFalse(
-            SurrenderPolicy.isLegendaryDetection(detection.copy(tier = CurrentRankDetector.RankTier.UNKNOWN)),
+        assertTrue(
+            SurrenderPolicy.isLegendaryDetection(
+                detection.copy(rank = 233, tier = CurrentRankDetector.RankTier.UNKNOWN),
+            ),
         )
     }
 
@@ -1118,6 +1118,14 @@ class SurrenderPolicyTest {
             val ten = SurrenderPolicy.evaluateCurrentRank(rank = 10, tier = tier)
             assertNull(five, "rank 5 remains eligible despite tier=$tier")
             assertNull(ten, "rank 10 remains eligible despite tier=$tier")
+        }
+    }
+
+    @Test
+    fun numericRatingsAboveTwentyAreEligibleRegardlessOfTierLabel() {
+        for (tier in CurrentRankDetector.RankTier.values()) {
+            assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 21, tier = tier))
+            assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 233, tier = tier))
         }
     }
 
@@ -1244,7 +1252,7 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun offlineRankScenariosRejectLegendaryAndOtherRanksButAllowOnlyExactFiveOrTen() {
+    fun offlineRankScenariosAllowFiveTenAndNumericLegendButRejectOtherRanks() {
         data class Scenario(
             val name: String,
             val ocr: String,
@@ -1254,8 +1262,8 @@ class SurrenderPolicyTest {
         )
 
         val scenarios = listOf(
-            Scenario("legendary-233", "233", CurrentRankDetector.RankTier.LEGEND, true, true),
-            Scenario("legendary-257", "257", CurrentRankDetector.RankTier.LEGEND, true, true),
+            Scenario("legendary-233", "233", CurrentRankDetector.RankTier.LEGEND, true, false),
+            Scenario("legendary-257", "257", CurrentRankDetector.RankTier.LEGEND, true, false),
             Scenario("platinum-2", "2", CurrentRankDetector.RankTier.PLATINUM, false, true),
             Scenario("rank-5", "5", CurrentRankDetector.RankTier.SILVER, false, false),
             Scenario("rank-10", "10", CurrentRankDetector.RankTier.GOLD, false, false),

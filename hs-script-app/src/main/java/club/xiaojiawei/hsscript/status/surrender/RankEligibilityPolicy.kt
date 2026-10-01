@@ -31,20 +31,11 @@ internal object RankEligibilityPolicy {
         val rank = detection.rank
             ?: return Decision(false, "rank-unresolved")
         if (detection.agreementCount < 1) return Decision(false, "rank-number-not-read-by-ocr")
-        // The pre-match visual tier probe also sees the red/orange backdrop
-        // around the badge and can label a clear rank-10 numeral as LEGEND.
-        // The fresh, high-confidence numeric contract is authoritative for 5
-        // and 10; only ratings above 20 require independent Legend tier support.
+        // Validate evidence provenance before deciding whether the numeric
+        // rank is eligible. A fresh, high-confidence numeric value above 20
+        // establishes Legend; the secondary tier OCR is noisy and is not an
+        // additional authorization requirement.
         val eligibleRank = rank == 5 || rank == 10
-        val eligibleLegendRating = rank > 20 && detection.tier == CurrentRankDetector.RankTier.LEGEND
-        if (!eligibleRank && !eligibleLegendRating) {
-            val reason = when {
-                rank > 20 -> "legend-rating-tier-unconfirmed"
-                rank in 11..20 -> "rank-not-5-or-10"
-                else -> "rank-not-5-or-10"
-            }
-            return Decision(false, reason)
-        }
         when (detection.provider.uppercase()) {
             "PADDLEX" -> {
                 val confidence = detection.confidence
@@ -57,6 +48,8 @@ internal object RankEligibilityPolicy {
             }
             else -> return Decision(false, "rank-provider-unverified")
         }
-        return Decision(true, if (eligibleRank) "verified-exact-rank-$rank" else "verified-legend-rating-$rank")
+        val eligibleLegendRating = rank > 20
+        if (!eligibleRank && !eligibleLegendRating) return Decision(false, "rank-not-5-or-10")
+        return Decision(true, if (eligibleRank) "verified-exact-rank-$rank" else "verified-numeric-legend-rating-$rank")
     }
 }

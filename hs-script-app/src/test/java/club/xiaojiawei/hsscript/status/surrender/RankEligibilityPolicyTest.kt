@@ -36,11 +36,12 @@ class RankEligibilityPolicyTest {
     }
 
     @Test
-    fun `numeric rating above twenty requires Legend tier confirmation`() {
-        assertTrue(evaluate(detection(rank = 21, tier = CurrentRankDetector.RankTier.LEGEND)).eligible)
-        assertTrue(evaluate(detection(rank = 233, tier = CurrentRankDetector.RankTier.LEGEND)).eligible)
-        assertFalse(evaluate(detection(rank = 21, tier = CurrentRankDetector.RankTier.UNKNOWN)).eligible)
-        assertFalse(evaluate(detection(rank = 21, tier = CurrentRankDetector.RankTier.GOLD)).eligible)
+    fun `numeric rating above twenty establishes Legend despite conflicting or unknown tier`() {
+        for (tier in CurrentRankDetector.RankTier.values()) {
+            val decision = evaluate(detection(rank = 21, tier = tier))
+            assertTrue(decision.eligible, "rank=21 tier=$tier reason=${decision.reason}")
+        }
+        assertTrue(evaluate(detection(rank = 233, tier = CurrentRankDetector.RankTier.UNKNOWN)).eligible)
         assertFalse(evaluate(detection(rank = null, tier = CurrentRankDetector.RankTier.LEGEND)).eligible)
     }
 
@@ -51,6 +52,8 @@ class RankEligibilityPolicyTest {
         assertTrue(evaluate(detection(rank = 5, confidence = 0.90)).eligible)
         assertFalse(evaluate(detection(rank = 5, confidence = 0.89)).eligible)
         assertFalse(evaluate(detection(rank = 5, confidence = null)).eligible)
+        assertFalse(evaluate(detection(rank = 233, confidence = 0.89)).eligible)
+        assertFalse(evaluate(detection(rank = 233, provider = "UNKNOWN")).eligible)
         assertEquals(
             "rank-number-not-read-by-ocr",
             evaluate(detection(rank = 10, agreementCount = 0)).reason,
@@ -94,7 +97,7 @@ class RankEligibilityPolicyTest {
             PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
         )!!
         assertTrue(surrenderStreak.blocksAutomaticSurrender)
-        for (rank in listOf(4, 7, 11, 233)) {
+        for (rank in listOf(4, 7, 11, 20)) {
             val decision = evaluate(detection(rank = rank))
             assertFalse(decision.eligible, "streak guard must not allow rank=$rank")
             assertFalse(RankEligibilityPolicy.shouldDispatchMatchmaking(decision, working = true, paused = false))
@@ -109,6 +112,8 @@ class RankEligibilityPolicyTest {
         assertTrue(rankTen.eligible)
         assertTrue(RankEligibilityPolicy.shouldDispatchMatchmaking(rankTen, working = true, paused = false))
         assertFalse(RankEligibilityPolicy.shouldDispatchMatchmaking(rankTen, working = true, paused = true))
+        val numericLegend = evaluate(detection(rank = 233, tier = CurrentRankDetector.RankTier.UNKNOWN))
+        assertTrue(numericLegend.eligible, "numeric rating above 20 must not depend on tier OCR")
     }
 
     private fun evaluate(
