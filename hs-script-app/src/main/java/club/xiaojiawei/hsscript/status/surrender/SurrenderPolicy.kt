@@ -540,6 +540,23 @@ object SurrenderPolicy {
             }
         }
 
+    /** Keep every generic surrender policy subordinate to a verified eligible rank. */
+    private fun skipGenericSurrenderForEligibleRank(stage: SurrenderCheckStage): Boolean {
+        if (!rankContinueAuthorized) return false
+        log.info {
+            "SURRENDER_POLICY_SKIPPED reason=verified-rank-eligibility stage=${stage.name} " +
+                "action=CONTINUE surrender=false dispatch=false retry=false"
+        }
+        return true
+    }
+
+    /** Common executor guard for direct GameUtil.surrender callers and stale requests. */
+    internal fun surrenderDispatchBlockReason(mandatoryRank: Boolean): String? = when {
+        rankContinueAuthorized -> "verified-rank-eligibility"
+        !rankCheckCompleted && !mandatoryRank -> "rank-eligibility-not-resolved"
+        else -> null
+    }
+
     /**
      * Evaluate the rival hero as soon as the live model has a resolved hero
      * entity during the pre-mulligan phases.  Unknown/placeholder names are
@@ -548,6 +565,7 @@ object SurrenderPolicy {
      */
     @Synchronized
     fun evaluateOpponentHeroBeforeMulligan(war: War): SurrenderRuleResult? {
+        if (skipGenericSurrenderForEligibleRank(SurrenderCheckStage.OPPONENT_HERO_RESOLVED)) return null
         enforcePersistentStreakGuardForCurrentPolicy()?.let { streakDecision ->
             if (!streakDecision.blocksAutomaticSurrender) return streakDecision
             logPersistentStreakContinueOnce("opponent-hero", streakDecision)
@@ -1088,7 +1106,7 @@ object SurrenderPolicy {
     /** True when a rank read already produced a final safe or unsafe result. */
     internal fun currentRankCheckCompleted(): Boolean = rankCheckCompleted
 
-    /** True only after the current game positively resolved Silver 5 or 10. */
+    /** True only after this game's numeric rank was positively authorized. */
     internal fun currentRankContinueAuthorized(): Boolean = rankContinueAuthorized
 
     internal fun rankInspectionAttemptsForTest(): Int = rankInspectionAttempts
@@ -1215,6 +1233,7 @@ object SurrenderPolicy {
      * identified.
      */
     fun evaluateTurnStart(war: War): SurrenderRuleResult? {
+        if (skipGenericSurrenderForEligibleRank(SurrenderCheckStage.TURN_START)) return null
         enforcePersistentStreakGuardForCurrentPolicy()?.let { streakDecision ->
             if (!streakDecision.blocksAutomaticSurrender) return streakDecision
             logPersistentStreakContinueOnce("turn", streakDecision)
@@ -1311,6 +1330,7 @@ object SurrenderPolicy {
      */
     @Synchronized
     internal fun evaluateOpponentPlayedCard(war: War): SurrenderRuleResult? {
+        if (skipGenericSurrenderForEligibleRank(SurrenderCheckStage.OPPONENT_CARD_PLAYED)) return null
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") return null
         if (!war.me.isValid() || !war.rival.isValid()) return null
         val cardsByZone = sequenceOf(

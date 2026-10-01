@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
+import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
@@ -335,8 +336,12 @@ object DeckStrategyActuator {
 
         if (surrenderNumber >= 0 && war.me.turn >= surrenderNumber) {
             log.info { "到达投降回合-[${surrenderNumber}]" }
-            GameUtil.surrender()
-            return
+            if (GameUtil.surrender(reason = "configured-over-turn")) return
+            if (GameUtil.isTerminalGameState() || !SurrenderPolicy.currentRankContinueAuthorized()) return
+            log.info {
+                "SURRENDER_POLICY_SKIPPED reason=verified-rank-eligibility " +
+                    "stage=CONFIGURED_OVER_TURN action=CONTINUE surrender=false dispatch=false"
+            }
         }
 
         // 等待动画结束
@@ -348,8 +353,12 @@ object DeckStrategyActuator {
         // deliberately opt-in and never affects normal runs.
         if (System.getProperty("hs.script.e2e.surrender-after-out-card") == "true") {
             log.info { "E2E专用：已进入有效我方出牌阶段，执行脚本投降以完成对局闭环" }
-            GameUtil.surrender()
-            return
+            if (GameUtil.surrender(reason = "e2e-surrender-after-out-card")) return
+            if (GameUtil.isTerminalGameState() || !SurrenderPolicy.currentRankContinueAuthorized()) return
+            log.info {
+                "SURRENDER_POLICY_SKIPPED reason=verified-rank-eligibility " +
+                    "stage=E2E_SURRENDER_AFTER_OUT_CARD action=CONTINUE surrender=false dispatch=false"
+            }
         }
 
         var strategyForTurn: DeckStrategy? = null
@@ -723,6 +732,14 @@ object DeckStrategyActuator {
     private fun checkSurrender(): Boolean {
         DeckStrategyManager.currentDeckStrategy?.let {
             if (it.needSurrender) {
+                if (SurrenderPolicy.currentRankContinueAuthorized()) {
+                    it.needSurrender = false
+                    log.info {
+                        "SURRENDER_POLICY_SKIPPED reason=verified-rank-eligibility " +
+                            "stage=DECK_STRATEGY action=CONTINUE surrender=false dispatch=false"
+                    }
+                    return false
+                }
                 if (NeverSurrenderPolicy.blockSurrender("DeckStrategyActuator.checkSurrender")) {
                     it.needSurrender = false
                     return true

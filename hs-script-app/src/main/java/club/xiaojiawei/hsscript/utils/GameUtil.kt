@@ -774,6 +774,14 @@ object GameUtil {
             }
             return false
         }
+        SurrenderPolicy.surrenderDispatchBlockReason(mandatoryRank)?.let { blockReason ->
+            log.info {
+                "SURRENDER_ACTION_BLOCKED reason=$blockReason " +
+                    "requestedReason=${reason?.takeIf { it.isNotBlank() } ?: "unspecified"} " +
+                    "mandatoryRank=$mandatoryRank dispatch=false queue=false retry=false"
+            }
+            return false
+        }
         if (NeverSurrenderPolicy.blockSurrender("GameUtil.surrender", mandatoryRank)) return false
         if (!ActionDispatchGate.allow("surrender.request")) return false
 //        SystemUtil.frontWindow(ScriptStaticData.getGameHWND());
@@ -825,6 +833,12 @@ object GameUtil {
                     fun stopSurrenderTask() = cancelGameEndTask()
                     if (PauseStatus.isPause) {
                         stopSurrenderTask()
+                    } else if (SurrenderPolicy.currentRankContinueAuthorized()) {
+                        stopSurrenderTask()
+                        log.info {
+                            "SURRENDER_RETRY_BLOCKED reason=verified-rank-eligibility " +
+                                "attempts=$surrenderAttempts dispatch=false retry=false action=CONTINUE_GAME"
+                        }
                     } else if (!ActionDispatchGate.allow("surrender.retry")) {
                         stopSurrenderTask()
                     } else if (WarEx.warCount > warCount || (isGamePlay && Mode.currMode !== ModeEnum.GAMEPLAY)) {

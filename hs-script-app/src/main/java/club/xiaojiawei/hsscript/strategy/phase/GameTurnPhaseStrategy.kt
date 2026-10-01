@@ -47,9 +47,17 @@ object GameTurnPhaseStrategy : AbstractPhaseStrategy() {
                     E2ETrace.markOurTurnSeen()
                     cancelAllTask()
                     war.isMyTurn = true
-                    if (SurrenderPolicy.evaluateTurnStart(war) != null) {
-                        GameUtil.surrender()
-                        return false
+                    val turnStartSurrender = SurrenderPolicy.evaluateTurnStart(war)
+                    if (turnStartSurrender != null) {
+                        if (GameUtil.surrender(reason = turnStartSurrender.reason)) return false
+                        if (GameUtil.isTerminalGameState() || !SurrenderPolicy.currentRankContinueAuthorized()) {
+                            log.info {
+                                "TURN_START_ACTIONS_DEFERRED reason=" +
+                                    "${if (GameUtil.isTerminalGameState()) "terminal-state-priority" else "rank-eligibility-not-resolved"} " +
+                                    "rule=${turnStartSurrender.ruleId} action=WAIT"
+                            }
+                            return false
+                        }
                     }
                     // A requested strategy refresh is applied only at this
                     // boundary. The running turn keeps its captured strategy

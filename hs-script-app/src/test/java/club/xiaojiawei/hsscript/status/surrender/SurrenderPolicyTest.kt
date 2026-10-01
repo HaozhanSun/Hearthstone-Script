@@ -15,6 +15,7 @@ import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
+import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.Player
 import club.xiaojiawei.hsscriptcardsdk.bean.TestCardAction
@@ -1126,6 +1127,50 @@ class SurrenderPolicyTest {
         for (tier in CurrentRankDetector.RankTier.values()) {
             assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 21, tier = tier))
             assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 233, tier = tier))
+        }
+    }
+
+    @Test
+    fun eligibleRankSuppressesTurnStartHeroHealthHeroIdentityAndCardSurrenderRules() {
+        val now = System.currentTimeMillis()
+        val detection = CurrentRankDetector.Detection(
+            rank = 10,
+            tier = CurrentRankDetector.RankTier.UNKNOWN,
+            ocrText = "10",
+            confidence = 1.0,
+            captureBounds = Rectangle(10, 20, 80, 90),
+            provider = "PADDLEX",
+            capturedAtMs = now,
+            agreementCount = 1,
+        )
+        val war = warWithRivalHero("星界雪怒").apply {
+            rival.playArea.hero!!.health = 40
+            rival.playArea.hero!!.damage = 0
+        }
+
+        SurrenderPolicy.resetForNewGame()
+        try {
+            assertNull(
+                SurrenderPolicy.evaluateMulliganRankEvidence(
+                    detection = detection,
+                    actualMode = "GAMEPLAY",
+                    inWar = true,
+                    nowMs = now,
+                    persistentStreakDecision = SurrenderPolicy.persistentStreakDecision(
+                        PersistentStreakSnapshot(consecutiveSurrenders = 0, consecutiveWins = 5),
+                    ),
+                    winRateDecisionProvider = {
+                        SurrenderPolicy.evaluateWinRate(SurrenderPolicy.WinRateSnapshot(games = 20, wins = 12))
+                    },
+                ),
+            )
+            assertTrue(SurrenderPolicy.currentRankContinueAuthorized())
+            assertNull(SurrenderPolicy.evaluateTurnStart(war), "health=40 must not surrender an eligible rank")
+            assertNull(SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war))
+            assertNull(SurrenderPolicy.evaluateOpponentPlayedCard(war))
+            assertFalse(GameUtil.surrender(reason = "opponent-health-is-40 source=Power.log"))
+        } finally {
+            SurrenderPolicy.resetForNewGame()
         }
     }
 
