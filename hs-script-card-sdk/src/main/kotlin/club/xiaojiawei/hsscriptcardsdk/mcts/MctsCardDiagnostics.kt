@@ -38,6 +38,8 @@ object MctsCardDiagnostics {
     const val GENERIC_OPAQUE_FALLBACK_PRIOR = -1_000_000.0
     private val targetHintCache = ConcurrentHashMap<String, Int>()
     private val minionStatCache = ConcurrentHashMap<String, Boolean>()
+    private val metadataAbsentCache = ConcurrentHashMap<String, Boolean>()
+    private const val METADATA_ABSENT_MINION_MAX_COST = 2
     private val targetOrChoiceHints = listOf(
         "目标",
         "选择",
@@ -108,6 +110,20 @@ object MctsCardDiagnostics {
     }
 
     /**
+     * A bounded last resort for a genuinely new low-cost minion whose DB row
+     * has not arrived yet. This never applies to an invalid card type, a
+     * missing entity, or an effect/choice minion.
+     */
+    fun metadataAbsentMinionFallbackAllowed(card: Card): Boolean {
+        if (card.cardType !== CardTypeEnum.MINION || card.cardId.isBlank() || card.entityId.isBlank()) return false
+        if (card.cost !in 0..METADATA_ABSENT_MINION_MAX_COST || card.atc > 0 || card.health > 0) return false
+        if (card.isBattlecry || card.isDiscover || card.isChooseOne) return false
+        return metadataAbsentCache.getOrPut(card.cardId) {
+            runCatching { CardDBUtil.queryCardById(card.cardId).isEmpty() }.getOrDefault(false)
+        }
+    }
+
+    /**
      * A generic minion click is safe only when its combat snapshot is usable
      * and a battlecry does not have explicit target/choice evidence.  A
      * battlecry minion with reliable combat stats is still a useful late
@@ -119,7 +135,9 @@ object MctsCardDiagnostics {
         if (card.cardType !== CardTypeEnum.MINION || card.cardId.isBlank() || card.entityId.isBlank() || card.cost < 0) {
             return false
         }
-        if (card.isDiscover || card.isChooseOne || !hasUsableUnknownMinionStats(card)) return false
+        if (card.isDiscover || card.isChooseOne ||
+            (!hasUsableUnknownMinionStats(card) && !metadataAbsentMinionFallbackAllowed(card))
+        ) return false
         if (!card.isBattlecry) return true
         return opaqueEffectSafety(card) !== OpaqueEffectSafety.UNSAFE_TARGET_OR_CHOICE
     }
@@ -164,7 +182,8 @@ object MctsCardDiagnostics {
                 OpaqueEffectSafety.UNKNOWN_METADATA -> "unknown-effect-metadata"
             }
             CardTypeEnum.MINION -> when {
-                !hasUsableUnknownMinionStats(card) -> "missing-or-invalid-minion-stats"
+                !hasUsableUnknownMinionStats(card) && !metadataAbsentMinionFallbackAllowed(card) -> "missing-or-invalid-minion-stats"
+                metadataAbsentMinionFallbackAllowed(card) -> "metadata-absent-cost-bounded-fallback"
                 card.isDiscover || card.isChooseOne || (card.isBattlecry && opaqueEffectSafety(card) === OpaqueEffectSafety.UNSAFE_TARGET_OR_CHOICE) -> "unsafe-target-or-choice"
                 else -> null
             }

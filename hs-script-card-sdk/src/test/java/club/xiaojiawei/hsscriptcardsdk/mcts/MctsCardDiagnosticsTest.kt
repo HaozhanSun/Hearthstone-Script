@@ -67,7 +67,7 @@ class MctsCardDiagnosticsTest {
     fun `unknown minion with missing or zero stats remains fail closed`() {
         val missing = card("UNKNOWN_MISSING_STATS", CardTypeEnum.MINION, "UNKNOWN ENTITY [cardType=MINION]").apply {
             entityId = "entity-missing-stats"
-            cost = 2
+            cost = 3
             isUncertain = true
         }
         val zeroAttack = missing.clone() as Card
@@ -84,6 +84,24 @@ class MctsCardDiagnosticsTest {
         assertFalse(MctsCardDiagnostics.hasUsableUnknownMinionStats(zeroHealth))
         assertEquals("missing-or-invalid-minion-stats", MctsCardDiagnostics.opaqueFallbackBlockReason(missing))
         assertFalse(MctsCardDiagnostics.braveOpaqueFallbackAllowed(missing))
+    }
+
+    @Test
+    fun `metadata-absent low-cost unknown minion gets bounded brave fallback`() {
+        val card = card("NEW_CARD_WITHOUT_DB_ROW", CardTypeEnum.MINION, "UNKNOWN ENTITY [cardType=MINION]").apply {
+            entityId = "entity-new-card"
+            cost = 2
+            atc = 0
+            health = 0
+            isUncertain = true
+        }
+
+        assertTrue(MctsCardDiagnostics.metadataAbsentMinionFallbackAllowed(card))
+        assertTrue(MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
+        assertEquals(
+            "metadata-absent-cost-bounded-fallback",
+            MctsCardDiagnostics.opaqueFallbackBlockReason(card),
+        )
     }
 
     @Test
