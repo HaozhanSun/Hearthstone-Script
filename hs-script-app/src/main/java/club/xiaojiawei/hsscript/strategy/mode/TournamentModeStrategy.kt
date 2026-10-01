@@ -376,6 +376,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
     private fun scheduleMatchmakingDialogRecovery(traceId: Long) {
         var attempts = 0
         var priorClickSent = false
+        val retrySupervisor = MatchmakingDialogRecoveryRetrySupervisor()
         lateinit var recoveryTask: ScheduledFuture<*>
         recoveryTask = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
             LRunnable {
@@ -388,6 +389,34 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                     return@LRunnable
                 }
                 val probe = ScreenStateRecovery.probeStartGameErrorDialogForMatchmaking()
+                val retryDecision = retrySupervisor.observe(System.currentTimeMillis(), probe.state)
+                when (retryDecision.action) {
+                    MatchmakingDialogRecoveryRetrySupervisor.Action.WAIT_COOLDOWN -> {
+                        if (retryDecision.reason != "cooldown-active") {
+                            log.info {
+                                "MATCHMAKING_ERROR_DIALOG_COOLDOWN trace=$traceId " +
+                                    "reason=${retryDecision.reason} clickAllowed=false pauseRequested=false " +
+                                    "retryAfterMs=${retryDecision.retryAfterMs} " +
+                                    "freshProbe=${probe.state} probeReason=${probe.reason} " +
+                                    "screenshot=${probe.screenshot ?: "none"}"
+                            }
+                        }
+                        return@LRunnable
+                    }
+
+                    MatchmakingDialogRecoveryRetrySupervisor.Action.REARMED -> {
+                        attempts = 0
+                        priorClickSent = false
+                        log.warn {
+                            "MATCHMAKING_ERROR_DIALOG_REARMED trace=$traceId " +
+                                "reason=${retryDecision.reason} evidence=fresh-exact-dialog " +
+                                "nextProbeRequired=true clickAllowed=false pauseRequested=false"
+                        }
+                        return@LRunnable
+                    }
+
+                    MatchmakingDialogRecoveryRetrySupervisor.Action.ATTEMPT_ALLOWED -> Unit
+                }
                 val gameStarted = MatchmakingGuardPolicy.decide(liveGameEvidence()) ==
                     MatchmakingGuardPolicy.Decision.ABORT_GAME_STARTED
                 val decision = MatchmakingDialogRecoveryPolicy.decide(
@@ -463,13 +492,14 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                             phase = "tournament-matchmaking",
                             label = "popup-recovery-exhausted",
                         )
-                        PauseStatus.setAutomaticPause(true)
-                        log.error {
+                        val cooldown = retrySupervisor.beginCooldown(System.currentTimeMillis())
+                        log.warn {
                             "MATCHMAKING_ERROR_DIALOG_EXHAUSTED trace=$traceId attempts=$attempts " +
-                                "pause=true dispatch=false input=none screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
+                                "pauseRequested=false dispatch=false input=none " +
+                                "retryAfterMs=${cooldown.retryAfterMs} " +
+                                "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                                 "screenshotLink=${evidence?.link ?: "none"}"
                         }
-                        recoveryTask.cancel(false)
                     }
                 }
             },
