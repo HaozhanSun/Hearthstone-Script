@@ -211,6 +211,7 @@ object ScreenWatchdog {
         val kind = classifyForSurrender(ocrKind, state, image)
         val visualGameplayFallback = ocrKind == ScreenWatchdogKind.UNKNOWN &&
             kind in setOf(ScreenWatchdogKind.GAMEPLAY, ScreenWatchdogKind.MULLIGAN)
+        val confirmationVisual = surrenderConfirmationMetrics(image).toString()
         val settingsVisual = settingsOverlayMetrics(image).toString()
         val mulliganVisual = if (state.contains("warPhase=REPLACE_CARD", ignoreCase = true)) {
             mulliganVisualMetrics(image).toString()
@@ -218,6 +219,11 @@ object ScreenWatchdog {
             "not-applicable"
         }
         val reason = when (kind) {
+            ScreenWatchdogKind.SURRENDER_CONFIRMATION -> if (ocrKind == ScreenWatchdogKind.SURRENDER_CONFIRMATION) {
+                "ocr-and-fresh-confirmation-modal-visual"
+            } else {
+                "fresh-surrender-confirmation-visual"
+            }
             ScreenWatchdogKind.SETTINGS -> if (ocrKind != ScreenWatchdogKind.SETTINGS) {
                 "fresh-settings-overlay-visual-priority"
             } else {
@@ -238,6 +244,7 @@ object ScreenWatchdog {
                 "visualFallback=$visualGameplayFallback " +
                 "mandatoryRankSurrender=$mandatoryRankSurrender " +
                 "betaRecoveryExtensionsEnabled=$betaRecoveryEnabled " +
+                "confirmationVisual={$confirmationVisual} " +
                 "settingsVisual={$settingsVisual} " +
                 "mulliganVisual={$mulliganVisual} " +
                 "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
@@ -275,26 +282,38 @@ object ScreenWatchdog {
     internal fun hasSettingsOverlayVisualForTest(image: BufferedImage): Boolean =
         settingsOverlayMetrics(image).accepted
 
+    internal fun surrenderConfirmationDiagnosticsForTest(image: BufferedImage): String =
+        surrenderConfirmationMetrics(image).toString()
+
+    internal fun hasSurrenderConfirmationVisualForTest(image: BufferedImage): Boolean =
+        surrenderConfirmationMetrics(image).accepted
+
+    internal fun hasSurrenderConfirmationPanelForTest(image: BufferedImage): Boolean =
+        surrenderConfirmationMetrics(image).panelVisible
+
     private fun classifyForSurrender(
         ocrKind: ScreenWatchdogKind,
         state: String,
         image: BufferedImage,
     ): ScreenWatchdogKind {
-        // Terminal and confirmation OCR is authoritative and must never be
-        // displaced by a settings-looking patch elsewhere in the frame.
+        // Terminal OCR is authoritative and must never be displaced by a
+        // nonterminal overlay signature.
         if (ocrKind in setOf(
                 ScreenWatchdogKind.WIN,
                 ScreenWatchdogKind.LOST,
                 ScreenWatchdogKind.RESULT,
-                ScreenWatchdogKind.SURRENDER_CONFIRMATION,
             )
         ) return ocrKind
-        if (ocrKind == ScreenWatchdogKind.SETTINGS) return ocrKind
 
-        // OCR over the live mulligan cards can continue returning the
-        // background phase after Settings opens. Override that stale phase
-        // only when the centered three-button panel is positively visible.
+        val confirmation = surrenderConfirmationMetrics(image)
+        if (confirmation.accepted) return ScreenWatchdogKind.SURRENDER_CONFIRMATION
+        // A partially obscured confirmation panel must fail closed rather
+        // than falling through to the visible Settings menu behind it.
+        if (confirmation.panelVisible || ocrKind == ScreenWatchdogKind.SURRENDER_CONFIRMATION) {
+            return ScreenWatchdogKind.UNKNOWN
+        }
         if (settingsOverlayMetrics(image).accepted) return ScreenWatchdogKind.SETTINGS
+        if (ocrKind == ScreenWatchdogKind.SETTINGS) return ocrKind
         if (ocrKind != ScreenWatchdogKind.UNKNOWN) return ocrKind
         if (isAuthoritativeActiveGameplay(state) && hasActiveGameplayVisual(image)) {
             return ScreenWatchdogKind.GAMEPLAY
@@ -353,6 +372,105 @@ object ScreenWatchdog {
                 "surrenderRed=${"%.4f".format(Locale.ROOT, surrenderRed)} " +
                 "optionsBeige=${"%.4f".format(Locale.ROOT, optionsBeige)} " +
                 "exitBeige=${"%.4f".format(Locale.ROOT, exitBeige)} accepted=$accepted"
+    }
+
+    private data class SurrenderConfirmationMetrics(
+        val width: Int,
+        val height: Int,
+        val titleBeige: Double,
+        val bodyPanelGray: Double,
+        val warningYellow: Double,
+        val acceptButtonBeige: Double,
+        val continueButtonBeige: Double,
+        val acceptCheckGreen: Double,
+        val continueCrossRed: Double,
+        val frameTop: Double,
+        val frameBottom: Double,
+        val frameLeft: Double,
+        val frameRight: Double,
+        val panelVisible: Boolean,
+        val accepted: Boolean,
+    ) {
+        override fun toString(): String =
+            "size=${width}x$height titleBeige=${"%.4f".format(Locale.ROOT, titleBeige)} " +
+                "bodyPanelGray=${"%.4f".format(Locale.ROOT, bodyPanelGray)} " +
+                "warningYellow=${"%.4f".format(Locale.ROOT, warningYellow)} " +
+                "acceptButtonBeige=${"%.4f".format(Locale.ROOT, acceptButtonBeige)} " +
+                "continueButtonBeige=${"%.4f".format(Locale.ROOT, continueButtonBeige)} " +
+                "acceptCheckGreen=${"%.4f".format(Locale.ROOT, acceptCheckGreen)} " +
+                "continueCrossRed=${"%.4f".format(Locale.ROOT, continueCrossRed)} " +
+                "frameTop=${"%.4f".format(Locale.ROOT, frameTop)} " +
+                "frameBottom=${"%.4f".format(Locale.ROOT, frameBottom)} " +
+                "frameLeft=${"%.4f".format(Locale.ROOT, frameLeft)} " +
+                "frameRight=${"%.4f".format(Locale.ROOT, frameRight)} " +
+                "panelVisible=$panelVisible accepted=$accepted"
+    }
+
+    /** Recognize the centered surrender-confirmation modal, not the board/menu behind it. */
+    private fun surrenderConfirmationMetrics(image: BufferedImage): SurrenderConfirmationMetrics {
+        if (image.width < 800 || image.height < 450) {
+            return SurrenderConfirmationMetrics(
+                image.width, image.height, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, false, false,
+            )
+        }
+        val titleBeige = colorRatio(image, 0.438, 0.382, 0.562, 0.435) { red, green, blue ->
+            red >= 100 && green >= 80 && blue >= 55 &&
+                red - blue <= 125 && red >= green && green >= blue * 0.78
+        }
+        val bodyPanelGray = colorRatio(image, 0.315, 0.445, 0.685, 0.565) { red, green, blue ->
+            red in 25..155 && green in 25..155 && blue in 25..155 &&
+                maxOf(red, green, blue) - minOf(red, green, blue) <= 55
+        }
+        val warningYellow = colorRatio(image, 0.326, 0.462, 0.376, 0.542) { red, green, blue ->
+            red >= 135 && green >= 90 && red > green * 1.12 && green > blue * 1.22
+        }
+        val acceptButtonBeige = colorRatio(image, 0.381, 0.576, 0.494, 0.631) { red, green, blue ->
+            red >= 135 && green >= 105 && blue >= 65 &&
+                red - blue <= 115 && red >= green && green >= blue * 0.82
+        }
+        val continueButtonBeige = colorRatio(image, 0.505, 0.576, 0.617, 0.631) { red, green, blue ->
+            red >= 135 && green >= 105 && blue >= 65 &&
+                red - blue <= 115 && red >= green && green >= blue * 0.82
+        }
+        val acceptCheckGreen = colorRatio(image, 0.388, 0.589, 0.411, 0.619) { red, green, blue ->
+            green >= 90 && green > red * 1.20 && green > blue * 0.72
+        }
+        val continueCrossRed = colorRatio(image, 0.512, 0.589, 0.535, 0.619) { red, green, blue ->
+            red >= 110 && red > green * 1.25 && red > blue * 1.10
+        }
+        // The title/body color ROIs overlap normal card art and mulligan speech
+        // bubbles. Require the distinctive large, four-sided dialog frame as
+        // well, so a false partial panel cannot suppress the live phase.
+        val darkNeutral: (Int, Int, Int) -> Boolean = { red, green, blue ->
+            red in 15..135 && green in 15..135 && blue in 15..135 &&
+                maxOf(red, green, blue) - minOf(red, green, blue) <= 45
+        }
+        val frameTop = colorRatio(image, 0.295, 0.379, 0.705, 0.404, darkNeutral)
+        val frameBottom = colorRatio(image, 0.295, 0.590, 0.705, 0.615, darkNeutral)
+        val frameLeft = colorRatio(image, 0.290, 0.395, 0.315, 0.605, darkNeutral)
+        val frameRight = colorRatio(image, 0.685, 0.395, 0.710, 0.605, darkNeutral)
+        val panelVisible = titleBeige >= 0.12 && bodyPanelGray >= 0.30 && warningYellow >= 0.015 &&
+            frameTop >= 0.60 && frameBottom >= 0.40 && frameLeft >= 0.60 && frameRight >= 0.40
+        val choicesVisible = acceptButtonBeige >= 0.10 && continueButtonBeige >= 0.10 &&
+            acceptCheckGreen >= 0.02 && continueCrossRed >= 0.02
+        return SurrenderConfirmationMetrics(
+            image.width,
+            image.height,
+            titleBeige,
+            bodyPanelGray,
+            warningYellow,
+            acceptButtonBeige,
+            continueButtonBeige,
+            acceptCheckGreen,
+            continueCrossRed,
+            frameTop,
+            frameBottom,
+            frameLeft,
+            frameRight,
+            panelVisible,
+            panelVisible && choicesVisible,
+        )
     }
 
     /** Three small, fixed menu-button ROIs; broad Hearthstone colors alone never confirm Settings. */

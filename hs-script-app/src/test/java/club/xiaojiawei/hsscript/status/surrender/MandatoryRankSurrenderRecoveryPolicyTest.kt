@@ -3,6 +3,7 @@ package club.xiaojiawei.hsscript.status.surrender
 import club.xiaojiawei.hsscript.status.ScreenWatchdog
 import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
+import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import org.junit.jupiter.api.AfterEach
@@ -11,6 +12,8 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.awt.image.BufferedImage
+import java.awt.Color
+import java.awt.Graphics2D
 import javax.imageio.ImageIO
 
 class MandatoryRankSurrenderRecoveryPolicyTest {
@@ -136,8 +139,10 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             ScreenWatchdogKind.RESULT,
             ScreenWatchdog.classifyForSurrenderForTest("本局结果 对战结束", state, settings),
         )
+        // OCR text alone must not authorize the final surrender click without
+        // a fresh visual confirmation dialog.
         assertEquals(
-            ScreenWatchdogKind.SURRENDER_CONFIRMATION,
+            ScreenWatchdogKind.UNKNOWN,
             ScreenWatchdog.classifyForSurrenderForTest("投降 确认 取消", state, settings),
         )
 
@@ -151,6 +156,109 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY,
             MandatoryRankSurrenderRecoveryPolicy.decide(ScreenWatchdogKind.UNKNOWN).action,
         )
+    }
+
+    @Test
+    fun `fresh confirmation modal over mulligan or board authorizes only the final surrender click`() {
+        val confirmationFrames = listOf(
+            "rank7-live-surrender-confirmation-mulligan-overlay.png",
+            "rank7-live-surrender-confirmation-board-overlay.png",
+        ).map { it to readFixture(it) }
+        val mulliganState = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
+        val boardState = "mode=GAMEPLAY|inWar=true|warPhase=GAME_TURN|myTurn=false|myMulliganInput=false"
+        val settingsOnly = readFixture("rank6-live-mulligan-settings-overlay.png")
+        val mulliganOnly = readFixture("rank6-live-mulligan-pre-settings.png")
+        assertFalse(ScreenWatchdog.hasSurrenderConfirmationPanelForTest(settingsOnly))
+        assertFalse(ScreenWatchdog.hasSurrenderConfirmationPanelForTest(mulliganOnly))
+
+        // The full sequence is re-observed after each single UI click; no
+        // stale frame can authorize skipping directly to confirmation.
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS,
+            MandatoryRankSurrenderRecoveryPolicy.decide(
+                ScreenWatchdog.classifyForSurrenderForTest("unreadable", mulliganState, mulliganOnly),
+            ).action,
+        )
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SURRENDER,
+            MandatoryRankSurrenderRecoveryPolicy.decide(
+                ScreenWatchdog.classifyForSurrenderForTest("unreadable", mulliganState, settingsOnly),
+            ).action,
+        )
+
+        confirmationFrames.forEachIndexed { index, (name, image) ->
+            val diagnostics = ScreenWatchdog.surrenderConfirmationDiagnosticsForTest(image)
+            println("LIVE_SURRENDER_CONFIRMATION name=$name $diagnostics")
+            assertTrue(ScreenWatchdog.hasSurrenderConfirmationPanelForTest(image), "$name: $diagnostics")
+            assertTrue(ScreenWatchdog.hasSurrenderConfirmationVisualForTest(image), "$name: $diagnostics")
+            val state = if (index == 0) mulliganState else boardState
+            val kind = ScreenWatchdog.classifyForSurrenderForTest("unreadable background OCR", state, image)
+            assertEquals(ScreenWatchdogKind.SURRENDER_CONFIRMATION, kind, "$name: $diagnostics")
+            assertEquals(
+                MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_CONFIRMATION,
+                MandatoryRankSurrenderRecoveryPolicy.decide(kind).action,
+                name,
+            )
+
+            val observation = ScreenWatchdog.inspectForSurrender(
+                state = state,
+                attempts = 28 + index,
+                mandatoryRankSurrender = true,
+                captureProvider = { image },
+                ocrProvider = { "unreadable background OCR" },
+            )
+            assertEquals(ScreenWatchdogKind.SURRENDER_CONFIRMATION, observation.kind, observation.reason)
+            assertEquals("fresh-surrender-confirmation-visual", observation.reason)
+            assertEquals(
+                MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_CONFIRMATION,
+                MandatoryRankSurrenderRecoveryPolicy.decide(observation.kind).action,
+            )
+        }
+
+        // A partially obscured choice row still looks like a modal, but is
+        // deliberately UNKNOWN; the settings menu behind it cannot win.
+        val ambiguous = maskConfirmationContinueButton(confirmationFrames.first().second)
+        val ambiguousDiagnostics = ScreenWatchdog.surrenderConfirmationDiagnosticsForTest(ambiguous)
+        assertTrue(ScreenWatchdog.hasSurrenderConfirmationPanelForTest(ambiguous), ambiguousDiagnostics)
+        assertFalse(ScreenWatchdog.hasSurrenderConfirmationVisualForTest(ambiguous), ambiguousDiagnostics)
+        assertEquals(
+            ScreenWatchdogKind.UNKNOWN,
+            ScreenWatchdog.classifyForSurrenderForTest("设置 选项 投降", mulliganState, ambiguous),
+            ambiguousDiagnostics,
+        )
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY,
+            MandatoryRankSurrenderRecoveryPolicy.decide(ScreenWatchdogKind.UNKNOWN).action,
+        )
+
+        // Terminal evidence remains higher priority than any overlay.
+        confirmationFrames.forEach { (_, image) ->
+            assertEquals(ScreenWatchdogKind.WIN, ScreenWatchdog.classifyForSurrenderForTest("胜利 点击继续", boardState, image))
+            assertEquals(ScreenWatchdogKind.LOST, ScreenWatchdog.classifyForSurrenderForTest("失败 点击继续", boardState, image))
+            assertEquals(ScreenWatchdogKind.RESULT, ScreenWatchdog.classifyForSurrenderForTest("本局结果 对战结束", boardState, image))
+        }
+
+        val capability = MandatoryRankSurrenderGuard.begin()
+        assertTrue(
+            ActionDispatchGate.allowForState(
+                action = "surrender.retry.confirm",
+                paused = false,
+                working = true,
+                mandatoryRankSurrenderPending = true,
+                recoveryCapabilityValid = MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(capability),
+            ),
+        )
+        assertFalse(
+            ActionDispatchGate.allowForState(
+                action = "strategy.turn-end",
+                paused = false,
+                working = true,
+                mandatoryRankSurrenderPending = true,
+            ),
+        )
+        assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
+        assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("UNKNOWN"))
+        assertTrue(MandatoryRankSurrenderGuard.isPending())
     }
 
     @Test
@@ -366,4 +474,22 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             javaClass.getResourceAsStream("/club/xiaojiawei/hsscript/status/surrender/$name"),
         ),
     )
+
+    private fun maskConfirmationContinueButton(source: BufferedImage): BufferedImage {
+        val image = BufferedImage(source.width, source.height, BufferedImage.TYPE_INT_RGB)
+        val graphics: Graphics2D = image.createGraphics()
+        try {
+            graphics.drawImage(source, 0, 0, null)
+            graphics.color = Color.BLACK
+            graphics.fillRect(
+                (source.width * 0.505).toInt(),
+                (source.height * 0.576).toInt(),
+                (source.width * 0.112).toInt(),
+                (source.height * 0.055).toInt(),
+            )
+        } finally {
+            graphics.dispose()
+        }
+        return image
+    }
 }
