@@ -211,12 +211,18 @@ object ScreenWatchdog {
         val kind = classifyForSurrender(ocrKind, state, image)
         val visualGameplayFallback = ocrKind == ScreenWatchdogKind.UNKNOWN &&
             kind in setOf(ScreenWatchdogKind.GAMEPLAY, ScreenWatchdogKind.MULLIGAN)
+        val settingsVisual = settingsOverlayMetrics(image).toString()
         val mulliganVisual = if (state.contains("warPhase=REPLACE_CARD", ignoreCase = true)) {
             mulliganVisualMetrics(image).toString()
         } else {
             "not-applicable"
         }
         val reason = when (kind) {
+            ScreenWatchdogKind.SETTINGS -> if (ocrKind != ScreenWatchdogKind.SETTINGS) {
+                "fresh-settings-overlay-visual-priority"
+            } else {
+                "ocr-classified"
+            }
             ScreenWatchdogKind.MULLIGAN -> "authoritative-mulligan-input-and-fresh-mulligan-visual"
             ScreenWatchdogKind.GAMEPLAY -> if (visualGameplayFallback) {
                 "authoritative-gameplay-and-fresh-board-visual"
@@ -232,6 +238,7 @@ object ScreenWatchdog {
                 "visualFallback=$visualGameplayFallback " +
                 "mandatoryRankSurrender=$mandatoryRankSurrender " +
                 "betaRecoveryExtensionsEnabled=$betaRecoveryEnabled " +
+                "settingsVisual={$settingsVisual} " +
                 "mulliganVisual={$mulliganVisual} " +
                 "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                 "ocr=${sanitize(ocrText).take(240).ifBlank { "<empty>" }}"
@@ -262,11 +269,32 @@ object ScreenWatchdog {
         image: BufferedImage,
     ): ScreenWatchdogKind = classifyForSurrender(classify(ocrText), state, image)
 
+    internal fun settingsOverlayDiagnosticsForTest(image: BufferedImage): String =
+        settingsOverlayMetrics(image).toString()
+
+    internal fun hasSettingsOverlayVisualForTest(image: BufferedImage): Boolean =
+        settingsOverlayMetrics(image).accepted
+
     private fun classifyForSurrender(
         ocrKind: ScreenWatchdogKind,
         state: String,
         image: BufferedImage,
     ): ScreenWatchdogKind {
+        // Terminal and confirmation OCR is authoritative and must never be
+        // displaced by a settings-looking patch elsewhere in the frame.
+        if (ocrKind in setOf(
+                ScreenWatchdogKind.WIN,
+                ScreenWatchdogKind.LOST,
+                ScreenWatchdogKind.RESULT,
+                ScreenWatchdogKind.SURRENDER_CONFIRMATION,
+            )
+        ) return ocrKind
+        if (ocrKind == ScreenWatchdogKind.SETTINGS) return ocrKind
+
+        // OCR over the live mulligan cards can continue returning the
+        // background phase after Settings opens. Override that stale phase
+        // only when the centered three-button panel is positively visible.
+        if (settingsOverlayMetrics(image).accepted) return ScreenWatchdogKind.SETTINGS
         if (ocrKind != ScreenWatchdogKind.UNKNOWN) return ocrKind
         if (isAuthoritativeActiveGameplay(state) && hasActiveGameplayVisual(image)) {
             return ScreenWatchdogKind.GAMEPLAY
@@ -310,6 +338,83 @@ object ScreenWatchdog {
     }
 
     private fun hasMulliganVisual(image: BufferedImage): Boolean = mulliganVisualMetrics(image).accepted
+
+    private data class SettingsOverlayMetrics(
+        val width: Int,
+        val height: Int,
+        val headerBeige: Double,
+        val surrenderRed: Double,
+        val optionsBeige: Double,
+        val exitBeige: Double,
+        val accepted: Boolean,
+    ) {
+        override fun toString(): String =
+            "size=${width}x$height headerBeige=${"%.4f".format(Locale.ROOT, headerBeige)} " +
+                "surrenderRed=${"%.4f".format(Locale.ROOT, surrenderRed)} " +
+                "optionsBeige=${"%.4f".format(Locale.ROOT, optionsBeige)} " +
+                "exitBeige=${"%.4f".format(Locale.ROOT, exitBeige)} accepted=$accepted"
+    }
+
+    /** Three small, fixed menu-button ROIs; broad Hearthstone colors alone never confirm Settings. */
+    private fun settingsOverlayMetrics(image: BufferedImage): SettingsOverlayMetrics {
+        if (image.width < 800 || image.height < 450) {
+            return SettingsOverlayMetrics(image.width, image.height, 0.0, 0.0, 0.0, 0.0, false)
+        }
+        val headerBeige = colorRatio(image, 0.424, 0.259, 0.587, 0.298) { red, green, blue ->
+            red >= 135 && green >= 110 && blue >= 70 &&
+                red - blue <= 125 && red >= green && green >= blue * 0.80
+        }
+        val surrenderRed = colorRatio(image, 0.445, 0.323, 0.571, 0.381) { red, green, blue ->
+            red >= 125 && red > green * 1.35 && green > blue * 1.12
+        }
+        val optionsBeige = colorRatio(image, 0.445, 0.418, 0.571, 0.477) { red, green, blue ->
+            red >= 135 && green >= 105 && blue >= 65 &&
+                red - blue <= 115 && red >= green && green >= blue * 0.82
+        }
+        val exitBeige = colorRatio(image, 0.445, 0.510, 0.571, 0.569) { red, green, blue ->
+            red >= 135 && green >= 105 && blue >= 65 &&
+                red - blue <= 115 && red >= green && green >= blue * 0.82
+        }
+        val accepted = headerBeige >= 0.12 && surrenderRed >= 0.10 &&
+            optionsBeige >= 0.10 && exitBeige >= 0.10
+        return SettingsOverlayMetrics(
+            image.width,
+            image.height,
+            headerBeige,
+            surrenderRed,
+            optionsBeige,
+            exitBeige,
+            accepted,
+        )
+    }
+
+    private fun colorRatio(
+        image: BufferedImage,
+        left: Double,
+        top: Double,
+        right: Double,
+        bottom: Double,
+        matches: (red: Int, green: Int, blue: Int) -> Boolean,
+    ): Double {
+        val x0 = (image.width * left).toInt().coerceIn(0, image.width)
+        val x1 = (image.width * right).toInt().coerceIn(x0, image.width)
+        val y0 = (image.height * top).toInt().coerceIn(0, image.height)
+        val y1 = (image.height * bottom).toInt().coerceIn(y0, image.height)
+        var matched = 0
+        var samples = 0
+        var y = y0
+        while (y < y1) {
+            var x = x0
+            while (x < x1) {
+                val rgb = image.getRGB(x, y)
+                if (matches(rgb shr 16 and 0xff, rgb shr 8 and 0xff, rgb and 0xff)) matched++
+                samples++
+                x += 2
+            }
+            y += 2
+        }
+        return if (samples == 0) 0.0 else matched.toDouble() / samples
+    }
 
     private fun mulliganVisualMetrics(image: BufferedImage): MulliganVisualMetrics {
         if (image.width < 800 || image.height < 450) {

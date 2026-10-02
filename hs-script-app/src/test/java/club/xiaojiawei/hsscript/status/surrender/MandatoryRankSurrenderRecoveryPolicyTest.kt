@@ -49,6 +49,111 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
     }
 
     @Test
+    fun `fresh settings overlay visual overrides mulligan background only when all menu buttons are present`() {
+        val settings = readFixture("rank6-live-mulligan-settings-overlay.png")
+        val preSettingsFrames = listOf(
+            "rank6-live-mulligan-unknown-ocr.png",
+            "rank6-live-mulligan-unknown-ocr-second-frame.png",
+            "rank6-live-mulligan-pre-settings.png",
+        ).map { it to readFixture(it) }
+        val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
+        val diagnostics = ScreenWatchdog.settingsOverlayDiagnosticsForTest(settings)
+
+        println("LIVE_SETTINGS_OVERLAY $diagnostics")
+        assertTrue(ScreenWatchdog.hasSettingsOverlayVisualForTest(settings), diagnostics)
+        preSettingsFrames.forEach { (name, image) ->
+            val negativeDiagnostics = ScreenWatchdog.settingsOverlayDiagnosticsForTest(image)
+            println("PRE_SETTINGS_NEGATIVE name=$name $negativeDiagnostics")
+            assertFalse(ScreenWatchdog.hasSettingsOverlayVisualForTest(image), "$name: $negativeDiagnostics")
+            assertEquals(
+                ScreenWatchdogKind.MULLIGAN,
+                ScreenWatchdog.classifyForSurrenderForTest("unreadable mulligan labels", state, image),
+                name,
+            )
+        }
+        val settingsKind = ScreenWatchdog.classifyForSurrenderForTest(
+            "保留或替换卡牌 确认",
+            state,
+            settings,
+        )
+        assertEquals(ScreenWatchdogKind.SETTINGS, settingsKind, diagnostics)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SURRENDER,
+            MandatoryRankSurrenderRecoveryPolicy.decide(settingsKind).action,
+        )
+        val liveObservation = ScreenWatchdog.inspectForSurrender(
+            state = state,
+            attempts = 27,
+            mandatoryRankSurrender = true,
+            captureProvider = { settings },
+            ocrProvider = { "起始手牌 保留或替换卡牌" },
+        )
+        assertEquals(ScreenWatchdogKind.SETTINGS, liveObservation.kind, liveObservation.reason)
+        assertEquals("fresh-settings-overlay-visual-priority", liveObservation.reason)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SURRENDER,
+            MandatoryRankSurrenderRecoveryPolicy.decide(liveObservation.kind).action,
+        )
+
+        // A new probe that sees only the underlying mulligan must not skip
+        // straight to the confirmation coordinate.
+        val nextFreshProbe = ScreenWatchdog.classifyForSurrenderForTest(
+            "unreadable mulligan labels",
+            state,
+            preSettingsFrames.last().second,
+        )
+        assertEquals(ScreenWatchdogKind.MULLIGAN, nextFreshProbe)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS,
+            MandatoryRankSurrenderRecoveryPolicy.decide(nextFreshProbe).action,
+        )
+        assertFalse(
+            MandatoryRankSurrenderRecoveryPolicy.decide(nextFreshProbe).action ==
+                MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_CONFIRMATION,
+        )
+        val confirmedDialog = ScreenWatchdog.classifyForTest("确定要投降吗 取消 确认")
+        assertEquals(ScreenWatchdogKind.SURRENDER_CONFIRMATION, confirmedDialog)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_CONFIRMATION,
+            MandatoryRankSurrenderRecoveryPolicy.decide(confirmedDialog).action,
+        )
+    }
+
+    @Test
+    fun `terminal OCR wins over settings overlay and settings-looking colors without panel remain unknown`() {
+        val settings = readFixture("rank6-live-mulligan-settings-overlay.png")
+        val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
+
+        assertEquals(
+            ScreenWatchdogKind.WIN,
+            ScreenWatchdog.classifyForSurrenderForTest("胜利 点击继续", state, settings),
+        )
+        assertEquals(
+            ScreenWatchdogKind.LOST,
+            ScreenWatchdog.classifyForSurrenderForTest("失败 点击继续", state, settings),
+        )
+        assertEquals(
+            ScreenWatchdogKind.RESULT,
+            ScreenWatchdog.classifyForSurrenderForTest("本局结果 对战结束", state, settings),
+        )
+        assertEquals(
+            ScreenWatchdogKind.SURRENDER_CONFIRMATION,
+            ScreenWatchdog.classifyForSurrenderForTest("投降 确认 取消", state, settings),
+        )
+
+        val blank = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
+        assertFalse(ScreenWatchdog.hasSettingsOverlayVisualForTest(blank))
+        assertEquals(
+            ScreenWatchdogKind.UNKNOWN,
+            ScreenWatchdog.classifyForSurrenderForTest("unreadable", state, blank),
+        )
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY,
+            MandatoryRankSurrenderRecoveryPolicy.decide(ScreenWatchdogKind.UNKNOWN).action,
+        )
+    }
+
+    @Test
     fun `unknown screen can only be observed and never dispatches a guessed coordinate`() {
         val screen = ScreenWatchdog.classifyForTest("无法识别的画面")
 
@@ -109,7 +214,7 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             ),
         )
         // This visual fallback does not authorize guessing later coordinates:
-        // Settings and the confirmation dialog still need their own OCR state.
+        // every next step needs a fresh observation of the corresponding screen.
         assertEquals(
             MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY,
             MandatoryRankSurrenderRecoveryPolicy.decide(ScreenWatchdogKind.UNKNOWN).action,
@@ -255,4 +360,10 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             MandatoryRankSurrenderRecoveryPolicy.decide(ScreenWatchdogKind.UNKNOWN).action,
         )
     }
+
+    private fun readFixture(name: String): BufferedImage = ImageIO.read(
+        requireNotNull(
+            javaClass.getResourceAsStream("/club/xiaojiawei/hsscript/status/surrender/$name"),
+        ),
+    )
 }
