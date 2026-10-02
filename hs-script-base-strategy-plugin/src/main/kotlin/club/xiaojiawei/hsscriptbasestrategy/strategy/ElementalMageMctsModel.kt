@@ -26,6 +26,7 @@ import club.xiaojiawei.hsscriptcardsdk.mcts.defaultMctsActionOrderPhase
 object ElementalMageMctsModel : MctsDecisionModel {
     const val MIN_ELEMENTAL_CHAIN_TURN = 3
     const val OVERFLOWING_LAVA_ID = "WW_424"
+    const val SEI_LA_ZAN_ID = "DEEP_036"
 
     private val sunfireNames = setOf("阳炎耀斑", "阳炎药班", "阳炎药斑")
     private val chainDependentNames = setOf("烈炎珠", "玄炎虫", "异流熔岩", "溢流熔岩", "焰登元素", "破链角斗士")
@@ -60,6 +61,17 @@ object ElementalMageMctsModel : MctsDecisionModel {
             card.entityName.contains("溢流熔岩") ||
             card.entityName.contains("异流熔岩") ||
             card.entityName.contains("亦留容颜")
+
+    /** Sei La Zan doubles friendly minion stats and is the deck's explicit first play. */
+    fun isSeiLaZan(card: Card): Boolean =
+        card.cardId == SEI_LA_ZAN_ID || card.entityName.contains("塞拉赞恩")
+
+    fun isPlayableSeiLaZan(card: Card, war: War): Boolean =
+        isSeiLaZan(card) &&
+            card.cardType === CardTypeEnum.MINION &&
+            card.cost in 0..war.me.usableResource &&
+            war.me.playArea.cards.size < war.me.playArea.maxSize &&
+            (!card.isUncertain || MctsCardDiagnostics.braveOpaqueFallbackAllowed(card))
 
     data class OverflowingLavaCopyPlan(
         val consecutiveElementalTurns: Int,
@@ -107,7 +119,7 @@ object ElementalMageMctsModel : MctsDecisionModel {
         // Elemental model remains responsible only for its chain bookkeeping.
         MctsLethalTelemetry.recordBeforeAttackDecision(
             war = war,
-            strategy = "元素法 V1.3",
+            strategy = "元素法 V1.4",
             step = turn,
             selectedAction = null,
         )
@@ -147,6 +159,12 @@ object ElementalMageMctsModel : MctsDecisionModel {
         MctsCardDiagnostics.safeOpaqueMinionFallbackAllowed(card)
 
     override fun isMandatoryAction(action: Action, war: War): Boolean {
+        // This is intentionally a root/action-generation fence rather than a
+        // score bonus: global turn-plan search must not choose a cheaper plan
+        // before the playable DEEP_036 play has happened.
+        if (war.me.handArea.cards.any { isPlayableSeiLaZan(it, war) }) {
+            return action is PlayAction && action.creator?.let(::isSeiLaZan) == true
+        }
         if (!mustPlayElementalFirst(war)) return false
         return action is PlayAction && action.creator?.let(::isElemental) == true
     }
@@ -196,6 +214,7 @@ object ElementalMageMctsModel : MctsDecisionModel {
 
     override fun actionPrior(action: Action, war: War): Double {
         val card = action.creator ?: return 0.0
+        if (isSeiLaZan(card)) return 100.0
         if (isOverflowingLava(card)) {
             val plan = overflowingLavaCopyPlan(
                 currentConsecutiveElementalTurns(war),
