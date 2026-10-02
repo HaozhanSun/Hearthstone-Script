@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.strategy.phase
 
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
+import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.PersistentStreakSnapshot
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.SurrenderRuleResult
@@ -41,7 +42,7 @@ class MulliganRankPreflightTest {
     }
 
     @Test
-    fun `verified rank five ten and numeric Legend continue through policy guards after grace`() {
+    fun `only verified rank five and ten continue through policy guards after grace`() {
         val now = System.currentTimeMillis()
         val winningStreakDecision = SurrenderPolicy.persistentStreakDecision(
             PersistentStreakSnapshot(consecutiveSurrenders = 0, consecutiveWins = 5),
@@ -56,7 +57,7 @@ class MulliganRankPreflightTest {
         assertTrue(surrenderStreakDecision.blocksAutomaticSurrender)
         assertTrue(winRateDecision.shouldSurrender)
 
-        for (rank in listOf(5, 10, 21)) {
+        for (rank in listOf(5, 10)) {
             for (tier in listOf(CurrentRankDetector.RankTier.GOLD, CurrentRankDetector.RankTier.UNKNOWN)) {
                 for (streakDecision in listOf(winningStreakDecision, surrenderStreakDecision)) {
                     SurrenderPolicy.resetForNewGame()
@@ -141,10 +142,15 @@ class MulliganRankPreflightTest {
             actualMode = "GAMEPLAY",
             inWar = true,
             nowMs = now,
-            persistentStreakDecision = null,
+            persistentStreakDecision = SurrenderPolicy.persistentStreakDecision(
+                PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
+            ),
         )
         assertEquals("current-rank-not-5-or-10", denied?.ruleId)
         assertTrue(denied?.shouldSurrender == true)
+        assertFalse(denied!!.blocksAutomaticSurrender)
+        assertTrue(NeverSurrenderPolicy.isMandatoryRankDispatch("mulligan-rank-preflight", denied.ruleId))
+        assertFalse(NeverSurrenderPolicy.shouldBlock(enabled = true, mandatoryRank = true))
         assertFalse(SurrenderPolicy.currentRankContinueAuthorized())
 
         SurrenderPolicy.resetForNewGame()

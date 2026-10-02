@@ -1,5 +1,6 @@
 package club.xiaojiawei.hsscript.status.surrender
 
+import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
 import java.awt.Rectangle
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -36,12 +37,14 @@ class RankEligibilityPolicyTest {
     }
 
     @Test
-    fun `numeric rating above twenty establishes Legend despite conflicting or unknown tier`() {
+    fun `all ranks other than exact five or ten including numeric Legend are denied`() {
         for (tier in CurrentRankDetector.RankTier.values()) {
             val decision = evaluate(detection(rank = 21, tier = tier))
-            assertTrue(decision.eligible, "rank=21 tier=$tier reason=${decision.reason}")
+            assertFalse(decision.eligible, "rank=21 tier=$tier reason=${decision.reason}")
+            assertEquals("rank-not-5-or-10", decision.reason)
         }
-        assertTrue(evaluate(detection(rank = 233, tier = CurrentRankDetector.RankTier.UNKNOWN)).eligible)
+        assertFalse(evaluate(detection(rank = 233, tier = CurrentRankDetector.RankTier.UNKNOWN)).eligible)
+        assertFalse(evaluate(detection(rank = 5220, tier = CurrentRankDetector.RankTier.LEGEND)).eligible)
         assertFalse(evaluate(detection(rank = null, tier = CurrentRankDetector.RankTier.LEGEND)).eligible)
     }
 
@@ -52,8 +55,8 @@ class RankEligibilityPolicyTest {
         assertTrue(evaluate(detection(rank = 5, confidence = 0.90)).eligible)
         assertFalse(evaluate(detection(rank = 5, confidence = 0.89)).eligible)
         assertFalse(evaluate(detection(rank = 5, confidence = null)).eligible)
-        assertFalse(evaluate(detection(rank = 233, confidence = 0.89)).eligible)
-        assertFalse(evaluate(detection(rank = 233, provider = "UNKNOWN")).eligible)
+        assertFalse(evaluate(detection(rank = 5, confidence = 0.89)).eligible)
+        assertFalse(evaluate(detection(rank = 5, provider = "UNKNOWN")).eligible)
         assertEquals(
             "rank-number-not-read-by-ocr",
             evaluate(detection(rank = 10, agreementCount = 0)).reason,
@@ -92,7 +95,7 @@ class RankEligibilityPolicyTest {
     }
 
     @Test
-    fun `surrender streak protection cannot grant rank eligibility`() {
+    fun `streak protection cannot change rank policy and matchmaking uses runtime gate only`() {
         val surrenderStreak = SurrenderPolicy.persistentStreakDecision(
             PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
         )!!
@@ -100,7 +103,6 @@ class RankEligibilityPolicyTest {
         for (rank in listOf(4, 7, 11, 20)) {
             val decision = evaluate(detection(rank = rank))
             assertFalse(decision.eligible, "streak guard must not allow rank=$rank")
-            assertFalse(RankEligibilityPolicy.shouldDispatchMatchmaking(decision, working = true, paused = false))
         }
 
         val winStreak = SurrenderPolicy.persistentStreakDecision(
@@ -110,10 +112,11 @@ class RankEligibilityPolicyTest {
         assertFalse(evaluate(detection(rank = 7)).eligible)
         val rankTen = evaluate(detection(rank = 10))
         assertTrue(rankTen.eligible)
-        assertTrue(RankEligibilityPolicy.shouldDispatchMatchmaking(rankTen, working = true, paused = false))
-        assertFalse(RankEligibilityPolicy.shouldDispatchMatchmaking(rankTen, working = true, paused = true))
+        assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = false))
+        assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = true))
+        assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(working = false, paused = false))
         val numericLegend = evaluate(detection(rank = 233, tier = CurrentRankDetector.RankTier.UNKNOWN))
-        assertTrue(numericLegend.eligible, "numeric rating above 20 must not depend on tier OCR")
+        assertFalse(numericLegend.eligible, "only exact ranks 5 and 10 are playable")
     }
 
     private fun evaluate(

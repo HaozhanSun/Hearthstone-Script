@@ -996,7 +996,7 @@ object SurrenderPolicy {
     ): SurrenderRuleResult? {
         // Exact numeric targets are authoritative even if the independent
         // tier classifier mistakes their badge artwork for Legendary.
-        if (rank in setOf(5, 10) || rank > 20) return null
+        if (rank == 5 || rank == 10) return null
         return SurrenderRuleResult(
             ruleId = "current-rank-not-5-or-10",
             matched = false,
@@ -1032,7 +1032,7 @@ object SurrenderPolicy {
         }
     }
 
-    /** The verified numeric rating above 20 itself confirms Legendary. */
+    /** Classification helper only; Legendary remains outside the allowed 5/10 ranks. */
     internal fun isLegendaryDetection(detection: CurrentRankDetector.Detection?): Boolean =
         detection?.rank?.let { it > 20 } == true
 

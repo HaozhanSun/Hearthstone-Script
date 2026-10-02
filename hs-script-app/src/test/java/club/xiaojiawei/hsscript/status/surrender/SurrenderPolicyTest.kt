@@ -97,24 +97,24 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun `verified numeric Legend continues despite surrender streak while unknown still fails closed`() {
+    fun `rank policy accepts only five or ten and mandatory rank decisions bypass surrender protections`() {
         val streakBlock = SurrenderPolicy.persistentStreakDecision(
             PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
         )!!
         assertTrue(streakBlock.blocksAutomaticSurrender)
 
-        val eligibleLegend = SurrenderPolicy.evaluateCurrentRank(
+        val ineligibleLegend = SurrenderPolicy.evaluateCurrentRank(
             rank = 5220,
             tier = CurrentRankDetector.RankTier.UNKNOWN,
         )
         val unresolved = SurrenderPolicy.unresolvedRankDecision(attempts = 3)
 
-        // Fresh numeric Legend evidence is eligible despite noisy tier OCR;
-        // genuinely unresolved evidence still fails closed.
-        assertNull(eligibleLegend)
+        assertTrue(ineligibleLegend?.shouldSurrender == true)
+        assertTrue(NeverSurrenderPolicy.isMandatoryRankRule(ineligibleLegend!!.ruleId))
         assertTrue(NeverSurrenderPolicy.isMandatoryRankRule(unresolved.ruleId))
         assertTrue(unresolved.shouldSurrender)
         assertFalse(streakBlock.shouldSurrender)
+        assertFalse(NeverSurrenderPolicy.shouldBlock(enabled = true, mandatoryRank = true))
     }
 
     @Test
@@ -635,155 +635,24 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun `deck selection rank crop targets the upper right badge from the 1920x1080 evidence`() {
-        val badge = CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(
-            1920,
-            1080,
-            "pre-match-deck-selection",
-        )
-        val digit = CurrentRankDetector.rankDigitBoundsForScreenPhaseForTest(
-            1920,
-            1080,
-            "pre-match-deck-selection",
-        )
+    fun `rank OCR ROI always targets the lower-left mulligan badge at scaled resolutions`() {
+        val referenceBadge = CurrentRankDetector.rankBadgeBoundsForTest(1920, 1080)
+        val referenceDigit = CurrentRankDetector.rankDigitBoundsForTest(1920, 1080)
 
-        assertEquals(Rectangle(1228, 21, 202, 324), badge)
-        assertEquals(Rectangle(1276, 221, 116, 49), digit)
-        assertTrue(badge.contains(digit))
-        assertTrue(digit.x > 1200 && digit.y < 300)
-        assertTrue(digit.x + digit.width < 1440, "exclude adjacent wins-remaining label")
-    }
-
-    @Test
-    fun `phase-specific rank crops scale with the captured game window`() {
-        val phase = "pre-match-deck-selection"
-        val referenceBadge = CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(1920, 1080, phase)
-        val referenceDigit = CurrentRankDetector.rankDigitBoundsForScreenPhaseForTest(1920, 1080, phase)
-
+        assertEquals(Rectangle(0, 885, 105, 108), referenceBadge)
+        assertEquals(Rectangle(34, 938, 35, 45), referenceDigit)
         for ((width, height) in listOf(2560 to 1440, 1600 to 900, 1280 to 720)) {
-            val badge = CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(width, height, phase)
-            val digit = CurrentRankDetector.rankDigitBoundsForScreenPhaseForTest(width, height, phase)
-            assertTrue(kotlin.math.abs(badge.x.toDouble() / width - referenceBadge.x.toDouble() / 1920) < 0.001)
-            assertTrue(kotlin.math.abs(badge.y.toDouble() / height - referenceBadge.y.toDouble() / 1080) < 0.001)
-            assertTrue(kotlin.math.abs(digit.x.toDouble() / width - referenceDigit.x.toDouble() / 1920) < 0.001)
-            assertTrue(kotlin.math.abs(digit.y.toDouble() / height - referenceDigit.y.toDouble() / 1080) < 0.001)
+            val badge = CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(width, height, "REPLACE_CARD")
+            val digit = CurrentRankDetector.rankDigitBoundsForScreenPhaseForTest(width, height, "REPLACE_CARD")
+            assertEquals((width * 0.055).toInt(), badge.width)
+            assertTrue(kotlin.math.abs(badge.height.toDouble() / height - 0.10) < 0.002)
             assertTrue(badge.contains(digit))
         }
-
         assertEquals(
-            Rectangle(0, 885, 105, 108),
-            CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(1920, 1080, "REPLACE_CARD"),
-            "in-game Mulligan keeps its known-good lower-left HUD crop",
+            referenceBadge,
+            CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(1920, 1080, "MULLIGAN"),
+            "screen-phase rank detection must use the same in-game lower-left ROI",
         )
-    }
-
-    @Test
-    fun `pre-match OCR reads the upper-right numeral and unknown remains denied by exact-rank policy`() {
-        val originalSettingsProvider = OcrRuntime.settingsProvider
-        val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
-        val digitBounds = CurrentRankDetector.rankDigitBoundsForScreenPhaseForTest(
-            1920,
-            1080,
-            "pre-match-deck-selection",
-        )
-        val markerX = digitBounds.x + digitBounds.width / 2
-        val markerY = digitBounds.y + digitBounds.height / 2
-        val screen = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
-        val graphics = screen.createGraphics()
-        graphics.color = Color.BLACK
-        graphics.fillRect(0, 0, screen.width, screen.height)
-        // Synthetic numeral evidence at the same upper-right coordinate as
-        // the deployed 1920x1080 screenshot; the old lower-left crop is blank.
-        graphics.color = Color.WHITE
-        graphics.fillRect(markerX - 12, markerY - 8, 24, 16)
-        graphics.dispose()
-
-        var recognizedRank = "10"
-        val calls = mutableListOf<Pair<String?, Pair<Int, Int>>>()
-        try {
-            OcrRuntime.settingsProvider = {
-                PaddleXOcrSettings(
-                    enabled = true,
-                    pythonExecutable = "python",
-                    modulePath = "fake-module",
-                    device = "cpu",
-                    modelCachePath = "",
-                    timeoutMs = 1000,
-                )
-            }
-            OcrRuntime.paddleXBridgeFactory = {
-                object : OcrTextBridge {
-                    override fun recognize(image: BufferedImage, desc: String): String = ""
-
-                    override fun recognizeWithConfidence(
-                        image: BufferedImage,
-                        desc: String,
-                        roi: String?,
-                    ): OcrRecognition {
-                        calls += roi to (image.width to image.height)
-                        if (roi == "rank-badge") return OcrRecognition("", confidence = null)
-                        if (roi != "rank-badge-small") return OcrRecognition("", confidence = null)
-                        val containsObservedNumeral = (0 until image.height).any { y ->
-                            (0 until image.width).any { x ->
-                                val pixel = image.getRGB(x, y)
-                                ((pixel shr 16) and 0xff) > 200 &&
-                                    ((pixel shr 8) and 0xff) > 200 &&
-                                    (pixel and 0xff) > 200
-                            }
-                        }
-                        return OcrRecognition(if (containsObservedNumeral) recognizedRank else "", confidence = 0.99)
-                    }
-
-                    override fun healthCheck(): OcrHealth =
-                        OcrHealth(true, OcrProviderKind.PADDLEX, "ok")
-                }
-            }
-
-            fun detection() = CurrentRankDetector.detectCapturedImage(
-                screen = screen,
-                saveEvidence = false,
-                evidenceTrigger = "matchmaking-rank-gate-test",
-                evidencePhase = "pre-match-deck-selection",
-                capturedAtMs = 10_000L,
-            )
-
-            for (rank in listOf("5", "10", "7")) {
-                recognizedRank = rank
-                calls.clear()
-                val result = detection()
-                assertEquals(rank.toInt(), result?.rank)
-                assertEquals(listOf("rank-badge", "rank-badge-small"), calls.map { it.first })
-                assertEquals(202 to 324, calls[0].second)
-                assertEquals(464 to 196, calls[1].second)
-                val authorization = RankEligibilityPolicy.evaluate(
-                    detection = result,
-                    expectedMode = ModeEnum.TOURNAMENT.name,
-                    actualMode = ModeEnum.TOURNAMENT.name,
-                    expectedInWar = false,
-                    inWar = false,
-                    nowMs = 10_000L,
-                )
-                assertEquals(rank in setOf("5", "10"), authorization.eligible, "rank=$rank")
-            }
-
-            recognizedRank = ""
-            calls.clear()
-            val unresolved = detection()
-            assertNull(unresolved?.rank)
-            val denied = RankEligibilityPolicy.evaluate(
-                detection = unresolved,
-                expectedMode = ModeEnum.TOURNAMENT.name,
-                actualMode = ModeEnum.TOURNAMENT.name,
-                expectedInWar = false,
-                inWar = false,
-                nowMs = 10_000L,
-            )
-            assertFalse(denied.eligible)
-            assertEquals("rank-unresolved", denied.reason)
-        } finally {
-            OcrRuntime.settingsProvider = originalSettingsProvider
-            OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
-        }
     }
 
     @Test
@@ -1026,7 +895,7 @@ class SurrenderPolicyTest {
             assertEquals(233, detection?.rank)
             assertEquals(CurrentRankDetector.RankTier.LEGEND, detection?.tier)
             assertTrue(SurrenderPolicy.isLegendaryDetection(detection))
-            assertNull(SurrenderPolicy.evaluateCurrentRank(233, detection!!.tier))
+            assertTrue(SurrenderPolicy.evaluateCurrentRank(233, detection!!.tier)!!.shouldSurrender)
             assertEquals(listOf(105 to 108), roiSizes)
         } finally {
             OcrRuntime.settingsProvider = originalSettingsProvider
@@ -1072,7 +941,7 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun activeRankFrameWithoutNumberOrLegendaryBlocksSurrenderInsteadOfRequestingIt() {
+    fun activeRankFrameWithoutNumberFailsClosedAndDoesNotBlockMandatorySurrender() {
         val result = SurrenderPolicy.unresolvedRankDecision(attempts = 3)
 
         assertTrue(result.shouldSurrender)
@@ -1123,10 +992,10 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun numericRatingsAboveTwentyAreEligibleRegardlessOfTierLabel() {
+    fun numericRatingsAboveTwentyRequestMandatoryRankSurrenderRegardlessOfTierLabel() {
         for (tier in CurrentRankDetector.RankTier.values()) {
-            assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 21, tier = tier))
-            assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 233, tier = tier))
+            assertTrue(SurrenderPolicy.evaluateCurrentRank(rank = 21, tier = tier)!!.shouldSurrender)
+            assertTrue(SurrenderPolicy.evaluateCurrentRank(rank = 233, tier = tier)!!.shouldSurrender)
         }
     }
 
@@ -1297,7 +1166,7 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun offlineRankScenariosAllowFiveTenAndNumericLegendButRejectOtherRanks() {
+    fun offlineRankScenariosAllowOnlyFiveAndTenAndSurrenderAllOtherNumericRanks() {
         data class Scenario(
             val name: String,
             val ocr: String,
@@ -1307,8 +1176,8 @@ class SurrenderPolicyTest {
         )
 
         val scenarios = listOf(
-            Scenario("legendary-233", "233", CurrentRankDetector.RankTier.LEGEND, true, false),
-            Scenario("legendary-257", "257", CurrentRankDetector.RankTier.LEGEND, true, false),
+            Scenario("legendary-233", "233", CurrentRankDetector.RankTier.LEGEND, true, true),
+            Scenario("legendary-257", "257", CurrentRankDetector.RankTier.LEGEND, true, true),
             Scenario("platinum-2", "2", CurrentRankDetector.RankTier.PLATINUM, false, true),
             Scenario("rank-5", "5", CurrentRankDetector.RankTier.SILVER, false, false),
             Scenario("rank-10", "10", CurrentRankDetector.RankTier.GOLD, false, false),

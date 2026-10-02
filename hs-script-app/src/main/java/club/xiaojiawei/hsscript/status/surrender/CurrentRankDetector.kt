@@ -47,20 +47,6 @@ object CurrentRankDetector {
     // board/background below it. At 1920x1080 this trims 22 px from the prior
     // 130 px crop without moving the top edge or cutting the numeral row.
     private const val RANK_BADGE_VISUAL_HEIGHT = 0.10
-    // The deck-selection screen presents the player's rank in the upper-right
-    // panel, unlike the lower-left rank badge used by the in-game HUD. At
-    // 1920x1080, this crop covers the shield/number but stops before the
-    // adjacent "wins remaining" text.
-    private const val PRE_MATCH_BADGE_LEFT = 0.64
-    private const val PRE_MATCH_BADGE_TOP = 0.02
-    private const val PRE_MATCH_BADGE_WIDTH = 0.105
-    private const val PRE_MATCH_BADGE_HEIGHT = 0.30
-    // Isolate the large 1/0 rank numerals. Keep the win-streak x10 label below
-    // this strip and the separate wins-remaining number to its right.
-    private const val PRE_MATCH_DIGIT_LEFT = 0.665
-    private const val PRE_MATCH_DIGIT_TOP = 0.205
-    private const val PRE_MATCH_DIGIT_WIDTH = 0.060
-    private const val PRE_MATCH_DIGIT_HEIGHT = 0.045
     private const val RANK_EXPANDED_LEFT = 0.01198
     private const val RANK_EXPANDED_TOP = 0.87130
     private const val RANK_EXPANDED_WIDTH = 0.02969
@@ -243,7 +229,7 @@ object CurrentRankDetector {
     /** Capture and OCR the rank badge without touching the Hearthstone input path. */
     fun detect(
         trigger: String = "current-rank-paddlex-badge",
-        phase: String = "pre-mulligan-rank-check",
+        phase: String = "REPLACE_CARD",
     ): Detection? = runCatching {
         if (GraphicsEnvironment.isHeadless()) return null
         val allScreens = GraphicsEnvironment
@@ -305,13 +291,12 @@ object CurrentRankDetector {
         bounds: Rectangle = Rectangle(0, 0, screen.width, screen.height),
         saveEvidence: Boolean = false,
         evidenceTrigger: String = "current-rank-paddlex-badge",
-        evidencePhase: String = "pre-mulligan-rank-check",
+        evidencePhase: String = "REPLACE_CARD",
         capturedAtMs: Long = System.currentTimeMillis(),
     ): Detection? = runCatching {
-        val preMatchLayout = isPreMatchDeckSelectionPhase(evidencePhase)
-        val badgeRegionBounds = rankBadgeBoundsForPhaseForTest(screen.width, screen.height, evidencePhase)
+        val badgeRegionBounds = rankBadgeBoundsForTest(screen.width, screen.height)
         val badgeRegion = crop(screen, badgeRegionBounds)
-        val numericRegionBounds = rankDigitBoundsForPhaseForTest(screen.width, screen.height, evidencePhase)
+        val numericRegionBounds = rankDigitBoundsForTest(screen.width, screen.height)
         val numericRegion = crop(screen, numericRegionBounds)
         val tessData = File(TESS_DATA_PATH)
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
@@ -330,20 +315,16 @@ object CurrentRankDetector {
         // installations that have not downloaded eng.traineddata yet.
         val rankLanguage = if (File(tessData, "eng.traineddata").isFile) "eng" else CHI_SIM_DATA
 
-        val expandedRegion = if (preMatchLayout) {
-            badgeRegion
-        } else {
-            crop(
-                screen,
-                RANK_EXPANDED_LEFT,
-                RANK_EXPANDED_TOP,
-                RANK_EXPANDED_WIDTH,
-                RANK_EXPANDED_HEIGHT,
-            )
-        }
+        val expandedRegion = crop(
+            screen,
+            RANK_EXPANDED_LEFT,
+            RANK_EXPANDED_TOP,
+            RANK_EXPANDED_WIDTH,
+            RANK_EXPANDED_HEIGHT,
+        )
         val badgeVisualRegion = badgeRegion
-        // Keep every OCR backend on the phase-selected numeral crop. The
-        // pre-match layout uses a different badge position from the in-game HUD.
+        // Rank OCR is only invoked after live Mulligan input is confirmed, so
+        // every backend uses the lower-left in-game HUD badge crop.
         val digitRegion = numericRegion
         if (!OcrRuntime.isLegacySelected()) {
             val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
@@ -659,36 +640,11 @@ object CurrentRankDetector {
     private fun formatConfidence(confidence: Double?): String =
         confidence?.let { String.format(Locale.ROOT, "%.2f", it) } ?: "unavailable"
 
-    private fun isPreMatchDeckSelectionPhase(phase: String): Boolean =
-        phase.equals("pre-match-deck-selection", ignoreCase = true)
+    private fun rankBadgeBoundsForPhaseForTest(imageWidth: Int, imageHeight: Int, @Suppress("UNUSED_PARAMETER") phase: String): Rectangle =
+        rankBadgeBoundsForTest(imageWidth, imageHeight)
 
-    private fun rankBadgeBoundsForPhaseForTest(imageWidth: Int, imageHeight: Int, phase: String): Rectangle =
-        if (isPreMatchDeckSelectionPhase(phase)) {
-            normalizedBounds(
-                imageWidth,
-                imageHeight,
-                PRE_MATCH_BADGE_LEFT,
-                PRE_MATCH_BADGE_TOP,
-                PRE_MATCH_BADGE_WIDTH,
-                PRE_MATCH_BADGE_HEIGHT,
-            )
-        } else {
-            rankBadgeBoundsForTest(imageWidth, imageHeight)
-        }
-
-    private fun rankDigitBoundsForPhaseForTest(imageWidth: Int, imageHeight: Int, phase: String): Rectangle =
-        if (isPreMatchDeckSelectionPhase(phase)) {
-            normalizedBounds(
-                imageWidth,
-                imageHeight,
-                PRE_MATCH_DIGIT_LEFT,
-                PRE_MATCH_DIGIT_TOP,
-                PRE_MATCH_DIGIT_WIDTH,
-                PRE_MATCH_DIGIT_HEIGHT,
-            )
-        } else {
-            rankDigitBoundsForTest(imageWidth, imageHeight)
-        }
+    private fun rankDigitBoundsForPhaseForTest(imageWidth: Int, imageHeight: Int, @Suppress("UNUSED_PARAMETER") phase: String): Rectangle =
+        rankDigitBoundsForTest(imageWidth, imageHeight)
 
     internal fun rankBadgeBoundsForScreenPhaseForTest(
         imageWidth: Int,

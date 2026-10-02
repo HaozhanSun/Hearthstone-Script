@@ -10,8 +10,6 @@ import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
-import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
-import club.xiaojiawei.hsscript.status.surrender.RankEligibilityPolicy
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
@@ -261,39 +259,20 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
     fun startMatching() {
         val traceId = matchmakingTraceSequence.incrementAndGet()
         log.info { "开始匹配 trace=$traceId" }
-        val rankDetection = runCatching {
-            CurrentRankDetector.detect(
-                trigger = "matchmaking-rank-gate-$traceId",
-                phase = "pre-match-deck-selection",
-            )
-        }.getOrNull()
-        val rankAuthorization = RankEligibilityPolicy.evaluate(
-            detection = rankDetection,
-            expectedMode = ModeEnum.TOURNAMENT.name,
-            actualMode = Mode.currMode?.name,
-            expectedInWar = false,
-            inWar = WarEx.inWar,
-            nowMs = System.currentTimeMillis(),
-        )
-        val runtimeAllowsMatchmaking = WorkTimeListener.working && !PauseStatus.isPause
-        val dispatchMatchmaking = RankEligibilityPolicy.shouldDispatchMatchmaking(
-            rankAuthorization,
+        val dispatchMatchmaking = MatchmakingGuardPolicy.runtimeAllowsInput(
             working = WorkTimeListener.working,
             paused = PauseStatus.isPause,
         )
         log.info {
-            "RANK_ELIGIBILITY_CHECK stage=PRE_MATCH provider=${rankDetection?.provider ?: "NONE"} " +
-                "rank=${rankDetection?.rank ?: "UNKNOWN"} tier=${rankDetection?.tier?.name ?: "UNKNOWN"} " +
-                "confidence=${rankDetection?.confidence ?: "unavailable"} " +
-                "agreement=${rankDetection?.agreementCount ?: 0} " +
+            "MATCHMAKING_GATE stage=PRE_MATCH rankPolicy=POST_MULLIGAN " +
                 "mode=${Mode.currMode?.name ?: "NONE"} inWar=${WarEx.inWar} " +
+                "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} " +
                 "decision=${if (dispatchMatchmaking) "ALLOW" else "DENY"} " +
-                "reason=${if (!runtimeAllowsMatchmaking) "runtime-not-active" else rankAuthorization.reason}"
+                "reason=${if (dispatchMatchmaking) "runtime-active" else "runtime-not-active"}"
         }
         if (!dispatchMatchmaking) {
             log.warn {
-                "MATCHMAKING_BLOCKED trace=$traceId reason=${if (!runtimeAllowsMatchmaking) "runtime-not-active" else rankAuthorization.reason} " +
-                    "rank=${rankDetection?.rank ?: "UNKNOWN"} action=NO_QUEUE_INPUT"
+                "MATCHMAKING_BLOCKED trace=$traceId reason=runtime-not-active action=NO_QUEUE_INPUT"
             }
             return
         }

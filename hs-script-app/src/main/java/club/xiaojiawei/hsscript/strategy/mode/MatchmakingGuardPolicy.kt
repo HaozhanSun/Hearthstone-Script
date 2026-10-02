@@ -16,6 +16,9 @@ internal object MatchmakingGuardPolicy {
         CONTINUE_MATCHMAKING,
     }
 
+    /** Rank is deliberately not part of the queue gate; rank is checked in Mulligan. */
+    fun runtimeAllowsInput(working: Boolean, paused: Boolean): Boolean = working && !paused
+
     fun decide(evidence: LiveGameEvidence): Decision =
         if (evidence.inWar ||
             (evidence.warPhase != WarPhaseEnum.GAME_OVER &&
