@@ -32,12 +32,20 @@ class StartupHandoffActivityTrackerTest {
         assertTrue(tracker.shouldDeferNoProgress(context, 89_999L))
         assertFalse(tracker.shouldDeferNoProgress(context, 90_000L))
         assertEquals(
-            NoProgressWatchdog.RecoveryAction.WAIT,
+            NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED,
             watchdog.observe(startupSnapshot(now = 90_000L)).action,
         )
         assertEquals(
             NoProgressWatchdog.RecoveryAction.REBIND,
             watchdog.observe(startupSnapshot(now = 210_000L)).action,
+        )
+        assertEquals(
+            NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED,
+            watchdog.observe(startupSnapshot(now = 329_999L)).action,
+        )
+        assertEquals(
+            NoProgressWatchdog.RecoveryAction.RESTART,
+            watchdog.observe(startupSnapshot(now = 330_000L)).action,
         )
     }
 

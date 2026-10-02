@@ -78,11 +78,15 @@ internal class NoProgressWatchdog(
     private var baselineFingerprint: String? = null
     private var noProgressSinceMs: Long? = null
     private var recoveryAttempts = 0
+    private var unboundMissingProcessSinceMs: Long? = null
+    private var unboundMissingProcessRecoveryAtMs: Long? = null
 
     fun reset() {
         baselineFingerprint = null
         noProgressSinceMs = null
         recoveryAttempts = 0
+        unboundMissingProcessSinceMs = null
+        unboundMissingProcessRecoveryAtMs = null
     }
 
     fun observe(snapshot: Snapshot): Decision {
@@ -101,6 +105,25 @@ internal class NoProgressWatchdog(
                 return recoverOrBackoff("live-match-process-lineage-changed", snapshot.nowMs)
             }
             return decision(RecoveryAction.WAIT_EXPECTED, "live-match-preserved", snapshot.nowMs)
+        }
+        // With no live-match evidence and no game process, an absent Power.log
+        // must not hold recovery in WAIT_EXPECTED forever. Still require a full
+        // bounded observation window, and space each retry by the same window.
+        // A live process with an unbound log remains non-actionable below.
+        if ((!snapshot.processAlive || snapshot.currentPid == null) && !snapshot.powerLogUsable) {
+            val since = unboundMissingProcessSinceMs ?: snapshot.nowMs.also {
+                unboundMissingProcessSinceMs = it
+            }
+            val elapsed = (snapshot.nowMs - since).coerceAtLeast(0L)
+            val lastRecovery = unboundMissingProcessRecoveryAtMs
+            if (elapsed < noProgressTimeoutMs ||
+                (lastRecovery != null && snapshot.nowMs - lastRecovery < noProgressTimeoutMs)
+            ) {
+                return decision(RecoveryAction.WAIT_EXPECTED, "process-missing-unbound-log-grace", snapshot.nowMs)
+            }
+            val recovery = recoverOrBackoff("process-missing-unbound-power-log", snapshot.nowMs)
+            if (recovery.action != RecoveryAction.WAIT) unboundMissingProcessRecoveryAtMs = snapshot.nowMs
+            return recovery
         }
         // An absent/unbound/unreadable Power.log is UNKNOWN, not evidence that
         // a live process is stuck. Keep the bounded observation window armed,

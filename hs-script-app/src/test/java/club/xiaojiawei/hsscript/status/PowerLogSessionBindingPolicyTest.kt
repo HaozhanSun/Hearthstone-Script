@@ -7,6 +7,21 @@ import org.junit.jupiter.api.Test
 import java.nio.file.Files
 
 class PowerLogSessionBindingPolicyTest {
+
+    @Test
+    fun `current session lineage accepts a zero byte file without treating it as usable progress`() {
+        val path = "D:/Hearthstone/Logs/Hearthstone_2026_10_01_16_12_38/Power.log"
+        val root = "D:/Hearthstone/Logs"
+        val processStarted = 1_790_000_000_000L
+        val lastModified = processStarted + 1_000L
+
+        assertTrue(
+            PowerLogSessionBindingPolicy.isSessionFileForProcess(path, root, lastModified, processStarted),
+        )
+        assertFalse(
+            PowerLogSessionBindingPolicy.isCurrentSession(path, root, 0L, lastModified, processStarted),
+        )
+    }
     @Test
     fun `accepts readable nonempty Power log modified during current game process`() {
         val root = Files.createTempDirectory("hs-game-logs")

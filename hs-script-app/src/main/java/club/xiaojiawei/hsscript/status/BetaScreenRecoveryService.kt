@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.config.StarterConfig
+import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.ocr.OcrProviderKind
@@ -12,6 +13,8 @@ import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.utils.GameUtil
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
@@ -25,16 +28,16 @@ import java.util.concurrent.atomic.AtomicReference
 import java.io.File
 
 /**
- * Optional Beta recovery orchestration. The upstream lifecycle loop remains
- * the owner of its normal heartbeat, stale-state fallback, and Power.log flow.
- * This service only schedules Beta-added no-progress/foreground recovery while
- * the explicit switch is enabled.
+ * Beta recovery orchestration. The upstream lifecycle loop remains the owner
+ * of normal screen classification; Beta adds paced process recovery, exact
+ * native crash-dialog detection, and the opt-in no-progress/foreground path.
  */
 internal object BetaScreenRecoveryService {
     private const val STARTUP_RECOVERY_GRACE_MS = 3_000L
     private const val STARTUP_HANDSHAKE_TIMEOUT_MS = 60_000L
     private val noProgressWatchdog = NoProgressWatchdog()
     private val startupHandoffActivity = StartupHandoffActivityTracker()
+    private val startupFailurePolicy = BetaStartupFailureRecoveryPolicy()
     private val recoveryCascadeGuard = RecoveryCascadeGuard()
     private val foregroundFailureCount = AtomicInteger(0)
     private val foregroundRecoveryPending = AtomicBoolean(false)
@@ -42,6 +45,10 @@ internal object BetaScreenRecoveryService {
     @Volatile private var noProgressBoundPowerLogPath: String? = null
     @Volatile private var lifecycleStarted = false
     @Volatile private var monitor: ScheduledFuture<*>? = null
+    @Volatile private var startupFailureMonitor: ScheduledFuture<*>? = null
+    @Volatile private var startupFailureSinceMs = 0L
+    @Volatile private var lastObservedGamePid: Long? = null
+    private val startupFailureDispatchInFlight = AtomicBoolean(false)
     @Volatile private var startupRecoveryGraceUntil = 0L
     private val startupRecoveryScheduled = AtomicBoolean(false)
 
@@ -134,6 +141,7 @@ internal object BetaScreenRecoveryService {
         initialize()
         lifecycleStarted = true
         startOptionalMonitor()
+        startStartupFailureMonitor()
     }
 
     fun stop() {
@@ -141,6 +149,12 @@ internal object BetaScreenRecoveryService {
         monitor?.cancel(true)
         monitor?.let(ScreenRecoveryRuntime::forget)
         monitor = null
+        startupFailureMonitor?.cancel(true)
+        startupFailureMonitor?.let(ScreenRecoveryRuntime::forget)
+        startupFailureMonitor = null
+        startupFailurePolicy.reset()
+        startupFailureSinceMs = 0L
+        lastObservedGamePid = null
     }
 
     internal fun onFeatureChanged(enabled: Boolean) {
@@ -165,6 +179,242 @@ internal object BetaScreenRecoveryService {
             if (ScreenRecoveryRuntime.isCurrent(token)) detectNoProgress(token)
         }, 10, 10, TimeUnit.SECONDS)
         if (ScreenRecoveryRuntime.track(token, task)) monitor = task
+    }
+
+    /** Beta-only, always-on guard for failed startup handoffs and native crash dialogs. */
+    private fun startStartupFailureMonitor() {
+        if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) != "beta" ||
+            !lifecycleStarted || startupFailureMonitor?.isDone == false
+        ) return
+        val token = ScreenRecoveryRuntime.tokenOrNull() ?: return
+        val task = EXTRA_THREAD_POOL.scheduleWithFixedDelay({
+            if (ScreenRecoveryRuntime.isCurrent(token)) {
+                runCatching { detectStartupFailure(token) }
+                    .onFailure { error -> log.error(error) { "BETA_STARTUP_RECOVERY_OBSERVATION_FAILED watchdog=RETAINED" } }
+            }
+        }, 10, 10, TimeUnit.SECONDS)
+        if (ScreenRecoveryRuntime.track(token, task)) startupFailureMonitor = task
+    }
+
+    private fun detectStartupFailure(recoveryToken: Long) {
+        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken) || !WorkTimeListener.working ||
+            PauseStatus.isPause || PowerLogListener.replayingExistingLog
+        ) return
+
+        val now = System.currentTimeMillis()
+        val pid = GameUtil.findGameProcessIdForDiagnostics()
+        val processStartedAt = pid?.let { gamePid ->
+            runCatching {
+                ProcessHandle.of(gamePid).orElse(null)?.info()?.startInstant()?.orElse(null)?.toEpochMilli()
+            }.getOrNull()
+        }
+        if (pid != lastObservedGamePid) {
+            startupFailureSinceMs = processStartedAt ?: now
+            lastObservedGamePid = pid
+        } else if (startupFailureSinceMs == 0L) {
+            startupFailureSinceMs = processStartedAt ?: now
+        }
+
+        val latestPowerLog = GameUtil.getLatestLogDir()?.resolve(club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME)
+        val sessionLog = latestPowerLog?.takeIf { candidate ->
+            candidate.isFile && candidate.canRead() && PowerLogSessionBindingPolicy.isSessionFileForProcess(
+                powerLogPath = candidate.absolutePath,
+                gameLogsRoot = candidate.parentFile?.parent,
+                lastModifiedMs = candidate.lastModified(),
+                processStartedAtMs = processStartedAt,
+            )
+        }
+        if (sessionLog != null && sessionLog.length() > 0L &&
+            PowerLogListener.logFile?.path() != sessionLog.absolutePath
+        ) {
+            val bound = runCatching { PowerLogListener.bindCurrentSessionIfAvailable() }.getOrDefault(false)
+            log.info {
+                "BETA_STARTUP_POWER_LOG_BIND result=${if (bound) "BOUND" else "PENDING"} " +
+                    "pid=${pid ?: "none"} path=${sessionLog.absolutePath} length=${sessionLog.length()}"
+            }
+        }
+
+        val powerLogLength = sessionLog?.length() ?: 0L
+        val powerLogAge = sessionLog?.let { (now - it.lastModified()).coerceAtLeast(0L) } ?: Long.MAX_VALUE
+        val powerLogIsCurrentSession = sessionLog != null
+        val phase = WarEx.war.currentPhase
+        val terminal = phase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState()
+        val liveMatch = WarEx.inWar || phase == WarPhaseEnum.REPLACE_CARD
+        val dialog = WindowsApplicationErrorDialogProbe.detect()?.asPolicyEvidence()
+        val hwnd = ScriptStatus.gameHWND
+        val windowMatchesPid = pid != null && hwnd != null &&
+            runCatching {
+                GameUtil.isVerifiedCurrentGameWindow(hwnd) &&
+                    ProcessHandle.of(pid).orElse(null)?.isAlive == true
+            }.getOrDefault(false)
+        val stalledFrom = processStartedAt ?: startupFailureSinceMs
+        val currentMode = Mode.currMode?.name ?: "NONE"
+        val expectedMode = Mode.nextMode?.name ?: currentMode
+        val handoffContext = StartupHandoffActivityTracker.Context(
+            working = WorkTimeListener.working,
+            paused = PauseStatus.isPause,
+            automaticPause = PauseStatus.isAutomaticPause,
+            recoveryPending = false,
+            replaying = PowerLogListener.replayingExistingLog,
+            inWar = liveMatch,
+            terminalState = terminal,
+            screen = if (currentMode in setOf("NONE", "STARTUP") && expectedMode in setOf("NONE", "STARTUP")) {
+                NoProgressWatchdog.ScreenExpectation.STARTUP
+            } else {
+                NoProgressWatchdog.ScreenExpectation.UNKNOWN
+            },
+            mode = currentMode,
+            expectedMode = expectedMode,
+            gameProcessAlive = pid != null,
+            powerLogPath = sessionLog?.absolutePath,
+        )
+        if (startupHandoffActivity.shouldDeferNoProgress(handoffContext, now)) {
+            log.debug {
+                "BETA_STARTUP_RECOVERY action=WAIT reason=startup-chain-active " +
+                    "gamePid=${pid ?: "none"} powerLogCurrent=$powerLogIsCurrentSession"
+            }
+            return
+        }
+        val decision = startupFailurePolicy.observe(
+            BetaStartupFailureRecoveryPolicy.Snapshot(
+                nowMs = now,
+                stalledForMs = (now - stalledFrom).coerceAtLeast(0L),
+                working = WorkTimeListener.working,
+                paused = PauseStatus.isPause,
+                terminalState = terminal,
+                liveMatch = liveMatch,
+                processAlive = pid != null,
+                currentPid = pid,
+                processStartedAtMs = processStartedAt,
+                gameWindowMatchesPid = windowMatchesPid,
+                powerLogIsCurrentSession = powerLogIsCurrentSession,
+                powerLogLength = powerLogLength,
+                powerLogAgeMs = powerLogAge,
+                knownUsableScreen = false,
+                dialog = dialog,
+            ),
+        )
+        logStartupFailureDecision(decision, pid, powerLogIsCurrentSession, powerLogLength, dialog)
+        if (decision.action != BetaStartupFailureRecoveryPolicy.Action.WAIT) {
+            dispatchStartupFailureRecovery(recoveryToken, decision, pid)
+        }
+    }
+
+    private fun logStartupFailureDecision(
+        decision: BetaStartupFailureRecoveryPolicy.Decision,
+        pid: Long?,
+        powerLogCurrent: Boolean,
+        powerLogLength: Long,
+        dialog: BetaStartupFailureRecoveryPolicy.DialogEvidence?,
+    ) {
+        val write = {
+            "BETA_STARTUP_RECOVERY action=${decision.action} reason=${decision.reason} " +
+                "attempt=${decision.attempt} retryDelayMs=${decision.retryDelayMs} " +
+                "gamePid=${pid ?: "none"} powerLogCurrent=$powerLogCurrent powerLogLength=$powerLogLength " +
+                "applicationErrorDialog=${dialog?.hwnd ?: "none"} " +
+                "dialogHostPid=${dialog?.hostPid ?: "none"} dialogOwnerPid=${dialog?.ownerPid ?: "none"}"
+        }
+        when (decision.action) {
+            BetaStartupFailureRecoveryPolicy.Action.WAIT -> log.debug { write() }
+            else -> log.warn { write() }
+        }
+        if (decision.attempt >= 5) {
+            log.error {
+                "BETA_STARTUP_RECOVERY_ESCALATION attempt=${decision.attempt} " +
+                    "lastAction=${decision.action} reason=${decision.reason} " +
+                    "nextRetryDelayMs=${decision.retryDelayMs} watchdog=RETAINED betaContinues=true"
+            }
+        }
+    }
+
+    private fun dispatchStartupFailureRecovery(
+        recoveryToken: Long,
+        decision: BetaStartupFailureRecoveryPolicy.Decision,
+        currentPid: Long?,
+    ) {
+        if (!startupFailureDispatchInFlight.compareAndSet(false, true)) return
+        EXTRA_THREAD_POOL.execute {
+            try {
+                if (!ScreenRecoveryRuntime.isCurrent(recoveryToken) || !WorkTimeListener.working ||
+                    PauseStatus.isPause || WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD ||
+                    WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState()
+                ) return@execute
+                val result = BetaStartupFailureRecoveryDispatch.dispatch(
+                    action = decision.action,
+                    rebindWindow = {
+                        val rebound = runCatching { GameUtil.findGameHWND() }.getOrNull()
+                        val verified = rebound != null && GameUtil.isVerifiedCurrentGameWindow(rebound)
+                        if (verified) {
+                            ScriptStatus.gameHWND = rebound
+                        }
+                        log.warn {
+                            "BETA_STARTUP_RECOVERY_APPLIED action=REBIND_WINDOW result=" +
+                                "${if (verified) "BOUND" else "NOT_FOUND_OR_UNVERIFIED"} " +
+                                "pid=${currentPid ?: "none"} hwnd=${rebound ?: "none"}"
+                        }
+                        verified
+                    },
+                    restartClient = {
+                        val evidence = if (decision.reason == "hearthstone-application-error-dialog") {
+                            UnknownStateScreenshot.capture(
+                                category = UnknownStateScreenshot.CATEGORY_SCREEN_RECOVERY_UNRESOLVED,
+                                trigger = "beta-application-error-dialog",
+                                state = "pid=${currentPid ?: "none"}",
+                                phase = "beta-startup-failure-recovery",
+                                label = "hearthstone-application-error-dialog",
+                            )
+                        } else {
+                            null
+                        }
+                        log.error {
+                            "BETA_STARTUP_RECOVERY_APPLIED action=RESTART_CLIENT " +
+                                "reason=${decision.reason} attempt=${decision.attempt} " +
+                                "evidence=${evidence?.file?.absolutePath ?: "none"}"
+                        }
+                        Core.restart(sync = true)
+                        startStarterChainForRecovery(recoveryToken, decision)
+                    },
+                    restartStarterChain = {
+                        startStarterChainForRecovery(recoveryToken, decision)
+                    },
+                )
+                if (result != BetaStartupFailureRecoveryDispatch.Result.NO_ACTION) {
+                    log.info {
+                        "BETA_STARTUP_RECOVERY_DISPATCH_RESULT result=$result " +
+                            "action=${decision.action} attempt=${decision.attempt} " +
+                            "watchdog=RETAINED pause=${PauseStatus.isPause}"
+                    }
+                }
+            } catch (error: Throwable) {
+                log.error(error) {
+                    "BETA_STARTUP_RECOVERY_DISPATCH_FAILED action=${decision.action} " +
+                        "attempt=${decision.attempt} retryDelayMs=${decision.retryDelayMs} " +
+                        "watchdog=RETAINED"
+                }
+            } finally {
+                startupFailureDispatchInFlight.set(false)
+            }
+        }
+    }
+
+    private fun startStarterChainForRecovery(
+        recoveryToken: Long,
+        decision: BetaStartupFailureRecoveryPolicy.Decision,
+    ) {
+        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return
+        log.error {
+            "BETA_STARTUP_RECOVERY_APPLIED action=RESTART_STARTER_CHAIN " +
+                "reason=${decision.reason} attempt=${decision.attempt} " +
+                "retryDelayMs=${decision.retryDelayMs} watchdog=RETAINED pause=${PauseStatus.isPause}"
+        }
+        NoProgressRecoveryDispatch.restartToStartup(
+            recoverModeToStartup = {
+                Mode.recover(ModeEnum.STARTUP, "beta-startup-${decision.reason}", enterStrategy = false)
+            },
+            startConfiguredStarterChain = {
+                if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) StarterConfig.starter.start()
+            },
+        )
     }
 
     fun markStartupRequested(reason: String, now: Long) {
@@ -403,6 +653,13 @@ internal object BetaScreenRecoveryService {
         recoveryToken: Long,
     ) {
         if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return
+        if (startupFailureMonitor?.isDone == false && decision.reason.contains("process-missing")) {
+            log.info {
+                "NO_PROGRESS_RECOVERY_DELEGATED reason=${decision.reason} " +
+                    "owner=beta-startup-failure-monitor dispatch=false"
+            }
+            return
+        }
         when (decision.action) {
             NoProgressWatchdog.RecoveryAction.WAIT,
             NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED,

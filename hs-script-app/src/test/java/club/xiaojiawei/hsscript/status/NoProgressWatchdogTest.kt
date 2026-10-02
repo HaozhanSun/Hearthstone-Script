@@ -58,6 +58,41 @@ class NoProgressWatchdogTest {
     }
 
     @Test
+    fun `missing game process with unbound log recovers only after a bounded grace and retry interval`() {
+        val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1_000L)
+        val missing = { now: Long ->
+            snapshot(
+                now = now,
+                screen = NoProgressWatchdog.ScreenExpectation.UNKNOWN,
+                processAlive = false,
+                currentPid = null,
+                powerLogUsable = false,
+            )
+        }
+
+        assertEquals(
+            "process-missing-unbound-log-grace",
+            watchdog.observe(missing(0L)).reason,
+        )
+        assertEquals(
+            NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED,
+            watchdog.observe(missing(999L)).action,
+        )
+        assertEquals(
+            NoProgressWatchdog.RecoveryAction.REBIND,
+            watchdog.observe(missing(1_000L)).action,
+        )
+        assertEquals(
+            NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED,
+            watchdog.observe(missing(1_001L)).action,
+        )
+        assertEquals(
+            NoProgressWatchdog.RecoveryAction.RESTART,
+            watchdog.observe(missing(2_000L)).action,
+        )
+    }
+
+    @Test
     fun `stale startup mode without fresh loading screenshot never restarts`() {
         val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1_000L)
         watchdog.observe(snapshot(now = 0L, screen = NoProgressWatchdog.ScreenExpectation.STARTUP))
@@ -311,6 +346,7 @@ class NoProgressWatchdogTest {
     private fun snapshot(
         now: Long,
         screen: NoProgressWatchdog.ScreenExpectation = NoProgressWatchdog.ScreenExpectation.ACTIVE_GAMEPLAY,
+        processAlive: Boolean = true,
         currentPid: Long? = 111L,
         boundPid: Long? = 111L,
         powerLogPath: String? = "run/Power.log",
@@ -327,7 +363,7 @@ class NoProgressWatchdogTest {
         mode = "GAMEPLAY",
         expectedMode = "GAMEPLAY",
         screen = screen,
-        processAlive = true,
+        processAlive = processAlive,
         currentPid = currentPid,
         boundPid = boundPid,
         windowPresent = true,

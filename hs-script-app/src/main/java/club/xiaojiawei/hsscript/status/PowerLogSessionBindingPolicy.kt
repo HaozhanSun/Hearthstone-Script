@@ -14,8 +14,19 @@ internal object PowerLogSessionBindingPolicy {
         lastModifiedMs: Long,
         processStartedAtMs: Long?,
     ): Boolean {
+        if (length <= 0L) return false
+        return isSessionFileForProcess(powerLogPath, gameLogsRoot, lastModifiedMs, processStartedAtMs)
+    }
+
+    /** Validates current-session file lineage without treating an empty file as progress. */
+    fun isSessionFileForProcess(
+        powerLogPath: String?,
+        gameLogsRoot: String?,
+        lastModifiedMs: Long,
+        processStartedAtMs: Long?,
+    ): Boolean {
         if (powerLogPath.isNullOrBlank() || gameLogsRoot.isNullOrBlank() ||
-            length <= 0L || lastModifiedMs <= 0L || processStartedAtMs == null
+            lastModifiedMs <= 0L || processStartedAtMs == null
         ) return false
 
         val powerLog = File(powerLogPath).absoluteFile.normalize().toPath()
