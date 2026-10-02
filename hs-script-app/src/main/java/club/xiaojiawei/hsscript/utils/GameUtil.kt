@@ -656,7 +656,12 @@ object GameUtil {
         getThreeDiscoverCardRect(Math.clamp(index.toLong(), 0, 2)).lClick()
     }
 
-    fun leftButtonClick(point: Point) = MouseUtil.leftButtonClick(point, ScriptStatus.gameHWND)
+    fun leftButtonClick(point: Point, mandatoryRankSurrenderRecovery: Boolean = false) =
+        MouseUtil.leftButtonClick(
+            point,
+            ScriptStatus.gameHWND,
+            mandatoryRankSurrenderRecovery = mandatoryRankSurrenderRecovery,
+        )
 
     fun rightButtonClick(point: Point) = MouseUtil.rightButtonClick(point, ScriptStatus.gameHWND)
 
@@ -1092,26 +1097,26 @@ object GameUtil {
                                 stopSurrenderTask()
                                 return@scheduleWithFixedDelay
                             }
-                            END_TURN_RECT.lClick()
+                            END_TURN_RECT.lClickForMandatoryRankSurrender()
                         }
                         SystemUtil.delayTiny()
                         if (!ActionDispatchGate.allow("surrender.retry.before-menu")) {
                             stopSurrenderTask()
                             return@scheduleWithFixedDelay
                         }
-                        lClickSettings()
+                        lClickSettingsForMandatoryRankSurrender()
                         SystemUtil.delayShortMedium()
                         if (!ActionDispatchGate.allow("surrender.retry.before-confirm")) {
                             stopSurrenderTask()
                             return@scheduleWithFixedDelay
                         }
-                        SURRENDER_RECT.lClick()
+                        SURRENDER_RECT.lClickForMandatoryRankSurrender()
                         SystemUtil.delayTiny()
                         if (!ActionDispatchGate.allow("surrender.retry.before-restart")) {
                             stopSurrenderTask()
                             return@scheduleWithFixedDelay
                         }
-                        RESTART_GAME_RECT.lClick()
+                        RESTART_GAME_RECT.lClickForMandatoryRankSurrender()
                     }
                 },
                 0,
@@ -1136,6 +1141,17 @@ object GameUtil {
         val rightMargin = 0.0072992700729927
         val bottomMargin = 0.015625
         leftButtonClick(Point((width - width * rightMargin).toInt(), (height - height * bottomMargin).toInt()))
+    }
+
+    private fun lClickSettingsForMandatoryRankSurrender() {
+        val width = ScriptStatus.GAME_RECT.right - ScriptStatus.GAME_RECT.left
+        val height = ScriptStatus.GAME_RECT.bottom - ScriptStatus.GAME_RECT.top
+        val rightMargin = 0.0072992700729927
+        val bottomMargin = 0.015625
+        leftButtonClick(
+            Point((width - width * rightMargin).toInt(), (height - height * bottomMargin).toInt()),
+            mandatoryRankSurrenderRecovery = true,
+        )
     }
 
     fun cancelAction() = MouseUtil.rightButtonClick(ScriptStatus.gameHWND)

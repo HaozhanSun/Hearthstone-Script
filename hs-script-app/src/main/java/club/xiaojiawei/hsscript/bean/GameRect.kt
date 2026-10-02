@@ -77,6 +77,12 @@ data class GameRect(
         GameUtil.leftButtonClick(getClickPos())
     }
 
+    /** Explicitly tagged input used only by the mandatory rank-surrender retry transaction. */
+    fun lClickForMandatoryRankSurrender() {
+        showControlPos()
+        GameUtil.leftButtonClick(getClickPos(), mandatoryRankSurrenderRecovery = true)
+    }
+
     fun lClickCenter(isCancel: Boolean = true) {
         if (isCancel) cancel()
         showControlPos()

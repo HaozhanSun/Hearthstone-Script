@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
+import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscriptbase.config.log
 
 /**
@@ -11,17 +12,38 @@ import club.xiaojiawei.hsscriptbase.config.log
  */
 object ActionDispatchGate {
 
-    fun allow(action: String): Boolean {
+    fun allow(action: String, mandatoryRankSurrenderRecovery: Boolean = false): Boolean {
         val paused = PauseStatus.isPause
         val working = WorkTimeListener.working
-        return allowForState(action, paused, working)
+        val mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending()
+        return allowForState(
+            action = action,
+            paused = paused,
+            working = working,
+            mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
+            mandatoryRankSurrenderRecovery = mandatoryRankSurrenderRecovery,
+        )
     }
 
-    internal fun allowForState(action: String, paused: Boolean, working: Boolean): Boolean {
+    internal fun allowForState(
+        action: String,
+        paused: Boolean,
+        working: Boolean,
+        mandatoryRankSurrenderPending: Boolean = false,
+        mandatoryRankSurrenderRecovery: Boolean = false,
+    ): Boolean {
         if (paused || !working) {
             log.warn {
                 "ACTION_BLOCKED action=$action reason=${if (paused) "paused" else "not-working"} " +
                     "pause=$paused working=$working dispatch=false"
+            }
+            return false
+        }
+        val surrenderRetry = action.startsWith("surrender.retry")
+        if (mandatoryRankSurrenderPending && !mandatoryRankSurrenderRecovery && !surrenderRetry) {
+            log.warn {
+                "ACTION_BLOCKED action=$action reason=mandatory-rank-surrender-pending " +
+                    "pause=false working=true dispatch=false"
             }
             return false
         }

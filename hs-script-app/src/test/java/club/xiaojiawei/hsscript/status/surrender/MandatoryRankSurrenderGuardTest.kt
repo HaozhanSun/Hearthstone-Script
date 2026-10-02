@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.status.surrender
 
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
+import club.xiaojiawei.hsscript.status.PauseStatus
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -32,5 +33,26 @@ class MandatoryRankSurrenderGuardTest {
         MandatoryRankSurrenderGuard.markRecoveryUncertain()
         assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_MAIN_MENU"))
         assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
+    }
+
+    @Test
+    fun `uncertain mandatory surrender retains retry state without auto-pausing`() {
+        PauseStatus.setManualPause(false)
+        try {
+            MandatoryRankSurrenderGuard.begin()
+            MandatoryRankSurrenderGuard.markRecoveryUncertain()
+
+            assertTrue(MandatoryRankSurrenderGuard.isPending())
+            assertTrue(MandatoryRankSurrenderGuard.isRecoveryUncertain())
+            assertFalse(PauseStatus.isPause)
+            assertTrue(
+                MandatoryRankSurrenderRecoveryPolicy.shouldWaitForMoreEvidence(
+                    mandatoryRank = true,
+                    screenConfirmed = false,
+                ),
+            )
+        } finally {
+            PauseStatus.setManualPause(true)
+        }
     }
 }

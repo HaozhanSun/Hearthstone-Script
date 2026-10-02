@@ -547,10 +547,12 @@ object MouseUtil {
         pos: Point,
         hwnd: HWND,
         buttonMask: Int = InputEvent.BUTTON1_DOWN_MASK,
+        mandatoryRankSurrenderRecovery: Boolean = false,
     ): Boolean {
+        val dispatchAction = if (mandatoryRankSurrenderRecovery) "rank-surrender.mouse.robot" else "mouse.robot"
         val task: Future<Boolean> = e2eRobotExecutor.submit<Boolean> {
             synchronized(e2eRobotLock) {
-                if (!ActionDispatchGate.allow("mouse.robot")) return@submit false
+                if (!ActionDispatchGate.allow(dispatchAction, mandatoryRankSurrenderRecovery)) return@submit false
                 log.info { "E2E_INPUT_ROBOT_BEGIN client=(${pos.x},${pos.y}) hwnd=$hwnd" }
                 val foregroundFocused = focusE2EWindow(hwnd)
                 if (Thread.currentThread().isInterrupted) {
@@ -599,7 +601,7 @@ object MouseUtil {
                     log.info { "E2E_INPUT_ROBOT_CANCELLED_BEFORE_PRESS client=(${pos.x},${pos.y}) hwnd=$hwnd" }
                     return@submit false
                 }
-                if (!ActionDispatchGate.allow("mouse.robot.before-press")) return@submit false
+                if (!ActionDispatchGate.allow("$dispatchAction.before-press", mandatoryRankSurrenderRecovery)) return@submit false
                 e2eRobot.apply {
                     mousePress(buttonMask)
                     log.info { "E2E_INPUT_ROBOT_PRESSED" }
@@ -976,8 +978,10 @@ object MouseUtil {
         pos: Point,
         hwnd: HWND?,
         mouseMode: Int = effectiveMouseMode(),
+        mandatoryRankSurrenderRecovery: Boolean = false,
     ) {
-        if (!ActionDispatchGate.allow("mouse.left")) return
+        val dispatchAction = if (mandatoryRankSurrenderRecovery) "rank-surrender.mouse.left" else "mouse.left"
+        if (!ActionDispatchGate.allow(dispatchAction, mandatoryRankSurrenderRecovery)) return
         val environmentValid = validateEnv(hwnd)
         if (e2eInputEnabled()) {
                 log.info {
@@ -1023,12 +1027,12 @@ object MouseUtil {
                 return
             }
             try {
-                if (!ActionDispatchGate.allow("mouse.left.locked")) return
+                if (!ActionDispatchGate.allow("$dispatchAction.locked", mandatoryRankSurrenderRecovery)) return
                 if (!WorkTimeListener.working && !ScriptStatus.testMode) return
 
                 if (e2eNativeClickEnabled() && hwnd != null) {
                     try {
-                        if (!ActionDispatchGate.allow("mouse.left.before-sendinput")) return
+                        if (!ActionDispatchGate.allow("$dispatchAction.before-sendinput", mandatoryRankSurrenderRecovery)) return
                         val foregroundFocused = focusE2EWindow(hwnd)
                         log.info {
                             "E2E_INPUT_SENDINPUT_FOREGROUND hwnd=$hwnd confirmed=$foregroundFocused"
@@ -1049,7 +1053,7 @@ object MouseUtil {
                         if (prevPoint != pos) {
                             moveNativeAlongCurve(prevPoint, pos, hwnd, mouseMode)
                         }
-                        if (!ActionDispatchGate.allow("mouse.left.before-sendinput-click")) return
+                        if (!ActionDispatchGate.allow("$dispatchAction.before-sendinput-click", mandatoryRankSurrenderRecovery)) return
                         val sent = sendE2eWindowsClick(pos)
                         log.info {
                             "E2E_INPUT_SENDINPUT_SENT pos=(${pos.x},${pos.y}) hwnd=$hwnd " +
@@ -1065,7 +1069,9 @@ object MouseUtil {
                     }
                 }
 
-                if (e2eInputEnabled() && hwnd != null && clickWithE2ERobot(pos, hwnd)) {
+                if (e2eInputEnabled() && hwnd != null &&
+                    clickWithE2ERobot(pos, hwnd, mandatoryRankSurrenderRecovery = mandatoryRankSurrenderRecovery)
+                ) {
                     savePos(pos)
                     return
                 }
@@ -1093,7 +1099,7 @@ object MouseUtil {
                 if (prevPoint != pos) {
                     moveNativeAlongCurve(prevPoint, pos, hwnd, mouseMode)
                 }
-                if (!ActionDispatchGate.allow("mouse.left.before-native")) return
+                if (!ActionDispatchGate.allow("$dispatchAction.before-native", mandatoryRankSurrenderRecovery)) return
                 CSystemDll.INSTANCE.leftClick(pos.x.toLong(), pos.y.toLong(), hwnd, mouseMode)
                 if (e2eInputEnabled()) {
                     log.info { "E2E_INPUT_NATIVE_SENT pos=(${pos.x},${pos.y}) hwnd=$hwnd mode=$mouseMode" }
