@@ -12,7 +12,10 @@ import club.xiaojiawei.hsscriptbase.config.log
  */
 object ActionDispatchGate {
 
-    fun allow(action: String, mandatoryRankSurrenderRecovery: Boolean = false): Boolean {
+    fun allow(
+        action: String,
+        recoveryCapability: MandatoryRankSurrenderGuard.RecoveryCapability? = null,
+    ): Boolean {
         val paused = PauseStatus.isPause
         val working = WorkTimeListener.working
         val mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending()
@@ -21,7 +24,7 @@ object ActionDispatchGate {
             paused = paused,
             working = working,
             mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
-            mandatoryRankSurrenderRecovery = mandatoryRankSurrenderRecovery,
+            recoveryCapabilityValid = MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(recoveryCapability),
         )
     }
 
@@ -30,7 +33,7 @@ object ActionDispatchGate {
         paused: Boolean,
         working: Boolean,
         mandatoryRankSurrenderPending: Boolean = false,
-        mandatoryRankSurrenderRecovery: Boolean = false,
+        recoveryCapabilityValid: Boolean = false,
     ): Boolean {
         if (paused || !working) {
             log.warn {
@@ -39,8 +42,7 @@ object ActionDispatchGate {
             }
             return false
         }
-        val surrenderRetry = action.startsWith("surrender.retry")
-        if (mandatoryRankSurrenderPending && !mandatoryRankSurrenderRecovery && !surrenderRetry) {
+        if (mandatoryRankSurrenderPending && !recoveryCapabilityValid) {
             log.warn {
                 "ACTION_BLOCKED action=$action reason=mandatory-rank-surrender-pending " +
                     "pause=false working=true dispatch=false"

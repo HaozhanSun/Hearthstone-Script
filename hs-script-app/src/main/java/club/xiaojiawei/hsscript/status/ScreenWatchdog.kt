@@ -26,6 +26,8 @@ enum class ScreenWatchdogKind {
     RESULT,
     MATCHMAKING,
     MAIN_MENU,
+    SETTINGS,
+    SURRENDER_CONFIRMATION,
     GAMEPLAY,
     UNKNOWN,
     CAPTURE_FAILED,
@@ -236,6 +238,16 @@ object ScreenWatchdog {
         ) {
             return ScreenWatchdogKind.RESULT
         }
+        val surrenderLabel = text.contains("投降") || text.contains("surrender") || text.contains("concede")
+        val confirmation = text.contains("确定") || text.contains("确认") ||
+            text.contains("confirm") || text.contains("areyousure") || text.contains("yes")
+        val cancellation = text.contains("取消") || text.contains("cancel")
+        if (surrenderLabel && confirmation && cancellation) {
+            return ScreenWatchdogKind.SURRENDER_CONFIRMATION
+        }
+        val settingsLabel = text.contains("设置") || text.contains("选项") ||
+            text.contains("settings") || text.contains("options")
+        if (settingsLabel && surrenderLabel) return ScreenWatchdogKind.SETTINGS
         if (ScreenStateRecovery.looksLikeMatchmakingText(text)) {
             return ScreenWatchdogKind.MATCHMAKING
         }
@@ -271,6 +283,8 @@ object ScreenWatchdog {
         ScreenWatchdogKind.MATCHMAKING -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MATCHMAKING
         ScreenWatchdogKind.MAIN_MENU -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MAIN_MENU
         ScreenWatchdogKind.GAMEPLAY -> ScreenWatchdogRecoveryAction.CONTINUE_ACTION
+        ScreenWatchdogKind.SETTINGS,
+        ScreenWatchdogKind.SURRENDER_CONFIRMATION,
         ScreenWatchdogKind.UNKNOWN,
         ScreenWatchdogKind.CAPTURE_FAILED,
         -> if (activeGameplay) {

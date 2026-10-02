@@ -69,13 +69,14 @@ class ActionDispatchGateTest {
     }
 
     @Test
-    fun `mandatory surrender retry and explicitly tagged recovery click can dispatch`() {
+    fun `only an explicit recovery capability authorizes retry and recovery clicks`() {
         assertTrue(
             ActionDispatchGate.allowForState(
                 action = "surrender.retry.before-menu",
                 paused = false,
                 working = true,
                 mandatoryRankSurrenderPending = true,
+                recoveryCapabilityValid = true,
             ),
         )
         assertTrue(
@@ -84,7 +85,7 @@ class ActionDispatchGateTest {
                 paused = false,
                 working = true,
                 mandatoryRankSurrenderPending = true,
-                mandatoryRankSurrenderRecovery = true,
+                recoveryCapabilityValid = true,
             ),
         )
     }
@@ -97,7 +98,7 @@ class ActionDispatchGateTest {
                 paused = true,
                 working = true,
                 mandatoryRankSurrenderPending = true,
-                mandatoryRankSurrenderRecovery = true,
+                recoveryCapabilityValid = true,
             ),
         )
         assertFalse(
@@ -106,7 +107,20 @@ class ActionDispatchGateTest {
                 paused = false,
                 working = false,
                 mandatoryRankSurrenderPending = true,
-                mandatoryRankSurrenderRecovery = true,
+                recoveryCapabilityValid = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `surrender action text alone does not grant mandatory recovery capability`() {
+        assertFalse(
+            ActionDispatchGate.allowForState(
+                action = "surrender.retry.before-menu",
+                paused = false,
+                working = true,
+                mandatoryRankSurrenderPending = true,
+                recoveryCapabilityValid = false,
             ),
         )
     }

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "channel": "beta",
-  "branch": "beta/rank-safety-v4.16.519",
+  "branch": "beta/rank-safety-v4.16.520",
   "displayName": "Hearthstone Script Beta",
   "runtimeDirectoryName": "Hearthstone Script Beta",
   "shortcutName": "Hearthstone Script Beta.lnk",

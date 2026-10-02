@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscript.service.DisplayGameRectPosService
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus.GAME_RECT
 import club.xiaojiawei.hsscript.utils.GameUtil
+import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import java.awt.Point
@@ -78,9 +79,11 @@ data class GameRect(
     }
 
     /** Explicitly tagged input used only by the mandatory rank-surrender retry transaction. */
-    fun lClickForMandatoryRankSurrender() {
+    fun lClickForMandatoryRankSurrender(
+        recoveryCapability: MandatoryRankSurrenderGuard.RecoveryCapability,
+    ) {
         showControlPos()
-        GameUtil.leftButtonClick(getClickPos(), mandatoryRankSurrenderRecovery = true)
+        GameUtil.leftButtonClick(getClickPos(), recoveryCapability)
     }
 
     fun lClickCenter(isCancel: Boolean = true) {

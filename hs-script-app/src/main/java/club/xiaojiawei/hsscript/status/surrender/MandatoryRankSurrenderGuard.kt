@@ -2,16 +2,28 @@ package club.xiaojiawei.hsscript.status.surrender
 
 /** Temporary lock between a mandatory rank surrender and confirmed completion. */
 object MandatoryRankSurrenderGuard {
+    class RecoveryCapability internal constructor()
+
     @Volatile
     private var pending = false
 
     @Volatile
     private var recoveryUncertain = false
 
-    fun begin() {
+    @Volatile
+    private var activeCapability: RecoveryCapability? = null
+
+    @Synchronized
+    fun begin(): RecoveryCapability {
         recoveryUncertain = false
+        val capability = RecoveryCapability()
+        activeCapability = capability
         pending = true
+        return capability
     }
+
+    fun isRecoveryCapabilityValid(capability: RecoveryCapability?): Boolean =
+        pending && capability != null && capability === activeCapability
 
     fun markRecoveryUncertain() {
         if (pending) recoveryUncertain = true
@@ -23,6 +35,7 @@ object MandatoryRankSurrenderGuard {
         if (!pending || evidence !in allowedEvidence) return false
         pending = false
         recoveryUncertain = false
+        activeCapability = null
         return true
     }
 
@@ -33,5 +46,6 @@ object MandatoryRankSurrenderGuard {
     internal fun resetForTest() {
         pending = false
         recoveryUncertain = false
+        activeCapability = null
     }
 }

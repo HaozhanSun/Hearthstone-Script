@@ -656,11 +656,14 @@ object GameUtil {
         getThreeDiscoverCardRect(Math.clamp(index.toLong(), 0, 2)).lClick()
     }
 
-    fun leftButtonClick(point: Point, mandatoryRankSurrenderRecovery: Boolean = false) =
+    fun leftButtonClick(
+        point: Point,
+        recoveryCapability: MandatoryRankSurrenderGuard.RecoveryCapability? = null,
+    ) =
         MouseUtil.leftButtonClick(
             point,
             ScriptStatus.gameHWND,
-            mandatoryRankSurrenderRecovery = mandatoryRankSurrenderRecovery,
+            recoveryCapability = recoveryCapability,
         )
 
     fun rightButtonClick(point: Point) = MouseUtil.rightButtonClick(point, ScriptStatus.gameHWND)
@@ -821,7 +824,7 @@ object GameUtil {
         // surrender can reach GAME_OVER before PLAYSTATE=CONCEDED is parsed
         // or before war.me has been assigned its game id.
         WarEx.surrenderRequested = true
-        if (mandatoryRank) MandatoryRankSurrenderGuard.begin()
+        val mandatoryRankSurrenderCapability = if (mandatoryRank) MandatoryRankSurrenderGuard.begin() else null
         WarEx.surrenderReason = reason?.takeIf { it.isNotBlank() }
         if (System.getProperty("hs.script.e2e") == "true") {
             E2ETrace.markSurrenderRequested(reason)
@@ -863,7 +866,7 @@ object GameUtil {
                             "SURRENDER_RETRY_BLOCKED reason=verified-rank-eligibility " +
                                 "attempts=$surrenderAttempts dispatch=false retry=false action=CONTINUE_GAME"
                         }
-                    } else if (!ActionDispatchGate.allow("surrender.retry")) {
+                    } else if (!ActionDispatchGate.allow("surrender.retry", mandatoryRankSurrenderCapability)) {
                         stopSurrenderTask()
                     } else if (WarEx.warCount > warCount || (isGamePlay && Mode.currMode !== ModeEnum.GAMEPLAY)) {
                         if (WarEx.warCount > warCount || isTerminalGameState()) {
@@ -894,75 +897,110 @@ object GameUtil {
                                 "reason=mode-not-gameplay-and-war-not-active"
                         }
                         stopSurrenderTask()
-                    } else if (++surrenderAttempts > maxSurrenderAttempts) {
-                        // Never keep clicking a potentially stale coordinate
-                        // forever.  If the game did not leave GAMEPLAY after
-                        // bounded retries, stop only this surrender request;
-                        // the normal game worker must remain active.
-                        if (mandatoryRank) {
+                    } else if (mandatoryRank) {
+                        if (++surrenderAttempts > maxSurrenderAttempts) {
                             surrenderAttempts = 0
                             MandatoryRankSurrenderGuard.markRecoveryUncertain()
                             log.warn {
                                 "RANK_SURRENDER_RECOVERY_WAIT reason=bounded-click-batch-exhausted " +
                                     "retry=screen-probe-only ordinaryInput=false requeue=false pause=false"
                             }
-                            return@scheduleWithFixedDelay
-                        } else {
-                            log.error {
-                                "投降重试熔断：未观察到对局结束或模式切换，停止盲点 " +
-                                    "attempts=$surrenderAttempts mode=${Mode.currMode} " +
-                                    "inWar=${WarEx.inWar} warCount=${WarEx.warCount} " +
-                                    "action=STOP_SURRENDER_AND_CONTINUE pause=false dispatch=false"
-                            }
-                            stopSurrenderTask()
                         }
+                        val watchdogTiming = ScreenWatchdog.shouldInspect(
+                            startedAt = surrenderStartedAt,
+                            attempts = surrenderAttempts,
+                        )
+                        if (!watchdogTiming.shouldInspect) {
+                            log.info {
+                                "RANK_SURRENDER_RECOVERY_WAIT reason=${watchdogTiming.reason} " +
+                                    "ordinaryInput=false requeue=false pause=false"
+                            }
+                            return@scheduleWithFixedDelay
+                        }
+                        val state = "mode=${Mode.currMode?.name ?: "NONE"}|inWar=${WarEx.inWar}|" +
+                            "warPhase=${WarEx.war.currentPhase.name}|myTurn=${WarEx.war.isMyTurn}|" +
+                            "warCount=${WarEx.warCount}"
+                        val observation = ScreenWatchdog.inspectForSurrender(
+                            state = state,
+                            attempts = surrenderAttempts,
+                        )
+                        val decision = MandatoryRankSurrenderRecoveryPolicy.decide(observation.kind)
+                        log.info {
+                            "RANK_SURRENDER_SCREEN_STEP screen=${observation.kind} " +
+                                "action=${decision.action} reason=${decision.reason} provider=${observation.provider} " +
+                                "screenshot=${observation.screenshotPath ?: "not-saved"}"
+                        }
+                        val recoveryCapability = requireNotNull(mandatoryRankSurrenderCapability)
+                        when (decision.action) {
+                            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS -> {
+                                if (ActionDispatchGate.allow("surrender.retry.open-settings", recoveryCapability)) {
+                                    lClickSettingsForMandatoryRankSurrender(recoveryCapability)
+                                }
+                            }
+                            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SURRENDER -> {
+                                if (ActionDispatchGate.allow("surrender.retry.select-surrender", recoveryCapability)) {
+                                    SURRENDER_RECT.lClickForMandatoryRankSurrender(recoveryCapability)
+                                }
+                            }
+                            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_CONFIRMATION -> {
+                                if (ActionDispatchGate.allow("surrender.retry.confirm", recoveryCapability)) {
+                                    RESTART_GAME_RECT.lClickForMandatoryRankSurrender(recoveryCapability)
+                                }
+                            }
+                            MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY -> {
+                                MandatoryRankSurrenderGuard.markRecoveryUncertain()
+                                log.warn {
+                                    "RANK_SURRENDER_RECOVERY_WAIT reason=screen-unconfirmed " +
+                                        "ordinaryInput=false requeue=false pause=false " +
+                                        "screen=${observation.kind} ocrReason=${observation.reason} " +
+                                        "screenshot=${observation.screenshotPath ?: "not-saved"}"
+                                }
+                            }
+                            MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_WIN,
+                            MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_LOSS,
+                            MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_RESULT,
+                            -> {
+                                stopSurrenderTask()
+                                val terminalKind = when (decision.action) {
+                                    MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_WIN -> ScreenWatchdogKind.WIN
+                                    MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_LOSS -> ScreenWatchdogKind.LOST
+                                    else -> ScreenWatchdogKind.RESULT
+                                }
+                                GameOverPhaseStrategy.forceTerminalFromScreenWatchdog(
+                                    terminalKind,
+                                    observation.screenshotPath ?: observation.reason,
+                                )
+                                completeMandatoryRankSurrender("SCREEN_TERMINAL")
+                            }
+                            MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_MAIN_MENU -> {
+                                stopSurrenderTask()
+                                completeMandatoryRankSurrender("SCREEN_MAIN_MENU")
+                                Mode.recover(ModeEnum.HUB, "mandatory-rank-surrender-main-menu-confirmed", enterStrategy = true)
+                            }
+                            MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_MATCHMAKING -> {
+                                stopSurrenderTask()
+                                completeMandatoryRankSurrender("SCREEN_MATCHMAKING")
+                                Mode.recover(ModeEnum.TOURNAMENT, "mandatory-rank-surrender-matchmaking-confirmed", enterStrategy = false)
+                            }
+                        }
+                        return@scheduleWithFixedDelay
+                    } else if (++surrenderAttempts > maxSurrenderAttempts) {
+                        // Never keep clicking a potentially stale coordinate
+                        // forever.  If the game did not leave GAMEPLAY after
+                        // bounded retries, stop only this surrender request;
+                        // the normal game worker must remain active.
+                        log.error {
+                            "投降重试熔断：未观察到对局结束或模式切换，停止盲点 " +
+                                "attempts=$surrenderAttempts mode=${Mode.currMode} " +
+                                "inWar=${WarEx.inWar} warCount=${WarEx.warCount} " +
+                                "action=STOP_SURRENDER_AND_CONTINUE pause=false dispatch=false"
+                        }
+                        stopSurrenderTask()
                     } else {
                         val watchdogTiming = ScreenWatchdog.shouldInspect(
                             startedAt = surrenderStartedAt,
                             attempts = surrenderAttempts,
                         )
-                        if (mandatoryRank && MandatoryRankSurrenderGuard.isRecoveryUncertain()) {
-                            if (watchdogTiming.shouldInspect) {
-                                val observation = ScreenWatchdog.inspectForSurrender(
-                                    state = "mandatory-rank-surrender|${WarEx.war.currentPhase.name}|${Mode.currMode?.name}",
-                                    attempts = surrenderAttempts,
-                                )
-                                when (observation.kind) {
-                                    ScreenWatchdogKind.WIN, ScreenWatchdogKind.LOST, ScreenWatchdogKind.RESULT -> {
-                                        stopSurrenderTask()
-                                        if (observation.kind == ScreenWatchdogKind.RESULT) {
-                                            GameOverPhaseStrategy.forceTerminalFromScreenWatchdog(
-                                                ScreenWatchdogKind.RESULT,
-                                                observation.screenshotPath ?: observation.reason,
-                                            )
-                                        } else {
-                                            GameOverPhaseStrategy.forceTerminalFromScreenWatchdog(
-                                                observation.kind,
-                                                observation.screenshotPath ?: observation.reason,
-                                            )
-                                        }
-                                        completeMandatoryRankSurrender("SCREEN_TERMINAL")
-                                    }
-                                    ScreenWatchdogKind.MAIN_MENU -> {
-                                        stopSurrenderTask()
-                                        completeMandatoryRankSurrender("SCREEN_MAIN_MENU")
-                                        Mode.recover(ModeEnum.HUB, "mandatory-rank-surrender-main-menu-confirmed", enterStrategy = true)
-                                    }
-                                    ScreenWatchdogKind.MATCHMAKING -> {
-                                        stopSurrenderTask()
-                                        completeMandatoryRankSurrender("SCREEN_MATCHMAKING")
-                                        Mode.recover(ModeEnum.TOURNAMENT, "mandatory-rank-surrender-matchmaking-confirmed", enterStrategy = false)
-                                    }
-                                    else -> log.warn {
-                                        "RANK_SURRENDER_RECOVERY_WAIT reason=completion-unconfirmed " +
-                                            "kind=${observation.kind} provider=${observation.provider} " +
-                                            "retry=bounded-screen-probe ordinaryInput=false requeue=false pause=false " +
-                                            "screenshot=${observation.screenshotPath ?: "not-saved"}"
-                                    }
-                                }
-                            }
-                            return@scheduleWithFixedDelay
-                        }
                         if (watchdogTiming.shouldInspect) {
                             val state = "mode=${Mode.currMode?.name ?: "NONE"}|inWar=${WarEx.inWar}|" +
                                 "warPhase=${WarEx.war.currentPhase.name}|myTurn=${WarEx.war.isMyTurn}|" +
@@ -1097,26 +1135,26 @@ object GameUtil {
                                 stopSurrenderTask()
                                 return@scheduleWithFixedDelay
                             }
-                            END_TURN_RECT.lClickForMandatoryRankSurrender()
+                            END_TURN_RECT.lClick()
                         }
                         SystemUtil.delayTiny()
                         if (!ActionDispatchGate.allow("surrender.retry.before-menu")) {
                             stopSurrenderTask()
                             return@scheduleWithFixedDelay
                         }
-                        lClickSettingsForMandatoryRankSurrender()
+                        lClickSettings()
                         SystemUtil.delayShortMedium()
                         if (!ActionDispatchGate.allow("surrender.retry.before-confirm")) {
                             stopSurrenderTask()
                             return@scheduleWithFixedDelay
                         }
-                        SURRENDER_RECT.lClickForMandatoryRankSurrender()
+                        SURRENDER_RECT.lClick()
                         SystemUtil.delayTiny()
                         if (!ActionDispatchGate.allow("surrender.retry.before-restart")) {
                             stopSurrenderTask()
                             return@scheduleWithFixedDelay
                         }
-                        RESTART_GAME_RECT.lClickForMandatoryRankSurrender()
+                        RESTART_GAME_RECT.lClick()
                     }
                 },
                 0,
@@ -1143,14 +1181,16 @@ object GameUtil {
         leftButtonClick(Point((width - width * rightMargin).toInt(), (height - height * bottomMargin).toInt()))
     }
 
-    private fun lClickSettingsForMandatoryRankSurrender() {
+    private fun lClickSettingsForMandatoryRankSurrender(
+        recoveryCapability: MandatoryRankSurrenderGuard.RecoveryCapability,
+    ) {
         val width = ScriptStatus.GAME_RECT.right - ScriptStatus.GAME_RECT.left
         val height = ScriptStatus.GAME_RECT.bottom - ScriptStatus.GAME_RECT.top
         val rightMargin = 0.0072992700729927
         val bottomMargin = 0.015625
         leftButtonClick(
             Point((width - width * rightMargin).toInt(), (height - height * bottomMargin).toInt()),
-            mandatoryRankSurrenderRecovery = true,
+            recoveryCapability = recoveryCapability,
         )
     }
 

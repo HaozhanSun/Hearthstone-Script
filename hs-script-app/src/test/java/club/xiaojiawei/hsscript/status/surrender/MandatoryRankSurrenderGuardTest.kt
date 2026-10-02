@@ -55,4 +55,15 @@ class MandatoryRankSurrenderGuardTest {
             PauseStatus.setManualPause(true)
         }
     }
+
+    @Test
+    fun `only the active surrender capability authorizes gated recovery input`() {
+        val active = MandatoryRankSurrenderGuard.begin()
+        val forged = MandatoryRankSurrenderGuard.RecoveryCapability()
+
+        assertTrue(MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(active))
+        assertFalse(MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(forged))
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL"))
+        assertFalse(MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(active))
+    }
 }

@@ -208,6 +208,8 @@ object UpstreamScreenWatchdog {
         ScreenWatchdogKind.MATCHMAKING -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MATCHMAKING
         ScreenWatchdogKind.MAIN_MENU -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MAIN_MENU
         ScreenWatchdogKind.GAMEPLAY -> ScreenWatchdogRecoveryAction.CONTINUE_ACTION
+        ScreenWatchdogKind.SETTINGS,
+        ScreenWatchdogKind.SURRENDER_CONFIRMATION,
         ScreenWatchdogKind.UNKNOWN,
         ScreenWatchdogKind.CAPTURE_FAILED,
         -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CONTINUE_UNKNOWN
