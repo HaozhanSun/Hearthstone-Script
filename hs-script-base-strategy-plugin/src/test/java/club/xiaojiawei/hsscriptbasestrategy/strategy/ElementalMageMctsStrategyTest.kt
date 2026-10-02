@@ -12,6 +12,9 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsCardDiagnostics
+import club.xiaojiawei.hsscriptcardsdk.bean.MCTSArg
+import club.xiaojiawei.hsscriptcardsdk.bean.MctsRootSelectionPolicy
+import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -22,7 +25,7 @@ class ElementalMageMctsStrategyTest {
     fun `elemental mage is visible only as a wild strategy`() {
         val strategy = HsElementalMageMctsDeckStrategy()
 
-        assertEquals("元素法 V1.3", strategy.name().substringBefore(" ·"))
+        assertEquals("元素法 V1.4", strategy.name().substringBefore(" ·"))
         assertEquals(listOf(RunModeEnum.WILD), strategy.runModes.toList())
         assertFalse(strategy.runModes.contains(RunModeEnum.STANDARD))
         assertTrue(strategy.id().contains("elemental-mage-mcts-v1-2"))
@@ -45,6 +48,53 @@ class ElementalMageMctsStrategyTest {
         assertTrue(ElementalMageMctsModel.mustPlayElementalFirst(war))
         assertTrue(ElementalMageMctsModel.isMandatoryAction(elementalAction, war))
         assertFalse(ElementalMageMctsModel.isMandatoryAction(fillerAction, war))
+    }
+
+    @Test
+    fun `playable Sei La Zan is selected before a cheaper alternative by global plan root`() {
+        val war = testWar(turn = 1, mana = 8)
+        val sei = testCard(ElementalMageMctsModel.SEI_LA_ZAN_ID, "塞拉赞恩", 7, CardRaceEnum.UNKNOWN)
+        val alternative = testCard("ALT_MINION", "普通随从", 4, CardRaceEnum.UNKNOWN)
+        war.addCard(sei, war.me.handArea)
+        war.addCard(alternative, war.me.handArea)
+
+        val arg = MCTSArg(
+            endMillisTime = System.currentTimeMillis() + 1_000L,
+            turnCount = 1,
+            turnFactor = 0.5,
+            countPerTurn = 12,
+            scoreCalculator = { 0.0 },
+            enableMultiThread = false,
+            debugName = "elemental-sei-la-zan-root",
+            decisionModel = ElementalMageMctsModel,
+            experimentalSearch = true,
+            rootSelectionPolicy = MctsRootSelectionPolicy.GLOBAL_TURN_PLAN,
+        )
+        val selected = MonteCarloTreeSearch().searchBestNode(war, arg)
+
+        assertTrue(ElementalMageMctsModel.isPlayableSeiLaZan(sei, war))
+        assertTrue(selected.isNotEmpty())
+        assertEquals(sei.entityId, selected.first().applyAction.creator?.entityId)
+    }
+
+    @Test
+    fun `Sei La Zan mandatory fence disappears when mana or board slot makes it illegal`() {
+        val lowManaWar = testWar(turn = 8, mana = 6)
+        val lowManaSei = testCard(ElementalMageMctsModel.SEI_LA_ZAN_ID, "塞拉赞恩", 7, CardRaceEnum.UNKNOWN)
+        lowManaWar.addCard(lowManaSei, lowManaWar.me.handArea)
+        val lowManaAction = PlayAction({}, {}, lowManaSei)
+        assertFalse(ElementalMageMctsModel.isPlayableSeiLaZan(lowManaSei, lowManaWar))
+        assertFalse(ElementalMageMctsModel.isMandatoryAction(lowManaAction, lowManaWar))
+
+        val fullBoardWar = testWar(turn = 8, mana = 7)
+        val fullBoardSei = testCard(ElementalMageMctsModel.SEI_LA_ZAN_ID, "塞拉赞恩", 7, CardRaceEnum.UNKNOWN)
+        fullBoardWar.addCard(fullBoardSei, fullBoardWar.me.handArea)
+        repeat(fullBoardWar.me.playArea.maxSize) { index ->
+            fullBoardWar.addCard(testCard("BOARD_$index", "场上随从", 1, CardRaceEnum.UNKNOWN), fullBoardWar.me.playArea)
+        }
+        val fullBoardAction = PlayAction({}, {}, fullBoardSei)
+        assertFalse(ElementalMageMctsModel.isPlayableSeiLaZan(fullBoardSei, fullBoardWar))
+        assertFalse(ElementalMageMctsModel.isMandatoryAction(fullBoardAction, fullBoardWar))
     }
 
     @Test
