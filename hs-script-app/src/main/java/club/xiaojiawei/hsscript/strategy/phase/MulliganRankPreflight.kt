@@ -89,6 +89,7 @@ internal class MulliganRankPreflight(
     private val isEligible: () -> Boolean,
     private val inspect: () -> SurrenderRuleResult?,
     private val isResolved: () -> Boolean = { false },
+    private val authorizeContinue: (SurrenderRuleResult) -> Boolean = { true },
     private val provider: () -> String,
     private val onSurrender: (SurrenderRuleResult) -> Unit,
     private val onContinue: () -> Unit,
@@ -233,14 +234,29 @@ internal class MulliganRankPreflight(
                 }
             }
 
-            if (!timeout && result?.ruleId == "rank-continue-authorized") {
-                state = MulliganRankPreflightState.RESOLVED
-                log.info {
-                    "MULLIGAN_RANK_PREFLIGHT_RESOLVED attempt=${context.attemptNumber} " +
-                        "provider=${provider()} action=CONTINUE_MULLIGAN pause=false"
+            if (!timeout && result?.ruleId == "rank-continue-authorized" && result.currentRank in setOf(5, 10)) {
+                if (authorizeContinue(result)) {
+                    state = MulliganRankPreflightState.RESOLVED
+                    log.info {
+                        "MULLIGAN_RANK_PREFLIGHT_RESOLVED attempt=${context.attemptNumber} " +
+                            "provider=${provider()} rank=${result.currentRank} action=CONTINUE_MULLIGAN pause=false"
+                    }
+                    onContinue()
+                    return
                 }
-                onContinue()
-                return
+                log.warn {
+                    "MULLIGAN_RANK_PREFLIGHT_CONTINUE_REJECTED attempt=${context.attemptNumber} " +
+                        "provider=${provider()} rank=${result.currentRank} " +
+                        "reason=dispatch-barrier-rejected action=RETRY pause=false"
+                }
+            }
+
+            if (!timeout && result?.ruleId == "rank-continue-authorized") {
+                log.warn {
+                    "MULLIGAN_RANK_PREFLIGHT_CONTINUE_REJECTED attempt=${context.attemptNumber} " +
+                        "provider=${provider()} rank=${result.currentRank ?: "UNKNOWN"} " +
+                        "reason=eligible-result-missing-exact-rank action=RETRY pause=false"
+                }
             }
 
             if (result?.shouldSurrender == true) {

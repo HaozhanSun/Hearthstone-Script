@@ -190,6 +190,7 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
     protected fun dispatchSurrenderDecision(
         result: club.xiaojiawei.hsscript.status.surrender.SurrenderRuleResult,
         source: String,
+        rankSurrenderCapability: club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier.SurrenderCapability? = null,
     ): Boolean {
         if (result.blocksAutomaticSurrender || !result.shouldSurrender) {
             log.warn {
@@ -210,6 +211,7 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
             skipEndTurn = true,
             reason = result.reason,
             mandatoryRank = NeverSurrenderPolicy.isMandatoryRankDispatch(source, result.ruleId),
+            rankSurrenderCapability = rankSurrenderCapability,
         )
         if (!dispatched) {
             log.warn {

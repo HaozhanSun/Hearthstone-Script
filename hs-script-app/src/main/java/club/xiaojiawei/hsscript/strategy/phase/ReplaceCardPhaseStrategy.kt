@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator.changeCard
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.SurrenderRuleResult
+import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
@@ -33,6 +34,10 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
     private val mulliganStageConfirmed = AtomicBoolean(false)
     private val mulliganInputConfirmed = AtomicBoolean(false)
     private val rankSurrenderRequested = AtomicBoolean(false)
+    private val rankPreflightStarted = AtomicBoolean(false)
+
+    @Volatile
+    private var rankBarrierTicket: Long? = null
 
     @Volatile
     private var rankPreflight: MulliganRankPreflight? = null
@@ -71,10 +76,13 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         // recovery/startup path can enter a new INPUT without replaying that
         // callback in the same ordering.
         SurrenderPolicy.resetForNewGame()
+        MulliganRankDispatchBarrier.resetForNewGame()
+        rankBarrierTicket = null
         changeCardScheduled.reset()
         mulliganStageConfirmed.set(false)
         mulliganInputConfirmed.set(false)
         rankSurrenderRequested.set(false)
+        rankPreflightStarted.set(false)
         latestMyMulliganState = null
         replayedMulliganInput = null
         pendingUnknownMulliganInputs.clear()
@@ -154,22 +162,40 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             log.info { "E2E恢复回放：跳过历史换牌点击，等待实时日志继续" }
             return
         }
+        if (!rankPreflightStarted.compareAndSet(false, true)) {
+            log.info {
+                "MULLIGAN_RANK_PREFLIGHT_START_IGNORED reason=duplicate-own-input " +
+                    "action=KEEP_CURRENT_BARRIER_AND_RETRY_SCHEDULE"
+            }
+            return
+        }
 
         // This is the first authoritative event that proves the local
         // mulligan UI exists. Rank OCR is not allowed before this boundary.
-        mulliganInputConfirmed.set(true)
-        // The normal mulligan action is independent from rank/OCR. Reserve it
-        // immediately; the delayed executor still rechecks live phase/pause
-        // state before clicking, and an explicit surrender can cancel it.
-        val scheduled = changeCardScheduled.tryReserve()
+        val barrierTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+        rankBarrierTicket = barrierTicket
         log.info {
-            "收到换牌输入：${tagChangeEntity.entity}，自动换牌线程调度结果：$scheduled"
+            "MULLIGAN_RANK_DISPATCH_BARRIER state=PENDING ticket=$barrierTicket " +
+                "action=BLOCK_ORDINARY_INPUT_UNTIL_FRESH_RANK_5_OR_10"
         }
-        if (!scheduled) return
-
+        mulliganInputConfirmed.set(true)
         rankSurrenderRequested.set(false)
-        startRankPreflight()
         cancelAllTask()
+        startRankPreflight(barrierTicket)
+    }
+
+    /** Queue normal Mulligan work only after this game's fresh rank decision opens the barrier. */
+    private fun scheduleMulliganAction() {
+        if (MulliganRankDispatchBarrier.currentState() != MulliganRankDispatchBarrier.State.ELIGIBLE) {
+            log.warn {
+                "MULLIGAN_ACTION_QUEUE_BLOCKED reason=rank-barrier-not-eligible " +
+                    "state=${MulliganRankDispatchBarrier.currentState()} queue=false"
+            }
+            return
+        }
+        val scheduled = changeCardScheduled.tryReserve()
+        log.info { "自动换牌线程调度结果：$scheduled rankBarrier=ELIGIBLE" }
+        if (!scheduled) return
         val skipMulliganSurrender =
             System.getProperty("hs.script.e2e.skip-mulligan-surrender") == "true"
         (ChangeCardThread {
@@ -208,7 +234,7 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         }.also { addTask(it) }).start()
     }
 
-    private fun startRankPreflight() {
+    private fun startRankPreflight(barrierTicket: Long) {
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") {
             log.info { "MULLIGAN_RANK_PREFLIGHT_SKIPPED reason=e2e-policy-bypass action=CONTINUE_MULLIGAN pause=false" }
             return
@@ -223,7 +249,8 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
                             ruleId = "rank-continue-authorized",
                             matched = true,
                             shouldSurrender = false,
-                            reason = "confirmed-silver-target",
+                            reason = "verified-eligible-current-rank",
+                            currentRank = SurrenderPolicy.currentRankAuthorizedNumber(),
                         )
                     } else {
                         null
@@ -233,10 +260,25 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             // mean OCR is unavailable, the policy is waiting, or a stale
             // completion flag leaked from another lifecycle.
             isResolved = { false },
+            authorizeContinue = { result ->
+                result.currentRank?.let { rank ->
+                    MulliganRankDispatchBarrier.authorizeEligibleRank(barrierTicket, rank)
+                } ?: false
+            },
             provider = {
                 if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
             },
             onSurrender = surrender@{ result ->
+                if (GameUtil.isTerminalGameState()) {
+                    cancelAllTask()
+                    cancelRankPreflight("terminal-state-priority")
+                    val released = MulliganRankDispatchBarrier.completeTerminalWithoutSurrender(barrierTicket)
+                    log.info {
+                        "MULLIGAN_RANK_PREFLIGHT_TERMINAL_PRIORITY ticket=$barrierTicket " +
+                            "rule=${result.ruleId} barrierReleased=$released action=NO_SURRENDER"
+                    }
+                    return@surrender
+                }
                 if (!isRankPreflightEligible()) {
                     log.info {
                         "MULLIGAN_RANK_PREFLIGHT_DECISION_DISCARDED reason=phase-or-input-left " +
@@ -245,14 +287,37 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
                     return@surrender
                 }
                 if (!rankSurrenderRequested.compareAndSet(false, true)) return@surrender
+                val surrenderCapability = MulliganRankDispatchBarrier.requireSurrender(barrierTicket)
+                if (surrenderCapability == null) {
+                    log.warn {
+                        "MULLIGAN_RANK_DISPATCH_BARRIER_SURRENDER_REJECTED ticket=$barrierTicket " +
+                            "reason=stale-or-invalid-barrier action=BLOCK"
+                    }
+                    rankSurrenderRequested.set(false)
+                    return@surrender
+                }
+                log.warn {
+                    "MULLIGAN_RANK_DISPATCH_BARRIER state=SURRENDER_REQUIRED ticket=$barrierTicket " +
+                        "rule=${result.ruleId} action=BLOCK_ORDINARY_ALLOW_MANDATORY_SURRENDER_ONLY"
+                }
                 cancelAllTask()
-                dispatchSurrenderDecision(result, "mulligan-rank-preflight")
+                dispatchSurrenderDecision(
+                    result,
+                    "mulligan-rank-preflight",
+                    rankSurrenderCapability = surrenderCapability,
+                )
             },
             onContinue = {
+                val rank = SurrenderPolicy.currentRankAuthorizedNumber()
+                log.info {
+                    "MULLIGAN_RANK_DISPATCH_BARRIER state=ELIGIBLE ticket=$barrierTicket rank=$rank " +
+                        "evidence=fresh-policy-verified action=ALLOW_ORDINARY_INPUT"
+                }
                 log.info {
                     "MULLIGAN_RANK_PREFLIGHT_CONTINUE action=CONTINUE_MULLIGAN " +
                         "provider=${if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"} pause=false"
                 }
+                scheduleMulliganAction()
             },
         ).also { it.start() }
     }
@@ -267,6 +332,35 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
     internal fun cancelRankPreflight(reason: String) {
         rankPreflight?.cancel(reason)
         rankPreflight = null
+    }
+
+    /** Leaving our Mulligan INPUT without a rank decision cannot silently open gameplay. */
+    private fun failClosedIfRankWindowEnded(reason: String) {
+        if (MulliganRankDispatchBarrier.currentState() != MulliganRankDispatchBarrier.State.PENDING) return
+        val ticket = rankBarrierTicket ?: return
+        if (GameUtil.isTerminalGameState()) {
+            val released = MulliganRankDispatchBarrier.completeTerminalWithoutSurrender(ticket)
+            log.info {
+                "MULLIGAN_RANK_PREFLIGHT_TERMINAL_PRIORITY ticket=$ticket " +
+                    "reason=$reason barrierReleased=$released action=NO_SURRENDER"
+            }
+            return
+        }
+        if (PauseStatus.isPause || !rankSurrenderRequested.compareAndSet(false, true)) return
+        val capability = MulliganRankDispatchBarrier.requireSurrender(ticket) ?: return
+        val attempts = rankPreflight?.snapshot()?.attempts ?: 0
+        val result = SurrenderPolicy.blockForUnresolvedRank(attempts)
+        log.warn {
+            "MULLIGAN_RANK_PREFLIGHT_WINDOW_ENDED ticket=$ticket reason=$reason " +
+                "attempts=$attempts action=SURRENDER_UNRESOLVED_RANK"
+        }
+        cancelRankPreflight("rank-window-ended-$reason")
+        cancelAllTask()
+        dispatchSurrenderDecision(
+            result,
+            "mulligan-rank-preflight",
+            rankSurrenderCapability = capability,
+        )
     }
 
     /** Guard every mulligan click against a late rank decision or phase exit. */
@@ -301,6 +395,7 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             if (state === MulliganStateEnum.INPUT) {
                 handleMulliganInput(tagChangeEntity)
             } else {
+                failClosedIfRankWindowEnded("mulligan-state-${state?.name?.lowercase() ?: "unknown"}")
                 cancelRankPreflight("mulligan-state-${state?.name?.lowercase() ?: "unknown"}")
             }
             if (state === MulliganStateEnum.DONE &&
@@ -311,6 +406,7 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
                 E2ETrace.markMulliganCompleted()
             }
         } else if (tagChangeEntity.tag == TagEnum.NEXT_STEP && StepEnum.MAIN_READY.name == tagChangeEntity.value) {
+            failClosedIfRankWindowEnded("main-ready")
             cancelRankPreflight("main-ready")
             if (mulliganStageConfirmed.compareAndSet(false, true)) {
                 log.info { "换牌阶段确认完成：收到NEXT_STEP=MAIN_READY" }

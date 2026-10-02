@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.strategy.phase
 
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
+import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.PersistentStreakSnapshot
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
@@ -27,12 +28,22 @@ class MulliganRankPreflightTest {
     @BeforeEach
     fun resetPauseState() {
         PauseStatus.isPause = false
+        MulliganRankDispatchBarrier.resetForTest()
     }
 
     @Test
-    fun `normal mulligan reservation is not gated by rank waiting`() {
+    fun `mulligan worker reservation follows eligible-rank release and remains duplicate-safe`() {
         val gate = MulliganActionGate()
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
 
+        assertEquals(
+            MulliganRankDispatchBarrier.State.PENDING,
+            MulliganRankDispatchBarrier.currentState(),
+        )
+        assertFalse(gate.tryReserve(), "normal worker must not be queued while rank is unresolved")
+        assertTrue(
+            MulliganRankDispatchBarrier.authorizeEligibleRank(ticket, 5),
+        )
         assertTrue(gate.tryReserve())
         assertFalse(gate.tryReserve(), "duplicate INPUT must remain suppressed")
         assertFalse(
@@ -73,6 +84,8 @@ class MulliganRankPreflightTest {
                     )
 
                     val scheduler = ManualScheduler()
+                    val barrierTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+                    val actionGate = MulliganActionGate()
                     var surrendered = 0
                     var continued = 0
                     var inspections = 0
@@ -98,12 +111,20 @@ class MulliganRankPreflightTest {
                                     matched = true,
                                     shouldSurrender = false,
                                     reason = "verified-rank-$rank-tier-$tier",
+                                    currentRank = rank,
                                 )
                             } else null
                         },
+                        authorizeContinue = { result ->
+                            result.currentRank?.let { MulliganRankDispatchBarrier.authorizeEligibleRank(barrierTicket, it) }
+                                ?: false
+                        },
                         provider = { "PADDLEX" },
                         onSurrender = { surrendered++ },
-                        onContinue = { continued++ },
+                        onContinue = {
+                            continued++
+                            assertTrue(actionGate.tryReserve(), "verified rank=$rank must release worker queue")
+                        },
                     )
 
                     preflight.start()
@@ -222,12 +243,13 @@ class MulliganRankPreflightTest {
         var surrenderCount = 0
         var logLines = listOf("MULLIGAN_STATE=INPUT", "MULLIGAN_STATE=INPUT")
         val gate = MulliganActionGate()
+        MulliganRankDispatchBarrier.beginCurrentGame()
         var changeCardSchedules = 0
 
         logLines.forEach {
             if (gate.tryReserve { true }) changeCardSchedules++
         }
-        assertEquals(1, changeCardSchedules, "duplicate INPUT must schedule changeCard once")
+        assertEquals(0, changeCardSchedules, "unresolved rank must not queue changeCard")
 
         val preflight = MulliganRankPreflight(
             config = MulliganRankPreflightConfig(
@@ -322,6 +344,7 @@ class MulliganRankPreflightTest {
                     shouldSurrender = false,
                     reason = "rank=10",
                     blocksAutomaticSurrender = true,
+                    currentRank = 10,
                 )
             },
             provider = { "PADDLEX" },
@@ -362,6 +385,7 @@ class MulliganRankPreflightTest {
                     shouldSurrender = false,
                     reason = "rank=10",
                     blocksAutomaticSurrender = true,
+                    currentRank = 10,
                 )
             },
             provider = { "PADDLEX" },
@@ -418,6 +442,7 @@ class MulliganRankPreflightTest {
                         shouldSurrender = false,
                         reason = "rank=10",
                         blocksAutomaticSurrender = true,
+                        currentRank = 10,
                     )
                 }
             },
@@ -493,8 +518,9 @@ class MulliganRankPreflightTest {
         val scheduler = ManualScheduler()
         val surrenderRequested = AtomicBoolean(false)
         val gate = MulliganActionGate()
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
         var changeCardSchedules = 0
-        assertTrue(gate.tryReserve { true }.also { if (it) changeCardSchedules++ })
+        assertFalse(gate.tryReserve { true }, "rank-pending game must not reserve a mulligan worker")
 
         val preflight = MulliganRankPreflight(
             config = MulliganRankPreflightConfig(initialDelayMs = 7_000, maxAttempts = 3),
@@ -509,7 +535,10 @@ class MulliganRankPreflightTest {
                 )
             },
             provider = { "PADDLEX" },
-            onSurrender = { surrenderRequested.set(true) },
+            onSurrender = {
+                assertNotNull(MulliganRankDispatchBarrier.requireSurrender(ticket))
+                surrenderRequested.set(true)
+            },
             onContinue = { error("unsafe rank must not continue") },
         )
 
@@ -517,11 +546,47 @@ class MulliganRankPreflightTest {
         scheduler.runScheduledAfter(7_000)
         scheduler.runWorker()
 
-        assertEquals(1, changeCardSchedules)
+        assertEquals(0, changeCardSchedules)
         assertTrue(surrenderRequested.get())
         assertEquals(MulliganRankPreflightState.SURRENDER_REQUESTED, preflight.snapshot().state)
         assertFalse(gate.tryReserve { !surrenderRequested.get() })
         assertFalse(PauseStatus.isPause)
+    }
+
+    @Test
+    fun `continue-shaped result without exact numeric rank retries and then fails closed`() {
+        val scheduler = ManualScheduler()
+        var inspections = 0
+        var surrenderCount = 0
+        var continueCount = 0
+        val preflight = MulliganRankPreflight(
+            config = MulliganRankPreflightConfig(initialDelayMs = 0, retryIntervalMs = 0, maxAttempts = 2),
+            scheduler = scheduler,
+            isEligible = { true },
+            inspect = {
+                inspections++
+                SurrenderRuleResult(
+                    ruleId = "rank-continue-authorized",
+                    matched = true,
+                    shouldSurrender = false,
+                    reason = "stale-or-incomplete-authorized-result",
+                )
+            },
+            provider = { "PADDLEX" },
+            onSurrender = { assertEquals("rank-ocr-unresolved", it.ruleId); surrenderCount++ },
+            onContinue = { continueCount++ },
+        )
+
+        preflight.start()
+        repeat(2) {
+            scheduler.runScheduledAfter(0)
+            scheduler.runWorker()
+        }
+
+        assertEquals(2, inspections)
+        assertEquals(1, surrenderCount)
+        assertEquals(0, continueCount)
+        assertEquals(MulliganRankPreflightState.SURRENDER_REQUESTED, preflight.snapshot().state)
     }
 
     @Test

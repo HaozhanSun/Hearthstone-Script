@@ -68,6 +68,8 @@ data class SurrenderRuleResult(
     val reason: String? = null,
     /** True when this particular surrender request must be blocked. */
     val blocksAutomaticSurrender: Boolean = false,
+    /** Numeric rank that was freshly verified for this game's continuation decision. */
+    val currentRank: Int? = null,
 )
 
 data class PersistentStreakSnapshot(
@@ -164,6 +166,8 @@ object SurrenderPolicy {
     private var rankCheckCompleted = false
     @Volatile
     private var rankContinueAuthorized = false
+    @Volatile
+    private var rankContinueAuthorizedNumber: Int? = null
     private var rankCompletionDiagnosticLogged = false
     private var rankCompletionDiagnosticCount = 0
     private var rankInspectionAttempts = 0
@@ -313,6 +317,7 @@ object SurrenderPolicy {
         earlySurrenderTriggered = false
         rankCheckCompleted = false
         rankContinueAuthorized = false
+        rankContinueAuthorizedNumber = null
         rankCompletionDiagnosticLogged = false
         rankCompletionDiagnosticCount = 0
         rankInspectionAttempts = 0
@@ -1015,6 +1020,7 @@ object SurrenderPolicy {
         rankCheckCompleted = true
         setRankInspectionState(RankInspectionState.RESOLVED)
         rankContinueAuthorized = true
+        rankContinueAuthorizedNumber = rank
         persistentStreakDecision?.let { streakDecision ->
             if (streakDecision.blocksAutomaticSurrender) {
                 logPersistentStreakContinueOnce("rank", streakDecision)
@@ -1108,6 +1114,8 @@ object SurrenderPolicy {
 
     /** True only after this game's numeric rank was positively authorized. */
     internal fun currentRankContinueAuthorized(): Boolean = rankContinueAuthorized
+
+    internal fun currentRankAuthorizedNumber(): Int? = rankContinueAuthorizedNumber
 
     internal fun rankInspectionAttemptsForTest(): Int = rankInspectionAttempts
 

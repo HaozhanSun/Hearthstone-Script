@@ -27,6 +27,7 @@ import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderRecoveryPolicy
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
 import club.xiaojiawei.hsscript.strategy.phase.GameOverPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil.CHOOSE_ONE_RECTS
@@ -775,6 +776,7 @@ object GameUtil {
         skipEndTurn: Boolean = false,
         reason: String? = null,
         mandatoryRank: Boolean = false,
+        rankSurrenderCapability: MulliganRankDispatchBarrier.SurrenderCapability? = null,
     ): Boolean {
         if (PowerLogListener.replayingExistingLog) {
             log.info { "Power.log恢复回放：跳过历史投降请求" }
@@ -798,7 +800,7 @@ object GameUtil {
             return false
         }
         if (NeverSurrenderPolicy.blockSurrender("GameUtil.surrender", mandatoryRank)) return false
-        if (!ActionDispatchGate.allow("surrender.request")) return false
+        if (!ActionDispatchGate.allow("surrender.request", rankSurrenderCapability = rankSurrenderCapability)) return false
 //        SystemUtil.frontWindow(ScriptStaticData.getGameHWND());
 //        按ESC键弹出投降界面
 //        ScriptStaticData.ROBOT.keyPress(27);

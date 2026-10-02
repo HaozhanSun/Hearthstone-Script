@@ -58,6 +58,7 @@ object MandatoryRankSurrenderGuard {
         recoveryUncertain = false
         activeCapability = null
         activeTerminalCleanupCapability = null
+        MulliganRankDispatchBarrier.completeSurrender()
         return true
     }
 
