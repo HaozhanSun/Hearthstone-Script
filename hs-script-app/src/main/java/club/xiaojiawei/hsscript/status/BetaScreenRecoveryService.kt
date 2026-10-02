@@ -65,61 +65,65 @@ internal object BetaScreenRecoveryService {
         if (!startupRecoveryScheduled.compareAndSet(false, true)) return
         val taskRef = AtomicReference<Future<*>?>()
         val task = EXTRA_THREAD_POOL.submit {
-            val startedAt = System.currentTimeMillis()
             try {
-                while (ScreenRecoveryRuntime.isCurrent(recoveryToken) &&
-                    System.currentTimeMillis() - startedAt < STARTUP_HANDSHAKE_TIMEOUT_MS
-                ) {
+                while (ScreenRecoveryRuntime.isCurrent(recoveryToken)) {
+                    val observationStartedAt = System.currentTimeMillis()
+                    while (ScreenRecoveryRuntime.isCurrent(recoveryToken) &&
+                        System.currentTimeMillis() - observationStartedAt < STARTUP_HANDSHAKE_TIMEOUT_MS
+                    ) {
+                        if (startupHandshakeConfirmed()) {
+                            clearFailureAttempts()
+                            return@submit
+                        }
+                        if (!GameUtil.isAliveOfGame()) {
+                            val attempt = nextFailureAttempt()
+                            val launchAt = lastGameLaunchAt()
+                            val now = System.currentTimeMillis()
+                            val decision = GameStartupRecoveryPolicy.decide(
+                                gameAlive = false,
+                                startupConfirmed = false,
+                                now = now,
+                                lastLaunchAt = launchAt,
+                            )
+                            log.warn {
+                                "GAME_STARTUP_PROCESS_EXITED attempt=$attempt decision=$decision " +
+                                    "platformAlive=${GameUtil.isAliveOfPlatform()} " +
+                                    "powerLog=${PowerLogListener.logFile?.path() ?: "none"} " +
+                                    "powerLogLength=${PowerLogListener.logFile?.length() ?: 0L}"
+                            }
+                            val retryDelay = GameStartupRecoveryPolicy.retryDelayMs(now, launchAt, attempt)
+                            log.info {
+                                "GAME_STARTUP_RETRY_DELAY delayMs=$retryDelay attempt=$attempt " +
+                                    "strategy=exponential-capped"
+                            }
+                            Thread.sleep(retryDelay)
+                            if (ScreenRecoveryRuntime.isCurrent(recoveryToken) && !startupHandshakeConfirmed()) {
+                                log.warn {
+                                    "GAME_STARTUP_RETRY action=STARTER_CHAIN reason=process-exited-before-handshake " +
+                                        "platformPreserved=true attempt=$attempt retryDelayMs=$retryDelay"
+                                }
+                                retryStarterChain()
+                            }
+                            return@submit
+                        }
+                        Thread.sleep(1_000L)
+                    }
+                    if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@submit
                     if (startupHandshakeConfirmed()) {
                         clearFailureAttempts()
                         return@submit
                     }
-                    if (!GameUtil.isAliveOfGame()) {
-                        val attempt = nextFailureAttempt()
-                        val launchAt = lastGameLaunchAt()
-                        val now = System.currentTimeMillis()
-                        val decision = GameStartupRecoveryPolicy.decide(
-                            gameAlive = false,
-                            startupConfirmed = false,
-                            now = now,
-                            lastLaunchAt = launchAt,
-                        )
-                        log.warn {
-                            "GAME_STARTUP_PROCESS_EXITED attempt=$attempt decision=$decision " +
-                                "platformAlive=${GameUtil.isAliveOfPlatform()} " +
-                                "powerLog=${PowerLogListener.logFile?.path() ?: "none"} " +
-                                "powerLogLength=${PowerLogListener.logFile?.length() ?: 0L}"
-                        }
-                        val retryDelay = GameStartupRecoveryPolicy.retryDelayMs(now, launchAt, attempt)
-                        log.info {
-                            "GAME_STARTUP_RETRY_DELAY delayMs=$retryDelay attempt=$attempt " +
-                                "strategy=exponential-capped"
-                        }
-                        Thread.sleep(retryDelay)
-                        if (ScreenRecoveryRuntime.isCurrent(recoveryToken) && !startupHandshakeConfirmed()) {
-                            log.warn {
-                                "GAME_STARTUP_RETRY action=STARTER_CHAIN reason=process-exited-before-handshake " +
-                                    "platformPreserved=true attempt=$attempt retryDelayMs=$retryDelay"
-                            }
-                            retryStarterChain()
-                        }
-                        return@submit
-                    }
-                    Thread.sleep(1_000L)
-                }
-                if (ScreenRecoveryRuntime.isCurrent(recoveryToken) &&
-                    GameStartupHandoffPolicy.onHandshakeTimeout(startupHandshakeConfirmed()) ==
-                    GameStartupHandoffPolicy.HandshakeTimeoutDecision.AUTOMATIC_PAUSE
-                ) {
-                    log.error {
-                        "GAME_STARTUP_STOPPED action=AUTOMATIC_PAUSE reason=handshake-timeout " +
-                            "timeoutMs=$STARTUP_HANDSHAKE_TIMEOUT_MS " +
-                            "gameAlive=${GameUtil.isAliveOfGame()} " +
+                    val timeoutDecision = GameStartupHandoffPolicy.onHandshakeTimeout(startupConfirmed = false)
+                    val recheckDelay = GameStartupHandoffPolicy.handshakeTimeoutRecheckDelayMs()
+                    log.warn {
+                        "GAME_STARTUP_HANDOFF_UNCONFIRMED action=$timeoutDecision " +
+                            "reason=handshake-timeout timeoutMs=$STARTUP_HANDSHAKE_TIMEOUT_MS " +
+                            "retryDelayMs=$recheckDelay gameAlive=${GameUtil.isAliveOfGame()} " +
                             "powerLog=${PowerLogListener.logFile?.path() ?: "none"} " +
-                            "powerLogLength=${PowerLogListener.logFile?.length() ?: 0L}"
+                            "powerLogLength=${PowerLogListener.logFile?.length() ?: 0L} " +
+                            "betaContinues=true pause=${PauseStatus.isPause}"
                     }
-                    stopRecoveryCascade("startup-handshake-timeout")
-                    PauseStatus.setAutomaticPause(true)
+                    Thread.sleep(recheckDelay)
                 }
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
@@ -332,23 +336,18 @@ internal object BetaScreenRecoveryService {
         dialog: BetaStartupFailureRecoveryPolicy.DialogEvidence?,
     ) {
         val write = {
-            "BETA_STARTUP_RECOVERY action=${decision.action} reason=${decision.reason} " +
+            "${if (decision.escalated) "BETA_STARTUP_RECOVERY_ESCALATED" else "BETA_STARTUP_RECOVERY"} " +
+                "action=${decision.action} reason=${decision.reason} " +
                 "attempt=${decision.attempt} retryDelayMs=${decision.retryDelayMs} " +
                 "gamePid=${pid ?: "none"} powerLogCurrent=$powerLogCurrent powerLogLength=$powerLogLength " +
                 "applicationErrorDialog=${dialog?.hwnd ?: "none"} " +
-                "dialogHostPid=${dialog?.hostPid ?: "none"} dialogOwnerPid=${dialog?.ownerPid ?: "none"}"
+                "dialogHostPid=${dialog?.hostPid ?: "none"} dialogOwnerPid=${dialog?.ownerPid ?: "none"} " +
+                "watchdog=RETAINED betaContinues=${decision.escalated} pause=${PauseStatus.isPause}"
         }
-        when (decision.action) {
-            BetaStartupFailureRecoveryPolicy.Action.WAIT -> log.debug { write() }
-            BetaStartupFailureRecoveryPolicy.Action.ESCALATE -> log.error { write() }
+        when {
+            decision.escalated -> log.error { write() }
+            decision.action == BetaStartupFailureRecoveryPolicy.Action.WAIT -> log.debug { write() }
             else -> log.warn { write() }
-        }
-        if (decision.attempt >= 5) {
-            log.error {
-                "BETA_STARTUP_RECOVERY_ESCALATION attempt=${decision.attempt} " +
-                    "lastAction=${decision.action} reason=${decision.reason} " +
-                    "nextRetryDelayMs=${decision.retryDelayMs} watchdog=RETAINED betaContinues=true"
-            }
         }
     }
 
@@ -366,7 +365,7 @@ internal object BetaScreenRecoveryService {
                 val allowsPersistentDialog = decision.reason in setOf(
                     "persistent-application-error-dialog-close",
                     "persistent-application-error-dialog-hard-restart",
-                    "application-error-dialog-recovery-exhausted",
+                    "application-error-dialog-escalated-retry",
                 )
                 val exactDialogStillConfirmed = decision.currentApplicationErrorDialogHwnd?.let { hwnd ->
                     isCurrentApplicationErrorDialogConfirmed(currentPid, hwnd, allowsPersistentDialog)
@@ -405,11 +404,10 @@ internal object BetaScreenRecoveryService {
                         } else {
                             null
                         }
-                        log.error {
-                            "BETA_STARTUP_RECOVERY_APPLIED action=RESTART_CLIENT " +
-                                "reason=${decision.reason} attempt=${decision.attempt} " +
-                                "evidence=${evidence?.file?.absolutePath ?: "none"}"
-                        }
+                        val message = "BETA_STARTUP_RECOVERY_APPLIED action=RESTART_CLIENT " +
+                            "reason=${decision.reason} attempt=${decision.attempt} " +
+                            "evidence=${evidence?.file?.absolutePath ?: "none"}"
+                        if (decision.escalated) log.warn { message } else log.error { message }
                         Core.restart(sync = true)
                         startStarterChainForRecovery(recoveryGeneration, decision)
                     },
@@ -430,16 +428,6 @@ internal object BetaScreenRecoveryService {
                                 "dialog=${hwnd ?: "none"} pid=${currentPid ?: "none"}"
                         }
                         dismissed
-                    },
-                    escalate = {
-                        val reason = "beta-application-error-dialog-recovery-exhausted"
-                        PauseStatus.setAutomaticPause(true)
-                        log.error {
-                            "BETA_STARTUP_RECOVERY_ESCALATED action=AUTOMATIC_PAUSE " +
-                                "reason=$reason attempt=${decision.attempt} " +
-                                "dialog=${decision.currentApplicationErrorDialogHwnd ?: "none"} " +
-                                "watchdog=RETAINED resume=F1"
-                        }
                     },
                 )
                 if (result != BetaStartupFailureRecoveryDispatch.Result.NO_ACTION) {

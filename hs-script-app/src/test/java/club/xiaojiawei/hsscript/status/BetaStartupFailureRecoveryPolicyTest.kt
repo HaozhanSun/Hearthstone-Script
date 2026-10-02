@@ -193,7 +193,7 @@ class BetaStartupFailureRecoveryPolicyTest {
     }
 
     @Test
-    fun `same exact modal survives game PID replacement through close hard restart and bounded escalation`() {
+    fun `same exact modal survives process replacement then keeps paced non-pausing retries`() {
         val policy = BetaStartupFailureRecoveryPolicy(noProgressTimeoutMs = 0L)
         val original = policy.observe(
             snapshot(
@@ -254,21 +254,68 @@ class BetaStartupFailureRecoveryPolicyTest {
         assertEquals(BetaStartupFailureRecoveryPolicy.Action.RESTART_CLIENT, hardRestart.action)
         val secondClose = failedClosePolicy.observe(replacement.copy(nowMs = 305_000L, processStartedAtMs = 300_000L))
         assertEquals(BetaStartupFailureRecoveryPolicy.Action.DISMISS_PERSISTENT_DIALOG, secondClose.action)
-        val exhausted = failedClosePolicy.observe(replacement.copy(nowMs = 425_000L, processStartedAtMs = 420_000L))
-        assertEquals(BetaStartupFailureRecoveryPolicy.Action.ESCALATE, exhausted.action)
-        assertEquals("application-error-dialog-recovery-exhausted", exhausted.reason)
-        var escalated = false
+        val escalatedRetry = failedClosePolicy.observe(
+            replacement.copy(nowMs = 425_000L, processStartedAtMs = 420_000L),
+        )
+        assertEquals(BetaStartupFailureRecoveryPolicy.Action.RESTART_CLIENT, escalatedRetry.action)
+        assertEquals("application-error-dialog-escalated-retry", escalatedRetry.reason)
+        assertTrue(escalatedRetry.escalated)
+        assertEquals(BetaStartupFailureRecoveryPolicy.ESCALATED_RETRY_COOLDOWN_MS, escalatedRetry.retryDelayMs)
+        var restartCount = 0
+        val previousPause = PauseStatus.isPause
+        val previousOrigin = PauseStatus.pauseOrigin
+        PauseStatus.setAutomaticPause(false)
+        try {
+            assertEquals(
+                BetaStartupFailureRecoveryDispatch.Result.CLIENT_RESTARTED,
+                BetaStartupFailureRecoveryDispatch.dispatch(
+                    action = escalatedRetry.action,
+                    rebindWindow = { false },
+                    restartClient = { restartCount++ },
+                    restartStarterChain = {},
+                ),
+            )
+            assertEquals(1, restartCount)
+            assertEquals(false, PauseStatus.isPause, "escalated retry must not pause the running script")
+        } finally {
+            if (previousOrigin == PauseStatus.Origin.MANUAL) {
+                PauseStatus.setManualPause(previousPause)
+            } else {
+                PauseStatus.setAutomaticPause(previousPause)
+            }
+        }
+
+        val duringCooldown = failedClosePolicy.observe(
+            replacement.copy(nowMs = 724_999L, processStartedAtMs = 420_000L),
+        )
+        assertEquals(BetaStartupFailureRecoveryPolicy.Action.WAIT, duringCooldown.action)
+        assertEquals(1L, duringCooldown.retryDelayMs)
+        assertEquals(false, duringCooldown.escalated)
+
+        val nextEscalatedRetry = failedClosePolicy.observe(
+            replacement.copy(nowMs = 725_000L, processStartedAtMs = 420_000L),
+        )
+        assertEquals(BetaStartupFailureRecoveryPolicy.Action.DISMISS_PERSISTENT_DIALOG, nextEscalatedRetry.action)
+        assertTrue(nextEscalatedRetry.escalated)
+        assertEquals(BetaStartupFailureRecoveryPolicy.ESCALATED_RETRY_COOLDOWN_MS, nextEscalatedRetry.retryDelayMs)
+        var nextRetryDispatched = false
         assertEquals(
-            BetaStartupFailureRecoveryDispatch.Result.ESCALATED,
+            BetaStartupFailureRecoveryDispatch.Result.PERSISTENT_DIALOG_DISMISS_FAILED,
             BetaStartupFailureRecoveryDispatch.dispatch(
-                action = exhausted.action,
+                action = nextEscalatedRetry.action,
                 rebindWindow = { false },
                 restartClient = {},
                 restartStarterChain = {},
-                escalate = { escalated = true },
+                dismissPersistentDialog = { nextRetryDispatched = true; false },
             ),
         )
-        assertTrue(escalated)
+        assertEquals(true, nextRetryDispatched, "the retry loop must dispatch again after the cooldown")
+        assertEquals(
+            "terminal-state-priority",
+            failedClosePolicy.observe(
+                replacement.copy(nowMs = 1_025_000L, terminalState = true),
+            ).reason,
+        )
     }
 
     @Test

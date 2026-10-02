@@ -4,7 +4,7 @@ package club.xiaojiawei.hsscript.status
 internal class BetaStartupFailureRecoveryPolicy(
     private val noProgressTimeoutMs: Long = DEFAULT_NO_PROGRESS_TIMEOUT_MS,
 ) {
-    enum class Action { WAIT, REBIND_WINDOW, RESTART_CLIENT, RESTART_STARTER_CHAIN, DISMISS_PERSISTENT_DIALOG, ESCALATE }
+    enum class Action { WAIT, REBIND_WINDOW, RESTART_CLIENT, RESTART_STARTER_CHAIN, DISMISS_PERSISTENT_DIALOG }
 
     data class DialogEvidence(
         val hwnd: Long,
@@ -39,6 +39,7 @@ internal class BetaStartupFailureRecoveryPolicy(
         val attempt: Int = 0,
         val retryDelayMs: Long = 0L,
         val currentApplicationErrorDialogHwnd: Long? = null,
+        val escalated: Boolean = false,
     )
 
     companion object {
@@ -48,6 +49,7 @@ internal class BetaStartupFailureRecoveryPolicy(
         const val MAX_POWER_LOG_PROGRESS_AGE_MS = 120_000L
         const val APPLICATION_ERROR_CONFIRMATION_MS = 3_000L
         const val MAX_APPLICATION_ERROR_RECOVERY_ATTEMPTS = 4
+        const val ESCALATED_RETRY_COOLDOWN_MS = 300_000L
         private const val MAX_BACKOFF_ATTEMPTS = 5
     }
 
@@ -100,11 +102,19 @@ internal class BetaStartupFailureRecoveryPolicy(
                 )
             }
             if (applicationErrorAttempts >= MAX_APPLICATION_ERROR_RECOVERY_ATTEMPTS) {
+                val nextAttempt = applicationErrorAttempts + 1
+                val action = if (nextAttempt % 2 == 1) Action.RESTART_CLIENT else Action.DISMISS_PERSISTENT_DIALOG
+                applicationErrorAttempts = nextAttempt
+                attempts++
+                lastApplicationErrorDialogHwnd = dialog.hwnd
+                nextAttemptAtMs = snapshot.nowMs + ESCALATED_RETRY_COOLDOWN_MS
                 return Decision(
-                    action = Action.ESCALATE,
-                    reason = "application-error-dialog-recovery-exhausted",
-                    attempt = applicationErrorAttempts,
+                    action = action,
+                    reason = "application-error-dialog-escalated-retry",
+                    attempt = attempts,
+                    retryDelayMs = ESCALATED_RETRY_COOLDOWN_MS,
                     currentApplicationErrorDialogHwnd = dialog.hwnd,
+                    escalated = true,
                 )
             }
             val action = when {
@@ -204,7 +214,6 @@ internal object BetaStartupFailureRecoveryDispatch {
         STARTER_CHAIN_RESTARTED,
         PERSISTENT_DIALOG_DISMISSED,
         PERSISTENT_DIALOG_DISMISS_FAILED,
-        ESCALATED,
     }
 
     fun shouldBlockForGameState(
@@ -219,7 +228,6 @@ internal object BetaStartupFailureRecoveryDispatch {
         restartClient: () -> Unit,
         restartStarterChain: () -> Unit,
         dismissPersistentDialog: () -> Boolean = { false },
-        escalate: () -> Unit = {},
     ): Result = when (action) {
         BetaStartupFailureRecoveryPolicy.Action.WAIT -> Result.NO_ACTION
         BetaStartupFailureRecoveryPolicy.Action.REBIND_WINDOW ->
@@ -235,9 +243,5 @@ internal object BetaStartupFailureRecoveryDispatch {
         BetaStartupFailureRecoveryPolicy.Action.DISMISS_PERSISTENT_DIALOG ->
             if (dismissPersistentDialog()) Result.PERSISTENT_DIALOG_DISMISSED
             else Result.PERSISTENT_DIALOG_DISMISS_FAILED
-        BetaStartupFailureRecoveryPolicy.Action.ESCALATE -> {
-            escalate()
-            Result.ESCALATED
-        }
     }
 }

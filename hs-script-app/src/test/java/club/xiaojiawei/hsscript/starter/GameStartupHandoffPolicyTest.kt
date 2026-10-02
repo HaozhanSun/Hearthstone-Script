@@ -62,19 +62,20 @@ class GameStartupHandoffPolicyTest {
     }
 
     @Test
-    fun `recognized Home prevents handshake timeout pause while unknown screen remains fail closed`() {
+    fun `handshake timeout keeps monitoring without pausing for either known or unknown startup`() {
         assertEquals(
-            GameStartupHandoffPolicy.HandshakeTimeoutDecision.NO_PAUSE_NEEDED,
+            GameStartupHandoffPolicy.HandshakeTimeoutDecision.CONTINUE_MONITORING,
             GameStartupHandoffPolicy.onHandshakeTimeout(
                 GameStartupHandoffPolicy.startupHandshakeConfirmed(false, ModeEnum.HUB),
             ),
         )
         assertEquals(
-            GameStartupHandoffPolicy.HandshakeTimeoutDecision.AUTOMATIC_PAUSE,
+            GameStartupHandoffPolicy.HandshakeTimeoutDecision.CONTINUE_MONITORING,
             GameStartupHandoffPolicy.onHandshakeTimeout(
                 GameStartupHandoffPolicy.startupHandshakeConfirmed(false, null),
             ),
         )
+        assertEquals(60_000L, GameStartupHandoffPolicy.handshakeTimeoutRecheckDelayMs())
     }
 
     @Test
