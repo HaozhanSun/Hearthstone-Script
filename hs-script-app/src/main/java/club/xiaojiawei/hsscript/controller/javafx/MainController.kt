@@ -772,4 +772,7 @@ internal fun formatVersionText(
     version: String,
     channelLabel: String,
     buildTimestampPacific: String,
-): String = "当前版本：$version · 渠道：$channelLabel\n构建时间（Pacific）：${buildTimestampPacific.ifBlank { "UNKNOWN" }}"
+): String {
+    val displayedTimestamp = buildTimestampPacific.trim().ifBlank { "UNKNOWN" }
+    return "当前版本：$version · 渠道：$channelLabel\n构建时间（Pacific）：$displayedTimestamp"
+}

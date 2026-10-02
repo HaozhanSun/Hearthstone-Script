@@ -20,10 +20,18 @@ class BuildChannelUiContractTest {
         assertEquals("stable", BuildChannel.identityToken("stable"))
         assertEquals("beta", BuildChannel.identityToken("beta"))
         assertEquals("unknown", BuildChannel.identityToken("nightly"))
+        assertEquals("hs-script-beta", BuildChannel.mainWindowTitle("hs-script", "beta"))
+        assertEquals("hs-script", BuildChannel.mainWindowTitle("hs-script", "stable"))
+        assertEquals("hs-script", BuildChannel.mainWindowTitle("hs-script", "unknown"))
         val artifactTimestamp = "2026-10-01 09:50:57 PDT"
         assertEquals(
             "当前版本：v4.16.194 · 渠道：Beta\n构建时间（Pacific）：$artifactTimestamp",
             formatVersionText("v4.16.194", "Beta", artifactTimestamp),
+        )
+        assertEquals(
+            "当前版本：v4.16.194 · 渠道：Beta\n构建时间（Pacific）：$artifactTimestamp",
+            formatVersionText("v4.16.194", "Beta", "  $artifactTimestamp  "),
+            "second-precision artifact timestamp should remain visible and cleanly formatted",
         )
         assertEquals(
             "当前版本：v4.16.194 · 渠道：Stable\n构建时间（Pacific）：$artifactTimestamp",
@@ -35,9 +43,9 @@ class BuildChannelUiContractTest {
             formatVersionText(BuildInfo.VERSION, BuildInfo.RELEASE_CHANNEL_LABEL, BuildInfo.BUILD_TIMESTAMP_PACIFIC),
         )
         assertTrue(
-            Regex("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}(:\\d{2})? (PDT|PST)")
+            Regex("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2} (PDT|PST)")
                 .matches(BuildInfo.BUILD_TIMESTAMP_PACIFIC),
-            "embedded build timestamp must be human-readable Pacific local time",
+            "embedded build timestamp must show human-readable Pacific date, minutes, and seconds",
         )
     }
 
@@ -59,10 +67,16 @@ class BuildChannelUiContractTest {
         val controller = Files.readString(root.resolve(
             "hs-script-app/src/main/java/club/xiaojiawei/hsscript/controller/javafx/MainController.kt",
         ))
+        val windowEnum = Files.readString(root.resolve(
+            "hs-script-app/src/main/java/club/xiaojiawei/hsscript/enums/WindowEnum.kt",
+        ))
         assertTrue(controller.contains("BuildInfo.RELEASE_CHANNEL_LABEL"))
         assertTrue(controller.contains("BuildInfo.VERSION"))
         assertTrue(controller.contains("BuildInfo.BUILD_TIMESTAMP_PACIFIC"))
         assertTrue(controller.contains("构建时间（Pacific）"))
+        assertTrue(windowEnum.contains("BuildChannel.mainWindowTitle(PROGRAM_NAME, BuildInfo.RELEASE_CHANNEL)"))
+        assertTrue(Files.readString(root.resolve("hs-script-app/src/main/resources/fxml/main.fxml"))
+            .contains("fx:id=\"versionText\""))
 
         assertTrue(buildInfoTemplate.contains("buildTimestampPacific=\${local-build-timestamp-pacific}"))
     }

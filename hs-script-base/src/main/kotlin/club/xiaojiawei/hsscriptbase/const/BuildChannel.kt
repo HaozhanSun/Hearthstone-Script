@@ -20,4 +20,8 @@ object BuildChannel {
         "beta" -> "beta"
         else -> "unknown"
     }
+
+    /** Keep Stable's executable/window identity while clearly separating Beta's main window. */
+    fun mainWindowTitle(programName: String, rawChannel: String?): String =
+        if (identityToken(rawChannel) == "beta") "$programName-beta" else programName
 }

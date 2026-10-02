@@ -1,6 +1,8 @@
 package club.xiaojiawei.hsscript.enums
 
 import club.xiaojiawei.hsscript.consts.PROGRAM_NAME
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.config.log
 import javafx.stage.Screen
 import javafx.stage.StageStyle
@@ -63,7 +65,7 @@ enum class WindowEnum(
     ),
     MAIN(
         "main.fxml",
-        PROGRAM_NAME,
+        BuildChannel.mainWindowTitle(PROGRAM_NAME, BuildInfo.RELEASE_CHANNEL),
         // Start wide enough for the controls and log text, while keeping a
         // small margin from the screen edge.  The stage remains resizable so
         // the user can move or size it around Hearthstone's End Turn control.
