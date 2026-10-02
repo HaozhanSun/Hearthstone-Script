@@ -21,8 +21,10 @@ Every build that can be used to run the application is a new build and must:
 3. Deploy the new artifact to the canonical Hearthstone Script runtime directory:
    `C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script`
 4. Update the deployment manifest so the launcher selects the new JAR and verifies its hash.
-5. Replace and verify all three user shortcuts: Desktop, Start Menu, and the per-user Taskbar pin. Shortcuts must target the stable admin launcher, which must resolve the newly deployed JAR; they must not point at an old versioned JAR.
-6. Record the resulting version, deployment ID, JAR hash, launcher target, and all shortcut targets in the handoff.
+5. Update the Desktop and Start Menu shortcuts. For Beta, update the existing Taskbar shortcut in place only when `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband\FavoritesResolve` resolves the exact canonical `User Pinned\TaskBar\<shortcut>` path. A `.lnk` file merely existing in that folder is not proof of a pin. Never edit Taskband registry data or attempt silent pin insertion.
+6. If Taskband does not resolve the canonical path, fail before creating the runtime directory, stopping processes, copying artifacts, or writing shortcuts. Give the operator the manual Windows taskbar repin instruction in `docs/RELEASE-CHANNELS.md`; rerun deployment only after Taskband resolves the canonical path.
+7. After deployment, the secretary must visually confirm the Beta icon is present, click that actual taskbar icon, and verify the app footer/current log identifies the deployment ID from the manifest. Shortcut metadata and Taskband registration alone do not prove that the visible icon launches the intended build.
+8. Record the version, deployment ID, JAR hash, launcher target, canonical Taskband-resolved path, and the actual-pin launch evidence in the handoff.
 
 Do not call a build complete if the build succeeds but deployment or shortcut replacement fails. Do not delete user data directories such as `config`, `data`, `log`, or `plugin` backups while deploying.
 
@@ -30,7 +32,9 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
 
 - Confirm `pom.xml` contains a version greater than the previous build.
 - Confirm the built artifact exists and the deployment manifest names that exact artifact and hash.
-- Confirm Desktop, Start Menu, and Taskbar shortcuts all target `wscript.exe` with the stable launcher as their argument.
+- Confirm Desktop and Start Menu shortcuts target `wscript.exe` with the stable launcher as their argument.
+- For Beta, confirm Taskband `FavoritesResolve` contains the exact canonical Taskbar `.lnk` path, not a stale/archived path; confirm the existing file is updated in place without deletion/recreation.
+- Require the secretary's visible Beta taskbar-pin click test and matching manifest/deployment identity before reporting the Beta deployment verified.
 - Confirm the stable launcher resolves the manifest's current JAR.
 
 ## Rank authorization and surrender safety

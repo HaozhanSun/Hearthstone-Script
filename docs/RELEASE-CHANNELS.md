@@ -40,9 +40,36 @@ This repository has two intentionally separate release channels.
    selecting the previous stable commit through the normal release path.
 
 The local `build-and-deploy.ps1` and `sync-shortcuts.ps1` scripts enforce the
-runtime and shortcut separation. The deployment manifest records the channel,
-runtime root, and shortcut name so stale beta artifacts cannot be selected by a
-stable launcher.
+runtime and shortcut separation. Before making any Beta runtime changes, the
+Beta release path reads Explorer's Taskband `FavoritesResolve` data and requires
+the exact canonical `User Pinned\TaskBar\Hearthstone Script Beta.lnk` path to be
+registered. Finding a valid `.lnk` file in the Taskbar folder is not sufficient:
+Explorer may still hold a pin entry for a shortcut that was moved elsewhere.
+The script updates an already-registered Taskbar link in place and never edits
+Taskband registry data, deletes/unpins a link, or silently creates a pin.
+
+If the preflight fails, stop before runtime files or shortcuts are modified.
+The secretary/operator must manually restore the pin through Windows UI: open
+the Beta runtime's `launch-as-admin.vbs` (or its Start Menu shortcut), then use
+the app/window's Windows taskbar context menu to pin it. If Windows policy
+prevents pinning, leave deployment blocked and report that policy; do not bypass
+it with registry edits or unsupported APIs. Once restored, rerun deployment and
+verify `FavoritesResolve` now names the canonical Taskbar `.lnk`.
+
+After deployment, the secretary must also visually confirm the Beta taskbar icon
+is present, click that actual icon, and verify the launched app footer and fresh
+log identify the exact manifest version/deployment ID. Registry registration
+and shortcut metadata are structural checks, not proof that the icon rendered or
+that clicking it launched the selected deployment. Keep this UI launch evidence
+as a separate required Beta release sign-off.
+
+Windows documents `TaskbarManager.RequestPinCurrentAppAsync` as a request that
+displays a user confirmation, requires explicit user interaction and a
+foreground app, and must not be invoked by installers. See Microsoft's
+[Taskbar pinning guidance](https://learn.microsoft.com/en-us/windows/apps/develop/windows-integration/pin-to-taskbar).
+
+The deployment manifest records the channel, runtime root, and shortcut name so
+stale beta artifacts cannot be selected by a stable launcher.
 
 ## PaddleX runtime parity
 

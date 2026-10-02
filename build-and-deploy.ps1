@@ -27,6 +27,19 @@ if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
 if ([string]::IsNullOrWhiteSpace($ShortcutName)) { $ShortcutName = [string]$channelConfig.shortcutName }
 $iconFileName = [string]$channelConfig.iconFileName
 if ([string]::IsNullOrWhiteSpace($iconFileName)) { throw 'release-channel.json iconFileName is missing' }
+if ($Channel -eq 'beta') {
+    $taskbarShortcutPath = Join-Path (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar') $ShortcutName
+    . (Join-Path $projectRoot 'taskbar-pin-contract.ps1')
+    $taskbandResolvedPaths = Get-TaskbandResolvedPathsFromCurrentUser
+    $taskbarPinPlan = Get-TaskbarShortcutSyncPlan `
+        -PinPath $taskbarShortcutPath `
+        -PinRegistered (Test-TaskbandPathRegistered -ExpectedPath $taskbarShortcutPath -ResolvedPaths $taskbandResolvedPaths) `
+        -ShortcutFileExists (Test-Path -LiteralPath $taskbarShortcutPath -PathType Leaf)
+    if (-not $taskbarPinPlan.Allowed) {
+        $registered = if ($taskbandResolvedPaths.Count -eq 0) { '<none>' } else { $taskbandResolvedPaths -join '; ' }
+        throw "Beta deployment preflight blocked before runtime changes: $($taskbarPinPlan.Reason) Taskband resolved paths: $registered"
+    }
+}
 $runtimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\')
 $runtimeExists = Test-Path -LiteralPath $runtimeRoot -PathType Container
 if (-not $runtimeExists -and $Channel -eq 'beta') {
@@ -203,6 +216,7 @@ $mavenBaseArgs = @('-f', $pomPath, '-pl', 'hs-script-app', '-am', '-Pjvm', '-Dja
 if (-not $SkipTests) {
     $testArgs = $mavenBaseArgs + @('-DforkCount=0', '-Dtest=AbstractLogListenerTest,CardTimingPolicyTest,CardIdentityCoverageTest,ParsedCardActionFactoryTest,MonteCarloTreeNodeDeferredActionTest,MctsReplayTraceTest,MctsRoundScreenshotTest,SurrenderPolicyTest,GameUtilSurrenderGuardTest,ScreenStateRecoveryTest,ScreenStateRoiSelectorTest,ScreenRecoveryFocusRetryPolicyTest,UnknownStateScreenshotTest,TurnEndActionGuardTest,PirateDemonHunterMctsExperimentModelTest,PirateWarriorMctsGoldenScenarioTest,PirateWarriorMctsModelTest,PirateWarriorOfflineReplayTest,ElementalMageMctsStrategyTest,DebugRunLeaseTest,DebugRunUiContractTest,ScheduleOverrideLogGateTest,StartupRunWindowTest,WorkTimeJitterTest,WorkTimeRuleSetTest,WorkTimeRuleTest,GlobalHotkeyListenerTest,UiLogFormatterTest', '-Dsurefire.failIfNoSpecifiedTests=false', 'test')
     Write-Output 'TARGETED_TESTS=enabled'
+    & (Join-Path $projectRoot 'tests\TaskbarPinContract.Tests.ps1')
     & $mavenWrapper @testArgs
     if ($LASTEXITCODE -ne 0) { throw "Targeted regression tests failed with exit code $LASTEXITCODE" }
 }
@@ -376,11 +390,20 @@ $manifest = [ordered]@{
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
-& (Join-Path $projectRoot 'sync-shortcuts.ps1') -RuntimeRoot $runtimeRoot -ShortcutName $ShortcutName -IconPath $iconPath
+if ($Channel -eq 'beta') {
+    & (Join-Path $projectRoot 'sync-shortcuts.ps1') -RuntimeRoot $runtimeRoot -ShortcutName $ShortcutName -IconPath $iconPath -RequireTaskbarRegistration
+} else {
+    & (Join-Path $projectRoot 'sync-shortcuts.ps1') -RuntimeRoot $runtimeRoot -ShortcutName $ShortcutName -IconPath $iconPath
+}
 if (-not $?) { throw "Shortcut synchronization failed" }
 
 Write-Output "DEPLOYED_JAR=$deployedJar"
 Write-Output "DEPLOYMENT_ID=$($manifest.deploymentId)"
 Write-Output "DEPLOYMENT_MANIFEST=$manifestPath"
 Write-Output "APP_SHA256=$appHash"
-Write-Output 'BUILD_AND_DEPLOY_COMPLETE'
+if ($Channel -eq 'beta') {
+    Write-Output 'BUILD_AND_DEPLOY_STRUCTURAL_CHECKS_COMPLETE'
+    Write-Output 'TASKBAR_PIN_LAUNCH_VERIFICATION_PENDING: secretary must visually confirm the icon and launch this exact deployment from the actual taskbar pin.'
+} else {
+    Write-Output 'BUILD_AND_DEPLOY_COMPLETE'
+}
