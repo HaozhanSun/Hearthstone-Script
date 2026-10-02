@@ -928,6 +928,7 @@ object GameUtil {
                         log.info {
                             "RANK_SURRENDER_SCREEN_STEP screen=${observation.kind} " +
                                 "action=${decision.action} reason=${decision.reason} provider=${observation.provider} " +
+                                "evidenceReason=${observation.reason} " +
                                 "screenshot=${observation.screenshotPath ?: "not-saved"}"
                         }
                         val recoveryCapability = requireNotNull(mandatoryRankSurrenderCapability)

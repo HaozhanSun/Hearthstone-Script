@@ -194,11 +194,21 @@ object ScreenWatchdog {
             ""
         }
         val providerUsed = "LEGACY"
-        val kind = classify(ocrText)
+        val ocrKind = classify(ocrText)
+        // During a live turn, the legacy OCR can miss all board labels even
+        // though the current Hearthstone capture is clear. Permit only the
+        // first recovery step (open Settings) when Power.log state is still
+        // an active player turn and the fresh image has both the board and
+        // two-hero gameplay composition. OCR-recognized terminal/menu/dialog
+        // states always take precedence over this visual fallback.
+        val kind = classifyForSurrender(ocrKind, activeGameplay, image)
+        val visualGameplayFallback = ocrKind == ScreenWatchdogKind.UNKNOWN && kind == ScreenWatchdogKind.GAMEPLAY
+        val reason = if (visualGameplayFallback) "authoritative-gameplay-and-fresh-board-visual" else "ocr-classified"
         val action = decide(kind, activeGameplay)
         log.warn {
             "SCREEN_WATCHDOG_OCR runId=$runId provider=$providerUsed kind=$kind action=$action " +
                 "activeGameplay=$activeGameplay chars=${ocrText.length} " +
+                "visualFallback=$visualGameplayFallback " +
                 "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                 "ocr=${sanitize(ocrText).take(240).ifBlank { "<empty>" }}"
         }
@@ -208,7 +218,7 @@ object ScreenWatchdog {
             ocrText = ocrText,
             screenshotPath = evidence?.file?.absolutePath,
             provider = providerUsed,
-            reason = "ocr-classified",
+            reason = reason,
         )
     }
 
@@ -218,6 +228,85 @@ object ScreenWatchdog {
 
     internal fun isAuthoritativeActiveGameplayForTest(state: String): Boolean =
         isAuthoritativeActiveGameplay(state)
+
+    internal fun hasActiveGameplayVisualForTest(image: BufferedImage): Boolean =
+        hasActiveGameplayVisual(image)
+
+    internal fun classifyForSurrenderForTest(
+        ocrText: String,
+        state: String,
+        image: BufferedImage,
+    ): ScreenWatchdogKind = classifyForSurrender(classify(ocrText), isAuthoritativeActiveGameplay(state), image)
+
+    private fun classifyForSurrender(
+        ocrKind: ScreenWatchdogKind,
+        activeGameplay: Boolean,
+        image: BufferedImage,
+    ): ScreenWatchdogKind = if (
+        ocrKind == ScreenWatchdogKind.UNKNOWN && activeGameplay && hasActiveGameplayVisual(image)
+    ) {
+        ScreenWatchdogKind.GAMEPLAY
+    } else {
+        ocrKind
+    }
+
+    private fun hasActiveGameplayVisual(image: BufferedImage): Boolean {
+        if (image.width < 800 || image.height < 450) return false
+        // Hearthstone's live board occupies the central field and has the
+        // opponent/player hero portraits at stable normalized positions.
+        // Requiring all three regions avoids treating a generic warm-colored
+        // menu, dialog, or desktop capture as gameplay evidence.
+        val board = colorRatios(image, 0.20, 0.32, 0.80, 0.68)
+        val opponentHero = colorRatios(image, 0.455, 0.08, 0.545, 0.25)
+        val playerHero = colorRatios(image, 0.455, 0.68, 0.545, 0.88)
+        return board.boardRatio >= 0.22 &&
+            opponentHero.vividRatio >= 0.12 &&
+            playerHero.vividRatio >= 0.12
+    }
+
+    private data class RegionColorRatios(val boardRatio: Double, val vividRatio: Double)
+
+    private fun colorRatios(
+        image: BufferedImage,
+        left: Double,
+        top: Double,
+        right: Double,
+        bottom: Double,
+    ): RegionColorRatios {
+        val x0 = (image.width * left).toInt().coerceIn(0, image.width)
+        val x1 = (image.width * right).toInt().coerceIn(x0, image.width)
+        val y0 = (image.height * top).toInt().coerceIn(0, image.height)
+        val y1 = (image.height * bottom).toInt().coerceIn(y0, image.height)
+        var boardPixels = 0
+        var vividPixels = 0
+        var samples = 0
+        var y = y0
+        while (y < y1) {
+            var x = x0
+            while (x < x1) {
+                val rgb = image.getRGB(x, y)
+                val red = rgb shr 16 and 0xff
+                val green = rgb shr 8 and 0xff
+                val blue = rgb and 0xff
+                val maximum = maxOf(red, green, blue)
+                val minimum = minOf(red, green, blue)
+                if (red in 80..220 && green in 65..205 && blue in 25..165 &&
+                    red >= green * 0.88 && green >= blue * 0.82 && red - blue >= 15
+                ) {
+                    boardPixels++
+                }
+                if (maximum >= 90 && maximum - minimum >= 45) vividPixels++
+                samples++
+                x += 3
+            }
+            y += 3
+        }
+        if (samples == 0) return RegionColorRatios(0.0, 0.0)
+        return RegionColorRatios(
+            boardRatio = boardPixels.toDouble() / samples,
+            vividRatio = vividPixels.toDouble() / samples,
+        )
+    }
 
     private fun classify(ocrText: String): ScreenWatchdogKind {
         val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
