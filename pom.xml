@@ -37,7 +37,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- This build contains local changes on top of the upstream GA baseline. -->
         <upstream-baseline-version>v4.16.3-GA</upstream-baseline-version>
-        <local-build-timestamp-pacific>2026-10-01 17:13:45 PDT</local-build-timestamp-pacific>
+        <local-build-timestamp-pacific>2026-10-01 18:14:36 PDT</local-build-timestamp-pacific>
         <build-channel>UNKNOWN</build-channel>
 
         <!--java/fx-->

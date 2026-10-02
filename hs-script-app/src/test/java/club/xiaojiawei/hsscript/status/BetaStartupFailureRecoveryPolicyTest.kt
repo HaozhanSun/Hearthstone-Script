@@ -193,6 +193,100 @@ class BetaStartupFailureRecoveryPolicyTest {
     }
 
     @Test
+    fun `same exact modal survives game PID replacement through close hard restart and bounded escalation`() {
+        val policy = BetaStartupFailureRecoveryPolicy(noProgressTimeoutMs = 0L)
+        val original = policy.observe(
+            snapshot(
+                nowMs = 200_000L,
+                processStartedAtMs = 5_000L,
+                dialog = dialog(firstSeenAtMs = 190_000L),
+            ),
+        )
+        assertEquals(BetaStartupFailureRecoveryPolicy.Action.RESTART_CLIENT, original.action)
+
+        val afterReplacement = snapshot(
+            nowMs = 215_000L,
+            currentPid = 21L,
+            processStartedAtMs = 210_000L,
+            dialog = dialog(firstSeenAtMs = 190_000L),
+        )
+        val close = policy.observe(afterReplacement)
+        assertEquals(BetaStartupFailureRecoveryPolicy.Action.DISMISS_PERSISTENT_DIALOG, close.action)
+        assertEquals(100L, close.currentApplicationErrorDialogHwnd)
+        var dialogPresent = true
+        val closed = BetaStartupFailureRecoveryDispatch.dispatch(
+            action = close.action,
+            rebindWindow = { false },
+            restartClient = {},
+            restartStarterChain = {},
+            dismissPersistentDialog = { dialogPresent = false; true },
+        )
+        assertEquals(BetaStartupFailureRecoveryDispatch.Result.PERSISTENT_DIALOG_DISMISSED, closed)
+        assertEquals(false, dialogPresent)
+
+        val failedClosePolicy = BetaStartupFailureRecoveryPolicy(noProgressTimeoutMs = 0L)
+        assertEquals(
+            BetaStartupFailureRecoveryPolicy.Action.RESTART_CLIENT,
+            failedClosePolicy.observe(snapshot(
+                nowMs = 200_000L,
+                processStartedAtMs = 5_000L,
+                dialog = dialog(firstSeenAtMs = 190_000L),
+            )).action,
+        )
+        val replacement = snapshot(
+            currentPid = 21L,
+            processStartedAtMs = 210_000L,
+            dialog = dialog(firstSeenAtMs = 190_000L),
+        )
+        val firstPersistent = failedClosePolicy.observe(replacement.copy(nowMs = 215_000L))
+        assertEquals(BetaStartupFailureRecoveryPolicy.Action.DISMISS_PERSISTENT_DIALOG, firstPersistent.action)
+        assertEquals(
+            BetaStartupFailureRecoveryDispatch.Result.PERSISTENT_DIALOG_DISMISS_FAILED,
+            BetaStartupFailureRecoveryDispatch.dispatch(
+                action = firstPersistent.action,
+                rebindWindow = { false },
+                restartClient = {},
+                restartStarterChain = {},
+                dismissPersistentDialog = { false },
+            ),
+        )
+        val hardRestart = failedClosePolicy.observe(replacement.copy(nowMs = 245_000L, processStartedAtMs = 240_000L))
+        assertEquals(BetaStartupFailureRecoveryPolicy.Action.RESTART_CLIENT, hardRestart.action)
+        val secondClose = failedClosePolicy.observe(replacement.copy(nowMs = 305_000L, processStartedAtMs = 300_000L))
+        assertEquals(BetaStartupFailureRecoveryPolicy.Action.DISMISS_PERSISTENT_DIALOG, secondClose.action)
+        val exhausted = failedClosePolicy.observe(replacement.copy(nowMs = 425_000L, processStartedAtMs = 420_000L))
+        assertEquals(BetaStartupFailureRecoveryPolicy.Action.ESCALATE, exhausted.action)
+        assertEquals("application-error-dialog-recovery-exhausted", exhausted.reason)
+        var escalated = false
+        assertEquals(
+            BetaStartupFailureRecoveryDispatch.Result.ESCALATED,
+            BetaStartupFailureRecoveryDispatch.dispatch(
+                action = exhausted.action,
+                rebindWindow = { false },
+                restartClient = {},
+                restartStarterChain = {},
+                escalate = { escalated = true },
+            ),
+        )
+        assertTrue(escalated)
+    }
+
+    @Test
+    fun `older exact modal with a different HWND is not treated as persistent across restart`() {
+        val policy = BetaStartupFailureRecoveryPolicy(noProgressTimeoutMs = 0L)
+        policy.observe(snapshot(dialog = dialog(firstSeenAtMs = 10_000L)))
+        val unrelated = policy.observe(
+            snapshot(
+                currentPid = 21L,
+                processStartedAtMs = 210_000L,
+                dialog = dialog(firstSeenAtMs = 10_000L, hwnd = 101L),
+            ),
+        )
+        assertEquals(BetaStartupFailureRecoveryPolicy.Action.WAIT, unrelated.action)
+        assertEquals("stale-or-unattributed-error-dialog", unrelated.reason)
+    }
+
+    @Test
     fun `startup handoff deferral does not mask exact application error dialog`() {
         assertTrue(BetaScreenRecoveryService.shouldDeferStartupFailureRecovery(true, false))
         assertEquals(false, BetaScreenRecoveryService.shouldDeferStartupFailureRecovery(true, true))
@@ -321,8 +415,8 @@ class BetaStartupFailureRecoveryPolicyTest {
         ownerPid = null,
     )
 
-    private fun dialog(firstSeenAtMs: Long) = BetaStartupFailureRecoveryPolicy.DialogEvidence(
-        hwnd = 100L,
+    private fun dialog(firstSeenAtMs: Long, hwnd: Long = 100L) = BetaStartupFailureRecoveryPolicy.DialogEvidence(
+        hwnd = hwnd,
         title = "炉石传说: Hearthstone.exe - Application Error",
         body = "The exception Breakpoint (0x80000003)",
         hostPid = 1_536L,

@@ -340,6 +340,7 @@ internal object BetaScreenRecoveryService {
         }
         when (decision.action) {
             BetaStartupFailureRecoveryPolicy.Action.WAIT -> log.debug { write() }
+            BetaStartupFailureRecoveryPolicy.Action.ESCALATE -> log.error { write() }
             else -> log.warn { write() }
         }
         if (decision.attempt >= 5) {
@@ -362,8 +363,13 @@ internal object BetaScreenRecoveryService {
                 val terminalState = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER ||
                     GameUtil.isTerminalGameState()
                 val liveMatch = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD
+                val allowsPersistentDialog = decision.reason in setOf(
+                    "persistent-application-error-dialog-close",
+                    "persistent-application-error-dialog-hard-restart",
+                    "application-error-dialog-recovery-exhausted",
+                )
                 val exactDialogStillConfirmed = decision.currentApplicationErrorDialogHwnd?.let { hwnd ->
-                    isCurrentApplicationErrorDialogConfirmed(currentPid, hwnd)
+                    isCurrentApplicationErrorDialogConfirmed(currentPid, hwnd, allowsPersistentDialog)
                 } == true
                 if (!isStartupFailureGenerationCurrent(recoveryGeneration) || !WorkTimeListener.working ||
                     PauseStatus.isPause || BetaStartupFailureRecoveryDispatch.shouldBlockForGameState(
@@ -410,6 +416,31 @@ internal object BetaScreenRecoveryService {
                     restartStarterChain = {
                         startStarterChainForRecovery(recoveryGeneration, decision)
                     },
+                    dismissPersistentDialog = {
+                        val hwnd = decision.currentApplicationErrorDialogHwnd
+                        val confirmed = hwnd != null && isCurrentApplicationErrorDialogConfirmed(
+                            currentPid = currentPid,
+                            expectedHwnd = hwnd,
+                            allowDialogFromPreviousGameProcess = true,
+                        )
+                        val dismissed = confirmed &&
+                            WindowsApplicationErrorDialogProbe.dismissExactBreakpointDialog(hwnd!!)
+                        log.info {
+                            "BETA_STARTUP_RECOVERY_DIALOG_CLOSE result=${if (dismissed) "VERIFIED_CLOSED" else "STILL_PRESENT_OR_UNVERIFIED"} " +
+                                "dialog=${hwnd ?: "none"} pid=${currentPid ?: "none"}"
+                        }
+                        dismissed
+                    },
+                    escalate = {
+                        val reason = "beta-application-error-dialog-recovery-exhausted"
+                        PauseStatus.setAutomaticPause(true)
+                        log.error {
+                            "BETA_STARTUP_RECOVERY_ESCALATED action=AUTOMATIC_PAUSE " +
+                                "reason=$reason attempt=${decision.attempt} " +
+                                "dialog=${decision.currentApplicationErrorDialogHwnd ?: "none"} " +
+                                "watchdog=RETAINED resume=F1"
+                        }
+                    },
                 )
                 if (result != BetaStartupFailureRecoveryDispatch.Result.NO_ACTION) {
                     log.info {
@@ -430,13 +461,18 @@ internal object BetaScreenRecoveryService {
         }
     }
 
-    private fun isCurrentApplicationErrorDialogConfirmed(currentPid: Long?, expectedHwnd: Long): Boolean {
+    private fun isCurrentApplicationErrorDialogConfirmed(
+        currentPid: Long?,
+        expectedHwnd: Long,
+        allowDialogFromPreviousGameProcess: Boolean = false,
+    ): Boolean {
         if (currentPid == null) return false
         val process = ProcessHandle.of(currentPid).orElse(null) ?: return false
         if (!process.isAlive) return false
         val processStartedAt = process.info().startInstant().orElse(null)?.toEpochMilli() ?: return false
         val dialog = WindowsApplicationErrorDialogProbe.detect()?.asPolicyEvidence() ?: return false
-        if (dialog.hwnd != expectedHwnd || dialog.firstSeenAtMs < processStartedAt ||
+        if (dialog.hwnd != expectedHwnd ||
+            (!allowDialogFromPreviousGameProcess && dialog.firstSeenAtMs < processStartedAt) ||
             System.currentTimeMillis() - dialog.firstSeenAtMs <
             BetaStartupFailureRecoveryPolicy.APPLICATION_ERROR_CONFIRMATION_MS
         ) return false

@@ -4,7 +4,7 @@ package club.xiaojiawei.hsscript.status
 internal class BetaStartupFailureRecoveryPolicy(
     private val noProgressTimeoutMs: Long = DEFAULT_NO_PROGRESS_TIMEOUT_MS,
 ) {
-    enum class Action { WAIT, REBIND_WINDOW, RESTART_CLIENT, RESTART_STARTER_CHAIN }
+    enum class Action { WAIT, REBIND_WINDOW, RESTART_CLIENT, RESTART_STARTER_CHAIN, DISMISS_PERSISTENT_DIALOG, ESCALATE }
 
     data class DialogEvidence(
         val hwnd: Long,
@@ -47,16 +47,21 @@ internal class BetaStartupFailureRecoveryPolicy(
         const val MAX_RETRY_DELAY_MS = 300_000L
         const val MAX_POWER_LOG_PROGRESS_AGE_MS = 120_000L
         const val APPLICATION_ERROR_CONFIRMATION_MS = 3_000L
+        const val MAX_APPLICATION_ERROR_RECOVERY_ATTEMPTS = 4
         private const val MAX_BACKOFF_ATTEMPTS = 5
     }
 
     private var attempts = 0
     private var nextAttemptAtMs = 0L
+    private var applicationErrorAttempts = 0
+    private var lastApplicationErrorDialogHwnd: Long? = null
 
     @Synchronized
     fun reset() {
         attempts = 0
         nextAttemptAtMs = 0L
+        applicationErrorAttempts = 0
+        lastApplicationErrorDialogHwnd = null
     }
 
     @Synchronized
@@ -73,9 +78,14 @@ internal class BetaStartupFailureRecoveryPolicy(
         val dialog = snapshot.dialog
         if (dialog != null && snapshot.processAlive && snapshot.currentPid != null) {
             val startedAt = snapshot.processStartedAtMs
-            if (startedAt == null || dialog.firstSeenAtMs < startedAt ||
-                dialog.firstSeenAtMs > snapshot.nowMs
-            ) {
+            if (startedAt == null || dialog.firstSeenAtMs > snapshot.nowMs) {
+                return Decision(Action.WAIT, "stale-or-unattributed-error-dialog")
+            }
+            val persistedAcrossReplacement = dialog.firstSeenAtMs < startedAt &&
+                applicationErrorAttempts > 0 &&
+                dialog.hwnd == lastApplicationErrorDialogHwnd &&
+                snapshot.gameWindowMatchesPid
+            if (dialog.firstSeenAtMs < startedAt && !persistedAcrossReplacement) {
                 return Decision(Action.WAIT, "stale-or-unattributed-error-dialog")
             }
             if (snapshot.nowMs - dialog.firstSeenAtMs < APPLICATION_ERROR_CONFIRMATION_MS) {
@@ -89,12 +99,36 @@ internal class BetaStartupFailureRecoveryPolicy(
                     retryDelayMs = nextAttemptAtMs - snapshot.nowMs,
                 )
             }
-            val action = if (snapshot.gameWindowMatchesPid) Action.RESTART_CLIENT else
-                if (attempts == 0) Action.REBIND_WINDOW else Action.RESTART_STARTER_CHAIN
-            val reason = if (snapshot.gameWindowMatchesPid) "hearthstone-application-error-dialog"
-            else "application-error-dialog-game-window-unverified"
+            if (applicationErrorAttempts >= MAX_APPLICATION_ERROR_RECOVERY_ATTEMPTS) {
+                return Decision(
+                    action = Action.ESCALATE,
+                    reason = "application-error-dialog-recovery-exhausted",
+                    attempt = applicationErrorAttempts,
+                    currentApplicationErrorDialogHwnd = dialog.hwnd,
+                )
+            }
+            val action = when {
+                !snapshot.gameWindowMatchesPid ->
+                    if (applicationErrorAttempts == 0) Action.REBIND_WINDOW else Action.RESTART_STARTER_CHAIN
+                persistedAcrossReplacement && applicationErrorAttempts % 2 == 1 ->
+                    Action.DISMISS_PERSISTENT_DIALOG
+                else -> Action.RESTART_CLIENT
+            }
+            val reason = when (action) {
+                Action.DISMISS_PERSISTENT_DIALOG -> "persistent-application-error-dialog-close"
+                Action.RESTART_CLIENT -> if (persistedAcrossReplacement) {
+                    "persistent-application-error-dialog-hard-restart"
+                } else {
+                    "hearthstone-application-error-dialog"
+                }
+                Action.REBIND_WINDOW, Action.RESTART_STARTER_CHAIN ->
+                    "application-error-dialog-game-window-unverified"
+                else -> "application-error-dialog-recovery"
+            }
+            applicationErrorAttempts++
             attempts++
-            val delay = retryDelayMs(attempts)
+            lastApplicationErrorDialogHwnd = dialog.hwnd
+            val delay = retryDelayMs(applicationErrorAttempts)
             nextAttemptAtMs = snapshot.nowMs + delay
             return Decision(
                 action = action,
@@ -162,7 +196,16 @@ internal class BetaStartupFailureRecoveryPolicy(
 
 /** Side-effect boundary shared by live dispatch and offline verification. */
 internal object BetaStartupFailureRecoveryDispatch {
-    enum class Result { NO_ACTION, WINDOW_REBOUND, WINDOW_REBIND_FAILED, CLIENT_RESTARTED, STARTER_CHAIN_RESTARTED }
+    enum class Result {
+        NO_ACTION,
+        WINDOW_REBOUND,
+        WINDOW_REBIND_FAILED,
+        CLIENT_RESTARTED,
+        STARTER_CHAIN_RESTARTED,
+        PERSISTENT_DIALOG_DISMISSED,
+        PERSISTENT_DIALOG_DISMISS_FAILED,
+        ESCALATED,
+    }
 
     fun shouldBlockForGameState(
         terminalState: Boolean,
@@ -175,6 +218,8 @@ internal object BetaStartupFailureRecoveryDispatch {
         rebindWindow: () -> Boolean,
         restartClient: () -> Unit,
         restartStarterChain: () -> Unit,
+        dismissPersistentDialog: () -> Boolean = { false },
+        escalate: () -> Unit = {},
     ): Result = when (action) {
         BetaStartupFailureRecoveryPolicy.Action.WAIT -> Result.NO_ACTION
         BetaStartupFailureRecoveryPolicy.Action.REBIND_WINDOW ->
@@ -186,6 +231,13 @@ internal object BetaStartupFailureRecoveryDispatch {
         BetaStartupFailureRecoveryPolicy.Action.RESTART_STARTER_CHAIN -> {
             restartStarterChain()
             Result.STARTER_CHAIN_RESTARTED
+        }
+        BetaStartupFailureRecoveryPolicy.Action.DISMISS_PERSISTENT_DIALOG ->
+            if (dismissPersistentDialog()) Result.PERSISTENT_DIALOG_DISMISSED
+            else Result.PERSISTENT_DIALOG_DISMISS_FAILED
+        BetaStartupFailureRecoveryPolicy.Action.ESCALATE -> {
+            escalate()
+            Result.ESCALATED
         }
     }
 }

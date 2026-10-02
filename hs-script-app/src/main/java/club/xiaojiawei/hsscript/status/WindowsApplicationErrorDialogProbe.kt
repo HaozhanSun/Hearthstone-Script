@@ -1,5 +1,6 @@
 package club.xiaojiawei.hsscript.status
 
+import club.xiaojiawei.hsscript.dll.User32PostMessageDll
 import com.sun.jna.platform.win32.User32
 import com.sun.jna.platform.win32.WinDef
 import com.sun.jna.platform.win32.WinUser
@@ -85,6 +86,38 @@ internal object WindowsApplicationErrorDialogProbe {
         observe(candidates, nowMs)
     }.getOrNull()
 
+    /** Close only the exact Breakpoint modal, and report success only after its signature disappears. */
+    fun dismissExactBreakpointDialog(hwndValue: Long, timeoutMs: Long = 2_000L): Boolean = runCatching {
+        if (hwndValue == 0L) return@runCatching false
+        val hwnd = WinDef.HWND(Pointer(hwndValue))
+        if (!hasExactTargetSignature(hwnd)) return@runCatching true
+        val posted = User32PostMessageDll.INSTANCE.PostMessageW(
+            hwnd,
+            WM_CLOSE,
+            WinDef.WPARAM(0L),
+            WinDef.LPARAM(0L),
+        )
+        if (!posted && hasExactTargetSignature(hwnd)) return@runCatching false
+
+        val deadline = System.nanoTime() + timeoutMs.coerceAtLeast(0L) * 1_000_000L
+        while (System.nanoTime() < deadline) {
+            if (!hasExactTargetSignature(hwnd)) return@runCatching true
+            try {
+                Thread.sleep(50L)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return@runCatching false
+            }
+        }
+        !hasExactTargetSignature(hwnd)
+    }.getOrDefault(false)
+
+    private fun hasExactTargetSignature(hwnd: WinDef.HWND): Boolean =
+        User32.INSTANCE.IsWindow(hwnd) &&
+            windowClass(hwnd) == "#32770" &&
+            windowText(hwnd) in EXACT_CAPTIONS &&
+            childWindowText(hwnd).contains("0x80000003", ignoreCase = true)
+
     private fun childWindowText(parent: WinDef.HWND): String {
         val texts = mutableListOf<String>()
         User32.INSTANCE.EnumChildWindows(parent, WinUser.WNDENUMPROC { hwnd, _ ->
@@ -112,4 +145,6 @@ internal object WindowsApplicationErrorDialogProbe {
         "Hearthstone.exe - Application Error",
         "炉石传说: Hearthstone.exe - Application Error",
     )
+
+    private const val WM_CLOSE = 0x0010
 }
