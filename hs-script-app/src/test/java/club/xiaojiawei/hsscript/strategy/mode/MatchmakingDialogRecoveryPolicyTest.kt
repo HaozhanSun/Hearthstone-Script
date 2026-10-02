@@ -1,9 +1,19 @@
 package club.xiaojiawei.hsscript.strategy.mode
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import club.xiaojiawei.hsscript.ocr.OcrHealth
+import club.xiaojiawei.hsscript.ocr.OcrRecognition
+import club.xiaojiawei.hsscript.ocr.OcrProviderKind
+import club.xiaojiawei.hsscript.ocr.OcrProviderMode
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
+import club.xiaojiawei.hsscript.ocr.OcrTextBridge
+import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
+import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.ScreenStateRoiSelector
+import javax.imageio.ImageIO
 
 class MatchmakingDialogRecoveryPolicyTest {
     private val active = MatchmakingDialogRecoveryPolicy.Context(
@@ -38,6 +48,119 @@ class MatchmakingDialogRecoveryPolicyTest {
             MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
             StartGameErrorDialogClassifier.classify("", "", "确定"),
         )
+    }
+
+    @Test
+    fun `provided screenshot fixture selects and accepts only the exact confirm click`() {
+        val fixture = requireNotNull(
+            javaClass.getResourceAsStream("/offline-ocr/screen-recovery/start-game-error-dialog-over-deck-selection.png"),
+        ).use(ImageIO::read)
+        assertEquals(1919, fixture.width)
+        assertEquals(1079, fixture.height)
+
+        val transcript = mapOf(
+            ScreenStateRoiSelector.START_GAME_ERROR_TITLE_ROI to OcrRecognition("发生错误", 0.94),
+            ScreenStateRoiSelector.START_GAME_ERROR_BODY_ROI to
+                OcrRecognition("开始游戏时发生了错误请等待几分钟然后再试", 0.96),
+            ScreenStateRoiSelector.START_GAME_ERROR_CONFIRM_ROI to OcrRecognition("确定", 0.93),
+        )
+        val originalSettingsProvider = OcrRuntime.settingsProvider
+        val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
+        val originalProviderModeProvider = OcrRuntime.providerModeProvider
+        val observedRois = mutableListOf<String>()
+        val probe = try {
+            OcrRuntime.providerModeProvider = { OcrProviderMode.PADDLEX_ONLY }
+            OcrRuntime.settingsProvider = {
+                PaddleXOcrSettings(
+                    enabled = true,
+                    pythonExecutable = "offline-fixture",
+                    modulePath = "offline-fixture",
+                    device = "cpu",
+                    modelCachePath = "",
+                    timeoutMs = 4_000L,
+                )
+            }
+            OcrRuntime.paddleXBridgeFactory = {
+                object : OcrTextBridge {
+                    override fun recognize(image: java.awt.image.BufferedImage, desc: String): String =
+                        error("fixture should use confidence-aware OCR")
+
+                    override fun recognizeWithConfidence(
+                        image: java.awt.image.BufferedImage,
+                        desc: String,
+                        roi: String?,
+                        timeoutMs: Long?,
+                    ): OcrRecognition {
+                        assertEquals(4_000L, timeoutMs)
+                        return transcript.getValue(requireNotNull(roi))
+                    }
+
+                    override fun healthCheck(): OcrHealth =
+                        OcrHealth(true, OcrProviderKind.PADDLEX, "offline fixture")
+                }
+            }
+            ScreenStateRecovery.probeStartGameErrorDialogForImage(
+                image = fixture,
+                screenshot = "fixture:start-game-error-dialog-over-deck-selection.png",
+            ) { crop, roi ->
+                assertTrue(crop.width > 0 && crop.height > 0)
+                observedRois += roi
+                OcrRuntime.recognizeResult(
+                    image = crop,
+                    desc = "fixture-start-game-error-$roi",
+                    roi = roi,
+                    timeoutMs = 4_000L,
+                ) {
+                    error("PADDLEX_ONLY fixture must not fall back to host OCR")
+                }
+            }
+        } finally {
+            OcrRuntime.settingsProvider = originalSettingsProvider
+            OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
+            OcrRuntime.providerModeProvider = originalProviderModeProvider
+        }
+        assertEquals("PADDLEX", probe.provider)
+        assertEquals(MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE, probe.state)
+        assertEquals(
+            setOf(
+                ScreenStateRoiSelector.START_GAME_ERROR_TITLE_ROI,
+                ScreenStateRoiSelector.START_GAME_ERROR_BODY_ROI,
+                ScreenStateRoiSelector.START_GAME_ERROR_CONFIRM_ROI,
+            ),
+            observedRois.toSet(),
+        )
+
+        val decision = MatchmakingDialogRecoveryPolicy.decide(active, probe.state, 0, false)
+        assertEquals(MatchmakingDialogRecoveryPolicy.Action.CLICK_CONFIRM, decision.action)
+        var harnessAcceptedClicks = 0
+        val accepted = MatchmakingDialogRecoveryPolicy.dispatchConfirm(decision) {
+            harnessAcceptedClicks++
+            true
+        }
+        assertEquals(true, accepted)
+        assertEquals(1, harnessAcceptedClicks, "the test input adapter must accept one actual dispatch")
+    }
+
+    @Test
+    fun `low confidence and capture failure remain unknown and never dispatch confirm`() {
+        val lowConfidence = StartGameErrorDialogClassifier.classify(
+            title = "发生错误",
+            body = "开始游戏时发生了错误请等待几分钟然后再试",
+            confirm = "确定",
+            confidences = listOf(0.9, 0.9, 0.21),
+        )
+        assertEquals(MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN, lowConfidence)
+        val missingCapture = ScreenStateRecovery.probeStartGameErrorDialogForImage(
+            image = null,
+            recognize = { _, _ -> error("recognizer must not run without a screenshot") },
+        )
+        assertEquals(MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN, missingCapture.state)
+
+        var dispatched = false
+        val decision = MatchmakingDialogRecoveryPolicy.decide(active, lowConfidence, 0, false)
+        assertEquals(MatchmakingDialogRecoveryPolicy.Action.WAIT_AND_RETRY, decision.action)
+        assertEquals(null, MatchmakingDialogRecoveryPolicy.dispatchConfirm(decision) { dispatched = true; true })
+        assertFalse(dispatched)
     }
 
     @Test

@@ -457,7 +457,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                 )
                 log.info {
                     "MATCHMAKING_ERROR_DIALOG_PROBE trace=$traceId attempt=${attempts + 1} " +
-                        "state=${probe.state} reason=${probe.reason} action=${decision.action} " +
+                        "state=${probe.state} provider=${probe.provider} reason=${probe.reason} action=${decision.action} " +
                         "title=${probe.title.ifBlank { "<empty>" }} " +
                         "body=${probe.body.ifBlank { "<empty>" }} " +
                         "confirm=${probe.confirm.ifBlank { "<empty>" }} " +
@@ -469,7 +469,9 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                             recoveryTask.cancel(false)
                             return@LRunnable
                         }
-                        val accepted = MouseUtil.leftButtonClickForRecovery(ERROR_RECT.getCenterClickPos())
+                        val accepted = MatchmakingDialogRecoveryPolicy.dispatchConfirm(decision) {
+                            MouseUtil.leftButtonClickForRecovery(ERROR_RECT.getCenterClickPos())
+                        } ?: false
                         attempts++
                         priorClickSent = true
                         log.warn {

@@ -3,6 +3,7 @@ package club.xiaojiawei.hsscript.strategy.mode
 /** Pure admission policy for the exact Hearthstone start-game error dialog. */
 internal object MatchmakingDialogRecoveryPolicy {
     const val MAX_ATTEMPTS = 20
+    const val MIN_OCR_CONFIDENCE = 0.55
 
     enum class Probe { ERROR_DIALOG_VISIBLE, NO_ERROR_DIALOG, UNKNOWN }
     enum class Action { CLICK_CONFIRM, WAIT_AND_RETRY, CONFIRMED_DISMISSED, STOP_NOT_PRESENT, CANCEL, EXHAUSTED }
@@ -33,11 +34,26 @@ internal object MatchmakingDialogRecoveryPolicy {
             Probe.NO_ERROR_DIALOG -> error("handled above")
         }
     }
+
+    /** Dispatch exactly the positive confirm decision and return the input adapter's acceptance. */
+    fun dispatchConfirm(decision: Decision, clickConfirm: () -> Boolean): Boolean? =
+        if (decision.action == Action.CLICK_CONFIRM) clickConfirm() else null
 }
 
 /** Fail-closed text contract; generic errors and other dialogs are not clickable evidence. */
 internal object StartGameErrorDialogClassifier {
-    fun classify(title: String, body: String, confirm: String): MatchmakingDialogRecoveryPolicy.Probe {
+    fun classify(
+        title: String,
+        body: String,
+        confirm: String,
+        confidences: List<Double?> = emptyList(),
+    ): MatchmakingDialogRecoveryPolicy.Probe {
+        if (confidences.any { confidence ->
+                confidence != null && (!confidence.isFinite() || confidence < MatchmakingDialogRecoveryPolicy.MIN_OCR_CONFIDENCE)
+            }
+        ) {
+            return MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN
+        }
         val normalizedTitle = normalize(title)
         val normalizedBody = normalize(body)
         val normalizedConfirm = normalize(confirm)

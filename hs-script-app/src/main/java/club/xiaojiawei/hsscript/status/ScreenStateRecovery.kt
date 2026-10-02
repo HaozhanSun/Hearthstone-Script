@@ -7,6 +7,7 @@ import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
+import club.xiaojiawei.hsscript.ocr.OcrRecognition
 import club.xiaojiawei.hsscript.strategy.mode.HubModeStrategy
 import club.xiaojiawei.hsscript.strategy.mode.LoginModeStrategy
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingDialogRecoveryPolicy
@@ -64,6 +65,7 @@ object ScreenStateRecovery {
     private const val OCR_MAX_WIDTH = 1280
     private const val RESULT_CONTINUE_GRAY_LIGHT_MIN = 0.025
     private const val RESULT_BANNER_LOW_SATURATION_MIN = 0.30
+    private const val MATCHMAKING_DIALOG_OCR_TIMEOUT_MS = 4_000L
     private const val RECONNECT_RETRY_INTERVAL_MS = 60_000L
     private const val RECOVERY_POSTCHECK_TIMEOUT_MS = 3_000L
     private const val RECOVERY_POSTCHECK_POLL_MS = 300L
@@ -160,6 +162,7 @@ object ScreenStateRecovery {
         val body: String = "",
         val confirm: String = "",
         val screenshot: String? = null,
+        val provider: String = "UNKNOWN",
         val reason: String,
     )
 
@@ -448,36 +451,80 @@ object ScreenStateRecovery {
             )
 
         return runCatching {
-            val values = ScreenStateRoiSelector
-                .selectStartGameError(capture.image.width, capture.image.height)
-                .associate { roi ->
+            probeStartGameErrorDialogForImage(capture.image, capture.file?.absolutePath) { roiImage, roiName ->
+                OcrRuntime.recognizeResult(
+                    image = roiImage,
+                    desc = "matchmaking-start-game-error-$roiName",
+                    roi = roiName,
+                    timeoutMs = MATCHMAKING_DIALOG_OCR_TIMEOUT_MS,
+                ) {
+                    // AUTO uses the selected PaddleX provider first and its established legacy fallback.
+                    // The compatibility OCR path remains available for LEGACY_ONLY mode and fallback.
+                    ocrScreenRoi(roiImage, tessData, targeted = true)
+                }.also { result ->
                     log.info {
-                        "MATCHMAKING_ERROR_DIALOG_OCR_ROI name=${roi.name} " +
-                            "x=${roi.bounds.x} y=${roi.bounds.y} " +
-                            "w=${roi.bounds.width} h=${roi.bounds.height} space=capture-local"
+                        "MATCHMAKING_ERROR_DIALOG_OCR_RESULT name=$roiName " +
+                            "provider=${OcrRuntime.lastProviderUsed()} confidence=${result.confidence ?: "unavailable"} " +
+                            "chars=${result.text.length}"
                     }
-                    roi.name to ocrScreenRoi(crop(capture.image, roi.bounds), tessData, targeted = true)
                 }
-            val title = values[ScreenStateRoiSelector.START_GAME_ERROR_TITLE_ROI].orEmpty()
-            val body = values[ScreenStateRoiSelector.START_GAME_ERROR_BODY_ROI].orEmpty()
-            val confirm = values[ScreenStateRoiSelector.START_GAME_ERROR_CONFIRM_ROI].orEmpty()
-            val state = StartGameErrorDialogClassifier.classify(title, body, confirm)
-            StartGameErrorDialogProbe(
-                state = state,
-                title = title,
-                body = body,
-                confirm = confirm,
-                screenshot = capture.file?.absolutePath,
-                reason = "ocr-complete",
-            )
+            }
         }.getOrElse { error ->
             log.warn(error) { "MATCHMAKING_ERROR_DIALOG_OCR_FAILED" }
             StartGameErrorDialogProbe(
                 MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
                 screenshot = capture.file?.absolutePath,
+                provider = OcrRuntime.lastProviderUsed().name,
                 reason = "ocr-failed-${error.javaClass.simpleName}",
             )
         }
+    }
+
+    /** Shared screenshot-to-contract path for production and deterministic offline fixture tests. */
+    internal fun probeStartGameErrorDialogForImage(
+        image: BufferedImage?,
+        screenshot: String? = null,
+        recognize: (BufferedImage, String) -> OcrRecognition,
+    ): StartGameErrorDialogProbe {
+        if (image == null) {
+            return StartGameErrorDialogProbe(
+                state = MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+                screenshot = screenshot,
+                reason = "capture-unavailable",
+            )
+        }
+        val values = ScreenStateRoiSelector
+            .selectStartGameError(image.width, image.height)
+            .associate { roi ->
+                log.info {
+                    "MATCHMAKING_ERROR_DIALOG_OCR_ROI name=${roi.name} " +
+                        "x=${roi.bounds.x} y=${roi.bounds.y} " +
+                        "w=${roi.bounds.width} h=${roi.bounds.height} space=capture-local"
+                }
+                roi.name to recognize(crop(image, roi.bounds), roi.name)
+            }
+        val title = values[ScreenStateRoiSelector.START_GAME_ERROR_TITLE_ROI]
+        val body = values[ScreenStateRoiSelector.START_GAME_ERROR_BODY_ROI]
+        val confirm = values[ScreenStateRoiSelector.START_GAME_ERROR_CONFIRM_ROI]
+        val state = StartGameErrorDialogClassifier.classify(
+            title = title?.text.orEmpty(),
+            body = body?.text.orEmpty(),
+            confirm = confirm?.text.orEmpty(),
+            confidences = listOf(title?.confidence, body?.confidence, confirm?.confidence),
+        )
+        return StartGameErrorDialogProbe(
+            state = state,
+            title = title?.text.orEmpty(),
+            body = body?.text.orEmpty(),
+            confirm = confirm?.text.orEmpty(),
+            screenshot = screenshot,
+            provider = OcrRuntime.lastProviderUsed().name,
+            reason = if (state == MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN) {
+                "ocr-unverified-or-low-confidence"
+            } else {
+                "ocr-complete"
+            },
+        )
     }
 
     private fun captureScreen(
