@@ -17,7 +17,11 @@ internal object MatchmakingGuardPolicy {
     }
 
     /** Rank is deliberately not part of the queue gate; rank is checked in Mulligan. */
-    fun runtimeAllowsInput(working: Boolean, paused: Boolean): Boolean = working && !paused
+    fun runtimeAllowsInput(
+        working: Boolean,
+        paused: Boolean,
+        mandatoryRankSurrenderPending: Boolean = false,
+    ): Boolean = working && !paused && !mandatoryRankSurrenderPending
 
     fun decide(evidence: LiveGameEvidence): Decision =
         if (evidence.inWar ||

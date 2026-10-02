@@ -259,20 +259,29 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
     fun startMatching() {
         val traceId = matchmakingTraceSequence.incrementAndGet()
         log.info { "开始匹配 trace=$traceId" }
+        val mandatoryRankSurrenderPending =
+            club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending()
         val dispatchMatchmaking = MatchmakingGuardPolicy.runtimeAllowsInput(
             working = WorkTimeListener.working,
             paused = PauseStatus.isPause,
+            mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
         )
         log.info {
             "MATCHMAKING_GATE stage=PRE_MATCH rankPolicy=POST_MULLIGAN " +
                 "mode=${Mode.currMode?.name ?: "NONE"} inWar=${WarEx.inWar} " +
                 "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} " +
                 "decision=${if (dispatchMatchmaking) "ALLOW" else "DENY"} " +
-                "reason=${if (dispatchMatchmaking) "runtime-active" else "runtime-not-active"}"
+                "reason=${when {
+                    dispatchMatchmaking -> "runtime-active"
+                    mandatoryRankSurrenderPending -> "mandatory-rank-surrender-pending"
+                    else -> "runtime-not-active"
+                }}"
         }
         if (!dispatchMatchmaking) {
             log.warn {
-                "MATCHMAKING_BLOCKED trace=$traceId reason=runtime-not-active action=NO_QUEUE_INPUT"
+                "MATCHMAKING_BLOCKED trace=$traceId " +
+                    "reason=${if (mandatoryRankSurrenderPending) "mandatory-rank-surrender-pending" else "runtime-not-active"} " +
+                    "action=NO_QUEUE_INPUT"
             }
             return
         }
