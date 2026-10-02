@@ -29,6 +29,7 @@ enum class ScreenWatchdogKind {
     SETTINGS,
     SURRENDER_CONFIRMATION,
     GAMEPLAY,
+    MULLIGAN,
     UNKNOWN,
     CAPTURE_FAILED,
 }
@@ -201,9 +202,18 @@ object ScreenWatchdog {
         // an active player turn and the fresh image has both the board and
         // two-hero gameplay composition. OCR-recognized terminal/menu/dialog
         // states always take precedence over this visual fallback.
-        val kind = classifyForSurrender(ocrKind, activeGameplay, image)
-        val visualGameplayFallback = ocrKind == ScreenWatchdogKind.UNKNOWN && kind == ScreenWatchdogKind.GAMEPLAY
-        val reason = if (visualGameplayFallback) "authoritative-gameplay-and-fresh-board-visual" else "ocr-classified"
+        val kind = classifyForSurrender(ocrKind, state, image)
+        val visualGameplayFallback = ocrKind == ScreenWatchdogKind.UNKNOWN &&
+            kind in setOf(ScreenWatchdogKind.GAMEPLAY, ScreenWatchdogKind.MULLIGAN)
+        val reason = when (kind) {
+            ScreenWatchdogKind.MULLIGAN -> "authoritative-mulligan-input-and-fresh-mulligan-visual"
+            ScreenWatchdogKind.GAMEPLAY -> if (visualGameplayFallback) {
+                "authoritative-gameplay-and-fresh-board-visual"
+            } else {
+                "ocr-classified"
+            }
+            else -> "ocr-classified"
+        }
         val action = decide(kind, activeGameplay)
         log.warn {
             "SCREEN_WATCHDOG_OCR runId=$runId provider=$providerUsed kind=$kind action=$action " +
@@ -236,18 +246,47 @@ object ScreenWatchdog {
         ocrText: String,
         state: String,
         image: BufferedImage,
-    ): ScreenWatchdogKind = classifyForSurrender(classify(ocrText), isAuthoritativeActiveGameplay(state), image)
+    ): ScreenWatchdogKind = classifyForSurrender(classify(ocrText), state, image)
 
     private fun classifyForSurrender(
         ocrKind: ScreenWatchdogKind,
-        activeGameplay: Boolean,
+        state: String,
         image: BufferedImage,
-    ): ScreenWatchdogKind = if (
-        ocrKind == ScreenWatchdogKind.UNKNOWN && activeGameplay && hasActiveGameplayVisual(image)
-    ) {
-        ScreenWatchdogKind.GAMEPLAY
-    } else {
-        ocrKind
+    ): ScreenWatchdogKind {
+        if (ocrKind != ScreenWatchdogKind.UNKNOWN) return ocrKind
+        if (isAuthoritativeActiveGameplay(state) && hasActiveGameplayVisual(image)) {
+            return ScreenWatchdogKind.GAMEPLAY
+        }
+        if (isAuthoritativeMulliganInput(state) && hasMulliganVisual(image)) {
+            return ScreenWatchdogKind.MULLIGAN
+        }
+        return ocrKind
+    }
+
+    private fun isAuthoritativeMulliganInput(state: String): Boolean {
+        val fields = state.lowercase(Locale.ROOT)
+            .split('|', ';', ' ', ',')
+            .filter { it.isNotBlank() }
+            .toSet()
+        return fields.contains("mode=gameplay") &&
+            fields.contains("inwar=true") &&
+            fields.contains("warphase=replace_card") &&
+            fields.contains("mymulliganinput=true")
+    }
+
+    internal fun hasMulliganVisualForTest(image: BufferedImage): Boolean = hasMulliganVisual(image)
+
+    private fun hasMulliganVisual(image: BufferedImage): Boolean {
+        if (image.width < 800 || image.height < 450) return false
+        val aspect = image.width.toDouble() / image.height
+        if (aspect !in 1.55..1.90) return false
+        // Require the distinctive start-hand banner, a vivid row of cards,
+        // and the local hero portrait; phase evidence alone never clicks.
+        val banner = colorRatios(image, 0.35, 0.09, 0.66, 0.24)
+        val hand = colorRatios(image, 0.20, 0.30, 0.80, 0.68)
+        val hero = colorRatios(image, 0.455, 0.68, 0.545, 0.88)
+        return banner.goldRatio >= 0.025 && banner.vividRatio >= 0.10 &&
+            hand.vividRatio >= 0.24 && hero.vividRatio >= 0.12
     }
 
     private fun hasActiveGameplayVisual(image: BufferedImage): Boolean {
@@ -264,7 +303,7 @@ object ScreenWatchdog {
             playerHero.vividRatio >= 0.12
     }
 
-    private data class RegionColorRatios(val boardRatio: Double, val vividRatio: Double)
+    private data class RegionColorRatios(val boardRatio: Double, val vividRatio: Double, val goldRatio: Double)
 
     private fun colorRatios(
         image: BufferedImage,
@@ -279,6 +318,7 @@ object ScreenWatchdog {
         val y1 = (image.height * bottom).toInt().coerceIn(y0, image.height)
         var boardPixels = 0
         var vividPixels = 0
+        var goldPixels = 0
         var samples = 0
         var y = y0
         while (y < y1) {
@@ -296,15 +336,17 @@ object ScreenWatchdog {
                     boardPixels++
                 }
                 if (maximum >= 90 && maximum - minimum >= 45) vividPixels++
+                if (red >= 130 && green >= 75 && red > green * 1.12 && green > blue * 1.15) goldPixels++
                 samples++
                 x += 3
             }
             y += 3
         }
-        if (samples == 0) return RegionColorRatios(0.0, 0.0)
+        if (samples == 0) return RegionColorRatios(0.0, 0.0, 0.0)
         return RegionColorRatios(
             boardRatio = boardPixels.toDouble() / samples,
             vividRatio = vividPixels.toDouble() / samples,
+            goldRatio = goldPixels.toDouble() / samples,
         )
     }
 
@@ -372,6 +414,7 @@ object ScreenWatchdog {
         ScreenWatchdogKind.MATCHMAKING -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MATCHMAKING
         ScreenWatchdogKind.MAIN_MENU -> ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MAIN_MENU
         ScreenWatchdogKind.GAMEPLAY -> ScreenWatchdogRecoveryAction.CONTINUE_ACTION
+        ScreenWatchdogKind.MULLIGAN -> ScreenWatchdogRecoveryAction.CONTINUE_ACTION
         ScreenWatchdogKind.SETTINGS,
         ScreenWatchdogKind.SURRENDER_CONFIRMATION,
         ScreenWatchdogKind.UNKNOWN,

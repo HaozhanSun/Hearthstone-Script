@@ -23,6 +23,7 @@ internal object MandatoryRankSurrenderRecoveryPolicy {
 
     fun decide(screen: ScreenWatchdogKind): Decision = when (screen) {
         ScreenWatchdogKind.GAMEPLAY -> Decision(Action.CLICK_SETTINGS, "confirmed-gameplay")
+        ScreenWatchdogKind.MULLIGAN -> Decision(Action.CLICK_SETTINGS, "confirmed-mulligan-with-rank-deny")
         ScreenWatchdogKind.SETTINGS -> Decision(Action.CLICK_SURRENDER, "confirmed-settings-with-surrender")
         ScreenWatchdogKind.SURRENDER_CONFIRMATION ->
             Decision(Action.CLICK_CONFIRMATION, "confirmed-surrender-dialog")

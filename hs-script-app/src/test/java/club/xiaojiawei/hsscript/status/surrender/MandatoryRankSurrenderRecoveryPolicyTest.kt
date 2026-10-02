@@ -130,4 +130,70 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `rank six confirmed mulligan image can only open settings and keeps normal actions blocked`() {
+        val image = ImageIO.read(
+            requireNotNull(javaClass.getResourceAsStream("/club/xiaojiawei/hsscript/status/surrender/rank6-live-mulligan-unknown-ocr.png")),
+        )
+        val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
+
+        assertTrue(ScreenWatchdog.hasMulliganVisualForTest(image))
+        val screen = ScreenWatchdog.classifyForSurrenderForTest("unreadable mulligan labels", state, image)
+        assertEquals(ScreenWatchdogKind.MULLIGAN, screen)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS,
+            MandatoryRankSurrenderRecoveryPolicy.decide(screen).action,
+        )
+
+        val capability = MandatoryRankSurrenderGuard.begin()
+        assertTrue(
+            ActionDispatchGate.allowForState(
+                action = "surrender.retry.open-settings",
+                paused = false,
+                working = true,
+                mandatoryRankSurrenderPending = true,
+                recoveryCapabilityValid = MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(capability),
+            ),
+        )
+        assertFalse(
+            ActionDispatchGate.allowForState(
+                action = "strategy.mulligan.replace-card",
+                paused = false,
+                working = true,
+                mandatoryRankSurrenderPending = true,
+                recoveryCapabilityValid = false,
+            ),
+        )
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY,
+            MandatoryRankSurrenderRecoveryPolicy.decide(ScreenWatchdogKind.UNKNOWN).action,
+        )
+    }
+
+    @Test
+    fun `mulligan phase without confirmed local input or positive visual remains fail closed`() {
+        val image = ImageIO.read(
+            requireNotNull(javaClass.getResourceAsStream("/club/xiaojiawei/hsscript/status/surrender/rank6-live-mulligan-unknown-ocr.png")),
+        )
+        val phaseOnly = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=false"
+        val confirmedButNoImage = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
+
+        assertEquals(
+            ScreenWatchdogKind.UNKNOWN,
+            ScreenWatchdog.classifyForSurrenderForTest("unreadable", phaseOnly, image),
+        )
+        assertEquals(
+            ScreenWatchdogKind.UNKNOWN,
+            ScreenWatchdog.classifyForSurrenderForTest(
+                "unreadable",
+                confirmedButNoImage,
+                BufferedImage(1280, 720, BufferedImage.TYPE_INT_RGB),
+            ),
+        )
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY,
+            MandatoryRankSurrenderRecoveryPolicy.decide(ScreenWatchdogKind.UNKNOWN).action,
+        )
+    }
 }

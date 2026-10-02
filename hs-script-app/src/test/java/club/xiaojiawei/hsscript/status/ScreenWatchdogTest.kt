@@ -237,6 +237,39 @@ class ScreenWatchdogTest {
     }
 
     @Test
+    fun `screen probes remain cooldown bounded after retry threshold`() {
+        ScreenWatchdog.resetTimingForTest()
+        val first = ScreenWatchdog.shouldInspect(
+            startedAt = 0L,
+            attempts = 3,
+            now = 100_000L,
+            stuckMs = 30_000L,
+            maxRetries = 3,
+            cooldownMs = 1_000L,
+        )
+        val withinCooldown = ScreenWatchdog.shouldInspect(
+            startedAt = 0L,
+            attempts = 30,
+            now = 100_500L,
+            stuckMs = 30_000L,
+            maxRetries = 3,
+            cooldownMs = 1_000L,
+        )
+        val afterCooldown = ScreenWatchdog.shouldInspect(
+            startedAt = 0L,
+            attempts = 30,
+            now = 101_001L,
+            stuckMs = 30_000L,
+            maxRetries = 3,
+            cooldownMs = 1_000L,
+        )
+
+        assertTrue(first.shouldInspect)
+        assertFalse(withinCooldown.shouldInspect)
+        assertTrue(afterCooldown.shouldInspect)
+    }
+
+    @Test
     fun `watchdog uses local OCR even when PaddleX is selected`() {
         OcrRuntime.providerModeProvider = { OcrProviderMode.PADDLEX_ONLY }
 

@@ -28,6 +28,7 @@ import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderRecoveryPolicy
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.strategy.phase.GameOverPhaseStrategy
+import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil.CHOOSE_ONE_RECTS
 import club.xiaojiawei.hsscript.utils.SystemUtil.delay
 import club.xiaojiawei.hsscriptbase.bean.LRunnable
@@ -919,6 +920,7 @@ object GameUtil {
                         }
                         val state = "mode=${Mode.currMode?.name ?: "NONE"}|inWar=${WarEx.inWar}|" +
                             "warPhase=${WarEx.war.currentPhase.name}|myTurn=${WarEx.war.isMyTurn}|" +
+                            "myMulliganInput=${ReplaceCardPhaseStrategy.isRankInspectionReady()}|" +
                             "warCount=${WarEx.warCount}"
                         val observation = ScreenWatchdog.inspectForSurrender(
                             state = state,
