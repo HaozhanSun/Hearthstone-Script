@@ -38,6 +38,7 @@ internal class BetaStartupFailureRecoveryPolicy(
         val reason: String,
         val attempt: Int = 0,
         val retryDelayMs: Long = 0L,
+        val currentApplicationErrorDialogHwnd: Long? = null,
     )
 
     companion object {
@@ -45,6 +46,7 @@ internal class BetaStartupFailureRecoveryPolicy(
         const val INITIAL_RETRY_DELAY_MS = 15_000L
         const val MAX_RETRY_DELAY_MS = 300_000L
         const val MAX_POWER_LOG_PROGRESS_AGE_MS = 120_000L
+        const val APPLICATION_ERROR_CONFIRMATION_MS = 3_000L
         private const val MAX_BACKOFF_ATTEMPTS = 5
     }
 
@@ -61,6 +63,48 @@ internal class BetaStartupFailureRecoveryPolicy(
     fun observe(snapshot: Snapshot): Decision {
         if (!snapshot.working || snapshot.paused) return Decision(Action.WAIT, "not-working-or-paused")
         if (snapshot.terminalState) return Decision(Action.WAIT, "terminal-state-priority")
+
+        // An exact native crash dialog correlated by its observation time and
+        // the independently verified Hearthstone HWND is stronger evidence
+        // than startup grace or a Power.log written before the dialog. Windows
+        // may host the dialog under csrss/WerFault, so its own HWND PID is not
+        // the game-process identity. This can override stale in-memory live
+        // match state, but never authoritative terminal/result evidence.
+        val dialog = snapshot.dialog
+        if (dialog != null && snapshot.processAlive && snapshot.currentPid != null) {
+            val startedAt = snapshot.processStartedAtMs
+            if (startedAt == null || dialog.firstSeenAtMs < startedAt ||
+                dialog.firstSeenAtMs > snapshot.nowMs
+            ) {
+                return Decision(Action.WAIT, "stale-or-unattributed-error-dialog")
+            }
+            if (snapshot.nowMs - dialog.firstSeenAtMs < APPLICATION_ERROR_CONFIRMATION_MS) {
+                return Decision(Action.WAIT, "application-error-dialog-confirmation-window")
+            }
+            if (snapshot.nowMs < nextAttemptAtMs) {
+                return Decision(
+                    Action.WAIT,
+                    "paced-retry-backoff",
+                    attempt = attempts,
+                    retryDelayMs = nextAttemptAtMs - snapshot.nowMs,
+                )
+            }
+            val action = if (snapshot.gameWindowMatchesPid) Action.RESTART_CLIENT else
+                if (attempts == 0) Action.REBIND_WINDOW else Action.RESTART_STARTER_CHAIN
+            val reason = if (snapshot.gameWindowMatchesPid) "hearthstone-application-error-dialog"
+            else "application-error-dialog-game-window-unverified"
+            attempts++
+            val delay = retryDelayMs(attempts)
+            nextAttemptAtMs = snapshot.nowMs + delay
+            return Decision(
+                action = action,
+                reason = reason,
+                attempt = attempts,
+                retryDelayMs = delay,
+                currentApplicationErrorDialogHwnd = dialog.hwnd.takeIf { snapshot.gameWindowMatchesPid },
+            )
+        }
+
         if (snapshot.liveMatch) return Decision(Action.WAIT, "authoritative-live-match-priority")
 
         val currentLogRecentlyUpdated = snapshot.powerLogIsCurrentSession && snapshot.powerLogLength > 0L &&
@@ -97,20 +141,7 @@ internal class BetaStartupFailureRecoveryPolicy(
                 reason = "game-process-missing-retry"
             }
         } else {
-            val dialog = snapshot.dialog
-            if (dialog != null) {
-                val startedAt = snapshot.processStartedAtMs
-                if (startedAt == null || dialog.firstSeenAtMs < startedAt) {
-                    return Decision(Action.WAIT, "stale-or-unattributed-error-dialog")
-                }
-                if (!snapshot.gameWindowMatchesPid) {
-                    action = if (attempts == 0) Action.REBIND_WINDOW else Action.RESTART_STARTER_CHAIN
-                    reason = "application-error-dialog-game-window-unverified"
-                } else {
-                    action = Action.RESTART_CLIENT
-                    reason = "hearthstone-application-error-dialog"
-                }
-            } else if (!snapshot.gameWindowMatchesPid) {
+            if (!snapshot.gameWindowMatchesPid) {
                 action = if (attempts == 0) Action.REBIND_WINDOW else Action.RESTART_STARTER_CHAIN
                 reason = "game-window-unavailable"
             } else {
@@ -132,6 +163,12 @@ internal class BetaStartupFailureRecoveryPolicy(
 /** Side-effect boundary shared by live dispatch and offline verification. */
 internal object BetaStartupFailureRecoveryDispatch {
     enum class Result { NO_ACTION, WINDOW_REBOUND, WINDOW_REBIND_FAILED, CLIENT_RESTARTED, STARTER_CHAIN_RESTARTED }
+
+    fun shouldBlockForGameState(
+        terminalState: Boolean,
+        liveMatch: Boolean,
+        currentApplicationErrorDialogConfirmed: Boolean,
+    ): Boolean = terminalState || (liveMatch && !currentApplicationErrorDialogConfirmed)
 
     fun dispatch(
         action: BetaStartupFailureRecoveryPolicy.Action,

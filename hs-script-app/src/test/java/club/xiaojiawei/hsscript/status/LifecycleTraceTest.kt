@@ -2,9 +2,12 @@ package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.utils.ConfigUtil
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class LifecycleTraceTest {
 
@@ -49,5 +52,23 @@ class LifecycleTraceTest {
         assertEquals(3_000L, BetaScreenRecoveryService.startupRecoveryGraceRemainingMs(now))
         assertEquals(0L, BetaScreenRecoveryService.startupRecoveryGraceRemainingMs(now + 3_000L))
         assertEquals(0L, BetaScreenRecoveryService.startupRecoveryGraceRemainingMs(now + 30_000L))
+    }
+
+    @Test
+    fun lifecycleStartSchedulesTheAlwaysOnBetaFailureMonitorWithOptionalExtensionsDisabled() {
+        assertEquals("beta", BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL))
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
+        BetaScreenRecoveryService.onFeatureChanged(false)
+        LifecycleTrace.stop("offline-test-setup")
+
+        try {
+            LifecycleTrace.start()
+            assertTrue(
+                BetaScreenRecoveryService.startupFailureMonitorScheduledForTest(),
+                "normal LifecycleTrace.start must schedule the Beta startup-failure monitor even when optional extensions are off",
+            )
+        } finally {
+            LifecycleTrace.stop("offline-test-cleanup")
+        }
     }
 }

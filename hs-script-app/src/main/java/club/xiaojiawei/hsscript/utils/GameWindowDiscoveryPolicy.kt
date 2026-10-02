@@ -19,6 +19,9 @@ internal data class GameWindowCandidate(
  * visible, and owned by a live process whose executable is Hearthstone.exe.
  */
 internal object GameWindowDiscoveryPolicy {
+    fun belongsToProcess(ownerPid: Long, expectedPid: Long): Boolean =
+        ownerPid > 0L && expectedPid > 0L && ownerPid == expectedPid
+
     /** Prefer the verified HWND's process when multiple Hearthstone clients exist. */
     fun selectDiagnosticPid(windowOwnerPid: Long?, discoveredProcessPids: List<Long>): Long? {
         val candidates = discoveredProcessPids.filter { it > 0L }

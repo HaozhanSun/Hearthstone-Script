@@ -116,6 +116,10 @@ object GameUtil {
         )
     }
 
+    internal fun isVerifiedCurrentGameWindow(hwnd: WinDef.HWND?, expectedPid: Long): Boolean =
+        hwnd != null && isVerifiedCurrentGameWindow(hwnd) &&
+            GameWindowDiscoveryPolicy.belongsToProcess(windowProcessId(hwnd).toLong(), expectedPid)
+
     internal fun isSurrenderStateConfirmed(mode: ModeEnum?, inWar: Boolean): Boolean =
         SurrenderPolicy.hasConfirmedGameState(mode, inWar)
 

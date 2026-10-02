@@ -50,6 +50,13 @@ class GameWindowDiscoveryPolicyTest {
     }
 
     @Test
+    fun `verified game HWND must belong to the exact diagnostic PID`() {
+        assertTrue(GameWindowDiscoveryPolicy.belongsToProcess(ownerPid = 46_112L, expectedPid = 46_112L))
+        assertFalse(GameWindowDiscoveryPolicy.belongsToProcess(ownerPid = 46_112L, expectedPid = 50_912L))
+        assertFalse(GameWindowDiscoveryPolicy.belongsToProcess(ownerPid = 0L, expectedPid = 46_112L))
+    }
+
+    @Test
     fun `rejects stale invalid hidden zero pid and foreign process windows`() {
         val rejected = listOf(
             candidate(handle = 0L),
