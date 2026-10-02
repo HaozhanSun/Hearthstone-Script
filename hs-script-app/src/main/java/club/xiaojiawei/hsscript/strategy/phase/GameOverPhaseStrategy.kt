@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
+import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil.addGameEndTask
 import club.xiaojiawei.hsscript.utils.GameResultScreenshot
@@ -110,7 +111,11 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         // Power.log has already proven the terminal state, reset the stale
         // in-war model here and let the caller use its bounded, postchecked
         // page dismissal path instead of the continuous generic click task.
-        if (kind != ScreenWatchdogKind.RESULT) addGameEndTask()
+        if (kind != ScreenWatchdogKind.RESULT) {
+            addGameEndTask(
+                MandatoryRankSurrenderGuard.authorizeTerminalCleanup("SCREEN_TERMINAL"),
+            )
+        }
         WarEx.reset()
         return true
     }
@@ -344,7 +349,10 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         }
         val accessFile = PowerLogListener.logFile
         accessFile?.seek(accessFile.length())
-        addGameEndTask()
+        val terminalCleanupCapability = if (authoritativeTerminal != null) {
+            MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL")
+        } else null
+        addGameEndTask(terminalCleanupCapability)
         WarEx.reset()
         if (System.getProperty("hs.script.e2e") == "true" &&
             E2ETrace.resultRecorded &&

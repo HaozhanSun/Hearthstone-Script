@@ -480,11 +480,15 @@ object MouseUtil {
      * proof that Hearthstone consumed the click.  Keep this method bounded
      * and require the game to be the verified foreground window first.
      */
-    internal fun leftButtonClickForRecovery(pos: Point): Boolean {
-        if (!ActionDispatchGate.allow("recovery.left")) return false
+    internal fun leftButtonClickForRecovery(
+        pos: Point,
+        terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
+    ): Boolean {
+        val dispatchAction = if (terminalCleanupCapability == null) "recovery.left" else "terminal-result.dismiss"
+        if (!ActionDispatchGate.allow(dispatchAction, terminalCleanupCapability = terminalCleanupCapability)) return false
         val hwnd = ScriptStatus.gameHWND
         if (!e2eInputEnabled() || hwnd == null) {
-            leftButtonClick(pos, hwnd)
+            leftButtonClick(pos, hwnd, terminalCleanupCapability = terminalCleanupCapability)
             return true
         }
         if (!hwndIsValid(hwnd) ||
@@ -510,7 +514,7 @@ object MouseUtil {
         }
         try {
             synchronized(e2eRobotLock) {
-                if (!ActionDispatchGate.allow("recovery.left.locked")) return false
+                if (!ActionDispatchGate.allow(dispatchAction, terminalCleanupCapability = terminalCleanupCapability)) return false
                 val focused = forceFocusWindowForRecovery(hwnd)
                 if (!focused) {
                     log.warn {
@@ -980,9 +984,19 @@ object MouseUtil {
         hwnd: HWND?,
         mouseMode: Int = effectiveMouseMode(),
         recoveryCapability: MandatoryRankSurrenderGuard.RecoveryCapability? = null,
+        terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
     ) {
-        val dispatchAction = if (recoveryCapability != null) "rank-surrender.mouse.left" else "mouse.left"
-        if (!ActionDispatchGate.allow(dispatchAction, recoveryCapability)) return
+        val dispatchAction = when {
+            terminalCleanupCapability != null -> "terminal-result.dismiss"
+            recoveryCapability != null -> "rank-surrender.mouse.left"
+            else -> "mouse.left"
+        }
+        if (!ActionDispatchGate.allow(
+                dispatchAction,
+                recoveryCapability,
+                terminalCleanupCapability,
+            )
+        ) return
         val environmentValid = validateEnv(hwnd)
         if (e2eInputEnabled()) {
                 log.info {
@@ -1028,12 +1042,22 @@ object MouseUtil {
                 return
             }
             try {
-                if (!ActionDispatchGate.allow("$dispatchAction.locked", recoveryCapability)) return
+                if (!ActionDispatchGate.allow(
+                        dispatchAction,
+                        recoveryCapability,
+                        terminalCleanupCapability,
+                    )
+                ) return
                 if (!WorkTimeListener.working && !ScriptStatus.testMode) return
 
                 if (e2eNativeClickEnabled() && hwnd != null) {
                     try {
-                        if (!ActionDispatchGate.allow("$dispatchAction.before-sendinput", recoveryCapability)) return
+                        if (!ActionDispatchGate.allow(
+                                dispatchAction,
+                                recoveryCapability,
+                                terminalCleanupCapability,
+                            )
+                        ) return
                         val foregroundFocused = focusE2EWindow(hwnd)
                         log.info {
                             "E2E_INPUT_SENDINPUT_FOREGROUND hwnd=$hwnd confirmed=$foregroundFocused"
@@ -1054,7 +1078,12 @@ object MouseUtil {
                         if (prevPoint != pos) {
                             moveNativeAlongCurve(prevPoint, pos, hwnd, mouseMode)
                         }
-                        if (!ActionDispatchGate.allow("$dispatchAction.before-sendinput-click", recoveryCapability)) return
+                        if (!ActionDispatchGate.allow(
+                                dispatchAction,
+                                recoveryCapability,
+                                terminalCleanupCapability,
+                            )
+                        ) return
                         val sent = sendE2eWindowsClick(pos)
                         log.info {
                             "E2E_INPUT_SENDINPUT_SENT pos=(${pos.x},${pos.y}) hwnd=$hwnd " +

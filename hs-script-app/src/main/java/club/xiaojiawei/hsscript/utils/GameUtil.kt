@@ -1211,9 +1211,21 @@ object GameUtil {
     /**
      * 点掉游戏结束结算页面
      */
-    fun addGameEndTask() {
+    fun addGameEndTask(
+        terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
+    ) {
         cancelGameEndTask()
         log.info { "点掉${GAME_CN_NAME}结束结算页面" }
+        if (terminalCleanupCapability != null) {
+            // While mandatory-rank recovery is pending, use the bounded,
+            // postchecked result-page path. Never let the legacy repeating
+            // end-turn clicker inherit the one-purpose terminal capability.
+            dismissStaleGameEndScreen(
+                resultAlreadyObserved = true,
+                terminalCleanupCapability = terminalCleanupCapability,
+            )
+            return
+        }
         if (Mode.currMode === ModeEnum.GAMEPLAY) {
             val gameEndClickInterval = RandomUtil.getActionInterval(1000).toLong()
             gameEndTasks.add(
@@ -1255,7 +1267,10 @@ object GameUtil {
      * bounded and cancel it as soon as a new game is detected; it must never
      * become a permanent clicker that can touch a later live game.
      */
-    fun dismissStaleGameEndScreen(resultAlreadyObserved: Boolean = false) {
+    fun dismissStaleGameEndScreen(
+        resultAlreadyObserved: Boolean = false,
+        terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
+    ) {
         if (Mode.currMode !== ModeEnum.GAMEPLAY || (WarEx.inWar && !resultAlreadyObserved)) {
             log.info {
                 "RESULT_PAGE_DISMISSAL_BLOCKED reason=unsafe-start " +
@@ -1286,6 +1301,15 @@ object GameUtil {
                     when (ResultPageDismissalPolicy.decide(WarEx.inWar, visible, number, maxAttempts = 5)) {
                         ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED -> {
                             log.info { "RESULT_PAGE_DISMISSAL_CONFIRMED source=visible-screen-postcheck attempt=$number" }
+                            if (terminalCleanupCapability != null &&
+                                MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCleanupCapability)
+                            ) {
+                                val completed = MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED")
+                                log.info {
+                                    "RANK_SURRENDER_RECOVERY_COMPLETED evidence=SCREEN_RESULT_DISMISSED " +
+                                        "requeueAllowed=$completed rankPreflightRequired=true"
+                                }
+                            }
                             future.cancel(false)
                             gameEndTasks.remove(future)
                             return@scheduleWithFixedDelay
@@ -1318,7 +1342,10 @@ object GameUtil {
                     // finish this task.
                     if (shouldUseStaleResultCenterClick(number)) {
                         log.info { "E2E恢复：结果页使用稳定中心点" }
-                        MouseUtil.leftButtonClickForRecovery(GAME_END_CONTINUE_RECT.getCenterClickPos())
+                        MouseUtil.leftButtonClickForRecovery(
+                            GAME_END_CONTINUE_RECT.getCenterClickPos(),
+                            terminalCleanupCapability = terminalCleanupCapability,
+                        )
                     } else {
                         log.error {
                             "RESULT_PAGE_DISMISSAL_FAILED reason=invalid-attempt-target attempt=$number " +

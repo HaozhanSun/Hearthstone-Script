@@ -2,6 +2,8 @@ package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscript.enums.GameStartupModeEnum
 import club.xiaojiawei.hsscript.starter.GameStartupModeSequencePolicy
+import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -123,5 +125,72 @@ class ActionDispatchGateTest {
                 recoveryCapabilityValid = false,
             ),
         )
+    }
+
+    @Test
+    fun `authoritative terminal capability allows only result dismissal while rank guard remains pending`() {
+        MandatoryRankSurrenderGuard.resetForTest()
+        try {
+            MandatoryRankSurrenderGuard.begin()
+            assertEquals(null, MandatoryRankSurrenderGuard.authorizeTerminalCleanup("UNKNOWN"))
+            val terminalCapability =
+                MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL")
+            assertTrue(terminalCapability != null)
+            assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCapability))
+            assertTrue(MandatoryRankSurrenderGuard.isPending())
+            assertTrue(
+                ActionDispatchGate.allowForState(
+                    action = "terminal-result.dismiss",
+                    paused = false,
+                    working = true,
+                    mandatoryRankSurrenderPending = true,
+                    terminalCleanupCapabilityValid = true,
+                ),
+            )
+            listOf(
+                "recovery.left",
+                "matchmaking.start",
+                "startup.handoff",
+                "strategy.card.play",
+                "strategy.turn-end",
+                "surrender.request",
+            ).forEach { action ->
+                assertFalse(
+                    ActionDispatchGate.allowForState(
+                        action = action,
+                        paused = false,
+                        working = true,
+                        mandatoryRankSurrenderPending = true,
+                        terminalCleanupCapabilityValid = true,
+                    ),
+                    action,
+                )
+            }
+            assertFalse(
+                ActionDispatchGate.allowForState(
+                    action = "terminal-result.dismiss",
+                    paused = true,
+                    working = true,
+                    mandatoryRankSurrenderPending = true,
+                    terminalCleanupCapabilityValid = true,
+                ),
+            )
+            assertFalse(
+                MatchmakingGuardPolicy.runtimeAllowsInput(
+                    working = true,
+                    paused = false,
+                    mandatoryRankSurrenderPending = true,
+                ),
+            )
+
+            assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
+            assertFalse(MandatoryRankSurrenderGuard.isPending())
+            assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCapability))
+            // Releasing the cleanup lock does not bypass the ordinary rank
+            // preflight, which will run again for the next match.
+            assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, false))
+        } finally {
+            MandatoryRankSurrenderGuard.resetForTest()
+        }
     }
 }
