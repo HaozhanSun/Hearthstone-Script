@@ -925,6 +925,7 @@ object GameUtil {
                         val observation = ScreenWatchdog.inspectForSurrender(
                             state = state,
                             attempts = surrenderAttempts,
+                            mandatoryRankSurrender = true,
                         )
                         val decision = MandatoryRankSurrenderRecoveryPolicy.decide(observation.kind)
                         log.info {

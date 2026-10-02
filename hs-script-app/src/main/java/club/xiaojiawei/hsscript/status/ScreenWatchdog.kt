@@ -108,13 +108,19 @@ object ScreenWatchdog {
         state: String,
         attempts: Int,
         trigger: String = "surrender-retry",
-        captureProvider: () -> BufferedImage? = ::captureScreen,
+        mandatoryRankSurrender: Boolean = false,
+        captureProvider: () -> BufferedImage? = if (mandatoryRankSurrender) {
+            ::captureMandatoryRankRecoveryScreen
+        } else {
+            ::captureScreen
+        },
         ocrProvider: (BufferedImage) -> String = ::runOCR,
     ): ScreenWatchdogObservation {
         // Keep the established watchdog as a separate, rename-only upstream
         // implementation.  The additive Beta capture/state heuristics must
         // not leak into a runtime with the Beta extension switch turned off.
-        if (!ScreenRecoveryRuntime.isEnabled()) {
+        val betaRecoveryEnabled = ScreenRecoveryRuntime.isEnabled()
+        if (!betaRecoveryEnabled && !mandatoryRankSurrender) {
             return UpstreamScreenWatchdog.inspectForSurrender(
                 state = state,
                 attempts = attempts,
@@ -205,6 +211,11 @@ object ScreenWatchdog {
         val kind = classifyForSurrender(ocrKind, state, image)
         val visualGameplayFallback = ocrKind == ScreenWatchdogKind.UNKNOWN &&
             kind in setOf(ScreenWatchdogKind.GAMEPLAY, ScreenWatchdogKind.MULLIGAN)
+        val mulliganVisual = if (state.contains("warPhase=REPLACE_CARD", ignoreCase = true)) {
+            mulliganVisualMetrics(image).toString()
+        } else {
+            "not-applicable"
+        }
         val reason = when (kind) {
             ScreenWatchdogKind.MULLIGAN -> "authoritative-mulligan-input-and-fresh-mulligan-visual"
             ScreenWatchdogKind.GAMEPLAY -> if (visualGameplayFallback) {
@@ -219,6 +230,9 @@ object ScreenWatchdog {
             "SCREEN_WATCHDOG_OCR runId=$runId provider=$providerUsed kind=$kind action=$action " +
                 "activeGameplay=$activeGameplay chars=${ocrText.length} " +
                 "visualFallback=$visualGameplayFallback " +
+                "mandatoryRankSurrender=$mandatoryRankSurrender " +
+                "betaRecoveryExtensionsEnabled=$betaRecoveryEnabled " +
+                "mulliganVisual={$mulliganVisual} " +
                 "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                 "ocr=${sanitize(ocrText).take(240).ifBlank { "<empty>" }}"
         }
@@ -276,17 +290,51 @@ object ScreenWatchdog {
 
     internal fun hasMulliganVisualForTest(image: BufferedImage): Boolean = hasMulliganVisual(image)
 
-    private fun hasMulliganVisual(image: BufferedImage): Boolean {
-        if (image.width < 800 || image.height < 450) return false
+    internal fun mulliganVisualDiagnosticsForTest(image: BufferedImage): String =
+        mulliganVisualMetrics(image).toString()
+
+    private data class MulliganVisualMetrics(
+        val width: Int,
+        val height: Int,
+        val bannerGold: Double,
+        val bannerVivid: Double,
+        val handVivid: Double,
+        val heroVivid: Double,
+        val accepted: Boolean,
+    ) {
+        override fun toString(): String =
+            "size=${width}x$height bannerGold=${"%.4f".format(Locale.ROOT, bannerGold)} " +
+                "bannerVivid=${"%.4f".format(Locale.ROOT, bannerVivid)} " +
+                "handVivid=${"%.4f".format(Locale.ROOT, handVivid)} " +
+                "heroVivid=${"%.4f".format(Locale.ROOT, heroVivid)} accepted=$accepted"
+    }
+
+    private fun hasMulliganVisual(image: BufferedImage): Boolean = mulliganVisualMetrics(image).accepted
+
+    private fun mulliganVisualMetrics(image: BufferedImage): MulliganVisualMetrics {
+        if (image.width < 800 || image.height < 450) {
+            return MulliganVisualMetrics(image.width, image.height, 0.0, 0.0, 0.0, 0.0, false)
+        }
         val aspect = image.width.toDouble() / image.height
-        if (aspect !in 1.55..1.90) return false
+        if (aspect !in 1.55..1.90) {
+            return MulliganVisualMetrics(image.width, image.height, 0.0, 0.0, 0.0, 0.0, false)
+        }
         // Require the distinctive start-hand banner, a vivid row of cards,
         // and the local hero portrait; phase evidence alone never clicks.
         val banner = colorRatios(image, 0.35, 0.09, 0.66, 0.24)
         val hand = colorRatios(image, 0.20, 0.30, 0.80, 0.68)
         val hero = colorRatios(image, 0.455, 0.68, 0.545, 0.88)
-        return banner.goldRatio >= 0.025 && banner.vividRatio >= 0.10 &&
+        val accepted = banner.goldRatio >= 0.025 && banner.vividRatio >= 0.10 &&
             hand.vividRatio >= 0.24 && hero.vividRatio >= 0.12
+        return MulliganVisualMetrics(
+            image.width,
+            image.height,
+            banner.goldRatio,
+            banner.vividRatio,
+            hand.vividRatio,
+            hero.vividRatio,
+            accepted,
+        )
     }
 
     private fun hasActiveGameplayVisual(image: BufferedImage): Boolean {
@@ -437,7 +485,14 @@ object ScreenWatchdog {
             fields.contains("myturn=true")
     }
 
-    private fun captureScreen(): BufferedImage? = runCatching {
+    private fun captureScreen(): BufferedImage? = captureScreen(
+        preferCurrentGameWindow = ScreenRecoveryRuntime.isEnabled(),
+    )
+
+    /** Mandatory rank recovery is a narrowly gated exception to the optional general Beta recovery switch. */
+    private fun captureMandatoryRankRecoveryScreen(): BufferedImage? = captureScreen(preferCurrentGameWindow = true)
+
+    private fun captureScreen(preferCurrentGameWindow: Boolean): BufferedImage? = runCatching {
         if (GraphicsEnvironment.isHeadless()) return null
         val allScreens = GraphicsEnvironment
             .getLocalGraphicsEnvironment()
@@ -445,7 +500,7 @@ object ScreenWatchdog {
             .map { it.defaultConfiguration.bounds }
             .fold(Rectangle()) { all, next -> all.union(next) }
         if (allScreens.width <= 0 || allScreens.height <= 0) return null
-        val bounds = gameBounds(allScreens)
+        val bounds = gameBounds(allScreens, preferCurrentGameWindow)
             ?: run {
                 log.info { "SCREEN_WATCHDOG_CAPTURE_SKIPPED reason=game-bounds-unknown" }
                 return null
@@ -485,7 +540,10 @@ object ScreenWatchdog {
     }
 
     /** Resolve only the Hearthstone client bounds; never OCR the whole desktop. */
-    private fun gameBounds(allScreens: Rectangle): Rectangle? {
+    private fun gameBounds(
+        allScreens: Rectangle,
+        preferCurrentGameWindow: Boolean = ScreenRecoveryRuntime.isEnabled(),
+    ): Rectangle? {
         val gameRect = ScriptStatus.GAME_RECT
         val cachedGameBounds = if (gameRect.right - gameRect.left >= 400 && gameRect.bottom - gameRect.top >= 300) {
             Rectangle(
@@ -514,7 +572,7 @@ object ScreenWatchdog {
             cachedGameBounds = cachedGameBounds,
             currentWindowBounds = currentWindowBounds,
             desktopBounds = allScreens,
-            betaExtensionsEnabled = ScreenRecoveryRuntime.isEnabled(),
+            betaExtensionsEnabled = preferCurrentGameWindow,
         )
     }
 

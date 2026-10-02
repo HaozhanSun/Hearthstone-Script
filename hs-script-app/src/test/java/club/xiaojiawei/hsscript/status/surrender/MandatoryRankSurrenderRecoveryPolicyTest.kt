@@ -3,6 +3,8 @@ package club.xiaojiawei.hsscript.status.surrender
 import club.xiaojiawei.hsscript.status.ScreenWatchdog
 import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
+import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.utils.ConfigUtil
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -12,8 +14,17 @@ import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
 
 class MandatoryRankSurrenderRecoveryPolicyTest {
+    private val originalBetaRecoveryEnabled = ConfigUtil.getBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED)
+
     @AfterEach
-    fun cleanup() = MandatoryRankSurrenderGuard.resetForTest()
+    fun cleanup() {
+        MandatoryRankSurrenderGuard.resetForTest()
+        ConfigUtil.putBoolean(
+            ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED,
+            originalBetaRecoveryEnabled,
+            store = false,
+        )
+    }
 
     @Test
     fun `uncertain mandatory rank surrender must stay in recovery`() {
@@ -133,18 +144,29 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
 
     @Test
     fun `rank six confirmed mulligan image can only open settings and keeps normal actions blocked`() {
-        val image = ImageIO.read(
-            requireNotNull(javaClass.getResourceAsStream("/club/xiaojiawei/hsscript/status/surrender/rank6-live-mulligan-unknown-ocr.png")),
-        )
+        val images = listOf(
+            "rank6-live-mulligan-unknown-ocr.png",
+            "rank6-live-mulligan-unknown-ocr-second-frame.png",
+        ).map { name ->
+            name to ImageIO.read(
+                requireNotNull(
+                    javaClass.getResourceAsStream("/club/xiaojiawei/hsscript/status/surrender/$name"),
+                ),
+            )
+        }
         val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
 
-        assertTrue(ScreenWatchdog.hasMulliganVisualForTest(image))
-        val screen = ScreenWatchdog.classifyForSurrenderForTest("unreadable mulligan labels", state, image)
-        assertEquals(ScreenWatchdogKind.MULLIGAN, screen)
-        assertEquals(
-            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS,
-            MandatoryRankSurrenderRecoveryPolicy.decide(screen).action,
-        )
+        images.forEach { (name, image) ->
+            val diagnostics = ScreenWatchdog.mulliganVisualDiagnosticsForTest(image)
+            println("LIVE_MULLIGAN_VISUAL name=$name $diagnostics")
+            assertTrue(ScreenWatchdog.hasMulliganVisualForTest(image), "$name: $diagnostics")
+            val screen = ScreenWatchdog.classifyForSurrenderForTest("unreadable mulligan labels", state, image)
+            assertEquals(ScreenWatchdogKind.MULLIGAN, screen, "$name: $diagnostics")
+            assertEquals(
+                MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS,
+                MandatoryRankSurrenderRecoveryPolicy.decide(screen).action,
+            )
+        }
 
         val capability = MandatoryRankSurrenderGuard.begin()
         assertTrue(
@@ -169,6 +191,43 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY,
             MandatoryRankSurrenderRecoveryPolicy.decide(ScreenWatchdogKind.UNKNOWN).action,
         )
+    }
+
+    @Test
+    fun `mandatory rank recovery uses mulligan visual when general beta recovery toggle is off`() {
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
+        val images = listOf(
+            "rank6-live-mulligan-unknown-ocr.png",
+            "rank6-live-mulligan-unknown-ocr-second-frame.png",
+        ).map { name ->
+            name to ImageIO.read(
+                requireNotNull(
+                    javaClass.getResourceAsStream("/club/xiaojiawei/hsscript/status/surrender/$name"),
+                ),
+            )
+        }
+        val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
+
+        images.forEach { (name, image) ->
+            val observation = ScreenWatchdog.inspectForSurrender(
+                state = state,
+                attempts = 3,
+                mandatoryRankSurrender = true,
+                captureProvider = { image },
+                ocrProvider = { "" },
+            )
+            assertEquals(ScreenWatchdogKind.MULLIGAN, observation.kind, "$name: ${observation.reason}")
+            assertEquals(
+                "authoritative-mulligan-input-and-fresh-mulligan-visual",
+                observation.reason,
+                name,
+            )
+            assertEquals(
+                MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS,
+                MandatoryRankSurrenderRecoveryPolicy.decide(observation.kind).action,
+                name,
+            )
+        }
     }
 
     @Test
