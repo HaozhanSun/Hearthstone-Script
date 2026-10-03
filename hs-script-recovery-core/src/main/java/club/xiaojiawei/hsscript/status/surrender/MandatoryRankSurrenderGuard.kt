@@ -9,13 +9,21 @@ object MandatoryRankSurrenderGuard {
     @Volatile private var recoveryUncertain = false
     @Volatile private var activeCapability: RecoveryCapability? = null
     @Volatile private var activeTerminalCleanupCapability: TerminalCleanupCapability? = null
+    @Volatile private var pendingGameIdentity: String? = null
 
     @Synchronized
-    fun begin(): RecoveryCapability {
+    fun begin(gameIdentity: String? = null): RecoveryCapability {
+        if (pending) {
+            // Duplicate callbacks for the same match must not invalidate the
+            // already-issued recovery token or reset terminal proof.
+            if (pendingGameIdentity == gameIdentity) return requireNotNull(activeCapability)
+            return requireNotNull(activeCapability)
+        }
         recoveryUncertain = false
         val capability = RecoveryCapability()
         activeCapability = capability
         activeTerminalCleanupCapability = null
+        pendingGameIdentity = gameIdentity?.takeIf { it.isNotBlank() }
         pending = true
         return capability
     }
@@ -23,10 +31,12 @@ object MandatoryRankSurrenderGuard {
     fun isRecoveryCapabilityValid(capability: RecoveryCapability?): Boolean =
         pending && capability != null && capability === activeCapability
 
-    /** Issue a one-purpose result-page dismissal token only after terminal evidence. */
+    /** Issue cleanup only from complete, current-game Power.log surrender evidence. */
     @Synchronized
-    fun authorizeTerminalCleanup(evidence: String): TerminalCleanupCapability? {
-        if (!pending || evidence !in setOf("POWERLOG_TERMINAL", "SCREEN_TERMINAL")) return null
+    fun authorizeTerminalCleanup(
+        evidence: CurrentGameSurrenderTerminalEvidence?,
+    ): TerminalCleanupCapability? {
+        if (!pending || !MandatorySurrenderTerminalEvidence.authorizes(pendingGameIdentity, evidence)) return null
         return activeTerminalCleanupCapability ?: TerminalCleanupCapability().also {
             activeTerminalCleanupCapability = it
         }
@@ -35,17 +45,29 @@ object MandatoryRankSurrenderGuard {
     fun isTerminalCleanupCapabilityValid(capability: TerminalCleanupCapability?): Boolean =
         pending && capability != null && capability === activeTerminalCleanupCapability
 
+    /** Screen paths may reuse proof already authorized by Power.log, never mint it. */
+    fun existingTerminalCleanupCapability(): TerminalCleanupCapability? =
+        activeTerminalCleanupCapability.takeIf { pending }
+
     fun hasTerminalCleanupCapability(): Boolean = pending && activeTerminalCleanupCapability != null
 
     fun markRecoveryUncertain() {
         if (pending) recoveryUncertain = true
     }
 
-    /** Only visible terminal/out-of-game evidence releases the lock. */
-    fun confirmCompleted(evidence: String): Boolean {
+    /** A screen transition may finish recovery only after current-game Power.log proof was authorized. */
+    fun confirmCompleted(evidence: String): Boolean =
+        confirmCompleted(evidence, existingTerminalCleanupCapability())
+
+    @Synchronized
+    fun confirmCompleted(
+        evidence: String,
+        terminalCleanupCapability: TerminalCleanupCapability?,
+    ): Boolean {
         if (!pending || evidence !in setOf("SCREEN_MAIN_MENU", "SCREEN_MATCHMAKING", "SCREEN_RESULT_DISMISSED")) {
             return false
         }
+        if (!isTerminalCleanupCapabilityValid(terminalCleanupCapability)) return false
         completePendingSurrender()
         return true
     }
@@ -73,6 +95,7 @@ object MandatoryRankSurrenderGuard {
         recoveryUncertain = false
         activeCapability = null
         activeTerminalCleanupCapability = null
+        pendingGameIdentity = null
         MulliganRankDispatchBarrier.completeSurrender()
     }
 
@@ -84,5 +107,6 @@ object MandatoryRankSurrenderGuard {
         recoveryUncertain = false
         activeCapability = null
         activeTerminalCleanupCapability = null
+        pendingGameIdentity = null
     }
 }

@@ -4,6 +4,8 @@ import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 
 /** Controls when a mandatory rank surrender may leave its recovery-only state. */
 internal object MandatoryRankSurrenderRecoveryPolicy {
+    enum class ConfirmationTarget { ACCEPT_NOW }
+
     enum class Action {
         CLICK_SETTINGS,
         CLICK_SURRENDER,
@@ -16,7 +18,11 @@ internal object MandatoryRankSurrenderRecoveryPolicy {
         COMPLETE_MATCHMAKING,
     }
 
-    data class Decision(val action: Action, val reason: String)
+    data class Decision(
+        val action: Action,
+        val reason: String,
+        val confirmationTarget: ConfirmationTarget? = null,
+    )
 
     internal fun shouldWaitForMoreEvidence(mandatoryRank: Boolean, screenConfirmed: Boolean): Boolean =
         mandatoryRank && !screenConfirmed
@@ -29,7 +35,11 @@ internal object MandatoryRankSurrenderRecoveryPolicy {
         ScreenWatchdogKind.MULLIGAN -> Decision(Action.CLICK_SETTINGS, "confirmed-mulligan-with-rank-deny")
         ScreenWatchdogKind.SETTINGS -> Decision(Action.CLICK_SURRENDER, "confirmed-settings-with-surrender")
         ScreenWatchdogKind.SURRENDER_CONFIRMATION ->
-            Decision(Action.CLICK_CONFIRMATION, "confirmed-surrender-dialog")
+            Decision(
+                Action.CLICK_CONFIRMATION,
+                "confirmed-surrender-dialog-accept-now",
+                ConfirmationTarget.ACCEPT_NOW,
+            )
         ScreenWatchdogKind.WIN -> Decision(Action.COMPLETE_WIN, "terminal-win-priority")
         ScreenWatchdogKind.LOST -> Decision(Action.COMPLETE_LOSS, "terminal-loss-priority")
         ScreenWatchdogKind.RESULT -> Decision(Action.COMPLETE_RESULT, "terminal-result-priority")

@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.RuntimeFaultBackoff
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.surrender.CurrentGamePowerLogTerminalTracker
+import club.xiaojiawei.hsscript.status.surrender.CurrentGameSurrenderTerminalEvidence
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
@@ -54,6 +55,16 @@ object PowerLogListener :
     /** True only when this CREATE_GAME has terminal PLAYSTATE and complete-game markers. */
     fun hasCurrentGameCompleteTerminalPowerLogEvidence(): Boolean =
         currentGamePowerLogTerminalTracker.hasCompleteTerminalEvidence()
+
+    /** Identity and owner states from the current live CREATE_GAME segment. */
+    fun currentGameSurrenderIdentity(ownEntityId: String): String? =
+        currentGamePowerLogTerminalTracker.currentGameIdentity(ownEntityId)
+
+    fun currentGameSurrenderTerminalEvidence(
+        ownEntityId: String,
+        opponentEntityId: String,
+    ): CurrentGameSurrenderTerminalEvidence? =
+        currentGamePowerLogTerminalTracker.currentGameSurrenderEvidence(ownEntityId, opponentEntityId)
 
     private const val RESERVE_SIZE_B = 4 * 1024 * 1024
     private const val ACTIVE_GAME_SCAN_CHUNK_B = 4 * 1024 * 1024

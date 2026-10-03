@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.starter.GameStartupModeSequencePolicy
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+import club.xiaojiawei.hsscript.status.surrender.CurrentGameSurrenderTerminalEvidence
 import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -272,10 +273,10 @@ class ActionDispatchGateTest {
     fun `authoritative terminal capability allows only result dismissal while rank guard remains pending`() {
         MandatoryRankSurrenderGuard.resetForTest()
         try {
-            MandatoryRankSurrenderGuard.begin()
-            assertEquals(null, MandatoryRankSurrenderGuard.authorizeTerminalCleanup("UNKNOWN"))
+            MandatoryRankSurrenderGuard.begin("test-game:self")
+            assertEquals(null, MandatoryRankSurrenderGuard.authorizeTerminalCleanup(null))
             val terminalCapability =
-                MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL")
+                MandatoryRankSurrenderGuard.authorizeTerminalCleanup(testTerminalEvidence())
             assertTrue(terminalCapability != null)
             assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCapability))
             assertTrue(MandatoryRankSurrenderGuard.isPending())
@@ -324,7 +325,7 @@ class ActionDispatchGateTest {
                 ),
             )
 
-            assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
+            assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED", terminalCapability))
             assertFalse(MandatoryRankSurrenderGuard.isPending())
             assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCapability))
             // Releasing the cleanup lock does not bypass the ordinary rank
@@ -347,9 +348,9 @@ class ActionDispatchGateTest {
             PauseStatus.setManualPause(false)
             val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
             assertTrue(MulliganRankDispatchBarrier.requireSurrender(ticket) != null)
-            MandatoryRankSurrenderGuard.begin()
+            MandatoryRankSurrenderGuard.begin("test-game:self")
 
-            assertEquals(null, MandatoryRankSurrenderGuard.authorizeTerminalCleanup("UNKNOWN"))
+            assertEquals(null, MandatoryRankSurrenderGuard.authorizeTerminalCleanup(null))
             assertFalse(
                 ActionDispatchGate.allow("terminal-result.dismiss"),
                 "without terminal evidence, neither guard may be bypassed",
@@ -362,10 +363,9 @@ class ActionDispatchGateTest {
             )
 
             val powerLogCapability =
-                MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL")
+                MandatoryRankSurrenderGuard.authorizeTerminalCleanup(testTerminalEvidence())
             assertTrue(powerLogCapability != null)
-            val screenCapability =
-                MandatoryRankSurrenderGuard.authorizeTerminalCleanup("SCREEN_TERMINAL")
+            val screenCapability = MandatoryRankSurrenderGuard.existingTerminalCleanupCapability()
             assertSame(powerLogCapability, screenCapability)
             assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(powerLogCapability))
             assertTrue(
@@ -384,7 +384,7 @@ class ActionDispatchGateTest {
                 MulliganRankDispatchBarrier.currentState(),
             )
 
-            assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
+            assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED", powerLogCapability))
             assertFalse(MandatoryRankSurrenderGuard.isPending())
             assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
             assertTrue(ActionDispatchGate.allow("matchmaking.start"))
@@ -400,4 +400,14 @@ class ActionDispatchGateTest {
             }
         }
     }
+
+    private fun testTerminalEvidence() = CurrentGameSurrenderTerminalEvidence(
+        gameIdentity = "test-game:self",
+        ownEntityId = "self",
+        opponentEntityId = "opponent",
+        ownPlayState = "CONCEDED",
+        opponentPlayState = "WON",
+        finalGameOver = true,
+        complete = true,
+    )
 }

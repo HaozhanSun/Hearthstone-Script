@@ -113,7 +113,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         // page dismissal path instead of the continuous generic click task.
         if (kind != ScreenWatchdogKind.RESULT) {
             addGameEndTask(
-                MandatoryRankSurrenderGuard.authorizeTerminalCleanup("SCREEN_TERMINAL"),
+                MandatoryRankSurrenderGuard.existingTerminalCleanupCapability(),
             )
         }
         WarEx.reset()
@@ -351,15 +351,26 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         accessFile?.seek(accessFile.length())
         val completeCurrentGamePowerLogTerminal =
             PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence()
-        val terminalCleanupCapability = if (completeCurrentGamePowerLogTerminal) {
-            club.xiaojiawei.hsscriptbase.config.log.info {
-                "RANK_SURRENDER_TERMINAL_CLEANUP_AUTHORIZED " +
-                    "source=CREATE_GAME_SCOPED_COMPLETE_POWERLOG " +
-                    "playerTerminal=${authoritativeTerminal ?: "UNKNOWN"} " +
-                    "completeTerminal=$completeCurrentGamePowerLogTerminal"
-            }
-            MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL")
+        val ownEntityId = war.me.gameId
+        val opponentEntityId = war.rival.gameId
+        val surrenderTerminalEvidence = if (completeCurrentGamePowerLogTerminal) {
+            PowerLogListener.currentGameSurrenderTerminalEvidence(ownEntityId, opponentEntityId)
         } else null
+        val terminalCleanupCapability = MandatoryRankSurrenderGuard.authorizeTerminalCleanup(
+            surrenderTerminalEvidence,
+        )
+        if (MandatoryRankSurrenderGuard.isPending()) {
+            club.xiaojiawei.hsscriptbase.config.log.info {
+                "RANK_SURRENDER_TERMINAL_PROOF result=${if (terminalCleanupCapability != null) "ACCEPTED" else "REJECTED"} " +
+                    "source=CREATE_GAME_SCOPED_POWERLOG " +
+                    "sameGame=${surrenderTerminalEvidence?.gameIdentity == "${PowerLogListener.currentGameSurrenderIdentity(ownEntityId)}"} " +
+                    "ownPlayState=${surrenderTerminalEvidence?.ownPlayState ?: "UNKNOWN"} " +
+                    "opponentPlayState=${surrenderTerminalEvidence?.opponentPlayState ?: "UNKNOWN"} " +
+                    "finalGameOver=${surrenderTerminalEvidence?.finalGameOver == true} " +
+                    "complete=${surrenderTerminalEvidence?.complete == true} " +
+                    "playerTerminal=${authoritativeTerminal ?: "UNKNOWN"}"
+            }
+        }
         addGameEndTask(terminalCleanupCapability)
         WarEx.reset()
         if (System.getProperty("hs.script.e2e") == "true" &&

@@ -99,7 +99,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
 
         val gameTicket = barrier.beginCurrentGame()
         assertNotNull(barrier.requireSurrender(gameTicket), "rank 4 must latch mandatory surrender")
-        guard.begin()
+        guard.begin("${fixture.priorGameId}:self")
         assertFalse(queueAllowed(), "do not queue while this game's mandatory surrender is unconfirmed")
 
         val powerLog = resourceText(fixtureDirectory.resolve(fixture.powerLog))
@@ -111,7 +111,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
         assertTrue(powerLog.contains("STEP value=FINAL_GAMEOVER"))
         // The Power.log terminal state is the authoritative acceptance proof;
         // a request/click log alone would not mint this cleanup capability.
-        assertNotNull(guard.authorizeTerminalCleanup("POWERLOG_TERMINAL"))
+        assertNotNull(guard.authorizeTerminalCleanup(terminalEvidence(fixture.priorGameId)))
 
         val deckImagePath = fixtureDirectory.resolve(fixture.deckSelection.screenshot).normalize()
         val deckImage = resourceBytes(deckImagePath)
@@ -161,12 +161,12 @@ class OfflineRankSurrenderMatchmakingE2ETest {
         val fixture = readFixture()
         val priorTicket = barrier.beginCurrentGame()
         assertNotNull(barrier.requireSurrender(priorTicket))
-        guard.begin()
+        guard.begin("${fixture.priorGameId}:self")
 
         val priorTerminal = resourceText(fixtureDirectory.resolve(fixture.powerLog))
         assertTrue(hasAcceptedSurrenderTerminal(priorTerminal, fixture.priorGameId))
         assertFalse(hasAcceptedSurrenderTerminal(priorTerminal, fixture.nextGameId))
-        assertNotNull(guard.authorizeTerminalCleanup("POWERLOG_TERMINAL"))
+        assertNotNull(guard.authorizeTerminalCleanup(terminalEvidence(fixture.priorGameId)))
 
         val deckScreen = fixture.deckSelection.screen
         assertEquals("DECK_SELECTION", deckScreen)
@@ -214,7 +214,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
             barrier.isSurrenderCapabilityValid(surrenderCapability),
             "the current game's mandatory surrender must retain a valid one-shot dispatch capability",
         )
-        guard.begin()
+        guard.begin("${fixture.nextGameId}:self")
         assertFalse(queueAllowed(), "ordinary actions stay blocked while the current game must be surrendered")
 
         // The next game's terminal must be scoped to that game's unique marker.
@@ -240,7 +240,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
 
         val terminal = resourceText(fixtureDirectory.resolve(fixture.nextGameTerminalPowerLog))
         assertTrue(hasAcceptedSurrenderTerminal(terminal, fixture.nextGameId))
-        assertNotNull(guard.authorizeTerminalCleanup("POWERLOG_TERMINAL"))
+        assertNotNull(guard.authorizeTerminalCleanup(terminalEvidence(fixture.nextGameId)))
         assertEquals(
             MandatoryRankSurrenderDeckSelectionRecovery.Result.COMPLETED,
             MandatoryRankSurrenderDeckSelectionRecovery.completeIfRequired(
@@ -341,6 +341,16 @@ class OfflineRankSurrenderMatchmakingE2ETest {
     )
 
     private fun queueBlocked(): Boolean = !queueAllowed()
+
+    private fun terminalEvidence(gameId: String) = CurrentGameSurrenderTerminalEvidence(
+        gameIdentity = "$gameId:self",
+        ownEntityId = "self",
+        opponentEntityId = "opponent",
+        ownPlayState = "CONCEDED",
+        opponentPlayState = "WON",
+        finalGameOver = true,
+        complete = true,
+    )
 
     private fun readFixture(): Fixture = Json.decodeFromString(
         resourceText(fixtureDirectory.resolve("rank4-mandatory-surrender-cycle.json")),

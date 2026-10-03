@@ -359,6 +359,11 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
                 MandatoryRankSurrenderRecoveryPolicy.decide(kind).action,
                 name,
             )
+            assertEquals(
+                MandatoryRankSurrenderRecoveryPolicy.ConfirmationTarget.ACCEPT_NOW,
+                MandatoryRankSurrenderRecoveryPolicy.decide(kind).confirmationTarget,
+                "the observed modal must target affirmative '现在认输', never '继续游戏'",
+            )
 
             val observation = ScreenWatchdog.inspectForSurrender(
                 state = state,
@@ -372,6 +377,10 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             assertEquals(
                 MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_CONFIRMATION,
                 MandatoryRankSurrenderRecoveryPolicy.decide(observation.kind).action,
+            )
+            assertEquals(
+                MandatoryRankSurrenderRecoveryPolicy.ConfirmationTarget.ACCEPT_NOW,
+                MandatoryRankSurrenderRecoveryPolicy.decide(observation.kind).confirmationTarget,
             )
         }
 
@@ -390,6 +399,7 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY,
             MandatoryRankSurrenderRecoveryPolicy.decide(ScreenWatchdogKind.UNKNOWN).action,
         )
+        assertEquals(null, MandatoryRankSurrenderRecoveryPolicy.decide(ScreenWatchdogKind.UNKNOWN).confirmationTarget)
 
         // Terminal evidence remains higher priority than any overlay.
         confirmationFrames.forEach { (_, image) ->
@@ -419,6 +429,21 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
         assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
         assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("UNKNOWN"))
         assertTrue(MandatoryRankSurrenderGuard.isPending())
+    }
+
+    @Test
+    fun `historical rank four mulligan confirmation screenshot selects only the affirmative control`() {
+        val image = readFixture("rank4-current-game-confirmation.png")
+        val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
+        val diagnostics = ScreenWatchdog.surrenderConfirmationDiagnosticsForTest(image)
+        assertTrue(ScreenWatchdog.hasSurrenderConfirmationPanelForTest(image), diagnostics)
+        assertTrue(ScreenWatchdog.hasSurrenderConfirmationVisualForTest(image), diagnostics)
+        val kind = ScreenWatchdog.classifyForSurrenderForTest("unreadable background OCR", state, image)
+        assertEquals(ScreenWatchdogKind.SURRENDER_CONFIRMATION, kind, diagnostics)
+        val decision = MandatoryRankSurrenderRecoveryPolicy.decide(kind)
+        assertEquals(MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_CONFIRMATION, decision.action)
+        assertEquals(MandatoryRankSurrenderRecoveryPolicy.ConfirmationTarget.ACCEPT_NOW, decision.confirmationTarget)
+        assertFalse(ScreenWatchdog.hasSettingsOverlayVisualForTest(image), diagnostics)
     }
 
     @Test

@@ -25,7 +25,7 @@ class MandatoryRankSurrenderGuardTest {
 
     @Test
     fun `uncertain surrender blocks queue until terminal evidence then allows recheck`() {
-        MandatoryRankSurrenderGuard.begin()
+        MandatoryRankSurrenderGuard.begin("test-game:self")
         MandatoryRankSurrenderGuard.markRecoveryUncertain()
 
         assertTrue(MandatoryRankSurrenderGuard.isPending())
@@ -38,7 +38,9 @@ class MandatoryRankSurrenderGuardTest {
         assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_TERMINAL"))
         assertTrue(MandatoryRankSurrenderGuard.isPending(), "Power.log terminal markers do not prove the UI left the board")
         assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
-        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
+        assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
+        val cleanup = MandatoryRankSurrenderGuard.authorizeTerminalCleanup(terminalEvidence("test-game:self"))
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED", cleanup))
         assertFalse(MandatoryRankSurrenderGuard.isPending())
         assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
     }
@@ -54,7 +56,7 @@ class MandatoryRankSurrenderGuardTest {
 
             val surrenderedGameTicket = MulliganRankDispatchBarrier.beginCurrentGame()
             assertTrue(MulliganRankDispatchBarrier.requireSurrender(surrenderedGameTicket) != null)
-            MandatoryRankSurrenderGuard.begin()
+            MandatoryRankSurrenderGuard.begin("test-game:self")
             assertEquals(
                 MandatoryRankSurrenderDeckSelectionRecovery.Result.BLOCKED,
                 MandatoryRankSurrenderDeckSelectionRecovery.completeIfRequired(
@@ -67,7 +69,7 @@ class MandatoryRankSurrenderGuardTest {
             )
             assertFalse(ActionDispatchGate.allow("matchmaking.start"))
             assertTrue(
-                MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL") != null,
+                MandatoryRankSurrenderGuard.authorizeTerminalCleanup(terminalEvidence("test-game:self")) != null,
             )
 
             // A result page is still a terminal screen, while only a fresh
@@ -142,11 +144,11 @@ class MandatoryRankSurrenderGuardTest {
     }
 
     @Test
-    fun `confirmed main menu screen completes surrender recovery and permits requeue`() {
+    fun `main menu alone cannot complete surrender recovery or permit requeue`() {
         MandatoryRankSurrenderGuard.begin()
         MandatoryRankSurrenderGuard.markRecoveryUncertain()
-        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_MAIN_MENU"))
-        assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
+        assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_MAIN_MENU"))
+        assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
     }
 
     @Test
@@ -172,12 +174,13 @@ class MandatoryRankSurrenderGuardTest {
 
     @Test
     fun `only the active surrender capability authorizes gated recovery input`() {
-        val stale = MandatoryRankSurrenderGuard.begin()
-        val active = MandatoryRankSurrenderGuard.begin()
+        val stale = MandatoryRankSurrenderGuard.begin("test-game:self")
+        val active = MandatoryRankSurrenderGuard.begin("test-game:self")
 
         assertTrue(MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(active))
-        assertFalse(MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(stale))
-        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_MAIN_MENU"))
+        assertTrue(MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(stale), "duplicate begin must preserve the original live token")
+        val cleanup = MandatoryRankSurrenderGuard.authorizeTerminalCleanup(terminalEvidence("test-game:self"))
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_MAIN_MENU", cleanup))
         assertFalse(MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(active))
     }
 
@@ -214,14 +217,15 @@ class MandatoryRankSurrenderGuardTest {
         replayedLog.observeLine(rawCompleteState)
         assertFalse(replayedLog.hasCompleteTerminalEvidence())
         replayedLog.observeLine("CREATE_GAME")
-        replayedLog.observeLine("tag=PLAYSTATE value=CONCEDED")
+        replayedLog.observeLine("TAG_CHANGE Entity=me tag=PLAYSTATE value=CONCEDED")
         replayedLog.observeLine("tag=STEP value=FINAL_GAMEOVER")
         replayedLog.observeLine(rawCompleteState)
         assertTrue(replayedLog.hasCompleteTerminalEvidence())
 
         val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
         assertTrue(MulliganRankDispatchBarrier.requireSurrender(ticket) != null)
-        MandatoryRankSurrenderGuard.begin()
+        val gameIdentity = terminalTracker.currentGameIdentity("me")
+        MandatoryRankSurrenderGuard.begin(gameIdentity)
 
         // Power.log can already say CONCEDED/FINAL_GAMEOVER/COMPLETE while
         // the screenshot is still the board. UNKNOWN must neither count as a
@@ -252,7 +256,12 @@ class MandatoryRankSurrenderGuardTest {
 
         // A current-match Power.log marker authorizes only the result cleanup;
         // requeue remains blocked until a fresh postcheck confirms the result is gone.
-        val cleanup = MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL")
+        val cleanup = MandatoryRankSurrenderGuard.authorizeTerminalCleanup(
+            terminalTracker.currentGameSurrenderEvidence("me", "opponent")?.copy(
+                ownPlayState = "CONCEDED",
+                opponentPlayState = "WON",
+            ),
+        )
         assertTrue(cleanup != null)
         assertTrue(
             ActionDispatchGate.allowForState(
@@ -299,15 +308,15 @@ class MandatoryRankSurrenderGuardTest {
         // now-cleared result screen, and release only this new match's barrier.
         val repeatedTicket = MulliganRankDispatchBarrier.beginCurrentGame()
         assertTrue(MulliganRankDispatchBarrier.requireSurrender(repeatedTicket) != null)
-        MandatoryRankSurrenderGuard.begin()
+        MandatoryRankSurrenderGuard.begin("repeated:self")
         val repeatedTerminal = CurrentGamePowerLogTerminalTracker().apply {
             observeLine("CREATE_GAME")
-            observeLine("tag=PLAYSTATE value=CONCEDED")
+            observeLine("TAG_CHANGE Entity=me tag=PLAYSTATE value=CONCEDED")
             observeLine("tag=STEP value=FINAL_GAMEOVER")
             observeLine("tag=STATE value=COMPLETE")
         }
         assertTrue(repeatedTerminal.hasCompleteTerminalEvidence())
-        val repeatedCleanup = MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL")
+        val repeatedCleanup = MandatoryRankSurrenderGuard.authorizeTerminalCleanup(terminalEvidence("repeated:self"))
         assertTrue(repeatedCleanup != null)
         assertFalse(
             ResultPageDismissalPolicy.shouldStopWorker(
@@ -328,7 +337,7 @@ class MandatoryRankSurrenderGuardTest {
             ),
             "the fresh deck-selection observation confirms the result page is gone",
         )
-        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED", repeatedCleanup))
         assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
         assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, false))
 
@@ -337,11 +346,11 @@ class MandatoryRankSurrenderGuardTest {
         terminalTracker.observeLine("CREATE_GAME")
         assertFalse(terminalTracker.hasCompleteTerminalEvidence())
         assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
-        terminalTracker.observeLine("tag=PLAYSTATE value=WON")
+        terminalTracker.observeLine("TAG_CHANGE Entity=me tag=PLAYSTATE value=WON")
         terminalTracker.observeLine("tag=STEP value=FINAL_GAMEOVER")
         terminalTracker.observeLine("CREATE_GAME")
         assertFalse(terminalTracker.hasCompleteTerminalEvidence(), "a previous game's terminal tail is stale")
-        terminalTracker.observeLine("tag=PLAYSTATE value=CONCEDED")
+        terminalTracker.observeLine("TAG_CHANGE Entity=me tag=PLAYSTATE value=CONCEDED")
         assertFalse(terminalTracker.hasCompleteTerminalEvidence(), "a terminal tag without final state is incomplete")
         assertFalse(
             ActionDispatchGate.allowForState(
@@ -365,16 +374,16 @@ class MandatoryRankSurrenderGuardTest {
 
             val firstTicket = MulliganRankDispatchBarrier.beginCurrentGame()
             assertTrue(MulliganRankDispatchBarrier.requireSurrender(firstTicket) != null)
-            MandatoryRankSurrenderGuard.begin()
+            MandatoryRankSurrenderGuard.begin("first:self")
             val firstTerminal = CurrentGamePowerLogTerminalTracker().apply {
                 observeLine("CREATE_GAME")
-                observeLine("tag=PLAYSTATE value=CONCEDED")
+                observeLine("TAG_CHANGE Entity=me tag=PLAYSTATE value=CONCEDED")
                 observeLine("tag=STEP value=FINAL_GAMEOVER")
                 observeLine("tag=STATE value=COMPLETE")
             }
             assertTrue(firstTerminal.hasCompleteTerminalEvidence())
             val firstCleanupCapability =
-                MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL")
+                MandatoryRankSurrenderGuard.authorizeTerminalCleanup(terminalEvidence("first:self"))
             assertTrue(firstCleanupCapability != null)
 
             val firstSurrenderRetry = pendingTask()
@@ -432,19 +441,19 @@ class MandatoryRankSurrenderGuardTest {
             // invalid; the second game gets a fresh barrier and cleanup token.
             val secondTicket = MulliganRankDispatchBarrier.beginCurrentGame()
             assertTrue(MulliganRankDispatchBarrier.requireSurrender(secondTicket) != null)
-            MandatoryRankSurrenderGuard.begin()
+            MandatoryRankSurrenderGuard.begin("second:self")
             assertFalse(
                 MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(firstCleanupCapability),
             )
             val secondTerminal = CurrentGamePowerLogTerminalTracker().apply {
                 observeLine("CREATE_GAME")
-                observeLine("tag=PLAYSTATE value=CONCEDED")
+                observeLine("TAG_CHANGE Entity=me tag=PLAYSTATE value=CONCEDED")
                 observeLine("tag=STEP value=FINAL_GAMEOVER")
                 observeLine("tag=STATE value=COMPLETE")
             }
             assertTrue(secondTerminal.hasCompleteTerminalEvidence())
             val secondCleanupCapability =
-                MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL")
+                MandatoryRankSurrenderGuard.authorizeTerminalCleanup(terminalEvidence("second:self"))
             assertTrue(secondCleanupCapability != null)
 
             val secondSurrenderRetry = pendingTask()
@@ -475,4 +484,14 @@ class MandatoryRankSurrenderGuardTest {
             scheduler.shutdownNow()
         }
     }
+
+    private fun terminalEvidence(gameIdentity: String) = CurrentGameSurrenderTerminalEvidence(
+        gameIdentity = gameIdentity,
+        ownEntityId = "self",
+        opponentEntityId = "opponent",
+        ownPlayState = "CONCEDED",
+        opponentPlayState = "WON",
+        finalGameOver = true,
+        complete = true,
+    )
 }

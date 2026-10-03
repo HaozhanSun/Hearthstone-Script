@@ -206,6 +206,9 @@ object GameUtil {
      */
     private val RESTART_GAME_RECT by lazy { GameRect(-0.0365, 0.0302, 0.0878, 0.1272) }
 
+    /** The legacy post-surrender button coordinate is the affirmative "现在认输" control. */
+    private val SURRENDER_CONFIRMATION_ACCEPT_RECT by lazy { RESTART_GAME_RECT }
+
     //    表情
     val THANK_RECT: GameRect by lazy { GameRect(-0.1604, -0.0404, 0.1153, 0.1502) }
     val PRAISE_RECT: GameRect by lazy { GameRect(-0.1930, -0.0730, 0.1971, 0.2320) }
@@ -837,7 +840,11 @@ object GameUtil {
         // surrender can reach GAME_OVER before PLAYSTATE=CONCEDED is parsed
         // or before war.me has been assigned its game id.
         WarEx.surrenderRequested = true
-        val mandatoryRankSurrenderCapability = if (mandatoryRank) MandatoryRankSurrenderGuard.begin() else null
+        val mandatoryRankSurrenderCapability = if (mandatoryRank) {
+            MandatoryRankSurrenderGuard.begin(
+                PowerLogListener.currentGameSurrenderIdentity(WarEx.war.me.gameId),
+            )
+        } else null
         WarEx.surrenderReason = reason?.takeIf { it.isNotBlank() }
         if (System.getProperty("hs.script.e2e") == "true") {
             E2ETrace.markSurrenderRequested(reason)
@@ -865,10 +872,32 @@ object GameUtil {
                         surrenderFutureRef.get()?.let { task -> gameEndTasks.cancel(task) }
                     }
                     if (surrenderStopRequested.get()) return@scheduleWithFixedDelay
-                    fun completeMandatoryRankSurrender(evidence: String) {
-                        if (mandatoryRank && MandatoryRankSurrenderGuard.confirmCompleted(evidence)) {
+                    fun currentSurrenderTerminalCleanupCapability(): MandatoryRankSurrenderGuard.TerminalCleanupCapability? {
+                        MandatoryRankSurrenderGuard.existingTerminalCleanupCapability()?.let { return it }
+                        val ownEntityId = WarEx.war.me.gameId
+                        val opponentEntityId = WarEx.war.rival.gameId
+                        val evidence = PowerLogListener.currentGameSurrenderTerminalEvidence(
+                            ownEntityId,
+                            opponentEntityId,
+                        )
+                        return MandatoryRankSurrenderGuard.authorizeTerminalCleanup(evidence)
+                    }
+                    fun completeMandatoryRankSurrender(
+                        evidence: String,
+                        cleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
+                    ): Boolean {
+                        if (!mandatoryRank) return true
+                        val authorizedCleanup = cleanupCapability ?: currentSurrenderTerminalCleanupCapability()
+                        if (MandatoryRankSurrenderGuard.confirmCompleted(evidence, authorizedCleanup)) {
                             log.info { "RANK_SURRENDER_RECOVERY_COMPLETED evidence=$evidence requeueAllowed=true" }
+                            return true
                         }
+                        MandatoryRankSurrenderGuard.markRecoveryUncertain()
+                        log.warn {
+                            "RANK_SURRENDER_RECOVERY_WAIT reason=terminal-proof-not-authorized " +
+                                "screenEvidence=$evidence ordinaryInput=false requeue=false"
+                        }
+                        return false
                     }
                     if (PauseStatus.isPause) {
                         if (mandatoryRank) {
@@ -987,8 +1016,20 @@ object GameUtil {
                                 }
                             }
                             MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_CONFIRMATION -> {
-                                if (ActionDispatchGate.allow("surrender.retry.confirm", recoveryCapability)) {
-                                    RESTART_GAME_RECT.lClickForMandatoryRankSurrender(recoveryCapability)
+                                if (decision.confirmationTarget == MandatoryRankSurrenderRecoveryPolicy.ConfirmationTarget.ACCEPT_NOW &&
+                                    ActionDispatchGate.allow("surrender.retry.confirm.accept-now", recoveryCapability)
+                                ) {
+                                    SURRENDER_CONFIRMATION_ACCEPT_RECT.lClickForMandatoryRankSurrender(recoveryCapability)
+                                    log.info {
+                                        "RANK_SURRENDER_CONFIRMATION_INPUT target=ACCEPT_NOW " +
+                                            "button=现在认输 dispatch=requested acceptance=awaiting-current-game-powerlog"
+                                    }
+                                } else {
+                                    log.warn {
+                                        "RANK_SURRENDER_CONFIRMATION_INPUT_BLOCKED reason=unrecognized-target " +
+                                            "target=${decision.confirmationTarget ?: "UNKNOWN"} " +
+                                            "continueButton=never-clicked dispatch=false"
+                                    }
                                 }
                             }
                             MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY -> {
@@ -1008,7 +1049,6 @@ object GameUtil {
                             MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_LOSS,
                             MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_RESULT,
                             -> {
-                                stopSurrenderTask()
                                 val terminalKind = when (decision.action) {
                                     MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_WIN -> ScreenWatchdogKind.WIN
                                     MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_LOSS -> ScreenWatchdogKind.LOST
@@ -1020,21 +1060,36 @@ object GameUtil {
                                 )
                                 if (decision.action == MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_RESULT) {
                                     val cleanupCapability = MandatoryRankSurrenderGuard
-                                        .authorizeTerminalCleanup("SCREEN_TERMINAL")
+                                        .existingTerminalCleanupCapability()
+                                    if (mandatoryRank && cleanupCapability == null) {
+                                        MandatoryRankSurrenderGuard.markRecoveryUncertain()
+                                        log.warn {
+                                            "RANK_SURRENDER_RECOVERY_WAIT reason=result-without-current-game-powerlog-proof " +
+                                                "ordinaryInput=false requeue=false"
+                                        }
+                                        return@scheduleWithFixedDelay
+                                    }
+                                    stopSurrenderTask()
                                     dismissStaleGameEndScreen(
                                         resultAlreadyObserved = true,
                                         terminalCleanupCapability = cleanupCapability,
                                     )
+                                } else {
+                                    stopSurrenderTask()
                                 }
                             }
                             MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_MAIN_MENU -> {
+                                if (!completeMandatoryRankSurrender("SCREEN_MAIN_MENU")) {
+                                    return@scheduleWithFixedDelay
+                                }
                                 stopSurrenderTask()
-                                completeMandatoryRankSurrender("SCREEN_MAIN_MENU")
                                 Mode.recover(ModeEnum.HUB, "mandatory-rank-surrender-main-menu-confirmed", enterStrategy = true)
                             }
                             MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_MATCHMAKING -> {
+                                if (!completeMandatoryRankSurrender("SCREEN_MATCHMAKING")) {
+                                    return@scheduleWithFixedDelay
+                                }
                                 stopSurrenderTask()
-                                completeMandatoryRankSurrender("SCREEN_MATCHMAKING")
                                 Mode.recover(ModeEnum.TOURNAMENT, "mandatory-rank-surrender-matchmaking-confirmed", enterStrategy = false)
                             }
                         }
@@ -1115,10 +1170,18 @@ object GameUtil {
                                         }
                                         return@scheduleWithFixedDelay
                                     }
-                                    stopSurrenderTask()
                                     Mode.recover(ModeEnum.GAMEPLAY, "screen-watchdog-result-page", enterStrategy = false)
                                     val cleanupCapability = MandatoryRankSurrenderGuard
-                                        .authorizeTerminalCleanup("SCREEN_TERMINAL")
+                                        .existingTerminalCleanupCapability()
+                                    if (mandatoryRank && cleanupCapability == null) {
+                                        MandatoryRankSurrenderGuard.markRecoveryUncertain()
+                                        log.warn {
+                                            "RANK_SURRENDER_RECOVERY_WAIT reason=result-without-current-game-powerlog-proof " +
+                                                "ordinaryInput=false requeue=false"
+                                        }
+                                        return@scheduleWithFixedDelay
+                                    }
+                                    stopSurrenderTask()
                                     dismissStaleGameEndScreen(
                                         resultAlreadyObserved = true,
                                         terminalCleanupCapability = cleanupCapability,
@@ -1126,14 +1189,18 @@ object GameUtil {
                                     return@scheduleWithFixedDelay
                                 }
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MATCHMAKING -> {
+                                    if (!completeMandatoryRankSurrender("SCREEN_MATCHMAKING")) {
+                                        return@scheduleWithFixedDelay
+                                    }
                                     stopSurrenderTask()
-                                    completeMandatoryRankSurrender("SCREEN_MATCHMAKING")
                                     Mode.recover(ModeEnum.TOURNAMENT, "screen-watchdog-matchmaking", enterStrategy = false)
                                     return@scheduleWithFixedDelay
                                 }
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MAIN_MENU -> {
+                                    if (!completeMandatoryRankSurrender("SCREEN_MAIN_MENU")) {
+                                        return@scheduleWithFixedDelay
+                                    }
                                     stopSurrenderTask()
-                                    completeMandatoryRankSurrender("SCREEN_MAIN_MENU")
                                     Mode.recover(ModeEnum.HUB, "screen-watchdog-main-menu", enterStrategy = true)
                                     return@scheduleWithFixedDelay
                                 }
@@ -1395,7 +1462,10 @@ object GameUtil {
                             if (terminalCleanupCapability != null &&
                                 MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCleanupCapability)
                             ) {
-                                val completed = MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED")
+                                val completed = MandatoryRankSurrenderGuard.confirmCompleted(
+                                    "SCREEN_RESULT_DISMISSED",
+                                    terminalCleanupCapability,
+                                )
                                 log.info {
                                     "RANK_SURRENDER_RECOVERY_COMPLETED evidence=SCREEN_RESULT_DISMISSED " +
                                         "requeueAllowed=$completed rankPreflightRequired=true"

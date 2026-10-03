@@ -864,7 +864,7 @@ object UpstreamScreenStateRecovery {
                 Mode.recover(ModeEnum.GAMEPLAY, "visible-result-screen", enterStrategy = false)
                 log.warn { "SCREEN_RECOVERY_APPLIED screen=RESULT next=DISMISS_STALE_RESULT" }
                 val cleanupCapability = club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
-                    .authorizeTerminalCleanup("SCREEN_TERMINAL")
+                    .existingTerminalCleanupCapability()
                 GameUtil.dismissStaleGameEndScreen(
                     resultAlreadyObserved = true,
                     terminalCleanupCapability = cleanupCapability,
