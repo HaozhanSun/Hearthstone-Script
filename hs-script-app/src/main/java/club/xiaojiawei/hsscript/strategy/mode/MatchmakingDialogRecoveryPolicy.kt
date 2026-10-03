@@ -42,6 +42,44 @@ internal object MatchmakingDialogRecoveryPolicy {
 
 /** Fail-closed text contract; generic errors and other dialogs are not clickable evidence. */
 internal object StartGameErrorDialogClassifier {
+    /**
+     * Classify the single, multi-line modal crop. A positive result requires
+     * both the generic error heading and the confirm label plus one of the
+     * two observed start-failure messages. Reconnect and other error dialogs
+     * remain UNKNOWN, never click authorization.
+     */
+    fun classifyModalText(
+        text: String,
+        confidence: Double? = null,
+        modalVisible: Boolean = false,
+    ): MatchmakingDialogRecoveryPolicy.Probe {
+        if (confidence != null && (!confidence.isFinite() ||
+                confidence < MatchmakingDialogRecoveryPolicy.MIN_OCR_CONFIDENCE)
+        ) {
+            return MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN
+        }
+        val normalized = normalize(text)
+        val hasErrorHeading = normalized.contains("发生错误")
+        val hasConfirm = normalized.contains("确定")
+        val legacyStartFailure = normalized.contains("开始游戏") && normalized.contains("几分钟")
+        val opponentStartFailure = normalized.contains("对手无法连接") &&
+            normalized.contains("游戏无法继续") &&
+            (normalized.contains("再试一次") || normalized.contains("请再试"))
+        if (modalVisible && hasErrorHeading && hasConfirm && (legacyStartFailure || opponentStartFailure)) {
+            return MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE
+        }
+
+        val partialError = hasErrorHeading || normalized.contains("开始游戏") ||
+            normalized.contains("几分钟") || normalized.contains("对手无法连接") ||
+            normalized.contains("游戏无法继续") || normalized.contains("无法重新连接") ||
+            normalized.contains("请再试") || normalized.contains("请重试")
+        return when {
+            partialError || normalized.isBlank() -> MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN
+            !modalVisible -> MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG
+            else -> MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN
+        }
+    }
+
     fun classify(
         title: String,
         body: String,

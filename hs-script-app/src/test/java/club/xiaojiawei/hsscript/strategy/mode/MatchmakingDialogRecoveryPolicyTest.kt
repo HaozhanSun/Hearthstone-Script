@@ -48,6 +48,40 @@ class MatchmakingDialogRecoveryPolicyTest {
             MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
             StartGameErrorDialogClassifier.classify("", "", "确定"),
         )
+        assertEquals(
+            MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE,
+            StartGameErrorDialogClassifier.classifyModalText(
+                "发生错误 由于你的对手无法连接，游戏无法继续。请再试一次。确定",
+                0.91,
+                modalVisible = true,
+            ),
+        )
+        assertEquals(
+            MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE,
+            StartGameErrorDialogClassifier.classifyModalText(
+                "发生错误 开始游戏时发生了错误。请等待几分钟然后再试。确定",
+                0.90,
+                modalVisible = true,
+            ),
+        )
+        assertEquals(
+            MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+            StartGameErrorDialogClassifier.classifyModalText(
+                "发生错误 无法重新连接到游戏 确定",
+                0.92,
+                modalVisible = true,
+            ),
+            "a reconnect modal must not be clicked as a start-game error",
+        )
+        assertEquals(
+            MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+            StartGameErrorDialogClassifier.classifyModalText(
+                "发生错误 由于你的对手无法连接，游戏无法继续。请再试一次。确定",
+                0.99,
+                modalVisible = false,
+            ),
+            "text without a visible modal is not click authorization",
+        )
     }
 
     @Test
@@ -59,10 +93,10 @@ class MatchmakingDialogRecoveryPolicyTest {
         assertEquals(1079, fixture.height)
 
         val transcript = mapOf(
-            ScreenStateRoiSelector.START_GAME_ERROR_TITLE_ROI to OcrRecognition("发生错误", 0.94),
-            ScreenStateRoiSelector.START_GAME_ERROR_BODY_ROI to
-                OcrRecognition("开始游戏时发生了错误请等待几分钟然后再试", 0.96),
-            ScreenStateRoiSelector.START_GAME_ERROR_CONFIRM_ROI to OcrRecognition("确定", 0.93),
+            ScreenStateRoiSelector.START_GAME_ERROR_MODAL_ROI to OcrRecognition(
+                "发生错误 由于你的对手无法连接，游戏无法继续。请再试一次。 确定",
+                0.96,
+            ),
         )
         val originalSettingsProvider = OcrRuntime.settingsProvider
         val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
@@ -121,14 +155,7 @@ class MatchmakingDialogRecoveryPolicyTest {
         }
         assertEquals("PADDLEX", probe.provider)
         assertEquals(MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE, probe.state)
-        assertEquals(
-            setOf(
-                ScreenStateRoiSelector.START_GAME_ERROR_TITLE_ROI,
-                ScreenStateRoiSelector.START_GAME_ERROR_BODY_ROI,
-                ScreenStateRoiSelector.START_GAME_ERROR_CONFIRM_ROI,
-            ),
-            observedRois.toSet(),
-        )
+        assertEquals(setOf(ScreenStateRoiSelector.START_GAME_ERROR_MODAL_ROI), observedRois.toSet())
 
         val decision = MatchmakingDialogRecoveryPolicy.decide(active, probe.state, 0, false)
         assertEquals(MatchmakingDialogRecoveryPolicy.Action.CLICK_CONFIRM, decision.action)
@@ -164,16 +191,14 @@ class MatchmakingDialogRecoveryPolicyTest {
     }
 
     @Test
-    fun `dedicated title body and confirm crops include the dialog in the supplied client frame`() {
+    fun `single modal crop includes title body and confirm in the supplied client frame`() {
         val rois = ScreenStateRoiSelector.selectStartGameError(1258, 947).associateBy { it.name }
-        val title = rois.getValue(ScreenStateRoiSelector.START_GAME_ERROR_TITLE_ROI).bounds
-        val body = rois.getValue(ScreenStateRoiSelector.START_GAME_ERROR_BODY_ROI).bounds
-        val confirm = rois.getValue(ScreenStateRoiSelector.START_GAME_ERROR_CONFIRM_ROI).bounds
+        val modal = rois.getValue(ScreenStateRoiSelector.START_GAME_ERROR_MODAL_ROI).bounds
 
-        assertTrue(title.contains(610, 345), "error heading should be in the title crop")
-        assertTrue(body.contains(500, 420), "error sentence should be in the body crop")
-        assertTrue(confirm.contains(585, 558), "visible 确定 button should be in the confirm crop")
-        assertEquals(3, rois.size)
+        assertTrue(modal.contains(610, 345), "error heading should be in the modal crop")
+        assertTrue(modal.contains(500, 420), "error sentence should be in the modal crop")
+        assertTrue(modal.contains(585, 558), "visible 确定 button should be in the modal crop")
+        assertEquals(1, rois.size, "the modal must require one bounded OCR request")
     }
 
     @Test

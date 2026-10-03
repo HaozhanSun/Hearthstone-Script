@@ -90,6 +90,7 @@ object ScreenStateRecovery {
      * branch so a stale client cannot wait forever on WAIT_FOR_CLIENT.
      */
     private val loadingObservedAt = AtomicLong(0L)
+    private val startGameErrorProbeInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
@@ -143,7 +144,7 @@ object ScreenStateRecovery {
         val loadingCentralDarkRatio: Double,
         val resultContinueGrayLightRatio: Double,
         val resultBannerLowSaturationRatio: Double,
-        val reconnectFailureDialogVisual: Boolean = false,
+        val centeredModalPanelVisual: Boolean = false,
     ) {
         override fun toString(): String =
             "hash=${java.lang.Long.toUnsignedString(sampleHash, 16)} " +
@@ -152,7 +153,7 @@ object ScreenStateRecovery {
                 "loadingCentralDark=${"%.3f".format(Locale.ROOT, loadingCentralDarkRatio)} " +
                 "resultContinueGrayLight=${"%.3f".format(Locale.ROOT, resultContinueGrayLightRatio)} " +
                 "resultBannerLowSaturation=${"%.3f".format(Locale.ROOT, resultBannerLowSaturationRatio)} " +
-                "reconnectFailureDialog=$reconnectFailureDialogVisual"
+                "centeredModalPanel=$centeredModalPanelVisual"
     }
 
     private data class RegionSignal(
@@ -431,6 +432,21 @@ object ScreenStateRecovery {
      * transition or input side effect; missing capture/OCR evidence is UNKNOWN.
      */
     internal fun probeStartGameErrorDialogForMatchmaking(): StartGameErrorDialogProbe {
+        if (!startGameErrorProbeInFlight.compareAndSet(false, true)) {
+            log.info { "MATCHMAKING_ERROR_DIALOG_PROBE_SKIPPED reason=probe-in-flight" }
+            return StartGameErrorDialogProbe(
+                MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+                reason = "probe-in-flight",
+            )
+        }
+        return try {
+            probeStartGameErrorDialogForMatchmakingSerial()
+        } finally {
+            startGameErrorProbeInFlight.set(false)
+        }
+    }
+
+    private fun probeStartGameErrorDialogForMatchmakingSerial(): StartGameErrorDialogProbe {
         val tessData = File(TESS_DATA_PATH)
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
         if (!chiSim.isFile) {
@@ -472,8 +488,9 @@ object ScreenStateRecovery {
                     timeoutMs = MATCHMAKING_DIALOG_OCR_TIMEOUT_MS,
                 ) {
                     // AUTO uses the selected PaddleX provider first and its established legacy fallback.
-                    // The compatibility OCR path remains available for LEGACY_ONLY mode and fallback.
-                    ocrScreenRoi(roiImage, tessData, targeted = true)
+                    // The modal is multi-line, so use the compatibility engine's block mode rather
+                    // than three tiny single-line crops (the confirm crop was frequently empty).
+                    ocrScreenRoi(roiImage, tessData, targeted = false)
                 }.also { result ->
                     log.info {
                         "MATCHMAKING_ERROR_DIALOG_OCR_RESULT name=$roiName " +
@@ -506,30 +523,33 @@ object ScreenStateRecovery {
                 reason = "capture-unavailable",
             )
         }
-        val values = ScreenStateRoiSelector
+        val roi = ScreenStateRoiSelector
             .selectStartGameError(image.width, image.height)
-            .associate { roi ->
-                log.info {
-                    "MATCHMAKING_ERROR_DIALOG_OCR_ROI name=${roi.name} " +
-                        "x=${roi.bounds.x} y=${roi.bounds.y} " +
-                        "w=${roi.bounds.width} h=${roi.bounds.height} space=capture-local"
-                }
-                roi.name to recognize(crop(image, roi.bounds), roi.name)
-            }
-        val title = values[ScreenStateRoiSelector.START_GAME_ERROR_TITLE_ROI]
-        val body = values[ScreenStateRoiSelector.START_GAME_ERROR_BODY_ROI]
-        val confirm = values[ScreenStateRoiSelector.START_GAME_ERROR_CONFIRM_ROI]
-        val state = StartGameErrorDialogClassifier.classify(
-            title = title?.text.orEmpty(),
-            body = body?.text.orEmpty(),
-            confirm = confirm?.text.orEmpty(),
-            confidences = listOf(title?.confidence, body?.confidence, confirm?.confidence),
+            .singleOrNull()
+            ?: return StartGameErrorDialogProbe(
+                state = MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+                screenshot = screenshot,
+                reason = "modal-roi-unavailable",
+            )
+        log.info {
+            "MATCHMAKING_ERROR_DIALOG_OCR_ROI name=${roi.name} " +
+                "x=${roi.bounds.x} y=${roi.bounds.y} " +
+                "w=${roi.bounds.width} h=${roi.bounds.height} space=capture-local"
+        }
+        val recognition = recognize(crop(image, roi.bounds), roi.name)
+        val text = recognition.text
+        val modalVisible = visualSignature(image).centeredModalPanelVisual
+        val state = StartGameErrorDialogClassifier.classifyModalText(
+            text = text,
+            confidence = recognition.confidence,
+            modalVisible = modalVisible,
         )
+        val normalized = text.replace(Regex("\\s+"), "")
         return StartGameErrorDialogProbe(
             state = state,
-            title = title?.text.orEmpty(),
-            body = body?.text.orEmpty(),
-            confirm = confirm?.text.orEmpty(),
+            title = if (normalized.contains("发生错误")) "发生错误" else "",
+            body = text,
+            confirm = if (normalized.contains("确定")) "确定" else "",
             screenshot = screenshot,
             provider = OcrRuntime.lastProviderUsed().name,
             reason = if (state == MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN) {
@@ -814,7 +834,7 @@ object ScreenStateRecovery {
             loadingCentralDarkRatio = loadingCenterSignal.darkRatio,
             resultContinueGrayLightRatio = continueSignal.grayLightRatio,
             resultBannerLowSaturationRatio = bannerSignal.lowSaturationRatio,
-            reconnectFailureDialogVisual = looksLikeReconnectFailureDialogVisual(
+            centeredModalPanelVisual = looksLikeCenteredModalPanelVisual(
                 lowSaturationRatio = reconnectDialogPanelSignal.lowSaturationRatio,
                 darkRatio = reconnectDialogPanelSignal.darkRatio,
                 warmRatio = reconnectDialogPanelSignal.warmRatio,
@@ -889,6 +909,12 @@ object ScreenStateRecovery {
         if (looksLikeReconnectSpinnerText(text)) {
             return Detection(ScreenKind.RECONNECT_SPINNER, ModeEnum.STARTUP, 96, "reconnect-spinner-text")
         }
+        // The same centered panel can cover the deck title while a distinct
+        // matchmaking error is visible. If its message was not recognized as
+        // a known reconnect state, do not act on the background screen. The
+        // dedicated matchmaking probe may click only after its exact OCR
+        // contract succeeds; otherwise this remains an unresolved observation.
+        if (visual.centeredModalPanelVisual) return null
         if (text.contains("选择套牌") || has("套牌", "狂野对战")) {
             return Detection(ScreenKind.DECK_SELECTION, ModeEnum.TOURNAMENT, 100, "deck-selection-title")
         }
@@ -990,14 +1016,7 @@ object ScreenStateRecovery {
         // centered, dark-gray non-reconnectable modal. OCR garbled the dialog
         // ROIs, so the underlying deck title incorrectly won. Require both
         // that screen-specific title anchor and the distinctive modal panel.
-        if (looksLikeDeckSelectionTitleText(deckTitle) && visual.reconnectFailureDialogVisual) {
-            return Detection(
-                ScreenKind.RECONNECT_FAILURE,
-                ModeEnum.LOGIN,
-                96,
-                "deck-underlay-centered-reconnect-failure-visual",
-            )
-        }
+        if (looksLikeDeckSelectionTitleText(deckTitle) && visual.centeredModalPanelVisual) return null
         if (looksLikeDeckSelectionTitleText(deckTitle)) {
             return Detection(
                 ScreenKind.DECK_SELECTION,
@@ -1064,16 +1083,15 @@ object ScreenStateRecovery {
 
     internal fun looksLikeReconnectFailureDialogRoiText(ocrText: String): Boolean {
         val text = normalizedScreenText(ocrText)
-        return text.contains("发生错误") ||
-            text.contains("对手无法连接") ||
-            text.contains("游戏无法继续") ||
-            text.contains("重新连接失败") ||
-            text.contains("请再试") ||
-            text.contains("请重试")
+        return text.contains("重新连接失败") ||
+            text.contains("无法重新连接") ||
+            text.contains("请重试") ||
+            text.contains("请重新启动炉石传说") ||
+            text.contains("无法通过暴雪战网服务")
     }
 
-    /** OCR-free modal fallback, gated by the dedicated deck-title anchor. */
-    internal fun looksLikeReconnectFailureDialogVisual(
+    /** OCR-free panel-shape guard; it blocks underlay recovery but never identifies a modal action. */
+    internal fun looksLikeCenteredModalPanelVisual(
         lowSaturationRatio: Double,
         darkRatio: Double,
         warmRatio: Double,

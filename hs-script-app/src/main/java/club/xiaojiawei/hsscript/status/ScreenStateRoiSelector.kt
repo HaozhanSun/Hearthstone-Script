@@ -9,9 +9,7 @@ internal object ScreenStateRoiSelector {
     const val RECONNECT_DIALOG_TITLE_ROI = "screen-state-reconnect-dialog-title"
     const val RECONNECT_DIALOG_STATUS_ROI = "screen-state-reconnect-dialog-status"
     const val RECONNECT_DIALOG_MESSAGE_ROI = "screen-state-reconnect-dialog-message"
-    const val START_GAME_ERROR_TITLE_ROI = "screen-state-start-game-error-title"
-    const val START_GAME_ERROR_BODY_ROI = "screen-state-start-game-error-body"
-    const val START_GAME_ERROR_CONFIRM_ROI = "screen-state-start-game-error-confirm"
+    const val START_GAME_ERROR_MODAL_ROI = "screen-state-start-game-error-modal"
     const val RESULT_CONTINUE_ROI = "screen-state-result-continue"
 
     data class Roi(val name: String, val bounds: Rectangle)
@@ -63,12 +61,12 @@ internal object ScreenStateRoiSelector {
         NormalizedRoi(RESULT_CONTINUE_ROI, 0.410, 0.905, 0.590, 0.980),
     )
 
-    // Kept out of normal screen recovery's OCR pass: these three crops are
-    // probed only while matchmaking, before any ERROR_RECT click.
+    // Kept out of normal screen recovery's OCR pass: this single crop is
+    // probed only while matchmaking, before any ERROR_RECT click. A single
+    // request avoids three independent sidecar queue timeouts and gives the
+    // compatibility OCR engine the heading, message, and button together.
     private val startGameErrorNormalized = listOf(
-        NormalizedRoi(START_GAME_ERROR_TITLE_ROI, 0.405, 0.345, 0.595, 0.425),
-        NormalizedRoi(START_GAME_ERROR_BODY_ROI, 0.285, 0.430, 0.715, 0.565),
-        NormalizedRoi(START_GAME_ERROR_CONFIRM_ROI, 0.425, 0.570, 0.575, 0.675),
+        NormalizedRoi(START_GAME_ERROR_MODAL_ROI, 0.285, 0.325, 0.715, 0.700),
     )
 
     // Secondary probes are deliberately smaller than the old center crop.

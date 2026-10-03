@@ -366,24 +366,23 @@ class ScreenStateRecoveryTest {
     }
 
     @Test
-    fun `reconnect failure dialog wins over the deck selection title`() {
+    fun `opponent cannot connect start-game dialog is not misclassified as a client restart`() {
         val dialogText = "发生错误由于你的对手无法连接游戏无法继续请再试"
-        assertTrue(ScreenStateRecovery.looksLikeReconnectFailureDialogRoiText(dialogText))
-        assertEquals(
-            "RECONNECT_FAILURE",
-            ScreenStateRecovery.recoveryTransitionForTest(
-                ocrText = "",
-                targeted = mapOf(
-                    ScreenStateRoiSelector.RECONNECT_DIALOG_TITLE_ROI to "发生错误",
-                    ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI to "选择套牌",
-                    ScreenStateRoiSelector.RECONNECT_DIALOG_MESSAGE_ROI to dialogText,
-                ),
-        )?.screen,
+        assertFalse(ScreenStateRecovery.looksLikeReconnectFailureDialogRoiText(dialogText))
+        val modal = loadFixture("start-game-error-dialog-over-deck-selection.png")
+        assertNull(
+            ScreenStateRecovery.recoveryTransitionForImageForTest(
+                image = modal,
+                ocrText = "选择套牌 狂野对战",
+                targeted = mapOf(ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI to "选择套牌"),
+            ),
+            "the underlay must not restart the client or restart matchmaking while a modal is visible",
         )
+        assertEquals("RECONNECT_FAILURE", ScreenStateRecovery.recoveryTransitionForTest("重新连接失败 请重新启动炉石传说")?.screen)
     }
 
     @Test
-    fun `saved reconnect error screenshot outranks underlying deck title when dialog OCR is garbled`() {
+    fun `saved reconnect error screenshot with garbled dialog OCR remains unresolved instead of acting on underlay`() {
         val modal = loadFixture("reconnect-failure-dialog-over-deck-selection.png")
         val ordinaryDeck = loadFixture("deck-selection-screen.png")
         // Exact ROI transcript at hs_script.log:7833: the visible modal ROIs
@@ -396,10 +395,7 @@ class ScreenStateRecoveryTest {
         )
 
         val blocked = ScreenStateRecovery.recoveryTransitionForImageForTest(modal, "", deployedOcr)
-        assertEquals("RECONNECT_FAILURE", blocked?.screen)
-        assertEquals(ModeEnum.LOGIN, blocked?.mode)
-        assertFalse(blocked?.enterStrategy ?: true)
-        assertEquals("RESTART_CLIENT", blocked?.action)
+        assertNull(blocked, "visual shape alone cannot distinguish reconnect failure from another centered modal")
 
         val actualDeck = ScreenStateRecovery.recoveryTransitionForImageForTest(ordinaryDeck, "", deployedOcr)
         assertEquals("DECK_SELECTION", actualDeck?.screen)
@@ -407,7 +403,7 @@ class ScreenStateRecoveryTest {
     }
 
     @Test
-    fun `second reconnect modal after authoritative win does not return to deck selection`() {
+    fun `second reconnect modal after authoritative win stays unresolved when dialog OCR is inconclusive`() {
         val evidence = requireNotNull(
             javaClass.getResourceAsStream("/offline-ocr/screen-recovery/won-then-reconnect-modal-evidence.txt"),
         ).bufferedReader().use { it.readText() }
@@ -427,10 +423,7 @@ class ScreenStateRecoveryTest {
             ScreenStateRoiSelector.RECONNECT_DIALOG_MESSAGE_ROI to "",
         )
         val transition = ScreenStateRecovery.recoveryTransitionForImageForTest(afterWinModal, "", deployedOcr)
-        assertEquals("RECONNECT_FAILURE", transition?.screen)
-        assertEquals(ModeEnum.LOGIN, transition?.mode)
-        assertFalse(transition?.enterStrategy ?: true)
-        assertEquals("RESTART_CLIENT", transition?.action)
+        assertNull(transition)
     }
 
     private fun loadFixture(name: String) = ImageIO.read(
