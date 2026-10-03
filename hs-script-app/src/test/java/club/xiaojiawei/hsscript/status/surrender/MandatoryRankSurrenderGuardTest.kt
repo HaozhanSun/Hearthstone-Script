@@ -172,11 +172,11 @@ class MandatoryRankSurrenderGuardTest {
 
     @Test
     fun `only the active surrender capability authorizes gated recovery input`() {
+        val stale = MandatoryRankSurrenderGuard.begin()
         val active = MandatoryRankSurrenderGuard.begin()
-        val forged = MandatoryRankSurrenderGuard.RecoveryCapability()
 
         assertTrue(MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(active))
-        assertFalse(MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(forged))
+        assertFalse(MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(stale))
         assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_MAIN_MENU"))
         assertFalse(MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(active))
     }

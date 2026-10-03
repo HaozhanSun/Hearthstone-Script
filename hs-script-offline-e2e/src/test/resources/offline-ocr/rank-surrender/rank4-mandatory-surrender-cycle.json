@@ -1,0 +1,38 @@
+{
+  "scenario": "rank4-surrender-accepted-then-return-to-deck-selection",
+  "rank": {
+    "provider": "PADDLEX",
+    "rank": 4,
+    "tier": "GOLD",
+    "confidence": 1.0,
+    "agreementCount": 1,
+    "phase": "REPLACE_CARD"
+  },
+  "deckSelectionRankBadge": 4,
+  "priorGameId": "rank4-prior-001",
+  "nextGameId": "rank4-next-002",
+  "nextGamePowerLog": "rank4-next-game-start.powerlog.txt",
+  "surrenderRequestLog": "rank4-surrender-request.log",
+  "powerLog": "rank4-surrender-terminal.powerlog.txt",
+  "nextGameTerminalPowerLog": "rank4-next-game-surrender-terminal.powerlog.txt",
+  "historicalRank3Evidence": {
+    "rank": 3,
+    "phase": "REPLACE_CARD",
+    "provider": "PADDLEX",
+    "confidence": 0.9993202686309814,
+    "captureTime": "HUD clock 11:09; host screenshot mtime 2026-10-03T11:10:02-07:00",
+    "sourceScreenshot": "codex-clipboard-753456c0-3dd3-4f6e-b6c1-08c838c41a5f.png",
+    "sourceLog": "historical-rank3-decision.log",
+    "sourceLines": "hs_script.log:19281,19285,19287",
+    "screenshot": "offline-ocr/rank3-mulligan-badge.png",
+    "decision": "DENY",
+    "reason": "rank-evidence-stale"
+  },
+  "deckSelection": {
+    "ocr": "有 选择套牌 个 全人人 一",
+    "screen": "DECK_SELECTION",
+    "confidence": 100,
+    "evidence": "deck-selection-title",
+    "screenshot": "../screen-recovery/deck-selection-screen.png"
+  }
+}

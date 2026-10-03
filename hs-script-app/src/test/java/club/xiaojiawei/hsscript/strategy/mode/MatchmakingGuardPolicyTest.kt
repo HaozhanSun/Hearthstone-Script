@@ -39,7 +39,7 @@ class MatchmakingGuardPolicyTest {
         assertEquals(
             MatchmakingGuardPolicy.Decision.ABORT_GAME_STARTED,
             MatchmakingGuardPolicy.decide(
-                MatchmakingGuardPolicy.LiveGameEvidence(true, WarPhaseEnum.FILL_DECK, "game-1", 10),
+                MatchmakingGuardPolicy.LiveGameEvidence(true, WarPhaseEnum.FILL_DECK.name, "game-1", 10),
             ),
         )
     }
@@ -49,7 +49,7 @@ class MatchmakingGuardPolicyTest {
         assertEquals(
             MatchmakingGuardPolicy.Decision.ABORT_GAME_STARTED,
             MatchmakingGuardPolicy.decide(
-                MatchmakingGuardPolicy.LiveGameEvidence(true, WarPhaseEnum.GAME_TURN, "game-1", 500),
+                MatchmakingGuardPolicy.LiveGameEvidence(true, WarPhaseEnum.GAME_TURN.name, "game-1", 500),
             ),
         )
     }
@@ -59,7 +59,7 @@ class MatchmakingGuardPolicyTest {
         assertEquals(
             MatchmakingGuardPolicy.Decision.ABORT_GAME_STARTED,
             MatchmakingGuardPolicy.decide(
-                MatchmakingGuardPolicy.LiveGameEvidence(false, WarPhaseEnum.FILL_DECK, "game-1", 25),
+                MatchmakingGuardPolicy.LiveGameEvidence(false, WarPhaseEnum.FILL_DECK.name, "game-1", 25),
             ),
         )
     }
@@ -69,19 +69,19 @@ class MatchmakingGuardPolicyTest {
         assertEquals(
             MatchmakingGuardPolicy.Decision.CONTINUE_MATCHMAKING,
             MatchmakingGuardPolicy.decide(
-                MatchmakingGuardPolicy.LiveGameEvidence(false, WarPhaseEnum.FILL_DECK, "", 0),
+                MatchmakingGuardPolicy.LiveGameEvidence(false, WarPhaseEnum.FILL_DECK.name, "", 0),
             ),
         )
         assertEquals(
             MatchmakingGuardPolicy.Decision.CONTINUE_MATCHMAKING,
             MatchmakingGuardPolicy.decide(
-                MatchmakingGuardPolicy.LiveGameEvidence(false, WarPhaseEnum.GAME_OVER, "stale-game", 500),
+                MatchmakingGuardPolicy.LiveGameEvidence(false, WarPhaseEnum.GAME_OVER.name, "stale-game", 500),
             ),
         )
         assertEquals(
             MatchmakingGuardPolicy.Decision.CONTINUE_MATCHMAKING,
             MatchmakingGuardPolicy.decide(
-                MatchmakingGuardPolicy.LiveGameEvidence(false, WarPhaseEnum.FILL_DECK, "UNKNOWN", 1),
+                MatchmakingGuardPolicy.LiveGameEvidence(false, WarPhaseEnum.FILL_DECK.name, "UNKNOWN", 1),
             ),
         )
     }

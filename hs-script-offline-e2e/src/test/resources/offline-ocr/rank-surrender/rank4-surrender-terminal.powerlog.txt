@@ -1,0 +1,6 @@
+D 12:22:32.7233260 GameState.DebugPrintPower() - CREATE_GAME gameId=rank4-prior-001
+D 12:22:32.7233260 GameState.DebugPrintPower() - TAG_CHANGE Entity=PLAYER_SELF tag=MULLIGAN_STATE value=INPUT
+D 12:24:30.5351350 GameState.DebugPrintPower() - TAG_CHANGE Entity=PLAYER_SELF tag=PLAYSTATE value=CONCEDED
+D 12:24:30.5351350 GameState.DebugPrintPower() - TAG_CHANGE Entity=PLAYER_SELF tag=PLAYSTATE value=LOST
+D 12:24:30.5351350 GameState.DebugPrintPower() - TAG_CHANGE Entity=PLAYER_OPPONENT tag=PLAYSTATE value=WON
+D 12:24:30.5351350 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER

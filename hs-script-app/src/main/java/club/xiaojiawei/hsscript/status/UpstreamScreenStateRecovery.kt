@@ -120,6 +120,25 @@ object UpstreamScreenStateRecovery {
     )
 
     /**
+     * A fresh, authoritative return to deck selection completes the visual
+     * half of a mandatory rank surrender. The Power.log terminal capability
+     * is still required by the guard; a screenshot by itself cannot release
+     * the queue barrier.
+     */
+    internal fun completeMandatoryRankSurrenderAtDeckSelection(
+        screenKind: String,
+        confidence: Int,
+        visualEvidence: String,
+        freshObservation: Boolean,
+    ): club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderDeckSelectionRecovery.Result =
+        club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderDeckSelectionRecovery.completeIfRequired(
+            screenKind = screenKind,
+            confidence = confidence,
+            visualEvidence = visualEvidence,
+            freshObservation = freshObservation,
+        )
+
+    /**
      * Inspect the visible client and, if possible, move the state machine to
      * the detected screen. Returns true only when a state/action was applied.
      */
@@ -800,6 +819,34 @@ object UpstreamScreenStateRecovery {
                 ) {
                     log.warn { "SCREEN_RECOVERY_DECK_SELECTION_SKIPPED reason=no-selected-strategy" }
                     return false
+                }
+                val surrenderCompletion = completeMandatoryRankSurrenderAtDeckSelection(
+                    screenKind = detection.kind.code,
+                    confidence = detection.confidence,
+                    visualEvidence = detection.evidence,
+                    // apply() is reached only after the current capture and
+                    // state fingerprint have been revalidated.
+                    freshObservation = true,
+                )
+                if (surrenderCompletion ==
+                    club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderDeckSelectionRecovery.Result.BLOCKED
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_DECK_SELECTION_BLOCKED reason=rank-surrender-terminal-proof-missing " +
+                            "confidence=${detection.confidence} evidence=${detection.evidence} " +
+                            "terminalCleanupAuthorized=${club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.hasTerminalCleanupCapability()} " +
+                            "dispatch=false"
+                    }
+                    return false
+                }
+                if (surrenderCompletion ==
+                    club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderDeckSelectionRecovery.Result.COMPLETED
+                ) {
+                    log.warn {
+                        "MANDATORY_RANK_SURRENDER_COMPLETED evidence=fresh-deck-selection " +
+                            "confidence=${detection.confidence} visualEvidence=${detection.evidence} " +
+                            "queueMayResume=true"
+                    }
                 }
                 Mode.recover(ModeEnum.TOURNAMENT, "visible-deck-selection", enterStrategy = false)
                 log.warn {

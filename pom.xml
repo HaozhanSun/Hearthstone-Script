@@ -4,15 +4,17 @@
 
     <groupId>com.github.xjw580.Hearthstone-Script</groupId>
     <artifactId>hs-script</artifactId>
-    <version>v4.16.543</version>
+    <version>v4.16.544</version>
     <packaging>pom</packaging>
 
     <name>Hearthstone-Script</name>
     <url>http://maven.apache.org</url>
 
     <modules>
-        <module>hs-script-app</module>
         <module>hs-script-base</module>
+        <module>hs-script-recovery-core</module>
+        <module>hs-script-app</module>
+        <module>hs-script-offline-e2e</module>
         <module>hs-script-plugin-sdk</module>
         <module>hs-script-card-sdk</module>
         <module>hs-script-strategy-sdk</module>

@@ -1,0 +1,2 @@
+D 12:34:00.0000000 GameState.DebugPrintPower() - CREATE_GAME gameId=rank4-next-002
+D 12:34:00.0000000 GameState.DebugPrintPower() - TAG_CHANGE Entity=PLAYER_SELF tag=MULLIGAN_STATE value=INPUT

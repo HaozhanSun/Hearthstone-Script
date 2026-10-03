@@ -326,7 +326,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         log.warn {
             "MATCHMAKING_ABORTED trace=$traceId reason=game-started stage=$stage " +
                 "mode=${Mode.currMode?.name ?: "NONE"} inWar=${evidence.inWar} " +
-                "warPhase=${evidence.warPhase.name} gameId=${evidence.gameId.ifBlank { "NONE" }} " +
+                "warPhase=${evidence.warPhase} gameId=${evidence.gameId.ifBlank { "NONE" }} " +
                 "powerLogPosition=${evidence.powerLogPosition}"
         }
         return true
@@ -339,7 +339,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
             .orEmpty()
         return MatchmakingGuardPolicy.LiveGameEvidence(
             inWar = WarEx.inWar,
-            warPhase = war.currentPhase,
+            warPhase = war.currentPhase.name,
             gameId = gameId,
             powerLogPosition = PowerLogListener.logFile?.getPosition() ?: -1L,
         )

@@ -1,7 +1,7 @@
 package club.xiaojiawei.hsscript.status.surrender
 
-/** Shared production/test handoff for a terminal surrender observed at deck selection. */
-internal object MandatoryRankSurrenderDeckSelectionRecovery {
+/** Production handoff for an authoritative terminal surrender at deck selection. */
+object MandatoryRankSurrenderDeckSelectionRecovery {
     enum class Result { NOT_REQUIRED, COMPLETED, BLOCKED }
 
     fun completeIfRequired(
@@ -12,10 +12,7 @@ internal object MandatoryRankSurrenderDeckSelectionRecovery {
     ): Result {
         if (!MandatoryRankSurrenderGuard.isPending()) return Result.NOT_REQUIRED
         val completed = MandatoryRankSurrenderGuard.confirmDeckSelectionCompleted(
-            screenKind = screenKind,
-            confidence = confidence,
-            visualEvidence = visualEvidence,
-            freshObservation = freshObservation,
+            screenKind, confidence, visualEvidence, freshObservation,
         )
         return if (completed) Result.COMPLETED else Result.BLOCKED
     }

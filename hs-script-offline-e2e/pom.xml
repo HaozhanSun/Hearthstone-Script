@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.github.xjw580.Hearthstone-Script</groupId>
+        <artifactId>hs-script</artifactId>
+        <version>v4.16.544</version>
+    </parent>
+    <groupId>com.github.xjw580</groupId>
+    <artifactId>hs-script-offline-e2e</artifactId>
+    <name>hs-script-offline-e2e</name>
+    <description>Standalone, headless replay of rank/mulligan/surrender recovery</description>
+    <properties>
+        <kotlin.compiler.jvmTarget>21</kotlin.compiler.jvmTarget>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>com.github.xjw580</groupId>
+            <artifactId>hs-script-recovery-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-serialization-json</artifactId>
+            <version>${ktjson-version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
