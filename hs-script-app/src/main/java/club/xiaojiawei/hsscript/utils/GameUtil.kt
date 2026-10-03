@@ -1276,10 +1276,18 @@ object GameUtil {
         resultAlreadyObserved: Boolean = false,
         terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
     ) {
-        if (Mode.currMode !== ModeEnum.GAMEPLAY || (WarEx.inWar && !resultAlreadyObserved)) {
+        val terminalCleanupAuthorized =
+            MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCleanupCapability)
+        if (ResultPageDismissalPolicy.shouldStopWorker(
+                paused = PauseStatus.isPause,
+                gameplayMode = Mode.currMode === ModeEnum.GAMEPLAY,
+                terminalCleanupCapabilityValid = terminalCleanupAuthorized,
+            ) || (WarEx.inWar && !resultAlreadyObserved)
+        ) {
             log.info {
                 "RESULT_PAGE_DISMISSAL_BLOCKED reason=unsafe-start " +
-                    "mode=${Mode.currMode} inWar=${WarEx.inWar} resultAlreadyObserved=$resultAlreadyObserved"
+                    "mode=${Mode.currMode} inWar=${WarEx.inWar} resultAlreadyObserved=$resultAlreadyObserved " +
+                    "terminalCleanupAuthorized=$terminalCleanupAuthorized"
             }
             return
         }
@@ -1290,7 +1298,14 @@ object GameUtil {
         future = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
             {
                 val number = attempt.incrementAndGet()
-                    if (PauseStatus.isPause || Mode.currMode !== ModeEnum.GAMEPLAY) {
+                val terminalCleanupStillAuthorized =
+                    MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCleanupCapability)
+                if (ResultPageDismissalPolicy.shouldStopWorker(
+                        paused = PauseStatus.isPause,
+                        gameplayMode = Mode.currMode === ModeEnum.GAMEPLAY,
+                        terminalCleanupCapabilityValid = terminalCleanupStillAuthorized,
+                    )
+                ) {
                     future.cancel(false)
                     gameEndTasks.remove(future)
                     return@scheduleWithFixedDelay

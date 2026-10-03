@@ -9,6 +9,18 @@ internal object ResultPageDismissalPolicy {
         EXHAUSTED,
     }
 
+    /**
+     * A mandatory-rank result cleanup may outlive the GAMEPLAY mode when the
+     * client has already advanced to tournament/deck selection. Only its
+     * one-purpose live capability may keep that worker alive; pause always
+     * cancels it.
+     */
+    fun shouldStopWorker(
+        paused: Boolean,
+        gameplayMode: Boolean,
+        terminalCleanupCapabilityValid: Boolean,
+    ): Boolean = paused || (!gameplayMode && !terminalCleanupCapabilityValid)
+
     fun decide(
         inWar: Boolean,
         resultPageVisible: Boolean?,

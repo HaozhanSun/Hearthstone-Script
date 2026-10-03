@@ -1,8 +1,9 @@
 package club.xiaojiawei.hsscript.status.surrender
 
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
-import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
+import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
 import club.xiaojiawei.hsscript.utils.PowerLogUtil
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.AfterEach
@@ -148,6 +149,44 @@ class MandatoryRankSurrenderGuardTest {
         assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
         assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
         assertFalse(MandatoryRankSurrenderGuard.isPending())
+        assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
+        assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, false))
+
+        // Consecutive denied-rank match: the result handler must survive the
+        // normal GAMEPLAY -> TOURNAMENT/deck-selection transition, observe the
+        // now-cleared result screen, and release only this new match's barrier.
+        val repeatedTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+        assertTrue(MulliganRankDispatchBarrier.requireSurrender(repeatedTicket) != null)
+        MandatoryRankSurrenderGuard.begin()
+        val repeatedTerminal = CurrentGamePowerLogTerminalTracker().apply {
+            observeLine("CREATE_GAME")
+            observeLine("tag=PLAYSTATE value=CONCEDED")
+            observeLine("tag=STEP value=FINAL_GAMEOVER")
+            observeLine("tag=STATE value=COMPLETE")
+        }
+        assertTrue(repeatedTerminal.hasCompleteTerminalEvidence())
+        val repeatedCleanup = MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL")
+        assertTrue(repeatedCleanup != null)
+        assertFalse(
+            ResultPageDismissalPolicy.shouldStopWorker(
+                paused = false,
+                gameplayMode = false,
+                terminalCleanupCapabilityValid =
+                    MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(repeatedCleanup),
+            ),
+            "a valid terminal cleanup must survive the tournament-mode transition",
+        )
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = false,
+                attempt = 1,
+                maxAttempts = 5,
+            ),
+            "the fresh deck-selection observation confirms the result page is gone",
+        )
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
         assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
         assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, false))
 
