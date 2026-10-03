@@ -349,7 +349,15 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         }
         val accessFile = PowerLogListener.logFile
         accessFile?.seek(accessFile.length())
-        val terminalCleanupCapability = if (authoritativeTerminal != null) {
+        val completeCurrentGamePowerLogTerminal =
+            PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence()
+        val terminalCleanupCapability = if (completeCurrentGamePowerLogTerminal) {
+            club.xiaojiawei.hsscriptbase.config.log.info {
+                "RANK_SURRENDER_TERMINAL_CLEANUP_AUTHORIZED " +
+                    "source=CREATE_GAME_SCOPED_COMPLETE_POWERLOG " +
+                    "playerTerminal=${authoritativeTerminal ?: "UNKNOWN"} " +
+                    "completeTerminal=$completeCurrentGamePowerLogTerminal"
+            }
             MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL")
         } else null
         addGameEndTask(terminalCleanupCapability)

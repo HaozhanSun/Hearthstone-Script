@@ -76,4 +76,21 @@ class E2ETraceTest {
             Files.deleteIfExists(log)
         }
     }
+
+    @Test
+    fun `opponent win is not attributed as our terminal result when player identity is unresolved`() {
+        val log = Files.createTempFile("power-opponent-terminal", ".log")
+        try {
+            Files.writeString(
+                log,
+                "CREATE_GAME\n" +
+                    "TAG_CHANGE Entity=Opponent#1 tag=PLAYSTATE value=WON\n" +
+                    "TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER\n" +
+                    "TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE\n",
+            )
+            assertEquals(null, E2ETrace.readPowerLogTerminal(log.toString(), ""))
+        } finally {
+            Files.deleteIfExists(log)
+        }
+    }
 }

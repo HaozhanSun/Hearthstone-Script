@@ -7,6 +7,7 @@ import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.RuntimeFaultBackoff
 import club.xiaojiawei.hsscript.status.ScriptStatus
+import club.xiaojiawei.hsscript.status.surrender.CurrentGamePowerLogTerminalTracker
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
@@ -48,6 +49,11 @@ object PowerLogListener :
      */
     @Volatile
     private var terminalTailFence = false
+    private val currentGamePowerLogTerminalTracker = CurrentGamePowerLogTerminalTracker()
+
+    /** True only when this CREATE_GAME has terminal PLAYSTATE and complete-game markers. */
+    fun hasCurrentGameCompleteTerminalPowerLogEvidence(): Boolean =
+        currentGamePowerLogTerminalTracker.hasCompleteTerminalEvidence()
 
     private const val RESERVE_SIZE_B = 4 * 1024 * 1024
     private const val ACTIVE_GAME_SCAN_CHUNK_B = 4 * 1024 * 1024
@@ -88,6 +94,7 @@ object PowerLogListener :
         WarEx.reset()
         PowerLogUtil.resetPendingTagChanges()
         terminalTailFence = false
+        currentGamePowerLogTerminalTracker.reset()
 
         logFile?.let {
             val unfinishedGameStart = unfinishedGameStartOffset(it.path())
@@ -233,7 +240,17 @@ object PowerLogListener :
                 val line = it.readLine()
                 if (line == null) {
                     return@dealNewLog
-                } else if (PowerLogUtil.isRelevance(line)) {
+                }
+                // Terminal markers are safety evidence, not only model input.
+                // Some current-client GameState.DebugPrintPower lines (notably
+                // STATE=COMPLETE) are intentionally excluded by isRelevance;
+                // observe every raw line before that parser filter so a
+                // completed current match can release result cleanup safely.
+                currentGamePowerLogTerminalTracker.observeLine(
+                    line,
+                    liveAttachedSession = !replayingExistingLog,
+                )
+                if (PowerLogUtil.isRelevance(line)) {
                     try {
                         resolveLog(line)
                         resolveFaultBackoff.onSuccess()
