@@ -123,6 +123,65 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
     }
 
     @Test
+    fun `authoritative mulligan beats settings OCR alone but fresh overlapping settings overlay allows surrender`() {
+        val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
+        val mulligan = readFixture("rank6-live-mulligan-unknown-ocr-second-frame.png")
+        val settings = readFixture("rank6-live-mulligan-settings-overlay.png")
+
+        // The raw Mulligan image can contain card colors that resemble parts
+        // of the menu. It has no complete Settings signature, so even OCR
+        // text claiming Settings must not route to the surrender coordinate.
+        assertTrue(ScreenWatchdog.hasMulliganVisualForTest(mulligan))
+        assertFalse(ScreenWatchdog.hasSettingsOverlayVisualForTest(mulligan))
+        val mulliganObservation = ScreenWatchdog.inspectForSurrender(
+            state = state,
+            attempts = 31,
+            mandatoryRankSurrender = true,
+            captureProvider = { mulligan },
+            ocrProvider = { "设置 投降" },
+        )
+        assertEquals(ScreenWatchdogKind.MULLIGAN, mulliganObservation.kind, mulliganObservation.reason)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS,
+            MandatoryRankSurrenderRecoveryPolicy.decide(mulliganObservation.kind).action,
+        )
+
+        // The Settings panel is a genuine fresh overlay over the same live
+        // Mulligan phase, so both underlay and overlay signatures may match.
+        // The topmost Settings evidence permits exactly the next surrender
+        // step; the confirmation-dialog visual is still required afterward.
+        assertTrue(ScreenWatchdog.hasMulliganVisualForTest(settings))
+        assertTrue(ScreenWatchdog.hasSettingsOverlayVisualForTest(settings))
+        val settingsObservation = ScreenWatchdog.inspectForSurrender(
+            state = state,
+            attempts = 32,
+            mandatoryRankSurrender = true,
+            captureProvider = { settings },
+            ocrProvider = { "起始手牌" },
+        )
+        assertEquals(ScreenWatchdogKind.SETTINGS, settingsObservation.kind, settingsObservation.reason)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SURRENDER,
+            MandatoryRankSurrenderRecoveryPolicy.decide(settingsObservation.kind).action,
+        )
+
+        // Settings OCR by itself is never enough when the current capture
+        // contains neither a confirmed Mulligan nor a Settings overlay.
+        val unknownObservation = ScreenWatchdog.inspectForSurrender(
+            state = "mode=GAMEPLAY|inWar=true|warPhase=GAME_TURN|myTurn=false",
+            attempts = 33,
+            mandatoryRankSurrender = true,
+            captureProvider = { BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB) },
+            ocrProvider = { "设置 投降" },
+        )
+        assertEquals(ScreenWatchdogKind.UNKNOWN, unknownObservation.kind, unknownObservation.reason)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY,
+            MandatoryRankSurrenderRecoveryPolicy.decide(unknownObservation.kind).action,
+        )
+    }
+
+    @Test
     fun `terminal OCR wins over settings overlay and settings-looking colors without panel remain unknown`() {
         val settings = readFixture("rank6-live-mulligan-settings-overlay.png")
         val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"

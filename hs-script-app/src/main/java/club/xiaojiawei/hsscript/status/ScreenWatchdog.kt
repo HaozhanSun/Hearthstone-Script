@@ -312,14 +312,17 @@ object ScreenWatchdog {
         if (confirmation.panelVisible || ocrKind == ScreenWatchdogKind.SURRENDER_CONFIRMATION) {
             return ScreenWatchdogKind.UNKNOWN
         }
+        // The authoritative Mulligan phase persists behind the Settings
+        // overlay. Trust the fresh overlay only when its visual signature is
+        // present; OCR text alone must never authorize the surrender button.
         if (settingsOverlayMetrics(image).accepted) return ScreenWatchdogKind.SETTINGS
-        if (ocrKind == ScreenWatchdogKind.SETTINGS) return ocrKind
+        if (isAuthoritativeMulliganInput(state) && hasMulliganVisual(image)) {
+            return ScreenWatchdogKind.MULLIGAN
+        }
+        if (ocrKind == ScreenWatchdogKind.SETTINGS) return ScreenWatchdogKind.UNKNOWN
         if (ocrKind != ScreenWatchdogKind.UNKNOWN) return ocrKind
         if (isAuthoritativeActiveGameplay(state) && hasActiveGameplayVisual(image)) {
             return ScreenWatchdogKind.GAMEPLAY
-        }
-        if (isAuthoritativeMulliganInput(state) && hasMulliganVisual(image)) {
-            return ScreenWatchdogKind.MULLIGAN
         }
         return ocrKind
     }
