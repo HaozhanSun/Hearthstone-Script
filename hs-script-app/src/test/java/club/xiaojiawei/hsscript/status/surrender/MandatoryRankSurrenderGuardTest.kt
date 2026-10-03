@@ -1,9 +1,11 @@
 package club.xiaojiawei.hsscript.status.surrender
 
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
+import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
+import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.utils.PowerLogUtil
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.AfterEach
@@ -39,6 +41,104 @@ class MandatoryRankSurrenderGuardTest {
         assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
         assertFalse(MandatoryRankSurrenderGuard.isPending())
         assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
+    }
+
+    @Test
+    fun `fresh deck selection plus current terminal capability releases cleanup and next game still needs rank ticket`() {
+        val wasWorking = WorkTimeListener.working
+        val wasPaused = PauseStatus.isPause
+        val oldPauseOrigin = PauseStatus.pauseOrigin
+        try {
+            WorkTimeListener.working = true
+            PauseStatus.setManualPause(false)
+
+            val surrenderedGameTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+            assertTrue(MulliganRankDispatchBarrier.requireSurrender(surrenderedGameTicket) != null)
+            MandatoryRankSurrenderGuard.begin()
+            assertEquals(
+                MandatoryRankSurrenderDeckSelectionRecovery.Result.BLOCKED,
+                MandatoryRankSurrenderDeckSelectionRecovery.completeIfRequired(
+                    screenKind = "DECK_SELECTION",
+                    confidence = 100,
+                    visualEvidence = "deck-selection-title-roi",
+                    freshObservation = true,
+                ),
+                "deck selection without this surrender's terminal capability must remain fenced",
+            )
+            assertFalse(ActionDispatchGate.allow("matchmaking.start"))
+            assertTrue(
+                MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL") != null,
+            )
+
+            // A result page is still a terminal screen, while only a fresh
+            // high-confidence deck-selection observation proves its dismissal.
+            assertEquals(true, ScreenStateRecovery.resultVisibilityForTest("RESULT", 100))
+            assertEquals(false, ScreenStateRecovery.resultVisibilityForTest("DECK_SELECTION", 100))
+            assertEquals(
+                MandatoryRankSurrenderDeckSelectionRecovery.Result.BLOCKED,
+                MandatoryRankSurrenderDeckSelectionRecovery.completeIfRequired(
+                    screenKind = "DECK_SELECTION",
+                    confidence = 100,
+                    visualEvidence = "deck-selection-title-roi",
+                    freshObservation = false,
+                ),
+                "stale or unverified screen evidence cannot release either guard",
+            )
+            assertEquals(
+                null,
+                ScreenStateRecovery.resultVisibilityForTest("UNKNOWN", 100),
+                "unknown capture remains inconclusive",
+            )
+            assertEquals(
+                MandatoryRankSurrenderDeckSelectionRecovery.Result.BLOCKED,
+                MandatoryRankSurrenderDeckSelectionRecovery.completeIfRequired(
+                    screenKind = "UNKNOWN",
+                    confidence = 100,
+                    visualEvidence = "none",
+                    freshObservation = true,
+                ),
+            )
+            assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("UNKNOWN"))
+            assertTrue(MandatoryRankSurrenderGuard.isPending())
+            assertEquals(
+                MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+                MulliganRankDispatchBarrier.currentState(),
+            )
+            assertFalse(ActionDispatchGate.allow("startup.handoff"))
+            assertFalse(ActionDispatchGate.allow("matchmaking.start"))
+            assertFalse(ActionDispatchGate.allow("strategy.card.play"))
+
+            assertEquals(
+                MandatoryRankSurrenderDeckSelectionRecovery.Result.COMPLETED,
+                MandatoryRankSurrenderDeckSelectionRecovery.completeIfRequired(
+                    screenKind = "DECK_SELECTION",
+                    confidence = 100,
+                    visualEvidence = "deck-selection-title-roi",
+                    freshObservation = true,
+                ),
+            )
+            assertFalse(MandatoryRankSurrenderGuard.isPending())
+            assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
+            assertTrue(ActionDispatchGate.allow("startup.handoff"))
+            assertTrue(ActionDispatchGate.allow("matchmaking.start"))
+
+            // CREATE_GAME for the next match creates a new mulligan ticket;
+            // cleanup of the prior surrender does not make gameplay eligible.
+            val nextGameTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+            assertTrue(nextGameTicket > surrenderedGameTicket)
+            assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
+            assertFalse(ActionDispatchGate.allow("strategy.card.play"))
+            assertFalse(MulliganRankDispatchBarrier.authorizeEligibleRank(nextGameTicket, 7))
+            assertTrue(MulliganRankDispatchBarrier.authorizeEligibleRank(nextGameTicket, 5))
+            assertTrue(ActionDispatchGate.allow("strategy.card.play"))
+        } finally {
+            WorkTimeListener.working = wasWorking
+            when {
+                !wasPaused -> PauseStatus.setManualPause(false)
+                oldPauseOrigin == PauseStatus.Origin.AUTOMATIC -> PauseStatus.setAutomaticPause(true)
+                else -> PauseStatus.setManualPause(true)
+            }
+        }
     }
 
     @Test

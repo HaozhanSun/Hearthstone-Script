@@ -1764,6 +1764,42 @@ object ScreenStateRecovery {
                 )
             }
             ScreenKind.DECK_SELECTION -> {
+                val guard = club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+                val observationIsCurrent = ScreenRecoveryRuntime.isCurrent(recoveryToken)
+                val surrenderCompletion =
+                    club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderDeckSelectionRecovery
+                        .completeIfRequired(
+                            screenKind = detection.kind.code,
+                            confidence = detection.confidence,
+                            visualEvidence = detection.evidence,
+                            freshObservation = observationIsCurrent,
+                        )
+                if (surrenderCompletion ==
+                    club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderDeckSelectionRecovery.Result.BLOCKED
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_DECK_SELECTION_BLOCKED reason=rank-surrender-terminal-proof-missing " +
+                            "terminalCleanupAuthorized=${guard.hasTerminalCleanupCapability()} " +
+                            "confidence=${detection.confidence} evidence=${detection.evidence} " +
+                            "barrier=${club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier.currentState()} " +
+                            "dispatch=false pause=false"
+                    }
+                    return false
+                }
+                if (surrenderCompletion ==
+                    club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderDeckSelectionRecovery.Result.COMPLETED
+                ) {
+                    // apply() is reached only from the current, foreground- and
+                    // PID-verified capture in inspectAndRecover. Require the
+                    // terminal capability already issued for this surrender;
+                    // a deck-selection screenshot alone must not manufacture
+                    // terminal authority or release an unresolved game.
+                    log.info {
+                        "RANK_SURRENDER_RECOVERY_COMPLETED evidence=SCREEN_DECK_SELECTION " +
+                            "terminalCleanupAuthorized=true confidence=${detection.confidence} " +
+                            "visualEvidence=${detection.evidence} requeueAllowed=true rankPreflightRequired=true"
+                    }
+                }
                 if (DeckStrategyManager.currentDeckStrategy == null ||
                     DeckStrategyManager.currentRunMode == null
                 ) {

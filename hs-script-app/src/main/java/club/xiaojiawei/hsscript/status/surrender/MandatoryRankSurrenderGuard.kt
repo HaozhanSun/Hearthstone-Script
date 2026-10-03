@@ -46,6 +46,9 @@ object MandatoryRankSurrenderGuard {
     fun isTerminalCleanupCapabilityValid(capability: TerminalCleanupCapability?): Boolean =
         pending && capability != null && capability === activeTerminalCleanupCapability
 
+    internal fun hasTerminalCleanupCapability(): Boolean =
+        pending && activeTerminalCleanupCapability != null
+
     fun markRecoveryUncertain() {
         if (pending) recoveryUncertain = true
     }
@@ -58,12 +61,40 @@ object MandatoryRankSurrenderGuard {
             "SCREEN_RESULT_DISMISSED",
         )
         if (!pending || evidence !in allowedEvidence) return false
+        completePendingSurrender()
+        return true
+    }
+
+    /**
+     * Deck selection is a valid post-result destination, but may complete a
+     * mandatory surrender only with its already-issued terminal capability
+     * and a fresh, high-confidence screen-recovery observation.
+     */
+    @Synchronized
+    internal fun confirmDeckSelectionCompleted(
+        screenKind: String,
+        confidence: Int,
+        visualEvidence: String,
+        freshObservation: Boolean,
+    ): Boolean {
+        // Deliberately require a capability already minted by this surrender's
+        // authoritative terminal observer; a deck screenshot cannot create it.
+        if (!pending || activeTerminalCleanupCapability == null) return false
+        if (!freshObservation || screenKind != "DECK_SELECTION" || confidence < 85) return false
+        if (visualEvidence !in setOf("deck-selection-title", "deck-selection-title-roi")) return false
+        if (MulliganRankDispatchBarrier.currentState() != MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED) {
+            return false
+        }
+        completePendingSurrender()
+        return true
+    }
+
+    private fun completePendingSurrender() {
         pending = false
         recoveryUncertain = false
         activeCapability = null
         activeTerminalCleanupCapability = null
         MulliganRankDispatchBarrier.completeSurrender()
-        return true
     }
 
     fun isPending(): Boolean = pending
