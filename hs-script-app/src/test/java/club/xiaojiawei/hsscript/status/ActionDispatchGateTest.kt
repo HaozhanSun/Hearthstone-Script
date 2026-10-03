@@ -1,7 +1,9 @@
 package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscript.enums.GameStartupModeEnum
+import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.starter.GameStartupModeSequencePolicy
+import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
@@ -207,6 +209,62 @@ class ActionDispatchGateTest {
                 recoveryCapabilityValid = false,
             ),
         )
+    }
+
+    @Test
+    fun `fresh current game surrender capability passes both pending guards once`() {
+        val wasWorking = WorkTimeListener.working
+        val wasPaused = PauseStatus.isPause
+        val oldPauseOrigin = PauseStatus.pauseOrigin
+        MandatoryRankSurrenderGuard.resetForTest()
+        MulliganRankDispatchBarrier.resetForTest()
+        try {
+            WorkTimeListener.working = true
+            PauseStatus.setManualPause(false)
+            MandatoryRankSurrenderGuard.begin()
+            val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+            val capability = MulliganRankDispatchBarrier.requireSurrender(ticket)
+            assertTrue(capability != null)
+            assertTrue(MandatoryRankSurrenderGuard.isPending())
+
+            assertTrue(
+                ActionDispatchGate.allow("surrender.request", rankSurrenderCapability = capability),
+                "the current game request must pass its own barrier and an already-pending recovery guard",
+            )
+            assertFalse(MulliganRankDispatchBarrier.isSurrenderCapabilityValid(capability))
+            assertFalse(
+                ActionDispatchGate.allow("surrender.request", rankSurrenderCapability = capability),
+                "the capability is consumed by exactly one accepted request",
+            )
+            assertFalse(
+                ActionDispatchGate.allowForState(
+                    action = "mouse.left",
+                    paused = false,
+                    working = true,
+                    mandatoryRankSurrenderPending = true,
+                    rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+                ),
+                "ordinary input remains blocked while mandatory surrender is unresolved",
+            )
+
+            val staleCapability = capability
+            val nextTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+            val nextCapability = MulliganRankDispatchBarrier.requireSurrender(nextTicket)
+            assertFalse(
+                ActionDispatchGate.allow("surrender.request", rankSurrenderCapability = staleCapability),
+                "a previous game's capability cannot authorize a new request",
+            )
+            assertTrue(ActionDispatchGate.allow("surrender.request", rankSurrenderCapability = nextCapability))
+        } finally {
+            MandatoryRankSurrenderGuard.resetForTest()
+            MulliganRankDispatchBarrier.resetForTest()
+            WorkTimeListener.working = wasWorking
+            when {
+                !wasPaused -> PauseStatus.setManualPause(false)
+                oldPauseOrigin == PauseStatus.Origin.AUTOMATIC -> PauseStatus.setAutomaticPause(true)
+                else -> PauseStatus.setManualPause(true)
+            }
+        }
     }
 
     @Test

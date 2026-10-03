@@ -37,7 +37,7 @@ object MulliganRankDispatchBarrier {
 
     /** An authoritative terminal Power.log state wins over any late rank decision. */
     internal fun completeTerminalWithoutSurrender(ticket: Long): Boolean = synchronized(lock) {
-        if (ticket != generation || state != State.PENDING) return false
+        if (ticket != generation || state !in setOf(State.PENDING, State.SURRENDER_REQUIRED)) return false
         state = State.IDLE
         surrenderCapability = null
         surrenderCapabilityConsumed = false

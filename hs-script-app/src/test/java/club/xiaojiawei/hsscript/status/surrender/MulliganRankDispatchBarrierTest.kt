@@ -44,6 +44,18 @@ class MulliganRankDispatchBarrierTest {
     }
 
     @Test
+    fun `authoritative terminal state supersedes a required but not yet accepted surrender`() {
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+        val capability = MulliganRankDispatchBarrier.requireSurrender(ticket)
+        assertNotNull(capability)
+        assertEquals(MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED, MulliganRankDispatchBarrier.currentState())
+
+        assertTrue(MulliganRankDispatchBarrier.completeTerminalWithoutSurrender(ticket))
+        assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
+        assertFalse(MulliganRankDispatchBarrier.isSurrenderCapabilityValid(capability))
+    }
+
+    @Test
     fun `mandatory surrender capability is single-use and game-scoped`() {
         val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
         val capability = MulliganRankDispatchBarrier.requireSurrender(ticket)

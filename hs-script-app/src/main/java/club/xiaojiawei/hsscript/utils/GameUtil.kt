@@ -799,7 +799,6 @@ object GameUtil {
             return false
         }
         if (NeverSurrenderPolicy.blockSurrender("GameUtil.surrender", mandatoryRank)) return false
-        if (!ActionDispatchGate.allow("surrender.request", rankSurrenderCapability = rankSurrenderCapability)) return false
 //        SystemUtil.frontWindow(ScriptStaticData.getGameHWND());
 //        按ESC键弹出投降界面
 //        ScriptStaticData.ROBOT.keyPress(27);
@@ -822,6 +821,11 @@ object GameUtil {
             }
             return false
         }
+        // Validate every ordinary executor precondition before consuming the
+        // one-shot rank capability. A rejected request must remain retryable;
+        // otherwise a stale settlement task or transient mode update could
+        // burn the only authorization while no surrender request was queued.
+        if (!ActionDispatchGate.allow("surrender.request", rankSurrenderCapability = rankSurrenderCapability)) return false
         // Keep a process-local ownership signal for statistics. A fast
         // surrender can reach GAME_OVER before PLAYSTATE=CONCEDED is parsed
         // or before war.me has been assigned its game id.

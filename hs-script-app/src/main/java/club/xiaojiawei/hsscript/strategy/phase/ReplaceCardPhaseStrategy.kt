@@ -16,11 +16,14 @@ import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.MulliganScreenshot
+import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.enums.StepEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.kt.config.log
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 /**
  * 换牌阶段
@@ -35,6 +38,10 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
     private val mulliganInputConfirmed = AtomicBoolean(false)
     private val rankSurrenderRequested = AtomicBoolean(false)
     private val rankPreflightStarted = AtomicBoolean(false)
+    private val rankSurrenderRetryPolicy = MulliganRankSurrenderRetryPolicy()
+
+    @Volatile
+    private var rankSurrenderRetryFuture: ScheduledFuture<*>? = null
 
     @Volatile
     private var rankBarrierTicket: Long? = null
@@ -70,6 +77,7 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
      * INPUT line.
      */
     fun resetForNewGame() {
+        cancelRankSurrenderRetry(resetBudget = true)
         cancelRankPreflight("new-game")
         // Keep the rank gate scoped to the same game lifecycle as the
         // mulligan state. FillDeck normally performs this reset too, but the
@@ -270,6 +278,7 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             },
             onSurrender = surrender@{ result ->
                 if (GameUtil.isTerminalGameState()) {
+                    cancelRankSurrenderRetry(resetBudget = true)
                     cancelAllTask()
                     cancelRankPreflight("terminal-state-priority")
                     val released = MulliganRankDispatchBarrier.completeTerminalWithoutSurrender(barrierTicket)
@@ -301,11 +310,16 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
                         "rule=${result.ruleId} action=BLOCK_ORDINARY_ALLOW_MANDATORY_SURRENDER_ONLY"
                 }
                 cancelAllTask()
-                dispatchSurrenderDecision(
+                val dispatched = dispatchSurrenderDecision(
                     result,
                     "mulligan-rank-preflight",
                     rankSurrenderCapability = surrenderCapability,
                 )
+                if (dispatched) {
+                    cancelRankSurrenderRetry(resetBudget = true)
+                } else {
+                    scheduleRankSurrenderRetry(result, "mulligan-rank-preflight", surrenderCapability, barrierTicket)
+                }
             },
             onContinue = {
                 val rank = SurrenderPolicy.currentRankAuthorizedNumber()
@@ -334,23 +348,95 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         rankPreflight = null
     }
 
+    @Synchronized
+    private fun scheduleRankSurrenderRetry(
+        result: SurrenderRuleResult,
+        source: String,
+        capability: MulliganRankDispatchBarrier.SurrenderCapability,
+        ticket: Long,
+    ) {
+        if (rankSurrenderRetryFuture?.isDone == false) return
+        val retry = rankSurrenderRetryPolicy.nextRetryAfterRejection()
+        log.warn {
+            "MANDATORY_RANK_SURRENDER_RETRY_${if (retry.cooldown) "COOLDOWN" else "SCHEDULED"} " +
+                "ticket=$ticket delayMs=${retry.delayMs} " +
+                "state=${MulliganRankDispatchBarrier.currentState()} attempt=${retry.attempt} pause=${retry.pause} " +
+                "phaseAdvance=${retry.allowPhaseAdvance}"
+        }
+        rankSurrenderRetryFuture = EXTRA_THREAD_POOL.schedule({
+            synchronized(this) { rankSurrenderRetryFuture = null }
+            if (rankBarrierTicket != ticket ||
+                MulliganRankDispatchBarrier.currentState() != MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED ||
+                !MulliganRankDispatchBarrier.isSurrenderCapabilityValid(capability)
+            ) {
+                log.info {
+                    "MANDATORY_RANK_SURRENDER_RETRY_CANCELLED ticket=$ticket reason=stale-or-consumed-capability " +
+                        "dispatch=false phaseAdvance=false"
+                }
+                return@schedule
+            }
+            if (GameUtil.isTerminalGameState()) {
+                val released = MulliganRankDispatchBarrier.completeTerminalWithoutSurrender(ticket)
+                cancelRankSurrenderRetry(resetBudget = true)
+                log.info {
+                    "MULLIGAN_RANK_PREFLIGHT_TERMINAL_PRIORITY ticket=$ticket " +
+                        "reason=terminal-during-surrender-retry barrierReleased=$released action=NO_SURRENDER"
+                }
+                return@schedule
+            }
+            log.warn {
+                "MANDATORY_RANK_SURRENDER_RETRY_ATTEMPT ticket=$ticket " +
+                    "phase=${war.currentPhase.name} pause=${PauseStatus.isPause} dispatch=requested"
+            }
+            if (dispatchSurrenderDecision(result, source, rankSurrenderCapability = capability)) {
+                cancelRankSurrenderRetry(resetBudget = true)
+                log.info {
+                    "MANDATORY_RANK_SURRENDER_RETRY_ACCEPTED ticket=$ticket " +
+                        "barrier=${MulliganRankDispatchBarrier.currentState()} phaseAdvance=false"
+                }
+            } else {
+                scheduleRankSurrenderRetry(result, source, capability, ticket)
+            }
+        }, retry.delayMs, TimeUnit.MILLISECONDS)
+    }
+
+    @Synchronized
+    private fun cancelRankSurrenderRetry(resetBudget: Boolean) {
+        rankSurrenderRetryFuture?.cancel(false)
+        rankSurrenderRetryFuture = null
+        if (resetBudget) rankSurrenderRetryPolicy.reset()
+    }
+
+    private fun blockMulliganAdvanceIfRankPending(reason: String): Boolean {
+        val barrierState = MulliganRankDispatchBarrier.currentState()
+        if (!MulliganRankSurrenderRetryPolicy.mustBlockMulliganAdvance(barrierState)) return false
+        log.warn {
+            "MULLIGAN_PHASE_ADVANCE_BLOCKED reason=rank-dispatch-unresolved source=$reason " +
+                "barrier=$barrierState ordinaryInput=false phaseAdvance=false pause=${PauseStatus.isPause}"
+        }
+        return true
+    }
+
     /** Leaving our Mulligan INPUT without a rank decision cannot silently open gameplay. */
     private fun failClosedIfRankWindowEnded(reason: String) {
         val barrierState = MulliganRankDispatchBarrier.currentState()
         if (barrierState !in setOf(
                 MulliganRankDispatchBarrier.State.IDLE,
                 MulliganRankDispatchBarrier.State.PENDING,
+                MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
             )
         ) return
         if (GameUtil.isTerminalGameState()) {
             val ticket = rankBarrierTicket
             val released = ticket?.let(MulliganRankDispatchBarrier::completeTerminalWithoutSurrender) ?: false
+            cancelRankSurrenderRetry(resetBudget = true)
             log.info {
                 "MULLIGAN_RANK_PREFLIGHT_TERMINAL_PRIORITY ticket=${ticket ?: "none"} " +
                     "reason=$reason barrierReleased=$released action=NO_SURRENDER"
             }
             return
         }
+        if (barrierState == MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED) return
         if (PauseStatus.isPause || !rankSurrenderRequested.compareAndSet(false, true)) return
         val capability = requireUnresolvedRankSurrenderCapability()
         if (capability == null) {
@@ -365,11 +451,17 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         }
         cancelRankPreflight("rank-window-ended-$reason")
         cancelAllTask()
-        dispatchSurrenderDecision(
+        val dispatched = dispatchSurrenderDecision(
             result,
             "mulligan-rank-preflight",
             rankSurrenderCapability = capability,
         )
+        if (dispatched) {
+            cancelRankSurrenderRetry(resetBudget = true)
+        } else {
+            val ticket = rankBarrierTicket ?: return
+            scheduleRankSurrenderRetry(result, "mulligan-rank-preflight", capability, ticket)
+        }
     }
 
     /**
@@ -422,6 +514,9 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
                 failClosedIfRankWindowEnded("mulligan-state-${state?.name?.lowercase() ?: "unknown"}")
                 cancelRankPreflight("mulligan-state-${state?.name?.lowercase() ?: "unknown"}")
             }
+            if (state === MulliganStateEnum.DONE && blockMulliganAdvanceIfRankPending("mulligan-done")) {
+                return false
+            }
             if (state === MulliganStateEnum.DONE &&
                 mulliganStageConfirmed.compareAndSet(false, true)
             ) {
@@ -431,6 +526,7 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             }
         } else if (tagChangeEntity.tag == TagEnum.NEXT_STEP && StepEnum.MAIN_READY.name == tagChangeEntity.value) {
             failClosedIfRankWindowEnded("main-ready")
+            if (blockMulliganAdvanceIfRankPending("main-ready")) return false
             cancelRankPreflight("main-ready")
             if (mulliganStageConfirmed.compareAndSet(false, true)) {
                 log.info { "换牌阶段确认完成：收到NEXT_STEP=MAIN_READY" }
