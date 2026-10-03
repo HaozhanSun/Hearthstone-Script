@@ -9,6 +9,7 @@ import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -331,6 +332,72 @@ class ActionDispatchGateTest {
             assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, false))
         } finally {
             MandatoryRankSurrenderGuard.resetForTest()
+        }
+    }
+
+    @Test
+    fun `repeated terminal authorization keeps result dismissal valid until confirmed clear`() {
+        val wasWorking = WorkTimeListener.working
+        val wasPaused = PauseStatus.isPause
+        val oldPauseOrigin = PauseStatus.pauseOrigin
+        MandatoryRankSurrenderGuard.resetForTest()
+        MulliganRankDispatchBarrier.resetForTest()
+        try {
+            WorkTimeListener.working = true
+            PauseStatus.setManualPause(false)
+            val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+            assertTrue(MulliganRankDispatchBarrier.requireSurrender(ticket) != null)
+            MandatoryRankSurrenderGuard.begin()
+
+            assertEquals(null, MandatoryRankSurrenderGuard.authorizeTerminalCleanup("UNKNOWN"))
+            assertFalse(
+                ActionDispatchGate.allow("terminal-result.dismiss"),
+                "without terminal evidence, neither guard may be bypassed",
+            )
+            assertFalse(ActionDispatchGate.allow("strategy.card.play"))
+            assertTrue(MandatoryRankSurrenderGuard.isPending())
+            assertEquals(
+                MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+                MulliganRankDispatchBarrier.currentState(),
+            )
+
+            val powerLogCapability =
+                MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL")
+            assertTrue(powerLogCapability != null)
+            val screenCapability =
+                MandatoryRankSurrenderGuard.authorizeTerminalCleanup("SCREEN_TERMINAL")
+            assertSame(powerLogCapability, screenCapability)
+            assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(powerLogCapability))
+            assertTrue(
+                ActionDispatchGate.allow(
+                    "terminal-result.dismiss",
+                    terminalCleanupCapability = powerLogCapability,
+                ),
+                "a repeated observer must not stale the capability held by the active cleanup worker",
+            )
+            assertFalse(ActionDispatchGate.allow("strategy.card.play"))
+            assertFalse(ActionDispatchGate.allow("mouse.left"))
+            assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL"))
+            assertTrue(MandatoryRankSurrenderGuard.isPending())
+            assertEquals(
+                MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+                MulliganRankDispatchBarrier.currentState(),
+            )
+
+            assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
+            assertFalse(MandatoryRankSurrenderGuard.isPending())
+            assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
+            assertTrue(ActionDispatchGate.allow("matchmaking.start"))
+            assertFalse(PauseStatus.isPause, "terminal proof releases rank fencing without auto-pausing")
+        } finally {
+            MandatoryRankSurrenderGuard.resetForTest()
+            MulliganRankDispatchBarrier.resetForTest()
+            WorkTimeListener.working = wasWorking
+            when {
+                !wasPaused -> PauseStatus.setManualPause(false)
+                oldPauseOrigin == PauseStatus.Origin.AUTOMATIC -> PauseStatus.setAutomaticPause(true)
+                else -> PauseStatus.setManualPause(true)
+            }
         }
     }
 }

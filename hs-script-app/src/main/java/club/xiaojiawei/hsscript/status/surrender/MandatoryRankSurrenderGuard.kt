@@ -34,7 +34,13 @@ object MandatoryRankSurrenderGuard {
     @Synchronized
     fun authorizeTerminalCleanup(evidence: String): TerminalCleanupCapability? {
         if (!pending || evidence !in setOf("POWERLOG_TERMINAL", "SCREEN_TERMINAL")) return null
-        return TerminalCleanupCapability().also { activeTerminalCleanupCapability = it }
+        // Several independent terminal observers can report the same result
+        // (Power.log, the phase handler, and screen recovery). Keep the first
+        // live capability stable so a later observation cannot invalidate a
+        // queued result-dismissal worker that already captured it.
+        return activeTerminalCleanupCapability ?: TerminalCleanupCapability().also {
+            activeTerminalCleanupCapability = it
+        }
     }
 
     fun isTerminalCleanupCapabilityValid(capability: TerminalCleanupCapability?): Boolean =
