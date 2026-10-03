@@ -28,8 +28,10 @@ class ScreenRecoveryGateTest {
         assertTrue(roiNames.contains(ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI))
         assertTrue(roiNames.contains("screen-state-header"))
         assertTrue(roiNames.contains("screen-state-footer"))
+        assertTrue(roiNames.contains(ScreenStateRoiSelector.RESULT_CONTINUE_ROI))
         assertFalse(roiNames.contains("screen-state-center"))
         assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyForTest("选择套牌 狂野对战"))
+        assertEquals("RESULT", UpstreamScreenStateRecovery.classifyForTest("点击继续"))
         assertEquals(
             false,
             UpstreamScreenStateRecovery.resultVisibilityForTest("DECK_SELECTION", 100),

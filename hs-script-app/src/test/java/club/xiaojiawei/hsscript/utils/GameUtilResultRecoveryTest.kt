@@ -1,19 +1,18 @@
 package club.xiaojiawei.hsscript.utils
 
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertTrue
+import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
 class GameUtilResultRecoveryTest {
 
     @Test
-    fun keepsEveryBoundedRecoveryAttemptOnTheStableContinueTarget() {
-        assertTrue(GameUtil.shouldUseStaleResultCenterClick(1))
-        assertTrue(GameUtil.shouldUseStaleResultCenterClick(2))
-        assertTrue(GameUtil.shouldUseStaleResultCenterClick(3))
-        assertTrue(GameUtil.shouldUseStaleResultCenterClick(4))
-        assertTrue(GameUtil.shouldUseStaleResultCenterClick(5))
-        assertFalse(GameUtil.shouldUseStaleResultCenterClick(0))
-        assertFalse(GameUtil.shouldUseStaleResultCenterClick(6))
+    fun usesUpstreamUnityDismissalSequenceWithinTheRetryBudget() {
+        assertEquals(ResultPageDismissalPolicy.Input.CENTER_CLICK, GameUtil.staleResultInputForAttempt(1))
+        assertEquals(ResultPageDismissalPolicy.Input.KEYBOARD_ENTER, GameUtil.staleResultInputForAttempt(2))
+        assertEquals(ResultPageDismissalPolicy.Input.RETRY_CLICK, GameUtil.staleResultInputForAttempt(3))
+        assertEquals(ResultPageDismissalPolicy.Input.RETRY_CLICK, GameUtil.staleResultInputForAttempt(5))
+        assertEquals(null, GameUtil.staleResultInputForAttempt(0))
+        assertEquals(null, GameUtil.staleResultInputForAttempt(6))
     }
 }

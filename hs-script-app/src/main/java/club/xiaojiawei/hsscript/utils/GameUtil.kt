@@ -158,13 +158,9 @@ object GameUtil {
         cancelGameEndTask()
     }
 
-    /**
-     * A stale result can advance through multiple post-game screens, each
-     * presenting the same lower-center Continue action. Keep every bounded
-     * retry on that observed control; changing to Enter or a randomized point
-     * after an unclassified intermediate screen can leave Hearthstone stuck.
-     */
-    internal fun shouldUseStaleResultCenterClick(attempt: Int): Boolean = attempt in 1..5
+    /** Input sequence for each bounded, positively-confirmed result-page attempt. */
+    internal fun staleResultInputForAttempt(attempt: Int): ResultPageDismissalPolicy.Input? =
+        ResultPageDismissalPolicy.inputForClickAttempt(attempt, maxAttempts = 5)
 
     /**
      * Safe-native mode deliberately avoids the injected/native window helper.
@@ -1405,20 +1401,31 @@ object GameUtil {
                 runCatching {
                     val clickNumber = clickAttempts.get()
                     log.info { "E2E恢复：尝试关闭旧结算页面 #$clickNumber" }
-                    // The live client can advance from defeat to a separate
-                    // rank/reward screen that still exposes the same Continue
-                    // control while OCR temporarily returns no text. Keep the
-                    // retry on its stable center. Input acceptance is not UI
-                    // confirmation; only the fresh screen postcheck below can
-                    // finish this task.
-                    if (shouldUseStaleResultCenterClick(clickNumber)) {
-                        log.info { "E2E恢复：结果页使用稳定中心点" }
-                        MouseUtil.leftButtonClickForRecovery(
-                            GAME_END_CONTINUE_RECT.getCenterClickPos(),
-                            terminalCleanupCapability = terminalCleanupCapability,
-                        )
-                    } else {
-                        log.error {
+                    // Match the known-working Unity sequence: one centered
+                    // click, one foreground-verified Enter fallback, then
+                    // bounded clicks in the control. SendInput acceptance is
+                    // never UI acceptance; only the fresh result postcheck
+                    // below can finish this task.
+                    when (staleResultInputForAttempt(clickNumber)) {
+                        ResultPageDismissalPolicy.Input.CENTER_CLICK -> {
+                            log.info { "E2E恢复：结果页使用稳定中心点" }
+                            MouseUtil.leftButtonClickForRecovery(
+                                GAME_END_CONTINUE_RECT.getCenterClickPos(),
+                                terminalCleanupCapability = terminalCleanupCapability,
+                            )
+                        }
+                        ResultPageDismissalPolicy.Input.KEYBOARD_ENTER -> {
+                            log.info { "E2E恢复：结果页中心点击未确认，使用一次前台 SendInput Enter 后备输入" }
+                            MouseUtil.pressEnterForRecovery(terminalCleanupCapability)
+                        }
+                        ResultPageDismissalPolicy.Input.RETRY_CLICK -> {
+                            log.info { "E2E恢复：结果页继续控件有界重试" }
+                            MouseUtil.leftButtonClickForRecovery(
+                                GAME_END_CONTINUE_RECT.getClickPos(),
+                                terminalCleanupCapability = terminalCleanupCapability,
+                            )
+                        }
+                        null -> log.error {
                             "RESULT_PAGE_DISMISSAL_FAILED reason=invalid-attempt-target attempt=$number " +
                                 "dispatch=false confirmed=false"
                         }

@@ -12,6 +12,7 @@ internal object ScreenStateRoiSelector {
     const val START_GAME_ERROR_TITLE_ROI = "screen-state-start-game-error-title"
     const val START_GAME_ERROR_BODY_ROI = "screen-state-start-game-error-body"
     const val START_GAME_ERROR_CONFIRM_ROI = "screen-state-start-game-error-confirm"
+    const val RESULT_CONTINUE_ROI = "screen-state-result-continue"
 
     data class Roi(val name: String, val bounds: Rectangle)
 
@@ -56,6 +57,10 @@ internal object ScreenStateRoiSelector {
         // was visible. Keep the probes narrow, but cover both body lines.
         NormalizedRoi(RECONNECT_DIALOG_STATUS_ROI, 0.300, 0.430, 0.750, 0.515),
         NormalizedRoi(RECONNECT_DIALOG_MESSAGE_ROI, 0.300, 0.475, 0.750, 0.555),
+        // The localized post-game "点击继续" control is centered near the
+        // bottom of the client. Keep this exact action label separate from
+        // the broad footer fallback so Tesseract can use a single text line.
+        NormalizedRoi(RESULT_CONTINUE_ROI, 0.410, 0.905, 0.590, 0.980),
     )
 
     // Kept out of normal screen recovery's OCR pass: these three crops are

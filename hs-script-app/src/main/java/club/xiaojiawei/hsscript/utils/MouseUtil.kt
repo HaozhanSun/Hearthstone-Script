@@ -407,8 +407,11 @@ object MouseUtil {
      * client does not consume it; keep the fallback target explicit and
      * observable for stale result pages.
      */
-    internal fun pressEnterForRecovery(): Boolean {
-        if (!ActionDispatchGate.allow("recovery.enter")) return false
+    internal fun pressEnterForRecovery(
+        terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
+    ): Boolean {
+        val dispatchAction = if (terminalCleanupCapability == null) "recovery.enter" else "terminal-result.dismiss"
+        if (!ActionDispatchGate.allow(dispatchAction, terminalCleanupCapability = terminalCleanupCapability)) return false
         if (!e2eInputEnabled()) {
             SystemUtil.sendKey(java.awt.event.KeyEvent.VK_ENTER)
             return true
@@ -436,7 +439,7 @@ object MouseUtil {
         }
         try {
             synchronized(e2eRobotLock) {
-                if (!ActionDispatchGate.allow("recovery.enter.locked")) return false
+                if (!ActionDispatchGate.allow(dispatchAction, terminalCleanupCapability = terminalCleanupCapability)) return false
                 if (!focusE2EWindow(hwnd, recovery = true)) {
                     log.warn { "E2E_RECOVERY_KEY_SKIPPED key=ENTER hwnd=$hwnd reason=foreground-unconfirmed" }
                     return false

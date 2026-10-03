@@ -30,7 +30,7 @@ class ScreenStateRoiSelectorTest {
     fun selectsBoundedScreenStateRoisInsteadOfTheWholeDesktop() {
         val rois = ScreenStateRoiSelector.select(3840, 2160)
 
-        assertEquals(7, rois.size)
+        assertEquals(8, rois.size)
         assertTrue(rois.all { it.bounds.x >= 0 && it.bounds.y >= 0 })
         assertTrue(rois.all { it.bounds.maxX <= 3840 && it.bounds.maxY <= 2160 })
         assertTrue(rois.all { it.bounds.width < 3840 && it.bounds.height < 2160 })
@@ -41,6 +41,7 @@ class ScreenStateRoiSelectorTest {
                 ScreenStateRoiSelector.RECONNECT_DIALOG_TITLE_ROI,
                 ScreenStateRoiSelector.RECONNECT_DIALOG_STATUS_ROI,
                 ScreenStateRoiSelector.RECONNECT_DIALOG_MESSAGE_ROI,
+                ScreenStateRoiSelector.RESULT_CONTINUE_ROI,
                 "screen-state-header",
                 "screen-state-footer",
             ),
@@ -57,6 +58,7 @@ class ScreenStateRoiSelectorTest {
                 Rectangle(787, 394, 345, 75),
                 Rectangle(576, 464, 864, 92),
                 Rectangle(576, 513, 864, 86),
+                Rectangle(787, 977, 345, 81),
             ),
             ScreenStateRoiSelector.targetedBoundsForTest(1920, 1080),
         )
@@ -67,6 +69,7 @@ class ScreenStateRoiSelectorTest {
                 Rectangle(786, 393, 346, 76),
                 Rectangle(575, 463, 864, 92),
                 Rectangle(575, 512, 864, 86),
+                Rectangle(786, 976, 346, 81),
             ),
             ScreenStateRoiSelector.targetedBoundsForTest(1919, 1079),
         )

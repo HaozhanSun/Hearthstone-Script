@@ -2,12 +2,26 @@ package club.xiaojiawei.hsscript.status
 
 /** A dismissal is accepted only after an observation that the result page is gone. */
 internal object ResultPageDismissalPolicy {
+    enum class Input {
+        CENTER_CLICK,
+        KEYBOARD_ENTER,
+        RETRY_CLICK,
+    }
+
     enum class Decision {
         DISPATCH_CLICK,
         CONFIRMED_CLEARED,
         BLOCKED_UNCONFIRMED_DURING_WAR,
         WAIT_FOR_SCREEN_TRANSITION,
         EXHAUSTED,
+    }
+
+    /** Preserve the known-working Unity result sequence without treating SendInput acceptance as success. */
+    fun inputForClickAttempt(clickAttempt: Int, maxAttempts: Int): Input? = when {
+        clickAttempt !in 1..maxAttempts -> null
+        clickAttempt == 1 -> Input.CENTER_CLICK
+        clickAttempt == 2 -> Input.KEYBOARD_ENTER
+        else -> Input.RETRY_CLICK
     }
 
     /**
