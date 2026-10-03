@@ -514,6 +514,82 @@ class MulliganRankPreflightTest {
     }
 
     @Test
+    fun `cancelled OCR exhausts into rank surrender and cannot release ordinary input`() {
+        val scheduler = ManualScheduler()
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+        var surrenderCapability: MulliganRankDispatchBarrier.SurrenderCapability? = null
+        val preflight = MulliganRankPreflight(
+            config = MulliganRankPreflightConfig(initialDelayMs = 0, maxAttempts = 1),
+            scheduler = scheduler,
+            isEligible = { true },
+            inspect = { throw club.xiaojiawei.hsscript.ocr.PaddleXOcrCancelledException("test cancellation") },
+            provider = { "PADDLEX" },
+            onSurrender = { result ->
+                assertEquals("rank-ocr-unresolved", result.ruleId)
+                surrenderCapability = MulliganRankDispatchBarrier.requireSurrender(ticket)
+            },
+            onContinue = { error("cancelled OCR must never continue") },
+        )
+
+        preflight.start()
+        scheduler.runScheduledAfter(0)
+        scheduler.runWorker()
+
+        assertNotNull(surrenderCapability)
+        assertEquals(
+            MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+            MulliganRankDispatchBarrier.currentState(),
+        )
+        assertFalse(
+            club.xiaojiawei.hsscript.status.ActionDispatchGate.allowForState(
+                action = "mulligan.confirm",
+                paused = false,
+                working = true,
+                rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+            ),
+        )
+        assertFalse(
+            club.xiaojiawei.hsscript.status.ActionDispatchGate.allowForState(
+                action = "strategy.card.play",
+                paused = false,
+                working = true,
+                rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+            ),
+        )
+        assertTrue(
+            club.xiaojiawei.hsscript.status.ActionDispatchGate.allowForState(
+                action = "surrender.request",
+                paused = false,
+                working = true,
+                rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+                rankSurrenderRequestCapabilityValid =
+                    MulliganRankDispatchBarrier.isSurrenderCapabilityValid(surrenderCapability),
+            ),
+        )
+    }
+
+    @Test
+    fun `main ready without a recognized local Mulligan input creates unresolved-rank barrier`() {
+        ReplaceCardPhaseStrategy.resetForNewGame()
+
+        val capability = ReplaceCardPhaseStrategy.requireUnresolvedRankSurrenderCapability()
+
+        assertNotNull(capability)
+        assertEquals(
+            MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+            MulliganRankDispatchBarrier.currentState(),
+        )
+        assertFalse(
+            club.xiaojiawei.hsscript.status.ActionDispatchGate.allowForState(
+                action = "strategy.card.play",
+                paused = false,
+                working = true,
+                rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+            ),
+        )
+    }
+
+    @Test
     fun `unsafe rank requests surrender once and closes the action gate`() {
         val scheduler = ManualScheduler()
         val surrenderRequested = AtomicBoolean(false)

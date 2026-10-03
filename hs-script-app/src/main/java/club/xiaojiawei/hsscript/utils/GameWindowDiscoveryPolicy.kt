@@ -25,18 +25,28 @@ internal object GameWindowDiscoveryPolicy {
     /** Prefer the verified HWND's process when multiple Hearthstone clients exist. */
     fun selectDiagnosticPid(
         windowOwnerPid: Long?,
-        discoveredProcessPids: List<Long>,
-        nativeProcessPid: Long? = null,
+        nativeProcessPids: List<Long>?,
     ): Long? {
-        val candidates = discoveredProcessPids.filter { it > 0L }
-        return windowOwnerPid?.takeIf { it > 0L && it in candidates }
-            ?: candidates.firstOrNull()
-            ?: nativeProcessPid?.takeIf { it > 0L }
+        val verifiedWindowOwner = windowOwnerPid?.takeIf { it > 0L }
+        val candidates = nativeProcessPids?.filter { it > 0L }?.distinct()
+        if (candidates == null) {
+            // A verified HWND may anchor lineage even if process enumeration
+            // fails. Process-name/PID scans alone are not proof of a window.
+            return verifiedWindowOwner
+        }
+        if (verifiedWindowOwner != null && verifiedWindowOwner in candidates) return verifiedWindowOwner
+        // Never choose an arbitrary Hearthstone PID: multiple clients make
+        // Power.log-to-process attribution ambiguous without a verified HWND.
+        return candidates.singleOrNull()
     }
 
     fun selectProcessStartedAtMs(processHandleStartedAtMs: Long?, nativeStartedAtMs: Long?): Long? =
         processHandleStartedAtMs?.takeIf { it > 0L }
             ?: nativeStartedAtMs?.takeIf { it > 0L }
+
+    /** Name-based injection cannot safely target one client when several share the executable name. */
+    fun selectUniqueProcessForNameBasedInjection(nativeProcessPids: List<Long>?): Long? =
+        nativeProcessPids?.filter { it > 0L }?.distinct()?.singleOrNull()
 
     fun isVerifiedGameWindow(
         ownerPid: Long,

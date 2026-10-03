@@ -45,6 +45,7 @@ import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import com.sun.jna.Pointer
 import com.sun.jna.WString
 import com.sun.jna.platform.win32.Kernel32
+import com.sun.jna.platform.win32.Tlhelp32
 import com.sun.jna.platform.win32.User32
 import com.sun.jna.platform.win32.WinBase
 import com.sun.jna.platform.win32.WinDef
@@ -1455,32 +1456,48 @@ object GameUtil {
                 ?.takeIf(::isVerifiedCurrentGameWindow)
                 ?.let { windowProcessId(it).toLong() }
         }.getOrNull()
-        val discoveredPids = runCatching {
-            ProcessHandle.allProcesses().use { processes ->
-                processes
-                    .filter { handle ->
-                        handle.info().command().map { command ->
-                            File(command).name.equals(GAME_PROGRAM_NAME, ignoreCase = true)
-                        }.orElse(false)
-                    }
-                    .map { it.pid() }
-                    .toList()
-            }
-        }.getOrDefault(emptyList())
-        // ProcessHandle.info().command() can be unavailable for a live Windows
-        // game process (for example, when image metadata is access-restricted).
-        // GameStarter already uses this native process-name probe to establish
-        // liveness; reuse its PID as a last-resort lineage anchor so a fresh
-        // Power.log can still be bound and rank preflight cannot be skipped.
-        val nativeProcessPid = runCatching {
-            CSystemDll.INSTANCE.findProcessId(GAME_PROGRAM_NAME, true)
-        }.getOrNull()?.takeIf { it > 0L }
+        // ProcessHandle can omit executable metadata for a live elevated game.
+        // Enumerate all native process-name matches instead of calling
+        // findProcessId(), which returns only one PID and cannot detect
+        // ambiguity when multiple Hearthstone clients are present.
+        val nativeProcessPids = findNativeGameProcessPidsForDiagnostics()
         return GameWindowDiscoveryPolicy.selectDiagnosticPid(
             windowOwnerPid = windowOwnerPid,
-            discoveredProcessPids = discoveredPids,
-            nativeProcessPid = nativeProcessPid,
+            nativeProcessPids = nativeProcessPids,
         )
     }
+
+    private fun findNativeGameProcessPidsForDiagnostics(): List<Long>? = runCatching {
+        val snapshot = Kernel32.INSTANCE.CreateToolhelp32Snapshot(
+            Tlhelp32.TH32CS_SNAPPROCESS,
+            WinDef.DWORD(0),
+        ) ?: return@runCatching null
+        if (Pointer.nativeValue(snapshot.pointer) == Pointer.nativeValue(WinBase.INVALID_HANDLE_VALUE.pointer)) {
+            return@runCatching null
+        }
+        try {
+            val pids = mutableListOf<Long>()
+            val entry = Tlhelp32.PROCESSENTRY32()
+            entry.dwSize = WinDef.DWORD(entry.size().toLong())
+            var hasEntry = Kernel32.INSTANCE.Process32First(snapshot, entry)
+            while (hasEntry) {
+                val executableName = String(entry.szExeFile).substringBefore('\u0000')
+                if (executableName.equals(GAME_PROGRAM_NAME, ignoreCase = true)) {
+                    entry.th32ProcessID.toLong().takeIf { it > 0L }?.let(pids::add)
+                }
+                hasEntry = Kernel32.INSTANCE.Process32Next(snapshot, entry)
+            }
+            pids.distinct()
+        } finally {
+            Kernel32.INSTANCE.CloseHandle(snapshot)
+        }
+    }.getOrNull()
+
+    /** Return a PID only when the legacy injector's process-name target is unambiguous. */
+    fun findUniqueGameProcessIdForNameBasedInjection(): Long? =
+        GameWindowDiscoveryPolicy.selectUniqueProcessForNameBasedInjection(
+            findNativeGameProcessPidsForDiagnostics(),
+        )
 
     /** Read process creation time even when ProcessHandle cannot enumerate an elevated client. */
     fun findProcessStartedAtForDiagnostics(pid: Long): Long? {

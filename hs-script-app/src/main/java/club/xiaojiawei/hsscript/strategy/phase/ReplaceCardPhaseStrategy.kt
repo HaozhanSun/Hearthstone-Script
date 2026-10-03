@@ -336,22 +336,31 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
 
     /** Leaving our Mulligan INPUT without a rank decision cannot silently open gameplay. */
     private fun failClosedIfRankWindowEnded(reason: String) {
-        if (MulliganRankDispatchBarrier.currentState() != MulliganRankDispatchBarrier.State.PENDING) return
-        val ticket = rankBarrierTicket ?: return
+        val barrierState = MulliganRankDispatchBarrier.currentState()
+        if (barrierState !in setOf(
+                MulliganRankDispatchBarrier.State.IDLE,
+                MulliganRankDispatchBarrier.State.PENDING,
+            )
+        ) return
         if (GameUtil.isTerminalGameState()) {
-            val released = MulliganRankDispatchBarrier.completeTerminalWithoutSurrender(ticket)
+            val ticket = rankBarrierTicket
+            val released = ticket?.let(MulliganRankDispatchBarrier::completeTerminalWithoutSurrender) ?: false
             log.info {
-                "MULLIGAN_RANK_PREFLIGHT_TERMINAL_PRIORITY ticket=$ticket " +
+                "MULLIGAN_RANK_PREFLIGHT_TERMINAL_PRIORITY ticket=${ticket ?: "none"} " +
                     "reason=$reason barrierReleased=$released action=NO_SURRENDER"
             }
             return
         }
         if (PauseStatus.isPause || !rankSurrenderRequested.compareAndSet(false, true)) return
-        val capability = MulliganRankDispatchBarrier.requireSurrender(ticket) ?: return
+        val capability = requireUnresolvedRankSurrenderCapability()
+        if (capability == null) {
+            rankSurrenderRequested.set(false)
+            return
+        }
         val attempts = rankPreflight?.snapshot()?.attempts ?: 0
         val result = SurrenderPolicy.blockForUnresolvedRank(attempts)
         log.warn {
-            "MULLIGAN_RANK_PREFLIGHT_WINDOW_ENDED ticket=$ticket reason=$reason " +
+            "MULLIGAN_RANK_PREFLIGHT_WINDOW_ENDED ticket=${rankBarrierTicket ?: "none"} reason=$reason " +
                 "attempts=$attempts action=SURRENDER_UNRESOLVED_RANK"
         }
         cancelRankPreflight("rank-window-ended-$reason")
@@ -361,6 +370,21 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             "mulligan-rank-preflight",
             rankSurrenderCapability = capability,
         )
+    }
+
+    /**
+     * A phase can leave Mulligan without a recognized local INPUT event.
+     * Create the pending barrier in that case, then require the same
+     * one-shot mandatory surrender used after exhausted rank OCR.
+     */
+    internal fun requireUnresolvedRankSurrenderCapability(): MulliganRankDispatchBarrier.SurrenderCapability? {
+        val ticket = when (MulliganRankDispatchBarrier.currentState()) {
+            MulliganRankDispatchBarrier.State.IDLE ->
+                MulliganRankDispatchBarrier.beginCurrentGame().also { rankBarrierTicket = it }
+            MulliganRankDispatchBarrier.State.PENDING -> rankBarrierTicket ?: return null
+            else -> return null
+        }
+        return MulliganRankDispatchBarrier.requireSurrender(ticket)
     }
 
     /** Guard every mulligan click against a late rank decision or phase exit. */

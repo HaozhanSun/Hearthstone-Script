@@ -64,12 +64,15 @@ class InjectGameStarter(
     private fun injectCheck(): Boolean {
         if (ConfigEnum.ALLOW_GAME_INJECT.getBoolean()) {
             val dllResourceFile = if (enableDebug()) LIB_HS_FILE else LIB_HS_BASE_FILE
-            val pid = CSystemDll.INSTANCE.findProcessId(GAME_PROGRAM_NAME, true)
-            if (pid > 0) {
-                if (CSystemDll.INSTANCE.isDllLoadedInProcess(pid, dllResourceFile.name)) return true
-            } else {
+            val pid = GameUtil.findUniqueGameProcessIdForNameBasedInjection()
+            if (pid == null) {
+                log.warn {
+                    "游戏 DLL 注入已阻止：Hearthstone 进程列表为空/有歧义，" +
+                        "按进程名的注入工具无法保证目标唯一"
+                }
                 return false
             }
+            if (CSystemDll.INSTANCE.isDllLoadedInProcess(pid, dllResourceFile.name)) return true
             CSystemDll.INSTANCE.uninstall()
             val injectFile = SystemUtil.getExeFilePath(INJECT_UTIL_FILE) ?: return false
             val dllFile = SystemUtil.getDllFilePath(dllResourceFile) ?: return false

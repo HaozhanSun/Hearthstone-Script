@@ -20,8 +20,7 @@ class ObservedRankSevenLiveSessionRegressionTest {
     fun `native PID fallback binds current game log and rank seven cannot release mulligan actions`() {
         val gamePid = GameWindowDiscoveryPolicy.selectDiagnosticPid(
             windowOwnerPid = null,
-            discoveredProcessPids = emptyList(),
-            nativeProcessPid = OBSERVED_GAME_PID,
+            nativeProcessPids = listOf(OBSERVED_GAME_PID),
         )
         assertEquals(OBSERVED_GAME_PID, gamePid)
         assertEquals(

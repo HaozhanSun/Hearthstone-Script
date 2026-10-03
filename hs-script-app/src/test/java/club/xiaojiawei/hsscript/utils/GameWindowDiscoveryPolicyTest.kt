@@ -30,8 +30,8 @@ class GameWindowDiscoveryPolicyTest {
     }
 
     @Test
-    fun `diagnostics select the verified HWND owner even when it is not the first Hearthstone PID`() {
-        val discoveredPids = listOf(100L, 200L)
+    fun `diagnostics select the verified HWND owner from multiple native Hearthstone PIDs`() {
+        val nativePids = listOf(100L, 200L)
         val hwnd = candidate(handle = 22L, ownerPid = 200L, valid = true, visible = true)
         assertTrue(
             GameWindowDiscoveryPolicy.isVerifiedGameWindow(
@@ -45,32 +45,43 @@ class GameWindowDiscoveryPolicyTest {
 
         assertEquals(
             200L,
-            GameWindowDiscoveryPolicy.selectDiagnosticPid(hwnd.ownerPid, discoveredPids),
+            GameWindowDiscoveryPolicy.selectDiagnosticPid(hwnd.ownerPid, nativePids),
         )
     }
 
     @Test
-    fun `diagnostics fall back to native live PID when HWND and ProcessHandle metadata are unavailable`() {
+    fun `diagnostics select a sole native PID when Java process metadata and HWND are unavailable`() {
         assertEquals(
             73_060L,
             GameWindowDiscoveryPolicy.selectDiagnosticPid(
                 windowOwnerPid = null,
-                discoveredProcessPids = emptyList(),
-                nativeProcessPid = 73_060L,
+                nativeProcessPids = listOf(73_060L),
             ),
         )
     }
 
     @Test
-    fun `diagnostics do not replace process-handle PID with native fallback`() {
-        assertEquals(
-            73_060L,
+    fun `ambiguous native process list fails closed without a verified window owner`() {
+        assertNull(
             GameWindowDiscoveryPolicy.selectDiagnosticPid(
                 windowOwnerPid = null,
-                discoveredProcessPids = listOf(73_060L),
-                nativeProcessPid = 81_155L,
+                nativeProcessPids = listOf(73_060L, 81_155L),
             ),
         )
+    }
+
+    @Test
+    fun `native PID enumeration failure requires independently verified HWND identity`() {
+        assertNull(GameWindowDiscoveryPolicy.selectDiagnosticPid(null, null))
+        assertEquals(73_060L, GameWindowDiscoveryPolicy.selectDiagnosticPid(73_060L, null))
+    }
+
+    @Test
+    fun `name-based native injection refuses zero or multiple matching processes`() {
+        assertNull(GameWindowDiscoveryPolicy.selectUniqueProcessForNameBasedInjection(null))
+        assertNull(GameWindowDiscoveryPolicy.selectUniqueProcessForNameBasedInjection(emptyList()))
+        assertNull(GameWindowDiscoveryPolicy.selectUniqueProcessForNameBasedInjection(listOf(73_060L, 81_155L)))
+        assertEquals(73_060L, GameWindowDiscoveryPolicy.selectUniqueProcessForNameBasedInjection(listOf(73_060L)))
     }
 
     @Test
