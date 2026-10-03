@@ -5,27 +5,37 @@ import java.util.concurrent.ScheduledFuture
 
 /** Tracks end-of-game workers while keeping a worker's own stop path scoped to itself. */
 internal class GameEndTaskRegistry {
-    private val tasks = CopyOnWriteArrayList<ScheduledFuture<*>>()
+    enum class Kind { SURRENDER_RECOVERY, TERMINAL_PAGE }
 
-    fun add(task: ScheduledFuture<*>) {
-        tasks.add(task)
+    private data class Entry(val task: ScheduledFuture<*>, val kind: Kind)
+
+    private val tasks = CopyOnWriteArrayList<Entry>()
+
+    fun add(task: ScheduledFuture<*>, kind: Kind = Kind.SURRENDER_RECOVERY) {
+        tasks.add(Entry(task, kind))
     }
 
     fun remove(task: ScheduledFuture<*>) {
-        tasks.remove(task)
+        tasks.removeIf { it.task == task }
     }
 
     fun cancel(task: ScheduledFuture<*>, mayInterruptIfRunning: Boolean = true) {
         task.cancel(mayInterruptIfRunning)
-        tasks.remove(task)
+        remove(task)
     }
 
     fun cancelAll() {
-        tasks.forEach { task ->
-            if (!task.isDone) task.cancel(true)
-            tasks.remove(task)
+        tasks.forEach { entry ->
+            if (!entry.task.isDone) entry.task.cancel(true)
+            tasks.remove(entry)
         }
     }
 
     fun isNotEmpty(): Boolean = tasks.isNotEmpty()
+
+    /** Only result-page workers prove a terminal UI; an in-flight surrender retry does not. */
+    fun hasTerminalPageTask(): Boolean = tasks.any { it.kind == Kind.TERMINAL_PAGE && !it.task.isDone }
+
+    fun hasSurrenderRecoveryTask(): Boolean =
+        tasks.any { it.kind == Kind.SURRENDER_RECOVERY && !it.task.isDone }
 }

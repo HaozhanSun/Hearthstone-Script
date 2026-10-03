@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.ocr
 
 import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -165,6 +166,45 @@ class OcrRuntimeTest {
 
         assertTrue(legacyCalled)
         assertEquals("legacy-after-failure", result)
+    }
+
+    @Test
+    fun matchmakingModalUsesConfiguredColdStartDeadlineAndRetainsLegacyFallback() {
+        OcrRuntime.providerModeProvider = { OcrProviderMode.AUTO }
+        OcrRuntime.settingsProvider = {
+            PaddleXOcrSettings(true, "python", "fake-module", "cpu", "", 120_000)
+        }
+        var observedTimeoutMs: Long? = null
+        OcrRuntime.paddleXBridgeFactory = {
+            object : OcrTextBridge {
+                override fun recognize(image: java.awt.image.BufferedImage, desc: String): String = "unused"
+
+                override fun recognizeWithConfidence(
+                    image: java.awt.image.BufferedImage,
+                    desc: String,
+                    roi: String?,
+                    timeoutMs: Long?,
+                ): OcrRecognition {
+                    observedTimeoutMs = timeoutMs
+                    throw PaddleXOcrException("simulated cold pipeline initialization timeout")
+                }
+
+                override fun healthCheck(): OcrHealth =
+                    OcrHealth(false, OcrProviderKind.PADDLEX, "cold-start")
+            }
+        }
+
+        val result = OcrRuntime.recognizeResult(
+            image = TestImages.onePixel(),
+            desc = "matchmaking-start-game-error-screen-state-start-game-error-modal",
+            roi = "screen-state-start-game-error-modal",
+            timeoutMs = ScreenStateRecovery.matchmakingDialogOcrTimeoutMs(),
+            legacyOcr = { "开始游戏时发生了错误 确定" },
+        )
+
+        assertEquals(120_000L, observedTimeoutMs)
+        assertEquals("开始游戏时发生了错误 确定", result.text)
+        assertEquals(OcrProviderKind.LEGACY, OcrRuntime.lastProviderUsed())
     }
 
     @Test

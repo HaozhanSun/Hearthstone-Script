@@ -460,13 +460,21 @@ object ScreenWatchdog {
         val surrenderRed: Double,
         val optionsBeige: Double,
         val exitBeige: Double,
+        val frameTop: Double,
+        val frameBottom: Double,
+        val frameLeft: Double,
+        val frameRight: Double,
         val accepted: Boolean,
     ) {
         override fun toString(): String =
             "size=${width}x$height headerBeige=${"%.4f".format(Locale.ROOT, headerBeige)} " +
                 "surrenderRed=${"%.4f".format(Locale.ROOT, surrenderRed)} " +
                 "optionsBeige=${"%.4f".format(Locale.ROOT, optionsBeige)} " +
-                "exitBeige=${"%.4f".format(Locale.ROOT, exitBeige)} accepted=$accepted"
+                "exitBeige=${"%.4f".format(Locale.ROOT, exitBeige)} " +
+                "frameTop=${"%.4f".format(Locale.ROOT, frameTop)} " +
+                "frameBottom=${"%.4f".format(Locale.ROOT, frameBottom)} " +
+                "frameLeft=${"%.4f".format(Locale.ROOT, frameLeft)} " +
+                "frameRight=${"%.4f".format(Locale.ROOT, frameRight)} accepted=$accepted"
     }
 
     private data class SurrenderConfirmationMetrics(
@@ -571,7 +579,12 @@ object ScreenWatchdog {
     /** Three small, fixed menu-button ROIs; broad Hearthstone colors alone never confirm Settings. */
     private fun settingsOverlayMetrics(image: BufferedImage): SettingsOverlayMetrics {
         if (image.width < 800 || image.height < 450) {
-            return SettingsOverlayMetrics(image.width, image.height, 0.0, 0.0, 0.0, 0.0, false)
+            return SettingsOverlayMetrics(
+                image.width, image.height,
+                0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0,
+                false,
+            )
         }
         val headerBeige = colorRatio(image, 0.424, 0.259, 0.587, 0.298) { red, green, blue ->
             red >= 135 && green >= 110 && blue >= 70 &&
@@ -588,8 +601,21 @@ object ScreenWatchdog {
             red >= 135 && green >= 105 && blue >= 65 &&
                 red - blue <= 115 && red >= green && green >= blue * 0.82
         }
+        // The four button ROIs overlap Hearthstone's tan board/card art. Require
+        // the centered, four-sided menu frame as well, or an active board can
+        // be mistaken for Settings and route a surrender click to the wrong UI.
+        val darkNeutral: (Int, Int, Int) -> Boolean = { red, green, blue ->
+            red in 15..135 && green in 15..135 && blue in 15..135 &&
+                maxOf(red, green, blue) - minOf(red, green, blue) <= 45
+        }
+        val frameTop = colorRatio(image, 0.398, 0.255, 0.602, 0.278, darkNeutral)
+        val frameBottom = colorRatio(image, 0.398, 0.595, 0.602, 0.622, darkNeutral)
+        val frameLeft = colorRatio(image, 0.398, 0.278, 0.418, 0.595, darkNeutral)
+        val frameRight = colorRatio(image, 0.582, 0.278, 0.602, 0.595, darkNeutral)
         val accepted = headerBeige >= 0.12 && surrenderRed >= 0.10 &&
-            optionsBeige >= 0.10 && exitBeige >= 0.10
+            optionsBeige >= 0.10 && exitBeige >= 0.10 &&
+            frameTop >= 0.55 && frameBottom >= 0.55 &&
+            frameLeft >= 0.55 && frameRight >= 0.55
         return SettingsOverlayMetrics(
             image.width,
             image.height,
@@ -597,6 +623,10 @@ object ScreenWatchdog {
             surrenderRed,
             optionsBeige,
             exitBeige,
+            frameTop,
+            frameBottom,
+            frameLeft,
+            frameRight,
             accepted,
         )
     }

@@ -123,6 +123,35 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
     }
 
     @Test
+    fun `live rank three board colors cannot be mistaken for settings or authorize surrender`() {
+        val board = readFixture("rank3-live-board-settings-false-positive.png")
+        val state = "mode=GAMEPLAY|inWar=true|warPhase=GAME_TURN|myTurn=false|myMulliganInput=false"
+        val diagnostics = ScreenWatchdog.settingsOverlayDiagnosticsForTest(board)
+
+        println("LIVE_RANK3_BOARD_NOT_SETTINGS $diagnostics")
+        assertFalse(ScreenWatchdog.hasSettingsOverlayVisualForTest(board), diagnostics)
+        assertTrue(
+            ScreenWatchdog.classifyForSurrenderForTest("unreadable board labels", state, board) !=
+                ScreenWatchdogKind.SETTINGS,
+            "the active-board capture must never classify as a Settings overlay",
+        )
+
+        val observation = ScreenWatchdog.inspectForSurrender(
+            state = state,
+            attempts = 42,
+            mandatoryRankSurrender = true,
+            captureProvider = { board },
+            ocrProvider = { "unreadable board labels" },
+        )
+        assertTrue(observation.kind != ScreenWatchdogKind.SETTINGS, observation.reason)
+        assertTrue(
+            MandatoryRankSurrenderRecoveryPolicy.decide(observation.kind).action !=
+                MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SURRENDER,
+            "a live board is not evidence that the Settings surrender button is present",
+        )
+    }
+
+    @Test
     fun `transient mulligan emote masking banner uses authoritative card signature before OCR`() {
         val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
         val animatedMulligan = maskMulliganBannerAndAddEmote(

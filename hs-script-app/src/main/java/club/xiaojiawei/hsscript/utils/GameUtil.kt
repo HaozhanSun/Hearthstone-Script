@@ -145,7 +145,7 @@ object GameUtil {
             WAR.won.isNotBlank() ||
             WAR.lost.isNotBlank() ||
             WAR.conceded.isNotBlank() ||
-            gameEndTasks.isNotEmpty()
+            gameEndTasks.hasTerminalPageTask()
 
     /**
      * A new CREATE_GAME/TURN=1 boundary supersedes any result-page cleanup
@@ -786,7 +786,7 @@ object GameUtil {
                 "SURRENDER_ACTION_BLOCKED reason=terminal-state-priority " +
                     "phase=${WAR.currentPhase.name} step=${WAR.currentTurnStep?.name ?: "NONE"} " +
                     "won=${WAR.won.isNotBlank()} lost=${WAR.lost.isNotBlank()} " +
-                    "conceded=${WAR.conceded.isNotBlank()} settlementTask=${gameEndTasks.isNotEmpty()} dispatch=false"
+                    "conceded=${WAR.conceded.isNotBlank()} terminalPageTask=${gameEndTasks.hasTerminalPageTask()} dispatch=false"
             }
             return false
         }
@@ -803,10 +803,17 @@ object GameUtil {
 //        按ESC键弹出投降界面
 //        ScriptStaticData.ROBOT.keyPress(27);
 //        ScriptStaticData.ROBOT.keyRelease(27);
-        if (gameEndTasks.isNotEmpty()) {
+        if (gameEndTasks.hasTerminalPageTask()) {
             log.warn {
                 "SURRENDER_ACTION_BLOCKED reason=stale-settlement-task " +
                     "settlementTask=true dispatch=false pause=false continue=true"
+            }
+            return false
+        }
+        if (gameEndTasks.hasSurrenderRecoveryTask()) {
+            log.info {
+                "SURRENDER_ACTION_BLOCKED reason=surrender-recovery-already-running " +
+                    "dispatch=false queue=false retry=existing-task"
             }
             return false
         }
@@ -1213,7 +1220,7 @@ object GameUtil {
                 TimeUnit.MILLISECONDS,
             )
         surrenderFutureRef.set(surrenderFuture)
-        gameEndTasks.add(surrenderFuture)
+        gameEndTasks.add(surrenderFuture, GameEndTaskRegistry.Kind.SURRENDER_RECOVERY)
         if (surrenderStopRequested.get()) gameEndTasks.cancel(surrenderFuture)
         return true
     }
@@ -1297,6 +1304,7 @@ object GameUtil {
                     gameEndClickInterval,
                     TimeUnit.MILLISECONDS,
                 ),
+                GameEndTaskRegistry.Kind.TERMINAL_PAGE,
             )
         } else {
             (0 until 3).forEach { _ ->
@@ -1463,7 +1471,7 @@ object GameUtil {
             interval,
             TimeUnit.MILLISECONDS,
         )
-        gameEndTasks.add(future)
+        gameEndTasks.add(future, GameEndTaskRegistry.Kind.TERMINAL_PAGE)
     }
 
     fun hidePlatformWindow() {

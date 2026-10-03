@@ -61,11 +61,13 @@ object ScreenStateRecovery {
         val screenshot: String?,
     )
 
+    /** Use the configured PaddleX deadline so cold pipeline initialization isn't cut off at 4 seconds. */
+    internal fun matchmakingDialogOcrTimeoutMs(): Long = OcrRuntime.paddleXRequestTimeoutMs()
+
     private const val MAX_OCR_TEXT_LENGTH = 500
     private const val OCR_MAX_WIDTH = 1280
     private const val RESULT_CONTINUE_GRAY_LIGHT_MIN = 0.025
     private const val RESULT_BANNER_LOW_SATURATION_MIN = 0.30
-    private const val MATCHMAKING_DIALOG_OCR_TIMEOUT_MS = 4_000L
     private const val RECONNECT_RETRY_INTERVAL_MS = 60_000L
     private const val RECOVERY_POSTCHECK_TIMEOUT_MS = 3_000L
     private const val RECOVERY_POSTCHECK_POLL_MS = 300L
@@ -485,7 +487,7 @@ object ScreenStateRecovery {
                     image = roiImage,
                     desc = "matchmaking-start-game-error-$roiName",
                     roi = roiName,
-                    timeoutMs = MATCHMAKING_DIALOG_OCR_TIMEOUT_MS,
+                    timeoutMs = matchmakingDialogOcrTimeoutMs(),
                 ) {
                     // AUTO uses the selected PaddleX provider first and its established legacy fallback.
                     // The modal is multi-line, so use the compatibility engine's block mode rather
