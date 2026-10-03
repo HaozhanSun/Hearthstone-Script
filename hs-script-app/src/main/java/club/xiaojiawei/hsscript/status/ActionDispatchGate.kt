@@ -78,7 +78,9 @@ object ActionDispatchGate {
             }
             return false
         }
-        if (mandatoryRankSurrenderPending && !recoveryCapabilityValid && !terminalCleanupAllowed) {
+        if (mandatoryRankSurrenderPending && !recoveryCapabilityValid &&
+            !rankSurrenderRequestAllowed && !terminalCleanupAllowed
+        ) {
             log.warn {
                 "ACTION_BLOCKED action=$action reason=mandatory-rank-surrender-pending " +
                     "pause=false working=true dispatch=false"

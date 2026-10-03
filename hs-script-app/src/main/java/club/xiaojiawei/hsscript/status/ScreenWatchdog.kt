@@ -542,13 +542,15 @@ object ScreenWatchdog {
         if (aspect !in 1.55..1.90) {
             return MulliganVisualMetrics(image.width, image.height, 0.0, 0.0, 0.0, 0.0, false)
         }
-        // Require the distinctive start-hand banner, a vivid row of cards,
-        // and the local hero portrait; phase evidence alone never clicks.
+        // Require the distinctive start-hand banner and visible cards. The
+        // hero region may be obscured by overlays; authoritative Mulligan
+        // input state is checked by the caller, so phase evidence alone never
+        // clicks.
         val banner = colorRatios(image, 0.35, 0.09, 0.66, 0.24)
         val hand = colorRatios(image, 0.20, 0.30, 0.80, 0.68)
         val hero = colorRatios(image, 0.455, 0.68, 0.545, 0.88)
         val accepted = banner.goldRatio >= 0.025 && banner.vividRatio >= 0.10 &&
-            hand.vividRatio >= 0.24 && hero.vividRatio >= 0.12
+            hand.vividRatio >= 0.22
         return MulliganVisualMetrics(
             image.width,
             image.height,

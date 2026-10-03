@@ -469,6 +469,69 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
         )
     }
 
+    @Test
+    fun `authoritative Mulligan with incident-level hand evidence opens settings without requiring hero visibility`() {
+        val image = incidentMulliganFrame()
+        val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
+        val diagnostics = ScreenWatchdog.mulliganVisualDiagnosticsForTest(image)
+
+        assertTrue(diagnostics.contains("handVivid=0.2300"), diagnostics)
+        assertTrue(diagnostics.contains("heroVivid=0.0000"), diagnostics)
+        assertTrue(ScreenWatchdog.hasMulliganVisualForTest(image), diagnostics)
+        val screen = ScreenWatchdog.classifyForSurrenderForTest("unreadable", state, image)
+        assertEquals(ScreenWatchdogKind.MULLIGAN, screen, diagnostics)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS,
+            MandatoryRankSurrenderRecoveryPolicy.decide(screen).action,
+        )
+
+        val noAuthoritativeInput = state.replace("myMulliganInput=true", "myMulliganInput=false")
+        assertEquals(
+            ScreenWatchdogKind.UNKNOWN,
+            ScreenWatchdog.classifyForSurrenderForTest("unreadable", noAuthoritativeInput, image),
+            "a visual signature alone must never authorize a click",
+        )
+    }
+
+    private fun incidentMulliganFrame(): BufferedImage {
+        val image = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
+        val gold = Color(200, 150, 50).rgb
+        val card = Color(50, 120, 220).rgb
+        // These pixel ratios reproduce the 00:17:10 log diagnostics within
+        // sampling tolerance: a strong Mulligan banner, 0.23 hand vividness,
+        // and no measurable local-hero region due to occlusion.
+        fillSampledRatio(image, 0.35, 0.09, 0.66, 0.24, 0.48, gold)
+        fillSampledRatio(image, 0.20, 0.30, 0.80, 0.68, 0.23, card)
+        return image
+    }
+
+    private fun fillSampledRatio(
+        image: BufferedImage,
+        left: Double,
+        top: Double,
+        right: Double,
+        bottom: Double,
+        ratio: Double,
+        color: Int,
+    ) {
+        val x0 = (image.width * left).toInt()
+        val x1 = (image.width * right).toInt()
+        val y0 = (image.height * top).toInt()
+        val y1 = (image.height * bottom).toInt()
+        val coordinates = buildList {
+            var y = y0
+            while (y < y1) {
+                var x = x0
+                while (x < x1) {
+                    add(x to y)
+                    x += 3
+                }
+                y += 3
+            }
+        }
+        coordinates.take((coordinates.size * ratio).toInt()).forEach { (x, y) -> image.setRGB(x, y, color) }
+    }
+
     private fun readFixture(name: String): BufferedImage = ImageIO.read(
         requireNotNull(
             javaClass.getResourceAsStream("/club/xiaojiawei/hsscript/status/surrender/$name"),

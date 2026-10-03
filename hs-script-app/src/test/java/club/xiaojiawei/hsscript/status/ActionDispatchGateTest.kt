@@ -90,6 +90,25 @@ class ActionDispatchGateTest {
         )
         assertTrue(
             ActionDispatchGate.allowForState(
+                "surrender.request", false, true,
+                mandatoryRankSurrenderPending = true,
+                rankBarrierState = required,
+                rankSurrenderRequestCapabilityValid = true,
+            ),
+            "the one-shot rank capability must not deadlock against its own pending recovery lock",
+        )
+        assertFalse(
+            ActionDispatchGate.allowForState(
+                "surrender.request", true, true,
+                mandatoryRankSurrenderPending = true,
+                recoveryCapabilityValid = true,
+                rankBarrierState = required,
+                rankSurrenderRequestCapabilityValid = true,
+            ),
+            "manual F2 pause has priority over both surrender capabilities",
+        )
+        assertTrue(
+            ActionDispatchGate.allowForState(
                 "surrender.retry.confirm", false, true,
                 mandatoryRankSurrenderPending = true,
                 recoveryCapabilityValid = true,
