@@ -61,7 +61,9 @@ import java.nio.file.Path
 import java.util.*
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
 import kotlin.math.min
 
@@ -460,9 +462,7 @@ object GameUtil {
         )
     }
 
-    private val gameEndTasks: MutableList<ScheduledFuture<*>> by lazy {
-        mutableListOf()
-    }
+    private val gameEndTasks = GameEndTaskRegistry()
 
     fun getDailyTaskDescRect(index: Int): GameRect? = DAILY_TASK_DESC_RECTS.getOrNull(index)
 
@@ -848,10 +848,15 @@ object GameUtil {
         var surrenderAttempts = 0
         val maxSurrenderAttempts = 30
         val surrenderStartedAt = System.currentTimeMillis()
-        gameEndTasks.add(
-            EXTRA_THREAD_POOL.scheduleWithFixedDelay(
+        val surrenderFutureRef = AtomicReference<ScheduledFuture<*>?>()
+        val surrenderStopRequested = AtomicBoolean(false)
+        val surrenderFuture = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
                 {
-                    fun stopSurrenderTask() = cancelGameEndTask()
+                    fun stopSurrenderTask() {
+                        surrenderStopRequested.set(true)
+                        surrenderFutureRef.get()?.let { task -> gameEndTasks.cancel(task) }
+                    }
+                    if (surrenderStopRequested.get()) return@scheduleWithFixedDelay
                     fun completeMandatoryRankSurrender(evidence: String) {
                         if (mandatoryRank && MandatoryRankSurrenderGuard.confirmCompleted(evidence)) {
                             log.info { "RANK_SURRENDER_RECOVERY_COMPLETED evidence=$evidence requeueAllowed=true" }
@@ -1169,8 +1174,10 @@ object GameUtil {
                 0,
                 surrenderRetryInterval,
                 TimeUnit.MILLISECONDS,
-            ),
-        )
+            )
+        surrenderFutureRef.set(surrenderFuture)
+        gameEndTasks.add(surrenderFuture)
+        if (surrenderStopRequested.get()) gameEndTasks.cancel(surrenderFuture)
         return true
     }
 
@@ -1839,12 +1846,7 @@ object GameUtil {
     }
 
     private fun cancelGameEndTask() {
-        for (future in gameEndTasks.toList()) {
-            future.isDone.isFalse {
-                future.cancel(true)
-            }
-            gameEndTasks.remove(future)
-        }
+        gameEndTasks.cancelAll()
     }
 
     /**

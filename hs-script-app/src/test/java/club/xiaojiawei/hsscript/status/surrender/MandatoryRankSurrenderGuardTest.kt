@@ -10,6 +10,9 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import club.xiaojiawei.hsscript.utils.GameEndTaskRegistry
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 class MandatoryRankSurrenderGuardTest {
     @AfterEach
@@ -212,5 +215,125 @@ class MandatoryRankSurrenderGuardTest {
             ),
             "F2 pause must remain higher priority than terminal cleanup",
         )
+    }
+
+    @Test
+    fun `late surrender retry cancellation cannot cancel terminal cleanup across consecutive matches`() {
+        val scheduler = ScheduledThreadPoolExecutor(1)
+        val tasks = GameEndTaskRegistry()
+        try {
+            fun pendingTask() = scheduler.scheduleWithFixedDelay({}, 1, 1, TimeUnit.MINUTES)
+
+            val firstTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+            assertTrue(MulliganRankDispatchBarrier.requireSurrender(firstTicket) != null)
+            MandatoryRankSurrenderGuard.begin()
+            val firstTerminal = CurrentGamePowerLogTerminalTracker().apply {
+                observeLine("CREATE_GAME")
+                observeLine("tag=PLAYSTATE value=CONCEDED")
+                observeLine("tag=STEP value=FINAL_GAMEOVER")
+                observeLine("tag=STATE value=COMPLETE")
+            }
+            assertTrue(firstTerminal.hasCompleteTerminalEvidence())
+            val firstCleanupCapability =
+                MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL")
+            assertTrue(firstCleanupCapability != null)
+
+            val firstSurrenderRetry = pendingTask()
+            val firstResultCleanup = pendingTask()
+            tasks.add(firstSurrenderRetry)
+            tasks.add(firstResultCleanup)
+
+            // A SendInput/Robot acceptance only proves dispatch. The result
+            // remains visible, so the barrier must stay closed after the click.
+            var acceptedClicks = 0
+            assertEquals(
+                ResultPageDismissalPolicy.Decision.DISPATCH_CLICK,
+                ResultPageDismissalPolicy.decide(
+                    inWar = false,
+                    resultPageVisible = true,
+                    attempt = 1,
+                    maxAttempts = 5,
+                ),
+            )
+            acceptedClicks++ // SendInput accepted; that is not UI/postcheck confirmation.
+            assertEquals(1, acceptedClicks)
+            assertTrue(MandatoryRankSurrenderGuard.isPending())
+
+            // A late surrender-retry callback sees the terminal marker and
+            // stops only itself. It must not cancel the result worker before
+            // that worker can observe the new deck-selection screen.
+            tasks.cancel(firstSurrenderRetry)
+            assertTrue(firstSurrenderRetry.isCancelled)
+            assertFalse(firstResultCleanup.isCancelled)
+            assertTrue(
+                MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(firstCleanupCapability),
+            )
+            assertFalse(
+                ResultPageDismissalPolicy.shouldStopWorker(
+                    paused = false,
+                    gameplayMode = false,
+                    terminalCleanupCapabilityValid =
+                        MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(firstCleanupCapability),
+                ),
+            )
+            assertEquals(
+                ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED,
+                ResultPageDismissalPolicy.decide(
+                    inWar = false,
+                    resultPageVisible = false,
+                    attempt = 2,
+                    maxAttempts = 5,
+                ),
+            )
+            assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
+            assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
+            tasks.cancel(firstResultCleanup)
+
+            // Consecutive match: stale capability from the first game is
+            // invalid; the second game gets a fresh barrier and cleanup token.
+            val secondTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+            assertTrue(MulliganRankDispatchBarrier.requireSurrender(secondTicket) != null)
+            MandatoryRankSurrenderGuard.begin()
+            assertFalse(
+                MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(firstCleanupCapability),
+            )
+            val secondTerminal = CurrentGamePowerLogTerminalTracker().apply {
+                observeLine("CREATE_GAME")
+                observeLine("tag=PLAYSTATE value=CONCEDED")
+                observeLine("tag=STEP value=FINAL_GAMEOVER")
+                observeLine("tag=STATE value=COMPLETE")
+            }
+            assertTrue(secondTerminal.hasCompleteTerminalEvidence())
+            val secondCleanupCapability =
+                MandatoryRankSurrenderGuard.authorizeTerminalCleanup("POWERLOG_TERMINAL")
+            assertTrue(secondCleanupCapability != null)
+
+            val secondSurrenderRetry = pendingTask()
+            val secondResultCleanup = pendingTask()
+            tasks.add(secondSurrenderRetry)
+            tasks.add(secondResultCleanup)
+            tasks.cancel(secondSurrenderRetry)
+
+            assertTrue(secondResultCleanup.isCancelled.not())
+            assertTrue(
+                MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(secondCleanupCapability),
+            )
+            assertTrue(MandatoryRankSurrenderGuard.isPending(), "accepted cleanup input is not completion")
+            assertEquals(
+                ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED,
+                ResultPageDismissalPolicy.decide(
+                    inWar = false,
+                    resultPageVisible = false,
+                    attempt = 2,
+                    maxAttempts = 5,
+                ),
+            )
+            assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
+            assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
+            tasks.cancel(secondResultCleanup)
+        } finally {
+            tasks.cancelAll()
+            scheduler.shutdownNow()
+        }
     }
 }
