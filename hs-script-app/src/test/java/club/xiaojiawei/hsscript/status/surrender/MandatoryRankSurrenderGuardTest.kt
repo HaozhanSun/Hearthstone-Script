@@ -32,7 +32,11 @@ class MandatoryRankSurrenderGuardTest {
         assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
         assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
 
-        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL"))
+        assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL"))
+        assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_TERMINAL"))
+        assertTrue(MandatoryRankSurrenderGuard.isPending(), "Power.log terminal markers do not prove the UI left the board")
+        assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
         assertFalse(MandatoryRankSurrenderGuard.isPending())
         assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
     }
@@ -73,7 +77,7 @@ class MandatoryRankSurrenderGuardTest {
 
         assertTrue(MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(active))
         assertFalse(MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(forged))
-        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL"))
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_MAIN_MENU"))
         assertFalse(MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(active))
     }
 
@@ -119,6 +123,21 @@ class MandatoryRankSurrenderGuardTest {
         assertTrue(MulliganRankDispatchBarrier.requireSurrender(ticket) != null)
         MandatoryRankSurrenderGuard.begin()
 
+        // Power.log can already say CONCEDED/FINAL_GAMEOVER/COMPLETE while
+        // the screenshot is still the board. UNKNOWN must neither count as a
+        // transition nor authorize a speculative result click.
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = null,
+                attempt = 1,
+                maxAttempts = 5,
+            ),
+        )
+        assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL"))
+        assertTrue(MandatoryRankSurrenderGuard.isPending())
+
         assertTrue(MandatoryRankSurrenderGuard.isPending())
         assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
         assertFalse(
@@ -147,6 +166,26 @@ class MandatoryRankSurrenderGuardTest {
             ),
         )
         assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.DISPATCH_CLICK,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = true,
+                attempt = 1,
+                maxAttempts = 5,
+            ),
+        )
+        assertTrue(MandatoryRankSurrenderGuard.isPending(), "a dispatched click is not an accepted transition")
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = null,
+                attempt = 2,
+                maxAttempts = 5,
+            ),
+        )
+        assertTrue(MandatoryRankSurrenderGuard.isPending(), "board/UNKNOWN postcheck remains fail-closed")
         assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("UNKNOWN"))
         assertTrue(MandatoryRankSurrenderGuard.isPending(), "an inconclusive screen postcheck must not unlock queue")
         assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))

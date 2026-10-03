@@ -882,7 +882,13 @@ object GameUtil {
                     } else if (WarEx.warCount > warCount || (isGamePlay && Mode.currMode !== ModeEnum.GAMEPLAY)) {
                         if (WarEx.warCount > warCount || isTerminalGameState()) {
                             stopSurrenderTask()
-                            completeMandatoryRankSurrender("POWERLOG_TERMINAL")
+                            if (mandatoryRank) {
+                                MandatoryRankSurrenderGuard.markRecoveryUncertain()
+                                log.info {
+                                    "RANK_SURRENDER_RECOVERY_WAIT reason=powerlog-terminal-awaiting-visible-transition " +
+                                        "ordinaryInput=false requeue=false pause=false"
+                                }
+                            }
                         } else if (mandatoryRank) {
                             MandatoryRankSurrenderGuard.markRecoveryUncertain()
                             log.warn {
@@ -984,7 +990,14 @@ object GameUtil {
                                     terminalKind,
                                     observation.screenshotPath ?: observation.reason,
                                 )
-                                completeMandatoryRankSurrender("SCREEN_TERMINAL")
+                                if (decision.action == MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_RESULT) {
+                                    val cleanupCapability = MandatoryRankSurrenderGuard
+                                        .authorizeTerminalCleanup("SCREEN_TERMINAL")
+                                    dismissStaleGameEndScreen(
+                                        resultAlreadyObserved = true,
+                                        terminalCleanupCapability = cleanupCapability,
+                                    )
+                                }
                             }
                             MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_MAIN_MENU -> {
                                 stopSurrenderTask()
@@ -1055,7 +1068,6 @@ object GameUtil {
                                         observation.kind,
                                         observation.screenshotPath ?: observation.reason,
                                     )
-                                    completeMandatoryRankSurrender("SCREEN_TERMINAL")
                                     return@scheduleWithFixedDelay
                                 }
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_CLEAR_RESULT -> {
@@ -1076,9 +1088,13 @@ object GameUtil {
                                         return@scheduleWithFixedDelay
                                     }
                                     stopSurrenderTask()
-                                    completeMandatoryRankSurrender("SCREEN_TERMINAL")
                                     Mode.recover(ModeEnum.GAMEPLAY, "screen-watchdog-result-page", enterStrategy = false)
-                                    dismissStaleGameEndScreen(resultAlreadyObserved = true)
+                                    val cleanupCapability = MandatoryRankSurrenderGuard
+                                        .authorizeTerminalCleanup("SCREEN_TERMINAL")
+                                    dismissStaleGameEndScreen(
+                                        resultAlreadyObserved = true,
+                                        terminalCleanupCapability = cleanupCapability,
+                                    )
                                     return@scheduleWithFixedDelay
                                 }
                                 ScreenWatchdogRecoveryAction.STOP_SURRENDER_AND_RECOVER_MATCHMAKING -> {
@@ -1300,19 +1316,29 @@ object GameUtil {
         }
 
         val attempt = AtomicInteger(0)
-        val interval = RandomUtil.getActionInterval(800).toLong()
+        val clickAttempts = AtomicInteger(0)
+        val startingWarCount = WarEx.warCount
+        val interval = if (terminalCleanupAuthorized) 2_000L else RandomUtil.getActionInterval(800).toLong()
         lateinit var future: ScheduledFuture<*>
         future = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
             {
                 val number = attempt.incrementAndGet()
                 val terminalCleanupStillAuthorized =
                     MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCleanupCapability)
+                val newGameDetected = WarEx.warCount > startingWarCount
                 if (ResultPageDismissalPolicy.shouldStopWorker(
                         paused = PauseStatus.isPause,
                         gameplayMode = Mode.currMode === ModeEnum.GAMEPLAY,
                         terminalCleanupCapabilityValid = terminalCleanupStillAuthorized,
+                        newGameDetected = newGameDetected,
                     )
                 ) {
+                    if (newGameDetected) {
+                        log.info {
+                            "RESULT_PAGE_DISMISSAL_CANCELLED reason=new-game-detected " +
+                                "startWarCount=$startingWarCount currentWarCount=${WarEx.warCount}"
+                        }
+                    }
                     future.cancel(false)
                     gameEndTasks.remove(future)
                     return@scheduleWithFixedDelay
@@ -1325,7 +1351,16 @@ object GameUtil {
                     val visible = if (resultAlreadyObserved || number > 1) {
                         ScreenStateRecovery.isResultVisibleForRecovery()
                     } else null
-                    when (ResultPageDismissalPolicy.decide(WarEx.inWar, visible, number, maxAttempts = 5)) {
+                    val clickNumber = clickAttempts.get()
+                    when (ResultPageDismissalPolicy.decide(
+                            inWar = WarEx.inWar,
+                            resultPageVisible = visible,
+                            attempt = number,
+                            maxAttempts = 5,
+                            clickAttempts = clickNumber,
+                            terminalCleanupAuthorized = terminalCleanupStillAuthorized,
+                        )
+                    ) {
                         ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED -> {
                             log.info { "RESULT_PAGE_DISMISSAL_CONFIRMED source=visible-screen-postcheck attempt=$number" }
                             if (terminalCleanupCapability != null &&
@@ -1350,24 +1385,33 @@ object GameUtil {
                             gameEndTasks.remove(future)
                             return@scheduleWithFixedDelay
                         }
+                        ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION -> {
+                            log.info {
+                                "RESULT_PAGE_DISMISSAL_WAIT reason=screen-transition-unconfirmed " +
+                                    "probe=$number clickAttempts=$clickNumber postcheck=${visible ?: "UNKNOWN"} dispatch=false " +
+                                    "terminalCleanupAuthorized=$terminalCleanupStillAuthorized"
+                            }
+                            return@scheduleWithFixedDelay
+                        }
                         ResultPageDismissalPolicy.Decision.EXHAUSTED -> {
                             log.error { "RESULT_PAGE_DISMISSAL_FAILED reason=bounded-retries-exhausted attempt=$number confirmed=false" }
                             future.cancel(false)
                             gameEndTasks.remove(future)
                             return@scheduleWithFixedDelay
                         }
-                        ResultPageDismissalPolicy.Decision.DISPATCH_CLICK -> Unit
+                        ResultPageDismissalPolicy.Decision.DISPATCH_CLICK -> clickAttempts.incrementAndGet()
                     }
 
                 runCatching {
-                    log.info { "E2E恢复：尝试关闭旧结算页面 #$number" }
+                    val clickNumber = clickAttempts.get()
+                    log.info { "E2E恢复：尝试关闭旧结算页面 #$clickNumber" }
                     // The live client can advance from defeat to a separate
                     // rank/reward screen that still exposes the same Continue
                     // control while OCR temporarily returns no text. Keep the
                     // retry on its stable center. Input acceptance is not UI
                     // confirmation; only the fresh screen postcheck below can
                     // finish this task.
-                    if (shouldUseStaleResultCenterClick(number)) {
+                    if (shouldUseStaleResultCenterClick(clickNumber)) {
                         log.info { "E2E恢复：结果页使用稳定中心点" }
                         MouseUtil.leftButtonClickForRecovery(
                             GAME_END_CONTINUE_RECT.getCenterClickPos(),

@@ -6,6 +6,7 @@ internal object ResultPageDismissalPolicy {
         DISPATCH_CLICK,
         CONFIRMED_CLEARED,
         BLOCKED_UNCONFIRMED_DURING_WAR,
+        WAIT_FOR_SCREEN_TRANSITION,
         EXHAUSTED,
     }
 
@@ -19,17 +20,25 @@ internal object ResultPageDismissalPolicy {
         paused: Boolean,
         gameplayMode: Boolean,
         terminalCleanupCapabilityValid: Boolean,
-    ): Boolean = paused || (!gameplayMode && !terminalCleanupCapabilityValid)
+        newGameDetected: Boolean = false,
+    ): Boolean = paused || newGameDetected || (!gameplayMode && !terminalCleanupCapabilityValid)
 
     fun decide(
         inWar: Boolean,
         resultPageVisible: Boolean?,
         attempt: Int,
         maxAttempts: Int,
+        clickAttempts: Int = (attempt - 1).coerceAtLeast(0),
+        terminalCleanupAuthorized: Boolean = false,
     ): Decision = when {
         resultPageVisible == false -> Decision.CONFIRMED_CLEARED
+        resultPageVisible == true && clickAttempts < maxAttempts -> Decision.DISPATCH_CLICK
+        // A terminal cleanup capability keeps only passive observation alive
+        // after its bounded click budget. It never authorizes speculative input.
+        terminalCleanupAuthorized -> Decision.WAIT_FOR_SCREEN_TRANSITION
         attempt > maxAttempts -> Decision.EXHAUSTED
-        inWar && resultPageVisible != true -> Decision.BLOCKED_UNCONFIRMED_DURING_WAR
-        else -> Decision.DISPATCH_CLICK
+        resultPageVisible == true -> Decision.EXHAUSTED
+        inWar -> Decision.BLOCKED_UNCONFIRMED_DURING_WAR
+        else -> Decision.WAIT_FOR_SCREEN_TRANSITION
     }
 }

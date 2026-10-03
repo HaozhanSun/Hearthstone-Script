@@ -109,6 +109,19 @@ object ScreenStateRecovery {
         LOADING("LOADING"),
     }
 
+    private val POST_RESULT_DESTINATIONS = setOf(
+        ScreenKind.DECK_SELECTION,
+        ScreenKind.HOME,
+        ScreenKind.HOME_TASK_OVERLAY,
+        ScreenKind.TOURNAMENT,
+        ScreenKind.MATCHMAKING,
+        ScreenKind.LOGIN,
+        ScreenKind.GAME_MODE,
+        ScreenKind.COLLECTION,
+        ScreenKind.PACK_OPENING,
+        ScreenKind.SHOP_OVERLAY,
+    )
+
     private data class Capture(
         val image: BufferedImage,
         val bounds: Rectangle,
@@ -1404,10 +1417,9 @@ object ScreenStateRecovery {
      * Re-check the actual desktop after a result-page input was sent.
      *
      * `MouseUtil` can report that an event was queued even when the client did
-     * not consume it. The caller needs a tri-state result: false means a
-     * different known screen is visible, true means the result page remains,
-     * and null means capture/OCR was inconclusive. A null must never be
-     * treated as proof that the result was dismissed.
+     * not consume it. Return false only for an explicitly recognized
+     * post-result destination; a live board, transitional screen, or
+     * inconclusive capture returns null and cannot release the rank barrier.
      */
     internal fun isResultVisibleForRecovery(): Boolean? {
         val token = ScreenRecoveryRuntime.tokenOrNull()
@@ -1418,17 +1430,24 @@ object ScreenStateRecovery {
             if (!ScreenRecoveryRuntime.isCurrent(token)) return@runCatching null
             val detection = detect(runOCR(capture), capture.visual)
             if (!ScreenRecoveryRuntime.isCurrent(token)) return@runCatching null
-            when {
-                detection == null || detection.confidence < 85 -> null
-                detection.kind == ScreenKind.RESULT -> true
-                else -> false
-            }
+            resultPageVisibility(detection)
         }.getOrElse { error ->
             if (ScreenRecoveryRuntime.isCurrent(token)) {
                 log.warn(error) { "SCREEN_RECOVERY_RESULT_POSTCHECK_FAILED" }
             }
             null
         }
+    }
+
+    private fun resultPageVisibility(detection: Detection?): Boolean? =
+        resultVisibilityForTest(detection?.kind?.code, detection?.confidence ?: 0)
+
+    /** Contract seam shared by the live postcheck and deterministic mapping tests. */
+    internal fun resultVisibilityForTest(screenKind: String?, confidence: Int): Boolean? = when {
+        confidence < 85 -> null
+        screenKind == ScreenKind.RESULT.code -> true
+        POST_RESULT_DESTINATIONS.any { it.code == screenKind } -> false
+        else -> null
     }
 
     /**
@@ -1762,7 +1781,12 @@ object ScreenStateRecovery {
             ScreenKind.RESULT -> {
                 Mode.recover(ModeEnum.GAMEPLAY, "visible-result-screen", enterStrategy = false)
                 log.warn { "SCREEN_RECOVERY_ACTION_REQUESTED screen=RESULT next=DISMISS_STALE_RESULT" }
-                GameUtil.dismissStaleGameEndScreen(resultAlreadyObserved = true)
+                val cleanupCapability = club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+                    .authorizeTerminalCleanup("SCREEN_TERMINAL")
+                GameUtil.dismissStaleGameEndScreen(
+                    resultAlreadyObserved = true,
+                    terminalCleanupCapability = cleanupCapability,
+                )
             }
 
             ScreenKind.MATCHMAKING -> {

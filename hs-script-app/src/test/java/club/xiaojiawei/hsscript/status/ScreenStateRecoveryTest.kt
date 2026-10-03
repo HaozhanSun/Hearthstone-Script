@@ -10,6 +10,15 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ScreenStateRecoveryTest {
+
+    @Test
+    fun `result postcheck distinguishes terminal result from explicit post-result destination`() {
+        assertEquals(true, ScreenStateRecovery.resultVisibilityForTest("RESULT", 90))
+        assertEquals(false, ScreenStateRecovery.resultVisibilityForTest("DECK_SELECTION", 90))
+        assertEquals(false, ScreenStateRecovery.resultVisibilityForTest("HOME", 90))
+        assertNull(ScreenStateRecovery.resultVisibilityForTest("UNKNOWN", 90))
+        assertNull(ScreenStateRecovery.resultVisibilityForTest("DECK_SELECTION", 84))
+    }
     @Test
     fun `recognizes result action when OCR loses outcome title`() {
         assertTrue(ScreenStateRecovery.looksLikeResultText("本局结果 KennethSun 写击继续"))

@@ -13,6 +13,14 @@ import kotlin.test.assertTrue
 
 class ScreenRecoveryGateTest {
 
+    @Test
+    fun `upstream fallback result postcheck requires a known post-result destination`() {
+        assertEquals(true, UpstreamScreenStateRecovery.resultVisibilityForTest("RESULT", 90))
+        assertEquals(false, UpstreamScreenStateRecovery.resultVisibilityForTest("DECK_SELECTION", 90))
+        assertNull(UpstreamScreenStateRecovery.resultVisibilityForTest("UNKNOWN", 90))
+        assertNull(UpstreamScreenStateRecovery.resultVisibilityForTest("HOME", 84))
+    }
+
     private val originalEnabled = ConfigUtil.getBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED)
 
     @AfterTest

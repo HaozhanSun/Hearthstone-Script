@@ -44,11 +44,9 @@ object MandatoryRankSurrenderGuard {
         if (pending) recoveryUncertain = true
     }
 
-    /** Only authoritative terminal evidence or a positive out-of-game screen may release the lock. */
+    /** Only visible terminal/out-of-game evidence may release the lock; Power.log authorizes cleanup, not UI completion. */
     fun confirmCompleted(evidence: String): Boolean {
         val allowedEvidence = setOf(
-            "POWERLOG_TERMINAL",
-            "SCREEN_TERMINAL",
             "SCREEN_MAIN_MENU",
             "SCREEN_MATCHMAKING",
             "SCREEN_RESULT_DISMISSED",

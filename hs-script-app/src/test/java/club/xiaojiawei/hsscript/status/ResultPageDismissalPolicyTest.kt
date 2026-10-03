@@ -31,6 +31,16 @@ class ResultPageDismissalPolicyTest {
             ),
         )
         assertEquals(
+            true,
+            ResultPageDismissalPolicy.shouldStopWorker(
+                paused = false,
+                gameplayMode = true,
+                terminalCleanupCapabilityValid = true,
+                newGameDetected = true,
+            ),
+            "even an authorized old-result worker must stop when a newer game begins",
+        )
+        assertEquals(
             ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED,
             ResultPageDismissalPolicy.decide(
                 inWar = false,
@@ -60,8 +70,12 @@ class ResultPageDismissalPolicyTest {
     @Test
     fun `unknown postcheck never counts as success and retries remain bounded`() {
         assertEquals(
-            ResultPageDismissalPolicy.Decision.DISPATCH_CLICK,
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
             ResultPageDismissalPolicy.decide(inWar = false, resultPageVisible = null, attempt = 1, maxAttempts = 5),
+        )
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
+            ResultPageDismissalPolicy.decide(inWar = false, resultPageVisible = null, attempt = 5, maxAttempts = 5),
         )
         assertEquals(
             ResultPageDismissalPolicy.Decision.DISPATCH_CLICK,
@@ -70,6 +84,51 @@ class ResultPageDismissalPolicyTest {
         assertEquals(
             ResultPageDismissalPolicy.Decision.EXHAUSTED,
             ResultPageDismissalPolicy.decide(inWar = false, resultPageVisible = null, attempt = 6, maxAttempts = 5),
+        )
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = null,
+                attempt = 100,
+                maxAttempts = 5,
+                clickAttempts = 5,
+                terminalCleanupAuthorized = true,
+            ),
+        )
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = true,
+                attempt = 100,
+                maxAttempts = 5,
+                clickAttempts = 5,
+                terminalCleanupAuthorized = true,
+            ),
+            "the terminal capability permits passive observation, not a sixth click",
+        )
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = false,
+                attempt = 100,
+                maxAttempts = 5,
+                clickAttempts = 5,
+                terminalCleanupAuthorized = true,
+            ),
+        )
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.EXHAUSTED,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = true,
+                attempt = 100,
+                maxAttempts = 5,
+                clickAttempts = 5,
+                terminalCleanupAuthorized = false,
+            ),
         )
     }
 }
