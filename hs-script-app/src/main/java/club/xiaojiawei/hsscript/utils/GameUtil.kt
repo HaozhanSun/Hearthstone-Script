@@ -842,6 +842,7 @@ object GameUtil {
         val isGamePlay = Mode.currMode === ModeEnum.GAMEPLAY
         val surrenderRetryInterval = RandomUtil.getActionInterval(500).toLong()
         var surrenderAttempts = 0
+        var consecutiveUnknownRankScreens = 0
         val maxSurrenderAttempts = 30
         val surrenderStartedAt = System.currentTimeMillis()
         val surrenderFutureRef = AtomicReference<ScheduledFuture<*>?>()
@@ -940,11 +941,27 @@ object GameUtil {
                             mandatoryRankSurrender = true,
                         )
                         val decision = MandatoryRankSurrenderRecoveryPolicy.decide(observation.kind)
-                        log.info {
-                            "RANK_SURRENDER_SCREEN_STEP screen=${observation.kind} " +
-                                "action=${decision.action} reason=${decision.reason} provider=${observation.provider} " +
-                                "evidenceReason=${observation.reason} " +
-                                "screenshot=${observation.screenshotPath ?: "not-saved"}"
+                        val unknownObservationOrdinal = if (
+                            decision.action == MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY
+                        ) {
+                            if (consecutiveUnknownRankScreens < Int.MAX_VALUE) consecutiveUnknownRankScreens++
+                            consecutiveUnknownRankScreens
+                        } else {
+                            consecutiveUnknownRankScreens = 0
+                            0
+                        }
+                        val emitScreenStep = unknownObservationOrdinal == 0 ||
+                            MandatoryRankSurrenderRecoveryPolicy.shouldEmitUnknownObservationDiagnostic(
+                                unknownObservationOrdinal,
+                            )
+                        if (emitScreenStep) {
+                            log.info {
+                                "RANK_SURRENDER_SCREEN_STEP screen=${observation.kind} " +
+                                    "action=${decision.action} reason=${decision.reason} provider=${observation.provider} " +
+                                    "evidenceReason=${observation.reason} " +
+                                    "unknownObservationOrdinal=${unknownObservationOrdinal.takeIf { it > 0 } ?: "reset"} " +
+                                    "screenshot=${observation.screenshotPath ?: "not-saved"}"
+                            }
                         }
                         val recoveryCapability = requireNotNull(mandatoryRankSurrenderCapability)
                         when (decision.action) {
@@ -965,11 +982,15 @@ object GameUtil {
                             }
                             MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY -> {
                                 MandatoryRankSurrenderGuard.markRecoveryUncertain()
-                                log.warn {
-                                    "RANK_SURRENDER_RECOVERY_WAIT reason=screen-unconfirmed " +
-                                        "ordinaryInput=false requeue=false pause=false " +
-                                        "screen=${observation.kind} ocrReason=${observation.reason} " +
-                                        "screenshot=${observation.screenshotPath ?: "not-saved"}"
+                                if (emitScreenStep) {
+                                    log.warn {
+                                        "RANK_SURRENDER_RECOVERY_WAIT reason=screen-unconfirmed " +
+                                            "ordinaryInput=false requeue=false pause=false " +
+                                            "screen=${observation.kind} ocrReason=${observation.reason} " +
+                                            "unknownObservationOrdinal=$unknownObservationOrdinal " +
+                                            "barrier=SURRENDER_REQUIRED " +
+                                            "screenshot=${observation.screenshotPath ?: "not-saved"}"
+                                    }
                                 }
                             }
                             MandatoryRankSurrenderRecoveryPolicy.Action.COMPLETE_WIN,

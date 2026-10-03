@@ -21,6 +21,9 @@ internal object MandatoryRankSurrenderRecoveryPolicy {
     internal fun shouldWaitForMoreEvidence(mandatoryRank: Boolean, screenConfirmed: Boolean): Boolean =
         mandatoryRank && !screenConfirmed
 
+    internal fun shouldEmitUnknownObservationDiagnostic(consecutiveUnknownScreens: Int): Boolean =
+        consecutiveUnknownScreens == 1 || consecutiveUnknownScreens > 1 && consecutiveUnknownScreens % 3 == 0
+
     fun decide(screen: ScreenWatchdogKind): Decision = when (screen) {
         ScreenWatchdogKind.GAMEPLAY -> Decision(Action.CLICK_SETTINGS, "confirmed-gameplay")
         ScreenWatchdogKind.MULLIGAN -> Decision(Action.CLICK_SETTINGS, "confirmed-mulligan-with-rank-deny")

@@ -175,6 +175,52 @@ object ScreenWatchdog {
                 "path=${evidence?.file?.absolutePath ?: "not-saved"}"
         }
 
+        // Run the small fixed visual probes before full-screen Tesseract.
+        // On a 1920x1080 live frame OCR can take >20s; authoritative phase plus
+        // a fresh, specific menu/hand signature is enough for the next
+        // recovery-only step. Never let these nonterminal signatures mask an
+        // authoritative Power.log terminal phase.
+        val confirmationMetrics = surrenderConfirmationMetrics(image)
+        val settingsMetrics = settingsOverlayMetrics(image)
+        val mulliganMetrics = if (state.contains("warPhase=REPLACE_CARD", ignoreCase = true)) {
+            mulliganVisualMetrics(image)
+        } else {
+            null
+        }
+        val fastVisualKind = fastVisualKindForSurrender(
+            state = state,
+            terminalState = isAuthoritativeTerminalState(state),
+            confirmation = confirmationMetrics,
+            settings = settingsMetrics,
+            mulligan = mulliganMetrics,
+        )
+        if (fastVisualKind != null) {
+            val reason = when (fastVisualKind) {
+                ScreenWatchdogKind.SURRENDER_CONFIRMATION -> "fresh-surrender-confirmation-visual"
+                ScreenWatchdogKind.SETTINGS -> "fresh-settings-overlay-visual-priority"
+                ScreenWatchdogKind.MULLIGAN -> "authoritative-mulligan-input-and-fresh-mulligan-visual"
+                else -> "fresh-visual-recovery"
+            }
+            val action = decide(fastVisualKind, activeGameplay)
+            log.warn {
+                "SCREEN_WATCHDOG_OCR runId=$runId provider=LEGACY kind=$fastVisualKind action=$action " +
+                    "activeGameplay=$activeGameplay chars=0 visualFallback=true " +
+                    "mandatoryRankSurrender=$mandatoryRankSurrender " +
+                    "betaRecoveryExtensionsEnabled=$betaRecoveryEnabled ocrSkipped=visual-fast-path " +
+                    "confirmationVisual={$confirmationMetrics} settingsVisual={$settingsMetrics} " +
+                    "mulliganVisual=${mulliganMetrics ?: "not-applicable"} " +
+                    "screenshot=${evidence?.file?.absolutePath ?: "not-saved"} ocr=<skipped>"
+            }
+            return ScreenWatchdogObservation(
+                kind = fastVisualKind,
+                action = action,
+                ocrText = "",
+                screenshotPath = evidence?.file?.absolutePath,
+                provider = "LEGACY",
+                reason = reason,
+            )
+        }
+
         val ocrText = runCatching { ocrProvider(image).replace(Regex("\\s+"), "") }.getOrElse { error ->
             if (error is PaddleXOcrCancelledException ||
                 error is CancellationException ||
@@ -211,13 +257,9 @@ object ScreenWatchdog {
         val kind = classifyForSurrender(ocrKind, state, image)
         val visualGameplayFallback = ocrKind == ScreenWatchdogKind.UNKNOWN &&
             kind in setOf(ScreenWatchdogKind.GAMEPLAY, ScreenWatchdogKind.MULLIGAN)
-        val confirmationVisual = surrenderConfirmationMetrics(image).toString()
-        val settingsVisual = settingsOverlayMetrics(image).toString()
-        val mulliganVisual = if (state.contains("warPhase=REPLACE_CARD", ignoreCase = true)) {
-            mulliganVisualMetrics(image).toString()
-        } else {
-            "not-applicable"
-        }
+        val confirmationVisual = confirmationMetrics.toString()
+        val settingsVisual = settingsMetrics.toString()
+        val mulliganVisual = mulliganMetrics?.toString() ?: "not-applicable"
         val reason = when (kind) {
             ScreenWatchdogKind.SURRENDER_CONFIRMATION -> if (ocrKind == ScreenWatchdogKind.SURRENDER_CONFIRMATION) {
                 "ocr-and-fresh-confirmation-modal-visual"
@@ -291,6 +333,51 @@ object ScreenWatchdog {
     internal fun hasSurrenderConfirmationPanelForTest(image: BufferedImage): Boolean =
         surrenderConfirmationMetrics(image).panelVisible
 
+    internal fun fastVisualKindForSurrenderForTest(
+        state: String,
+        image: BufferedImage,
+    ): ScreenWatchdogKind? = fastVisualKindForSurrender(
+        state = state,
+        terminalState = isAuthoritativeTerminalState(state),
+        confirmation = surrenderConfirmationMetrics(image),
+        settings = settingsOverlayMetrics(image),
+        mulligan = if (state.contains("warPhase=REPLACE_CARD", ignoreCase = true)) {
+            mulliganVisualMetrics(image)
+        } else {
+            null
+        },
+    )
+
+    private fun fastVisualKindForSurrender(
+        state: String,
+        terminalState: Boolean,
+        confirmation: SurrenderConfirmationMetrics,
+        settings: SettingsOverlayMetrics,
+        mulligan: MulliganVisualMetrics?,
+    ): ScreenWatchdogKind? {
+        if (terminalState) return null
+        val activeGameplay = isAuthoritativeActiveGameplay(state)
+        val activeMulligan = isAuthoritativeMulliganInput(state)
+        if (!activeGameplay && !activeMulligan) return null
+        if (confirmation.accepted) return ScreenWatchdogKind.SURRENDER_CONFIRMATION
+        // Partial confirmation panels must still go through full OCR and fail
+        // closed; never misroute them to the Settings surrender button.
+        if (confirmation.panelVisible) return null
+        if (settings.accepted) return ScreenWatchdogKind.SETTINGS
+        if (activeMulligan && mulligan?.accepted == true) return ScreenWatchdogKind.MULLIGAN
+        return null
+    }
+
+    private fun isAuthoritativeTerminalState(state: String): Boolean {
+        val fields = state.lowercase(Locale.ROOT)
+            .split('|', ';', ' ', ',')
+            .filter { it.isNotBlank() }
+            .toSet()
+        return fields.contains("warphase=game_over") ||
+            fields.contains("step=final_gameover") ||
+            fields.contains("won=true") || fields.contains("lost=true") || fields.contains("conceded=true")
+    }
+
     private fun classifyForSurrender(
         ocrKind: ScreenWatchdogKind,
         state: String,
@@ -350,13 +437,18 @@ object ScreenWatchdog {
         val bannerVivid: Double,
         val handVivid: Double,
         val heroVivid: Double,
+        val cardVivid: List<Double>,
+        val visibleCardCount: Int,
+        val animationFallback: Boolean,
         val accepted: Boolean,
     ) {
         override fun toString(): String =
             "size=${width}x$height bannerGold=${"%.4f".format(Locale.ROOT, bannerGold)} " +
                 "bannerVivid=${"%.4f".format(Locale.ROOT, bannerVivid)} " +
                 "handVivid=${"%.4f".format(Locale.ROOT, handVivid)} " +
-                "heroVivid=${"%.4f".format(Locale.ROOT, heroVivid)} accepted=$accepted"
+                "heroVivid=${"%.4f".format(Locale.ROOT, heroVivid)} " +
+                "cardVivid=${cardVivid.joinToString(",") { "%.4f".format(Locale.ROOT, it) }} " +
+                "visibleCardCount=$visibleCardCount animationFallback=$animationFallback accepted=$accepted"
     }
 
     private fun hasMulliganVisual(image: BufferedImage): Boolean = mulliganVisualMetrics(image).accepted
@@ -539,21 +631,32 @@ object ScreenWatchdog {
 
     private fun mulliganVisualMetrics(image: BufferedImage): MulliganVisualMetrics {
         if (image.width < 800 || image.height < 450) {
-            return MulliganVisualMetrics(image.width, image.height, 0.0, 0.0, 0.0, 0.0, false)
+            return MulliganVisualMetrics(image.width, image.height, 0.0, 0.0, 0.0, 0.0, emptyList(), 0, false, false)
         }
         val aspect = image.width.toDouble() / image.height
         if (aspect !in 1.55..1.90) {
-            return MulliganVisualMetrics(image.width, image.height, 0.0, 0.0, 0.0, 0.0, false)
+            return MulliganVisualMetrics(image.width, image.height, 0.0, 0.0, 0.0, 0.0, emptyList(), 0, false, false)
         }
-        // Require the distinctive start-hand banner and visible cards. The
-        // hero region may be obscured by overlays; authoritative Mulligan
-        // input state is checked by the caller, so phase evidence alone never
-        // clicks.
+        // Normally require the distinctive start-hand banner and colorful
+        // hand. During the game's transient Mulligan emote/time-warp animation
+        // the banner can disappear and a neutral speech bubble can mask much
+        // of the hand. In that case require at least two distinct visible card
+        // tops plus a minimum residual hand signature. The caller still
+        // requires authoritative Power.log Mulligan-input state, and Settings
+        // / confirmation overlays are checked first.
         val banner = colorRatios(image, 0.35, 0.09, 0.66, 0.24)
         val hand = colorRatios(image, 0.20, 0.30, 0.80, 0.68)
         val hero = colorRatios(image, 0.455, 0.68, 0.545, 0.88)
-        val accepted = banner.goldRatio >= 0.025 && banner.vividRatio >= 0.10 &&
+        val cardVivid = listOf(
+            colorRatios(image, 0.225, 0.30, 0.385, 0.425).vividRatio,
+            colorRatios(image, 0.375, 0.30, 0.535, 0.425).vividRatio,
+            colorRatios(image, 0.525, 0.30, 0.685, 0.425).vividRatio,
+        )
+        val visibleCardCount = cardVivid.count { it >= 0.08 }
+        val bannerAndHand = banner.goldRatio >= 0.025 && banner.vividRatio >= 0.10 &&
             hand.vividRatio >= 0.22
+        val animationFallback = !bannerAndHand && visibleCardCount >= 2 && hand.vividRatio >= 0.16
+        val accepted = bannerAndHand || animationFallback
         return MulliganVisualMetrics(
             image.width,
             image.height,
@@ -561,6 +664,9 @@ object ScreenWatchdog {
             banner.vividRatio,
             hand.vividRatio,
             hero.vividRatio,
+            cardVivid,
+            visibleCardCount,
+            animationFallback,
             accepted,
         )
     }

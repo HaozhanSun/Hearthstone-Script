@@ -89,7 +89,7 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             attempts = 27,
             mandatoryRankSurrender = true,
             captureProvider = { settings },
-            ocrProvider = { "起始手牌 保留或替换卡牌" },
+            ocrProvider = { error("a visually confirmed Settings overlay must not wait on full-screen OCR") },
         )
         assertEquals(ScreenWatchdogKind.SETTINGS, liveObservation.kind, liveObservation.reason)
         assertEquals("fresh-settings-overlay-visual-priority", liveObservation.reason)
@@ -120,6 +120,60 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_CONFIRMATION,
             MandatoryRankSurrenderRecoveryPolicy.decide(confirmedDialog).action,
         )
+    }
+
+    @Test
+    fun `transient mulligan emote masking banner uses authoritative card signature before OCR`() {
+        val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
+        val animatedMulligan = maskMulliganBannerAndAddEmote(
+            readFixture("rank6-live-mulligan-unknown-ocr-second-frame.png"),
+        )
+        val diagnostics = ScreenWatchdog.mulliganVisualDiagnosticsForTest(animatedMulligan)
+        println("ANIMATED_MULLIGAN $diagnostics")
+        assertTrue(diagnostics.contains("animationFallback=true"), diagnostics)
+        assertTrue(ScreenWatchdog.hasMulliganVisualForTest(animatedMulligan), diagnostics)
+
+        val observation = ScreenWatchdog.inspectForSurrender(
+            state = state,
+            attempts = 34,
+            mandatoryRankSurrender = true,
+            captureProvider = { animatedMulligan },
+            ocrProvider = { error("authoritative Mulligan plus card signature must bypass slow OCR") },
+        )
+        assertEquals(ScreenWatchdogKind.MULLIGAN, observation.kind, observation.reason)
+        assertEquals("authoritative-mulligan-input-and-fresh-mulligan-visual", observation.reason)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS,
+            MandatoryRankSurrenderRecoveryPolicy.decide(observation.kind).action,
+        )
+
+        // The same colors are insufficient without authoritative current-player
+        // Mulligan input; this must remain UNKNOWN rather than authorize a click.
+        val nonAuthoritative = ScreenWatchdog.inspectForSurrender(
+            state = "mode=GAMEPLAY|inWar=true|warPhase=GAME_TURN|myTurn=false|myMulliganInput=false",
+            attempts = 35,
+            mandatoryRankSurrender = true,
+            captureProvider = { animatedMulligan },
+            ocrProvider = { "unreadable" },
+        )
+        assertEquals(ScreenWatchdogKind.UNKNOWN, nonAuthoritative.kind, nonAuthoritative.reason)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY,
+            MandatoryRankSurrenderRecoveryPolicy.decide(nonAuthoritative.kind).action,
+        )
+    }
+
+    @Test
+    fun `unknown rank surrender screens stay observe-only and diagnostic cadence is bounded`() {
+        assertTrue(MandatoryRankSurrenderRecoveryPolicy.shouldWaitForMoreEvidence(true, false))
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY,
+            MandatoryRankSurrenderRecoveryPolicy.decide(ScreenWatchdogKind.UNKNOWN).action,
+        )
+        assertTrue(MandatoryRankSurrenderRecoveryPolicy.shouldEmitUnknownObservationDiagnostic(1))
+        assertFalse(MandatoryRankSurrenderRecoveryPolicy.shouldEmitUnknownObservationDiagnostic(2))
+        assertTrue(MandatoryRankSurrenderRecoveryPolicy.shouldEmitUnknownObservationDiagnostic(3))
+        assertFalse(MandatoryRankSurrenderRecoveryPolicy.shouldEmitUnknownObservationDiagnostic(4))
     }
 
     @Test
@@ -215,6 +269,24 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY,
             MandatoryRankSurrenderRecoveryPolicy.decide(ScreenWatchdogKind.UNKNOWN).action,
         )
+
+        // Even a strong nonterminal overlay signature cannot short-circuit
+        // OCR when Power.log already reports a terminal game phase.
+        val terminalState = "mode=GAMEPLAY|inWar=true|warPhase=GAME_OVER|won=true"
+        assertEquals(null, ScreenWatchdog.fastVisualKindForSurrenderForTest(terminalState, settings))
+        var terminalOcrCalled = false
+        val terminalObservation = ScreenWatchdog.inspectForSurrender(
+            state = terminalState,
+            attempts = 36,
+            mandatoryRankSurrender = true,
+            captureProvider = { settings },
+            ocrProvider = {
+                terminalOcrCalled = true
+                "胜利 点击继续"
+            },
+        )
+        assertTrue(terminalOcrCalled)
+        assertEquals(ScreenWatchdogKind.WIN, terminalObservation.kind)
     }
 
     @Test
@@ -596,6 +668,33 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             javaClass.getResourceAsStream("/club/xiaojiawei/hsscript/status/surrender/$name"),
         ),
     )
+
+    private fun maskMulliganBannerAndAddEmote(source: BufferedImage): BufferedImage {
+        val image = BufferedImage(source.width, source.height, BufferedImage.TYPE_INT_RGB)
+        val graphics: Graphics2D = image.createGraphics()
+        try {
+            graphics.drawImage(source, 0, 0, null)
+            graphics.color = Color(25, 23, 21)
+            graphics.fillRect(
+                (source.width * 0.35).toInt(),
+                (source.height * 0.09).toInt(),
+                (source.width * 0.31).toInt(),
+                (source.height * 0.15).toInt(),
+            )
+            graphics.color = Color(118, 111, 103)
+            graphics.fillRoundRect(
+                (source.width * 0.31).toInt(),
+                (source.height * 0.44).toInt(),
+                (source.width * 0.38).toInt(),
+                (source.height * 0.16).toInt(),
+                (source.width * 0.035).toInt(),
+                (source.height * 0.04).toInt(),
+            )
+        } finally {
+            graphics.dispose()
+        }
+        return image
+    }
 
     private fun maskConfirmationContinueButton(source: BufferedImage): BufferedImage {
         val image = BufferedImage(source.width, source.height, BufferedImage.TYPE_INT_RGB)
