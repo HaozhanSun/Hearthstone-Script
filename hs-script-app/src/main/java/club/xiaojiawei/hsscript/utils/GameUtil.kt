@@ -46,7 +46,9 @@ import com.sun.jna.Pointer
 import com.sun.jna.WString
 import com.sun.jna.platform.win32.Kernel32
 import com.sun.jna.platform.win32.User32
+import com.sun.jna.platform.win32.WinBase
 import com.sun.jna.platform.win32.WinDef
+import com.sun.jna.platform.win32.WinNT
 import com.sun.jna.platform.win32.WinUser
 import com.sun.jna.platform.win32.WinUser.SWP_NOMOVE
 import com.sun.jna.platform.win32.WinUser.SWP_NOZORDER
@@ -1447,22 +1449,71 @@ object GameUtil {
     }
 
     /** Read-only process lineage used by the bounded lifecycle watchdog. */
-    fun findGameProcessIdForDiagnostics(): Long? = runCatching {
-        val windowOwnerPid = ScriptStatus.gameHWND
-            ?.takeIf(::isVerifiedCurrentGameWindow)
-            ?.let { windowProcessId(it).toLong() }
-        val discoveredPids = ProcessHandle.allProcesses().use { processes ->
-            processes
-                .filter { handle ->
-                    handle.info().command().map { command ->
-                        File(command).name.equals(GAME_PROGRAM_NAME, ignoreCase = true)
-                    }.orElse(false)
-                }
-                .map { it.pid() }
-                .toList()
+    fun findGameProcessIdForDiagnostics(): Long? {
+        val windowOwnerPid = runCatching {
+            ScriptStatus.gameHWND
+                ?.takeIf(::isVerifiedCurrentGameWindow)
+                ?.let { windowProcessId(it).toLong() }
+        }.getOrNull()
+        val discoveredPids = runCatching {
+            ProcessHandle.allProcesses().use { processes ->
+                processes
+                    .filter { handle ->
+                        handle.info().command().map { command ->
+                            File(command).name.equals(GAME_PROGRAM_NAME, ignoreCase = true)
+                        }.orElse(false)
+                    }
+                    .map { it.pid() }
+                    .toList()
+            }
+        }.getOrDefault(emptyList())
+        // ProcessHandle.info().command() can be unavailable for a live Windows
+        // game process (for example, when image metadata is access-restricted).
+        // GameStarter already uses this native process-name probe to establish
+        // liveness; reuse its PID as a last-resort lineage anchor so a fresh
+        // Power.log can still be bound and rank preflight cannot be skipped.
+        val nativeProcessPid = runCatching {
+            CSystemDll.INSTANCE.findProcessId(GAME_PROGRAM_NAME, true)
+        }.getOrNull()?.takeIf { it > 0L }
+        return GameWindowDiscoveryPolicy.selectDiagnosticPid(
+            windowOwnerPid = windowOwnerPid,
+            discoveredProcessPids = discoveredPids,
+            nativeProcessPid = nativeProcessPid,
+        )
+    }
+
+    /** Read process creation time even when ProcessHandle cannot enumerate an elevated client. */
+    fun findProcessStartedAtForDiagnostics(pid: Long): Long? {
+        if (pid <= 0L || pid > Int.MAX_VALUE) return null
+        val processHandleStart = runCatching {
+            ProcessHandle.of(pid).orElse(null)?.info()?.startInstant()?.orElse(null)?.toEpochMilli()
+        }.getOrNull()
+        if (processHandleStart != null) {
+            return GameWindowDiscoveryPolicy.selectProcessStartedAtMs(processHandleStart, null)
         }
-        GameWindowDiscoveryPolicy.selectDiagnosticPid(windowOwnerPid, discoveredPids)
-    }.getOrNull()
+
+        val nativeStart = runCatching {
+            val process = Kernel32.INSTANCE.OpenProcess(
+                WinNT.PROCESS_QUERY_LIMITED_INFORMATION,
+                false,
+                pid.toInt(),
+            ) ?: return@runCatching null
+            try {
+                val created = WinBase.FILETIME()
+                val exited = WinBase.FILETIME()
+                val kernel = WinBase.FILETIME()
+                val user = WinBase.FILETIME()
+                if (Kernel32.INSTANCE.GetProcessTimes(process, created, exited, kernel, user)) {
+                    created.toDate().time
+                } else {
+                    null
+                }
+            } finally {
+                Kernel32.INSTANCE.CloseHandle(process)
+            }
+        }.getOrNull()
+        return GameWindowDiscoveryPolicy.selectProcessStartedAtMs(null, nativeStart)
+    }
 
 
     fun getGameProgramPermission(): ProgramPermissionEnum {

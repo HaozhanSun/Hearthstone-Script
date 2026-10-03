@@ -226,9 +226,7 @@ internal object BetaScreenRecoveryService {
         val now = System.currentTimeMillis()
         val pid = GameUtil.findGameProcessIdForDiagnostics()
         val processStartedAt = pid?.let { gamePid ->
-            runCatching {
-                ProcessHandle.of(gamePid).orElse(null)?.info()?.startInstant()?.orElse(null)?.toEpochMilli()
-            }.getOrNull()
+            runCatching { GameUtil.findProcessStartedAtForDiagnostics(gamePid) }.getOrNull()
         }
         if (pid != lastObservedGamePid) {
             startupFailureSinceMs = processStartedAt ?: now
@@ -588,9 +586,7 @@ internal object BetaScreenRecoveryService {
         val liveGamePid = GameUtil.findGameProcessIdForDiagnostics()
         val latestPowerLog = GameUtil.getLatestLogDir()?.resolve(club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME)
         val processStartedAt = liveGamePid?.let { pid ->
-            runCatching {
-                ProcessHandle.of(pid).orElse(null)?.info()?.startInstant()?.orElse(null)?.toEpochMilli()
-            }.getOrNull()
+            runCatching { GameUtil.findProcessStartedAtForDiagnostics(pid) }.getOrNull()
         }
         val latestPowerLogUsable = latestPowerLog?.let { candidate ->
             candidate.isFile && candidate.canRead() && PowerLogSessionBindingPolicy.isCurrentSession(

@@ -50,6 +50,41 @@ class GameWindowDiscoveryPolicyTest {
     }
 
     @Test
+    fun `diagnostics fall back to native live PID when HWND and ProcessHandle metadata are unavailable`() {
+        assertEquals(
+            73_060L,
+            GameWindowDiscoveryPolicy.selectDiagnosticPid(
+                windowOwnerPid = null,
+                discoveredProcessPids = emptyList(),
+                nativeProcessPid = 73_060L,
+            ),
+        )
+    }
+
+    @Test
+    fun `diagnostics do not replace process-handle PID with native fallback`() {
+        assertEquals(
+            73_060L,
+            GameWindowDiscoveryPolicy.selectDiagnosticPid(
+                windowOwnerPid = null,
+                discoveredProcessPids = listOf(73_060L),
+                nativeProcessPid = 81_155L,
+            ),
+        )
+    }
+
+    @Test
+    fun `process creation time falls back to native query when ProcessHandle has no start instant`() {
+        assertEquals(
+            1_790_000_000_000L,
+            GameWindowDiscoveryPolicy.selectProcessStartedAtMs(
+                processHandleStartedAtMs = null,
+                nativeStartedAtMs = 1_790_000_000_000L,
+            ),
+        )
+    }
+
+    @Test
     fun `verified game HWND must belong to the exact diagnostic PID`() {
         assertTrue(GameWindowDiscoveryPolicy.belongsToProcess(ownerPid = 46_112L, expectedPid = 46_112L))
         assertFalse(GameWindowDiscoveryPolicy.belongsToProcess(ownerPid = 46_112L, expectedPid = 50_912L))

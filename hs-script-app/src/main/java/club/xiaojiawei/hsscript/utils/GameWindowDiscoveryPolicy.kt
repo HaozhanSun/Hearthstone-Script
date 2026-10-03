@@ -23,10 +23,20 @@ internal object GameWindowDiscoveryPolicy {
         ownerPid > 0L && expectedPid > 0L && ownerPid == expectedPid
 
     /** Prefer the verified HWND's process when multiple Hearthstone clients exist. */
-    fun selectDiagnosticPid(windowOwnerPid: Long?, discoveredProcessPids: List<Long>): Long? {
+    fun selectDiagnosticPid(
+        windowOwnerPid: Long?,
+        discoveredProcessPids: List<Long>,
+        nativeProcessPid: Long? = null,
+    ): Long? {
         val candidates = discoveredProcessPids.filter { it > 0L }
-        return windowOwnerPid?.takeIf { it > 0L && it in candidates } ?: candidates.firstOrNull()
+        return windowOwnerPid?.takeIf { it > 0L && it in candidates }
+            ?: candidates.firstOrNull()
+            ?: nativeProcessPid?.takeIf { it > 0L }
     }
+
+    fun selectProcessStartedAtMs(processHandleStartedAtMs: Long?, nativeStartedAtMs: Long?): Long? =
+        processHandleStartedAtMs?.takeIf { it > 0L }
+            ?: nativeStartedAtMs?.takeIf { it > 0L }
 
     fun isVerifiedGameWindow(
         ownerPid: Long,
