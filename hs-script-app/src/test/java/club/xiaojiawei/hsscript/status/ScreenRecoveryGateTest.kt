@@ -21,6 +21,22 @@ class ScreenRecoveryGateTest {
         assertNull(UpstreamScreenStateRecovery.resultVisibilityForTest("HOME", 84))
     }
 
+    @Test
+    fun `upstream fallback OCR consumes the current deck selection anchor instead of missing center ROI`() {
+        val roiNames = UpstreamScreenStateRecovery.screenRecoveryOcrRoiNamesForTest()
+
+        assertTrue(roiNames.contains(ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI))
+        assertTrue(roiNames.contains("screen-state-header"))
+        assertTrue(roiNames.contains("screen-state-footer"))
+        assertFalse(roiNames.contains("screen-state-center"))
+        assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyForTest("选择套牌 狂野对战"))
+        assertEquals(
+            false,
+            UpstreamScreenStateRecovery.resultVisibilityForTest("DECK_SELECTION", 100),
+        )
+        assertNull(UpstreamScreenStateRecovery.classifyForTest(""), "OCR failure must remain UNKNOWN")
+    }
+
     private val originalEnabled = ConfigUtil.getBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED)
 
     @AfterTest

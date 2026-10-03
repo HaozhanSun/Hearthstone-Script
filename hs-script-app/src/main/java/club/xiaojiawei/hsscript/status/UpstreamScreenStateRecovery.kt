@@ -300,26 +300,61 @@ object UpstreamScreenStateRecovery {
             return ""
         }
         return runCatching {
-            // A full-screen client often has the script log window over the
-            // right edge. The center menu crop contains the home/deck labels,
-            // avoids OCR-ing our own UI, and is sufficient for this recovery
-            // path. This is deliberately local OCR: PaddleX is reserved for
-            // rank detection and must never stall menu recovery.
-            val rois = ScreenStateRoiSelector.select(capture.image.width, capture.image.height)
-                .filter { it.name == "screen-state-center" }
-            rois.joinToString(separator = "") { roi ->
-                val image = resizeForOcr(crop(capture.image, roi.bounds))
-                Tesseract().apply {
+            // ScreenStateRoiSelector no longer has the former broad
+            // screen-state-center crop. Probe the same narrow, capture-local
+            // anchors as beta recovery so the upstream fallback cannot turn
+            // every OCR observation into an empty string.
+            val (targetedRois, secondaryRois) = screenRecoveryOcrRois(
+                capture.image.width,
+                capture.image.height,
+            )
+            fun recognize(roi: ScreenStateRoiSelector.Roi, targeted: Boolean): String {
+                val crop = crop(capture.image, roi.bounds)
+                val image = if (targeted) enlargeTargetedOcr(crop) else resizeForOcr(crop)
+                return Tesseract().apply {
                     setDatapath(tessData.absolutePath)
                     setLanguage(CHI_SIM_DATA)
-                    setPageSegMode(11)
-                    setVariable("user_defined_dpi", "160")
+                    setPageSegMode(if (targeted) 7 else 11)
+                    setVariable("user_defined_dpi", if (targeted) "180" else "160")
                 }.doOCR(image).replace(Regex("\\s+"), "")
             }
+            val targetedText = targetedRois.joinToString(separator = "") { recognize(it, targeted = true) }
+            if (detect(targetedText, capture.visual) != null) return@runCatching targetedText
+            targetedText + secondaryRois.joinToString(separator = "") { recognize(it, targeted = false) }
         }.getOrElse { error ->
             log.warn(error) { "SCREEN_RECOVERY_OCR_FAILED" }
             ""
         }
+    }
+
+    private fun screenRecoveryOcrRois(
+        width: Int,
+        height: Int,
+    ): Pair<List<ScreenStateRoiSelector.Roi>, List<ScreenStateRoiSelector.Roi>> =
+        ScreenStateRoiSelector.selectTargeted(width, height) to
+            ScreenStateRoiSelector.selectSecondary(width, height)
+
+    internal fun screenRecoveryOcrRoiNamesForTest(): List<String> {
+        val (targeted, secondary) = screenRecoveryOcrRois(1920, 1080)
+        return (targeted + secondary).map { it.name }
+    }
+
+    private fun enlargeTargetedOcr(image: BufferedImage): BufferedImage {
+        val scale = 4
+        val enlarged = BufferedImage(
+            (image.width * scale).coerceAtLeast(1),
+            (image.height * scale).coerceAtLeast(1),
+            BufferedImage.TYPE_INT_RGB,
+        )
+        val graphics = enlarged.createGraphics()
+        try {
+            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
+            graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+            graphics.drawImage(image, 0, 0, enlarged.width, enlarged.height, null)
+        } finally {
+            graphics.dispose()
+        }
+        return enlarged
     }
 
     private fun looksLikeHearthstoneVisual(visual: VisualSignature): Boolean =
