@@ -1,0 +1,8 @@
+D 18:35:25.1173963 GameState.DebugPrintPower() - CREATE_GAME
+D 18:35:25.1173963 GameState.DebugPrintGame() - PlayerID=1, PlayerName=laz#12793
+D 18:35:25.1173963 PowerTaskList.DebugPrintPower() -     TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=PLAYING
+D 18:36:20.7373675 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=CONCEDED
+D 18:36:20.7373675 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=LOST
+D 18:36:20.7373675 GameState.DebugPrintPower() - TAG_CHANGE Entity=Klfe#1109 tag=PLAYSTATE value=WON
+D 18:36:20.7373675 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+D 18:36:20.7373675 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE

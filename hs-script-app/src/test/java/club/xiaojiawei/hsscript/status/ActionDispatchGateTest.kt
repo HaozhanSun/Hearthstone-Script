@@ -270,7 +270,7 @@ class ActionDispatchGateTest {
     }
 
     @Test
-    fun `authoritative terminal capability allows only result dismissal while rank guard remains pending`() {
+    fun `authoritative terminal capability clears rank barrier but allows only result dismissal`() {
         MandatoryRankSurrenderGuard.resetForTest()
         try {
             MandatoryRankSurrenderGuard.begin("test-game:self")
@@ -280,12 +280,16 @@ class ActionDispatchGateTest {
             assertTrue(terminalCapability != null)
             assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCapability))
             assertTrue(MandatoryRankSurrenderGuard.isPending())
+            assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", terminalCapability))
+            assertFalse(MandatoryRankSurrenderGuard.isPending())
+            assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+            assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCapability))
             assertTrue(
                 ActionDispatchGate.allowForState(
                     action = "terminal-result.dismiss",
                     paused = false,
                     working = true,
-                    mandatoryRankSurrenderPending = true,
+                    terminalCleanupPending = true,
                     terminalCleanupCapabilityValid = true,
                 ),
             )
@@ -302,7 +306,7 @@ class ActionDispatchGateTest {
                         action = action,
                         paused = false,
                         working = true,
-                        mandatoryRankSurrenderPending = true,
+                        terminalCleanupPending = true,
                         terminalCleanupCapabilityValid = true,
                     ),
                     action,
@@ -313,7 +317,7 @@ class ActionDispatchGateTest {
                     action = "terminal-result.dismiss",
                     paused = true,
                     working = true,
-                    mandatoryRankSurrenderPending = true,
+                    terminalCleanupPending = true,
                     terminalCleanupCapabilityValid = true,
                 ),
             )
@@ -327,6 +331,7 @@ class ActionDispatchGateTest {
 
             assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED", terminalCapability))
             assertFalse(MandatoryRankSurrenderGuard.isPending())
+            assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
             assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCapability))
             // Releasing the cleanup lock does not bypass the ordinary rank
             // preflight, which will run again for the next match.
@@ -377,15 +382,15 @@ class ActionDispatchGateTest {
             )
             assertFalse(ActionDispatchGate.allow("strategy.card.play"))
             assertFalse(ActionDispatchGate.allow("mouse.left"))
-            assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL"))
-            assertTrue(MandatoryRankSurrenderGuard.isPending())
-            assertEquals(
-                MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
-                MulliganRankDispatchBarrier.currentState(),
-            )
+            assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", powerLogCapability))
+            assertFalse(MandatoryRankSurrenderGuard.isPending())
+            assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+            assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
+            assertFalse(ActionDispatchGate.allow("strategy.card.play"))
 
             assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED", powerLogCapability))
             assertFalse(MandatoryRankSurrenderGuard.isPending())
+            assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
             assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
             assertTrue(ActionDispatchGate.allow("matchmaking.start"))
             assertFalse(PauseStatus.isPause, "terminal proof releases rank fencing without auto-pausing")

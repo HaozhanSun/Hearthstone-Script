@@ -371,6 +371,14 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
                     "playerTerminal=${authoritativeTerminal ?: "UNKNOWN"}"
             }
         }
+        if (terminalCleanupCapability != null &&
+            MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", terminalCleanupCapability)
+        ) {
+            club.xiaojiawei.hsscriptbase.config.log.info {
+                "RANK_SURRENDER_TERMINAL_RECONCILED barrier=cleared " +
+                    "terminalUiCleanup=pending ordinaryDispatch=false"
+            }
+        }
         addGameEndTask(terminalCleanupCapability)
         WarEx.reset()
         if (System.getProperty("hs.script.e2e") == "true" &&

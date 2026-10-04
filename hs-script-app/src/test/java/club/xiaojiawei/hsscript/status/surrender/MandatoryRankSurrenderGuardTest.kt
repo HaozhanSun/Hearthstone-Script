@@ -207,10 +207,10 @@ class MandatoryRankSurrenderGuardTest {
         assertTrue(opponentOnlyWin.hasCompleteTerminalEvidence(), "opponent WON still proves the match is terminal")
 
         val replayedLog = CurrentGamePowerLogTerminalTracker()
-        replayedLog.observeLine("CREATE_GAME", liveAttachedSession = false)
-        replayedLog.observeLine("tag=PLAYSTATE value=CONCEDED", liveAttachedSession = false)
-        replayedLog.observeLine("tag=STEP value=FINAL_GAMEOVER", liveAttachedSession = false)
-        replayedLog.observeLine(rawCompleteState, liveAttachedSession = false)
+        replayedLog.observeLine("CREATE_GAME", currentSessionEvidence = false)
+        replayedLog.observeLine("tag=PLAYSTATE value=CONCEDED", currentSessionEvidence = false)
+        replayedLog.observeLine("tag=STEP value=FINAL_GAMEOVER", currentSessionEvidence = false)
+        replayedLog.observeLine(rawCompleteState, currentSessionEvidence = false)
         assertFalse(replayedLog.hasCompleteTerminalEvidence(), "existing-log replay must not authorize cleanup")
         // Nor may a stale tail after replay count until a fresh live CREATE_GAME
         // establishes the active game's boundary.

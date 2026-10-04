@@ -37,4 +37,23 @@ class GameEndTaskRegistryTest {
         assertFalse(registry.hasSurrenderRecoveryTask())
         assertFalse(registry.isNotEmpty())
     }
+
+    @Test
+    fun `terminal handoff cancels the surrender retry worker before result cleanup is scheduled`() {
+        val registry = GameEndTaskRegistry()
+        val surrenderRetry = executor.scheduleAtFixedRate({}, 0, 1, TimeUnit.DAYS)
+        registry.add(surrenderRetry, GameEndTaskRegistry.Kind.SURRENDER_RECOVERY)
+
+        registry.cancelAll()
+
+        assertTrue(surrenderRetry.isCancelled)
+        assertFalse(registry.hasSurrenderRecoveryTask())
+        assertFalse(registry.isNotEmpty())
+
+        val terminalPage = executor.schedule({}, 1, TimeUnit.DAYS)
+        registry.add(terminalPage, GameEndTaskRegistry.Kind.TERMINAL_PAGE)
+        assertTrue(registry.hasTerminalPageTask())
+        registry.cancelAll()
+        assertFalse(registry.hasTerminalPageTask())
+    }
 }

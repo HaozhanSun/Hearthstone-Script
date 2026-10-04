@@ -18,12 +18,13 @@ internal class CurrentGamePowerLogTerminalTracker {
     private val playStates = linkedMapOf<String, String>()
 
     @Synchronized
-    fun observeLine(line: String, liveAttachedSession: Boolean = true) {
-        // Existing-log replay rebuilds the parser model, but old/replayed
-        // terminal tails must never mint cleanup authority. The caller resets
-        // this tracker for every attached/rotated Power.log; only subsequent
-        // live lines from that attachment may open and complete a game.
-        if (!liveAttachedSession) return
+    fun observeLine(line: String, currentSessionEvidence: Boolean = true) {
+        // Historical replay is not terminal authority. The one exception is a
+        // replay that starts at the latest unfinished CREATE_GAME in the
+        // already-verified current-session Power.log: that segment is the
+        // current live match, and its replayed prefix must seed ownership so
+        // later live terminal lines can be correlated to the same game.
+        if (!currentSessionEvidence) return
         if (line.contains("CREATE_GAME")) {
             reset()
             gameStarted = true

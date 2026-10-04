@@ -30,6 +30,7 @@ object ActionDispatchGate {
             recoveryCapabilityValid = MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(recoveryCapability),
             terminalCleanupCapabilityValid =
                 MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCleanupCapability),
+            terminalCleanupPending = MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
             rankBarrierState = MulliganRankDispatchBarrier.currentState(),
             rankSurrenderRequestCapabilityValid = action == "surrender.request" &&
                 MulliganRankDispatchBarrier.isSurrenderCapabilityValid(rankSurrenderCapability),
@@ -53,6 +54,7 @@ object ActionDispatchGate {
         mandatoryRankSurrenderPending: Boolean = false,
         recoveryCapabilityValid: Boolean = false,
         terminalCleanupCapabilityValid: Boolean = false,
+        terminalCleanupPending: Boolean = false,
         rankBarrierState: MulliganRankDispatchBarrier.State = MulliganRankDispatchBarrier.State.IDLE,
         rankSurrenderRequestCapabilityValid: Boolean = false,
     ): Boolean {
@@ -64,6 +66,13 @@ object ActionDispatchGate {
             return false
         }
         val terminalCleanupAllowed = action == "terminal-result.dismiss" && terminalCleanupCapabilityValid
+        if (terminalCleanupPending && !terminalCleanupAllowed) {
+            log.warn {
+                "ACTION_BLOCKED action=$action reason=terminal-result-cleanup-pending " +
+                    "pause=false working=true dispatch=false"
+            }
+            return false
+        }
         val rankSurrenderRecoveryAllowed = rankBarrierState == MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED &&
             recoveryCapabilityValid
         val rankSurrenderRequestAllowed = rankBarrierState == MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED &&

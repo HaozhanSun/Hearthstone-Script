@@ -10,6 +10,7 @@ object MandatoryRankSurrenderGuard {
     @Volatile private var activeCapability: RecoveryCapability? = null
     @Volatile private var activeTerminalCleanupCapability: TerminalCleanupCapability? = null
     @Volatile private var pendingGameIdentity: String? = null
+    @Volatile private var terminalCleanupPending = false
 
     @Synchronized
     fun begin(gameIdentity: String? = null): RecoveryCapability {
@@ -23,6 +24,7 @@ object MandatoryRankSurrenderGuard {
         val capability = RecoveryCapability()
         activeCapability = capability
         activeTerminalCleanupCapability = null
+        terminalCleanupPending = false
         pendingGameIdentity = gameIdentity?.takeIf { it.isNotBlank() }
         pending = true
         return capability
@@ -36,20 +38,26 @@ object MandatoryRankSurrenderGuard {
     fun authorizeTerminalCleanup(
         evidence: CurrentGameSurrenderTerminalEvidence?,
     ): TerminalCleanupCapability? {
-        if (!pending || !MandatorySurrenderTerminalEvidence.authorizes(pendingGameIdentity, evidence)) return null
+        if (!pending || terminalCleanupPending ||
+            !MandatorySurrenderTerminalEvidence.authorizes(pendingGameIdentity, evidence)
+        ) return null
         return activeTerminalCleanupCapability ?: TerminalCleanupCapability().also {
             activeTerminalCleanupCapability = it
         }
     }
 
     fun isTerminalCleanupCapabilityValid(capability: TerminalCleanupCapability?): Boolean =
-        pending && capability != null && capability === activeTerminalCleanupCapability
+        (pending || terminalCleanupPending) && capability != null && capability === activeTerminalCleanupCapability
 
     /** Screen paths may reuse proof already authorized by Power.log, never mint it. */
     fun existingTerminalCleanupCapability(): TerminalCleanupCapability? =
-        activeTerminalCleanupCapability.takeIf { pending }
+        activeTerminalCleanupCapability.takeIf { pending || terminalCleanupPending }
 
-    fun hasTerminalCleanupCapability(): Boolean = pending && activeTerminalCleanupCapability != null
+    fun hasTerminalCleanupCapability(): Boolean =
+        (pending || terminalCleanupPending) && activeTerminalCleanupCapability != null
+
+    /** Terminal proof releases the rank barrier while keeping only result-screen dismissal enabled. */
+    fun isTerminalCleanupPending(): Boolean = terminalCleanupPending
 
     fun markRecoveryUncertain() {
         if (pending) recoveryUncertain = true
@@ -64,10 +72,13 @@ object MandatoryRankSurrenderGuard {
         evidence: String,
         terminalCleanupCapability: TerminalCleanupCapability?,
     ): Boolean {
-        if (!pending || evidence !in setOf("SCREEN_MAIN_MENU", "SCREEN_MATCHMAKING", "SCREEN_RESULT_DISMISSED")) {
-            return false
-        }
         if (!isTerminalCleanupCapabilityValid(terminalCleanupCapability)) return false
+        if (evidence == "POWERLOG_TERMINAL") {
+            if (!pending || terminalCleanupPending) return false
+            releaseRankBarrierForTerminalCleanup()
+            return true
+        }
+        if (evidence !in setOf("SCREEN_MAIN_MENU", "SCREEN_MATCHMAKING", "SCREEN_RESULT_DISMISSED")) return false
         completePendingSurrender()
         return true
     }
@@ -80,10 +91,13 @@ object MandatoryRankSurrenderGuard {
         visualEvidence: String,
         freshObservation: Boolean,
     ): Boolean {
-        if (!pending || activeTerminalCleanupCapability == null) return false
+        if ((!pending && !terminalCleanupPending) || activeTerminalCleanupCapability == null) return false
         if (!freshObservation || screenKind != "DECK_SELECTION" || confidence < 85) return false
         if (visualEvidence !in setOf("deck-selection-title", "deck-selection-title-roi")) return false
-        if (MulliganRankDispatchBarrier.currentState() != MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED) {
+        val barrierState = MulliganRankDispatchBarrier.currentState()
+        if ((terminalCleanupPending && barrierState != MulliganRankDispatchBarrier.State.IDLE) ||
+            (!terminalCleanupPending && barrierState != MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED)
+        ) {
             return false
         }
         completePendingSurrender()
@@ -95,6 +109,16 @@ object MandatoryRankSurrenderGuard {
         recoveryUncertain = false
         activeCapability = null
         activeTerminalCleanupCapability = null
+        terminalCleanupPending = false
+        pendingGameIdentity = null
+        MulliganRankDispatchBarrier.completeSurrender()
+    }
+
+    private fun releaseRankBarrierForTerminalCleanup() {
+        pending = false
+        recoveryUncertain = false
+        activeCapability = null
+        terminalCleanupPending = true
         pendingGameIdentity = null
         MulliganRankDispatchBarrier.completeSurrender()
     }
@@ -107,6 +131,7 @@ object MandatoryRankSurrenderGuard {
         recoveryUncertain = false
         activeCapability = null
         activeTerminalCleanupCapability = null
+        terminalCleanupPending = false
         pendingGameIdentity = null
     }
 }

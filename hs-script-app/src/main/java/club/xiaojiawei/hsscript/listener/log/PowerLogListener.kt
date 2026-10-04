@@ -41,6 +41,10 @@ object PowerLogListener :
     @Volatile
     var replayingExistingLog: Boolean = false
 
+    /** True only while reconstructing the latest unfinished game in the attached current-session log. */
+    @Volatile
+    private var replayingVerifiedCurrentSessionGame: Boolean = false
+
     /**
      * A Power.log result block contains a tail of repeated state/event lines
      * after FINAL_GAMEOVER.  WarEx.reset() intentionally returns the model to
@@ -123,10 +127,12 @@ object PowerLogListener :
                 // Replay guards make this state-only and prevent historical UI
                 // clicks.
                 replayingExistingLog = true
+                replayingVerifiedCurrentSessionGame = true
                 try {
                     log.info {
                         "Power.log恢复：从未结束对局起点回放 " +
-                            "offset=${unfinishedGameStart ?: 0} reason=active-game-detected"
+                            "offset=${unfinishedGameStart ?: 0} reason=active-game-detected " +
+                            "terminalEvidenceSeed=current-session-latest-unfinished-create"
                     }
                     // Power.log is append-only across multiple games. Replaying
                     // from byte zero makes startup latency proportional to the
@@ -137,6 +143,7 @@ object PowerLogListener :
                     dealNewLog()
                 } finally {
                     replayingExistingLog = false
+                    replayingVerifiedCurrentSessionGame = false
                     if (war.currentPhase == WarPhaseEnum.REPLACE_CARD) {
                         ReplaceCardPhaseStrategy.resumeAfterExistingLogReplay()
                     } else {
@@ -259,7 +266,7 @@ object PowerLogListener :
                 // completed current match can release result cleanup safely.
                 currentGamePowerLogTerminalTracker.observeLine(
                     line,
-                    liveAttachedSession = !replayingExistingLog,
+                    currentSessionEvidence = !replayingExistingLog || replayingVerifiedCurrentSessionGame,
                 )
                 if (PowerLogUtil.isRelevance(line)) {
                     try {

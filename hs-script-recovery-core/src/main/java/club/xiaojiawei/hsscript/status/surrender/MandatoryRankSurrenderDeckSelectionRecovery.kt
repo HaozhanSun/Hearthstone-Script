@@ -10,7 +10,9 @@ object MandatoryRankSurrenderDeckSelectionRecovery {
         visualEvidence: String,
         freshObservation: Boolean,
     ): Result {
-        if (!MandatoryRankSurrenderGuard.isPending()) return Result.NOT_REQUIRED
+        if (!MandatoryRankSurrenderGuard.isPending() && !MandatoryRankSurrenderGuard.isTerminalCleanupPending()) {
+            return Result.NOT_REQUIRED
+        }
         val completed = MandatoryRankSurrenderGuard.confirmDeckSelectionCompleted(
             screenKind, confidence, visualEvidence, freshObservation,
         )
