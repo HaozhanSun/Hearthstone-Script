@@ -206,8 +206,10 @@ object GameUtil {
      */
     private val RESTART_GAME_RECT by lazy { GameRect(-0.0365, 0.0302, 0.0878, 0.1272) }
 
-    /** The legacy post-surrender button coordinate is the affirmative "现在认输" control. */
-    private val SURRENDER_CONFIRMATION_ACCEPT_RECT by lazy { RESTART_GAME_RECT }
+    /** Calibrated interior of the left "现在认输" choice; separate from both continue and restart controls. */
+    internal val SURRENDER_CONFIRMATION_ACCEPT_RECT by lazy { GameRect(-0.095, -0.025, 0.095, 0.125) }
+
+    internal fun surrenderConfirmationAcceptRectForTest(): GameRect = SURRENDER_CONFIRMATION_ACCEPT_RECT
 
     //    表情
     val THANK_RECT: GameRect by lazy { GameRect(-0.1604, -0.0404, 0.1153, 0.1502) }
@@ -863,6 +865,7 @@ object GameUtil {
         var consecutiveUnknownRankScreens = 0
         val maxSurrenderAttempts = 30
         val surrenderStartedAt = System.currentTimeMillis()
+        val mandatoryPostClickProbe = ScreenWatchdog.MandatorySurrenderPostClickProbe()
         val surrenderFutureRef = AtomicReference<ScheduledFuture<*>?>()
         val surrenderStopRequested = AtomicBoolean(false)
         val surrenderFuture = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
@@ -952,17 +955,21 @@ object GameUtil {
                         }
                         stopSurrenderTask()
                     } else if (mandatoryRank) {
-                        if (++surrenderAttempts > maxSurrenderAttempts) {
-                            surrenderAttempts = 0
+                        if (!MandatoryRankSurrenderRecoveryPolicy.hasRetryBudget(surrenderAttempts)) {
                             MandatoryRankSurrenderGuard.markRecoveryUncertain()
-                            log.warn {
-                                "RANK_SURRENDER_RECOVERY_WAIT reason=bounded-click-batch-exhausted " +
-                                    "retry=screen-probe-only ordinaryInput=false requeue=false pause=false"
+                            log.error {
+                                "RANK_SURRENDER_RECOVERY_STOP reason=retry-budget-exhausted " +
+                                    "attempts=$surrenderAttempts maxAttempts=${MandatoryRankSurrenderRecoveryPolicy.MAX_RETRY_ATTEMPTS} " +
+                                    "retry=false ordinaryInput=false requeue=false pause=false"
                             }
+                            stopSurrenderTask()
+                            return@scheduleWithFixedDelay
                         }
+                        val postClickProbe = mandatoryPostClickProbe.shouldBypassCooldown()
                         val watchdogTiming = ScreenWatchdog.shouldInspect(
                             startedAt = surrenderStartedAt,
-                            attempts = surrenderAttempts,
+                            attempts = surrenderAttempts + 1,
+                            bypassCooldownForMandatorySurrenderPostClick = postClickProbe,
                         )
                         if (!watchdogTiming.shouldInspect) {
                             log.info {
@@ -971,6 +978,11 @@ object GameUtil {
                             }
                             return@scheduleWithFixedDelay
                         }
+                        surrenderAttempts = MandatoryRankSurrenderRecoveryPolicy.attemptsAfterInspectionStart(
+                            surrenderAttempts,
+                            inspectionStarted = true,
+                        )
+                        if (postClickProbe) mandatoryPostClickProbe.markProbeStarted()
                         val state = "mode=${Mode.currMode?.name ?: "NONE"}|inWar=${WarEx.inWar}|" +
                             "warPhase=${WarEx.war.currentPhase.name}|myTurn=${WarEx.war.isMyTurn}|" +
                             "myMulliganInput=${ReplaceCardPhaseStrategy.isRankInspectionReady()}|" +
@@ -1008,18 +1020,21 @@ object GameUtil {
                             MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS -> {
                                 if (ActionDispatchGate.allow("surrender.retry.open-settings", recoveryCapability)) {
                                     lClickSettingsForMandatoryRankSurrender(recoveryCapability)
+                                    mandatoryPostClickProbe.markClickDispatched()
                                 }
                             }
                             MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SURRENDER -> {
                                 if (ActionDispatchGate.allow("surrender.retry.select-surrender", recoveryCapability)) {
                                     SURRENDER_RECT.lClickForMandatoryRankSurrender(recoveryCapability)
+                                    mandatoryPostClickProbe.markClickDispatched()
                                 }
                             }
                             MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_CONFIRMATION -> {
                                 if (decision.confirmationTarget == MandatoryRankSurrenderRecoveryPolicy.ConfirmationTarget.ACCEPT_NOW &&
                                     ActionDispatchGate.allow("surrender.retry.confirm.accept-now", recoveryCapability)
                                 ) {
-                                    SURRENDER_CONFIRMATION_ACCEPT_RECT.lClickForMandatoryRankSurrender(recoveryCapability)
+                                    SURRENDER_CONFIRMATION_ACCEPT_RECT.lClickCenterForMandatoryRankSurrender(recoveryCapability)
+                                    mandatoryPostClickProbe.markClickDispatched()
                                     log.info {
                                         "RANK_SURRENDER_CONFIRMATION_INPUT target=ACCEPT_NOW " +
                                             "button=现在认输 dispatch=requested acceptance=awaiting-current-game-powerlog"

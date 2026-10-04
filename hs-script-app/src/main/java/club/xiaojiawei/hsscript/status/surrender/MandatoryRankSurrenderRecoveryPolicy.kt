@@ -4,6 +4,8 @@ import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 
 /** Controls when a mandatory rank surrender may leave its recovery-only state. */
 internal object MandatoryRankSurrenderRecoveryPolicy {
+    const val MAX_RETRY_ATTEMPTS = 30
+
     enum class ConfirmationTarget { ACCEPT_NOW }
 
     enum class Action {
@@ -29,6 +31,14 @@ internal object MandatoryRankSurrenderRecoveryPolicy {
 
     internal fun shouldEmitUnknownObservationDiagnostic(consecutiveUnknownScreens: Int): Boolean =
         consecutiveUnknownScreens == 1 || consecutiveUnknownScreens > 1 && consecutiveUnknownScreens % 3 == 0
+
+    internal fun hasRetryBudget(attemptsAlreadyStarted: Int): Boolean =
+        attemptsAlreadyStarted < MAX_RETRY_ATTEMPTS
+
+    /** Cooldown/in-flight scheduler ticks do not consume an inspection retry. */
+    internal fun attemptsAfterInspectionStart(attemptsAlreadyStarted: Int, inspectionStarted: Boolean): Int =
+        if (inspectionStarted && hasRetryBudget(attemptsAlreadyStarted)) attemptsAlreadyStarted + 1
+        else attemptsAlreadyStarted
 
     fun decide(screen: ScreenWatchdogKind): Decision = when (screen) {
         ScreenWatchdogKind.GAMEPLAY -> Decision(Action.CLICK_SETTINGS, "confirmed-gameplay")

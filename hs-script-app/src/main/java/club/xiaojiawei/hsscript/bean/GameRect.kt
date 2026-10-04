@@ -86,6 +86,14 @@ data class GameRect(
         GameUtil.leftButtonClick(getClickPos(), recoveryCapability)
     }
 
+    /** Dispatch the stable center of a verified modal target during rank recovery. */
+    fun lClickCenterForMandatoryRankSurrender(
+        recoveryCapability: MandatoryRankSurrenderGuard.RecoveryCapability,
+    ) {
+        showControlPos()
+        GameUtil.leftButtonClick(getCenterClickPos(), recoveryCapability)
+    }
+
     fun lClickCenter(isCancel: Boolean = true) {
         if (isCancel) cancel()
         showControlPos()

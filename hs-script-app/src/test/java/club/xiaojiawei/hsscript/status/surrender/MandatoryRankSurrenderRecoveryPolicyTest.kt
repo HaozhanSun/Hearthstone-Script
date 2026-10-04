@@ -3,6 +3,7 @@ package club.xiaojiawei.hsscript.status.surrender
 import club.xiaojiawei.hsscript.status.ScreenWatchdog
 import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
+import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.utils.ConfigUtil
@@ -14,6 +15,8 @@ import org.junit.jupiter.api.Test
 import java.awt.image.BufferedImage
 import java.awt.Color
 import java.awt.Graphics2D
+import java.awt.Rectangle
+import club.xiaojiawei.hsscript.utils.GameUtil
 import javax.imageio.ImageIO
 
 class MandatoryRankSurrenderRecoveryPolicyTest {
@@ -38,6 +41,34 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
     fun `ordinary strategy surrender retains existing recovery behavior`() {
         assertFalse(MandatoryRankSurrenderRecoveryPolicy.shouldWaitForMoreEvidence(false, false))
         assertFalse(MandatoryRankSurrenderRecoveryPolicy.shouldWaitForMoreEvidence(true, true))
+    }
+
+    @Test
+    fun `mandatory rank retry budget is finite and cannot restart in new batches`() {
+        assertTrue(MandatoryRankSurrenderRecoveryPolicy.hasRetryBudget(0))
+        assertTrue(MandatoryRankSurrenderRecoveryPolicy.hasRetryBudget(29))
+        assertFalse(MandatoryRankSurrenderRecoveryPolicy.hasRetryBudget(30))
+        assertEquals(30, MandatoryRankSurrenderRecoveryPolicy.MAX_RETRY_ATTEMPTS)
+    }
+
+    @Test
+    fun `cooldown scheduler ticks do not consume mandatory rank inspection retry budget`() {
+        var attemptsStarted = 0
+        repeat(30) {
+            attemptsStarted = MandatoryRankSurrenderRecoveryPolicy.attemptsAfterInspectionStart(
+                attemptsStarted,
+                inspectionStarted = false,
+            )
+        }
+
+        assertEquals(0, attemptsStarted)
+        assertTrue(MandatoryRankSurrenderRecoveryPolicy.hasRetryBudget(attemptsStarted))
+
+        attemptsStarted = MandatoryRankSurrenderRecoveryPolicy.attemptsAfterInspectionStart(
+            attemptsStarted,
+            inspectionStarted = true,
+        )
+        assertEquals(1, attemptsStarted)
     }
 
     @Test
@@ -444,6 +475,87 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
         assertEquals(MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_CONFIRMATION, decision.action)
         assertEquals(MandatoryRankSurrenderRecoveryPolicy.ConfirmationTarget.ACCEPT_NOW, decision.confirmationTarget)
         assertFalse(ScreenWatchdog.hasSettingsOverlayVisualForTest(image), diagnostics)
+    }
+
+    @Test
+    fun `exact transition screenshot stays on settings step until modal appears`() {
+        val settingsTransition = readFixture("rank7-live-settings-surrender-transition.png")
+        val confirmationOverlay = readFixture("rank7-live-surrender-confirmation-mulligan-overlay.png")
+        val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
+        val sourceSha256 = "0024C29B7BAA4005FF5373E41A1375EABA51DF03563328604244D68EDC1D0E17"
+
+        assertEquals(1920, settingsTransition.width)
+        assertEquals(1080, settingsTransition.height)
+        assertTrue(ScreenWatchdog.hasSettingsOverlayVisualForTest(settingsTransition))
+        assertFalse(ScreenWatchdog.hasSurrenderConfirmationPanelForTest(settingsTransition))
+        val settingsObservation = ScreenWatchdog.inspectForSurrender(
+            state = state,
+            attempts = 12,
+            trigger = "incident-settings-transition-fixture",
+            mandatoryRankSurrender = true,
+            captureProvider = { settingsTransition },
+            ocrProvider = { error("freshly confirmed Settings must use its visual fast path") },
+        )
+        assertEquals(ScreenWatchdogKind.SETTINGS, settingsObservation.kind)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SURRENDER,
+            MandatoryRankSurrenderRecoveryPolicy.decide(settingsObservation.kind).action,
+        )
+
+        // This second real frame shows the confirmation modal over the same
+        // underlying Settings menu. The modal must win even when OCR says the
+        // background labels, and may select only its affirmative choice.
+        assertTrue(ScreenWatchdog.hasSurrenderConfirmationPanelForTest(confirmationOverlay))
+        val confirmationObservation = ScreenWatchdog.inspectForSurrender(
+            state = state,
+            attempts = 13,
+            trigger = "incident-confirmation-overlay-fixture",
+            mandatoryRankSurrender = true,
+            captureProvider = { confirmationOverlay },
+            ocrProvider = { "设置 认输 选项 退出" },
+        )
+        assertEquals(ScreenWatchdogKind.SURRENDER_CONFIRMATION, confirmationObservation.kind)
+        val decision = MandatoryRankSurrenderRecoveryPolicy.decide(confirmationObservation.kind)
+        assertEquals(MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_CONFIRMATION, decision.action)
+        assertEquals(MandatoryRankSurrenderRecoveryPolicy.ConfirmationTarget.ACCEPT_NOW, decision.confirmationTarget)
+        println("SURRENDER_TRANSITION_FIXTURE sourceSha256=$sourceSha256 settings=${settingsObservation.kind} modal=${confirmationObservation.kind} target=${decision.confirmationTarget}")
+    }
+
+    @Test
+    fun `surrender accept target remains inside affirmative button and outside continue button`() {
+        val gameRect = ScriptStatus.GAME_RECT
+        val original = intArrayOf(gameRect.left, gameRect.top, gameRect.right, gameRect.bottom)
+        try {
+            gameRect.left = 0
+            gameRect.top = 0
+            gameRect.right = 1920
+            gameRect.bottom = 1080
+
+            val target = GameUtil.surrenderConfirmationAcceptRectForTest()
+            val targetRect = target.getRelativeRect()
+            val center = target.getCenterClickPos()
+            // Bounds measured from both checked-in rank-7 surrender modal
+            // screenshots at 1920x1080. These are the visible gold-button
+            // interiors, excluding the gap between the two choices.
+            val acceptButton = Rectangle(730, 624, 215, 56)
+            val continueButton = Rectangle(968, 624, 216, 56)
+            val clickArea = Rectangle(
+                targetRect.x.toInt(),
+                targetRect.y.toInt(),
+                kotlin.math.ceil(targetRect.width).toInt(),
+                kotlin.math.ceil(targetRect.height).toInt(),
+            )
+
+            assertTrue(acceptButton.contains(center), "stable center $center must land on 现在认输")
+            assertFalse(continueButton.contains(center), "stable center $center must not land on 继续游戏")
+            assertTrue(acceptButton.contains(clickArea), "whole click area $clickArea must stay within affirmative target")
+            assertFalse(clickArea.intersects(continueButton), "click area $clickArea must not overlap 继续游戏")
+        } finally {
+            gameRect.left = original[0]
+            gameRect.top = original[1]
+            gameRect.right = original[2]
+            gameRect.bottom = original[3]
+        }
     }
 
     @Test

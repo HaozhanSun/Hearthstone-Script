@@ -270,6 +270,51 @@ class ScreenWatchdogTest {
     }
 
     @Test
+    fun `mandatory surrender post-click probe bypasses only the global cooldown`() {
+        ScreenWatchdog.resetTimingForTest()
+        val postClickProbe = ScreenWatchdog.MandatorySurrenderPostClickProbe()
+        val first = ScreenWatchdog.shouldInspect(
+            startedAt = 0L,
+            attempts = 3,
+            now = 100_000L,
+            stuckMs = 30_000L,
+            maxRetries = 3,
+            cooldownMs = 15_000L,
+        )
+        postClickProbe.markClickDispatched()
+
+        // The recovery scheduler's next fixed-delay tick is 500 ms later.
+        // A post-click visual transition check must not wait for the 15s
+        // process-wide watchdog cooldown to expire.
+        val fastPostClick = ScreenWatchdog.shouldInspect(
+            startedAt = 0L,
+            attempts = 4,
+            now = 100_500L,
+            stuckMs = 30_000L,
+            maxRetries = 3,
+            cooldownMs = 15_000L,
+            bypassCooldownForMandatorySurrenderPostClick = postClickProbe.shouldBypassCooldown(),
+        )
+        if (fastPostClick.shouldInspect) postClickProbe.markProbeStarted()
+        val ordinaryProbe = ScreenWatchdog.shouldInspect(
+            startedAt = 0L,
+            attempts = 5,
+            now = 101_000L,
+            stuckMs = 30_000L,
+            maxRetries = 3,
+            cooldownMs = 15_000L,
+            bypassCooldownForMandatorySurrenderPostClick = postClickProbe.shouldBypassCooldown(),
+        )
+
+        assertTrue(first.shouldInspect)
+        assertTrue(fastPostClick.shouldInspect, fastPostClick.reason)
+        assertTrue(fastPostClick.reason.startsWith("mandatory-surrender-post-click"))
+        assertFalse(postClickProbe.shouldBypassCooldown(), "one click must authorize only one fast probe")
+        assertFalse(ordinaryProbe.shouldInspect)
+        assertTrue(ordinaryProbe.reason.startsWith("cooldown"))
+    }
+
+    @Test
     fun `watchdog uses local OCR even when PaddleX is selected`() {
         OcrRuntime.providerModeProvider = { OcrProviderMode.PADDLEX_ONLY }
 

@@ -16,6 +16,7 @@ import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.File
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.CancellationException
 import net.sourceforge.tess4j.Tesseract
@@ -84,6 +85,7 @@ object ScreenWatchdog {
         stuckMs: Long = ConfigUtil.getLong(ConfigEnum.SCREEN_WATCHDOG_STUCK_MS),
         maxRetries: Int = ConfigUtil.getInt(ConfigEnum.SCREEN_WATCHDOG_MAX_RETRIES),
         cooldownMs: Long = ConfigUtil.getLong(ConfigEnum.SCREEN_WATCHDOG_COOLDOWN_MS),
+        bypassCooldownForMandatorySurrenderPostClick: Boolean = false,
     ): TimingDecision {
         if (!ConfigUtil.getBoolean(ConfigEnum.SCREEN_WATCHDOG_ENABLED)) {
             return TimingDecision(false, "disabled")
@@ -95,13 +97,39 @@ object ScreenWatchdog {
             return TimingDecision(false, "below-threshold stuckForMs=$stuckFor attempts=$attempts")
         }
         val previous = lastCaptureAt.get()
-        if (previous > 0L && now - previous < cooldownMs.coerceAtLeast(0L)) {
+        if (!bypassCooldownForMandatorySurrenderPostClick && previous > 0L &&
+            now - previous < cooldownMs.coerceAtLeast(0L)
+        ) {
             return TimingDecision(false, "cooldown remainingMs=${cooldownMs - (now - previous)}")
         }
         if (!lastCaptureAt.compareAndSet(previous, now)) {
             return TimingDecision(false, "in-flight")
         }
-        return TimingDecision(true, "threshold stuckForMs=$stuckFor attempts=$attempts")
+        val reason = if (bypassCooldownForMandatorySurrenderPostClick) {
+            "mandatory-surrender-post-click stuckForMs=$stuckFor attempts=$attempts"
+        } else {
+            "threshold stuckForMs=$stuckFor attempts=$attempts"
+        }
+        return TimingDecision(true, reason)
+    }
+
+    /**
+     * A mandatory surrender click changes the very screen the retry worker
+     * must verify. One bounded, next-tick observation may skip the shared
+     * watchdog cooldown; ordinary watchdog probes remain globally throttled.
+     */
+    internal class MandatorySurrenderPostClickProbe {
+        private val pending = AtomicBoolean(false)
+
+        fun markClickDispatched() {
+            pending.set(true)
+        }
+
+        fun shouldBypassCooldown(): Boolean = pending.get()
+
+        fun markProbeStarted() {
+            pending.set(false)
+        }
     }
 
     fun inspectForSurrender(
