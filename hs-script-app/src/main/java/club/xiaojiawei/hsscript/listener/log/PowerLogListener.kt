@@ -66,9 +66,17 @@ object PowerLogListener :
 
     fun currentGameSurrenderTerminalEvidence(
         ownEntityId: String,
-        opponentEntityId: String,
+        opponentEntityId: String?,
     ): CurrentGameSurrenderTerminalEvidence? =
         currentGamePowerLogTerminalTracker.currentGameSurrenderEvidence(ownEntityId, opponentEntityId)
+
+    /** Observe raw lines consumed by a phase handler's bounded tail reader. */
+    fun observeCurrentGameTerminalEvidenceLine(line: String) {
+        currentGamePowerLogTerminalTracker.observeLine(
+            line,
+            currentSessionEvidence = !replayingExistingLog || replayingVerifiedCurrentSessionGame,
+        )
+    }
 
     private const val RESERVE_SIZE_B = 4 * 1024 * 1024
     private const val ACTIVE_GAME_SCAN_CHUNK_B = 4 * 1024 * 1024
@@ -264,10 +272,7 @@ object PowerLogListener :
                 // STATE=COMPLETE) are intentionally excluded by isRelevance;
                 // observe every raw line before that parser filter so a
                 // completed current match can release result cleanup safely.
-                currentGamePowerLogTerminalTracker.observeLine(
-                    line,
-                    currentSessionEvidence = !replayingExistingLog || replayingVerifiedCurrentSessionGame,
-                )
+                observeCurrentGameTerminalEvidenceLine(line)
                 if (PowerLogUtil.isRelevance(line)) {
                     try {
                         resolveLog(line)

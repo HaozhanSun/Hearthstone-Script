@@ -1,0 +1,11 @@
+D 19:30:20.7924036 GameState.DebugPrintPower() - CREATE_GAME
+D 19:30:20.7924036 GameState.DebugPrintPower() - TAG_CHANGE Entity=2 tag=PLAYSTATE value=PLAYING
+D 19:30:20.7924036 GameState.DebugPrintPower() - TAG_CHANGE Entity=3 tag=PLAYSTATE value=PLAYING
+D 19:30:20.7924036 PowerTaskList.DebugPrintPower() -     CREATE_GAME
+D 19:30:20.7924036 PowerTaskList.DebugPrintPower() -     TAG_CHANGE Entity=player-self#1 tag=PLAYSTATE value=PLAYING
+D 19:31:15.7610021 GameState.DebugPrintPower() - TAG_CHANGE Entity=player-self#1 tag=PLAYSTATE value=CONCEDED
+D 19:31:15.7610021 GameState.DebugPrintPower() - TAG_CHANGE Entity=player-opponent#2 tag=PLAYSTATE value=WON
+D 19:31:15.7610021 GameState.DebugPrintPower() - TAG_CHANGE Entity=player-self#1 tag=PLAYSTATE value=LOST
+D 19:31:15.7610021 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=NEXT_STEP value=FINAL_GAMEOVER
+D 19:31:15.7610021 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+D 19:31:15.7610021 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE

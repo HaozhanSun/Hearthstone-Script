@@ -4,9 +4,10 @@ package club.xiaojiawei.hsscript.status.surrender
 data class CurrentGameSurrenderTerminalEvidence(
     val gameIdentity: String,
     val ownEntityId: String,
-    val opponentEntityId: String,
+    val opponentEntityId: String?,
     val ownPlayState: String?,
     val opponentPlayState: String?,
+    val ownConceded: Boolean = false,
     val finalGameOver: Boolean,
     val complete: Boolean,
 )
@@ -19,12 +20,16 @@ object MandatorySurrenderTerminalEvidence {
     ): Boolean {
         if (requestedGameIdentity.isNullOrBlank() || evidence == null) return false
         if (requestedGameIdentity != evidence.gameIdentity) return false
-        if (evidence.ownEntityId.isBlank() || evidence.opponentEntityId.isBlank() ||
-            evidence.ownEntityId == evidence.opponentEntityId
-        ) return false
+        if (evidence.ownEntityId.isBlank()) return false
+        val opponentEntityId = evidence.opponentEntityId?.takeIf { it.isNotBlank() }
+        if (opponentEntityId == evidence.ownEntityId) return false
         val ownState = evidence.ownPlayState?.uppercase() ?: return false
-        val opponentState = evidence.opponentPlayState?.uppercase() ?: return false
-        return ownState in setOf("CONCEDED", "LOST") &&
-            opponentState == "WON" && evidence.finalGameOver && evidence.complete
+        val opponentWon = opponentEntityId != null && evidence.opponentPlayState?.uppercase() == "WON"
+        val locallyConceded = evidence.ownConceded || ownState == "CONCEDED"
+        val terminalResultIsConsistent = when {
+            opponentEntityId == null -> locallyConceded
+            else -> ownState in setOf("CONCEDED", "LOST") && opponentWon
+        }
+        return terminalResultIsConsistent && evidence.finalGameOver && evidence.complete
     }
 }

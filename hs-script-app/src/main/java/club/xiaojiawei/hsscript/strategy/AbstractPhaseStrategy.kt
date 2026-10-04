@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.TaskManager
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
+import club.xiaojiawei.hsscript.status.surrender.PowerLogTerminalTailReader
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
@@ -56,6 +57,7 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
         val logFile = PowerLogListener.logFile
         logFile ?: return false
         var l: String? = line
+        var firstObservedLine = true
         // A phase handler may consume the tail of the file while it waits for
         // the next state transition. Bound one pass so one malformed or very
         // large power-log burst cannot monopolize the listener forever.
@@ -63,6 +65,16 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
         var processedLines = 0
         while (WorkTimeListener.working && processedLines++ < 2_000 && System.nanoTime() < deadlineNanos) {
             try {
+                // dealNewLog observes its triggering line before entering this
+                // phase handler. Every later line here is read directly from
+                // the shared cursor and must also reach the terminal tracker;
+                // otherwise phase transitions can consume surrender proof
+                // before the outer listener sees it.
+                if (firstObservedLine) {
+                    firstObservedLine = false
+                } else if (l != null) {
+                    PowerLogListener.observeCurrentGameTerminalEvidenceLine(l)
+                }
                 if (l == null) {
                     SystemUtil.delay(RandomUtil.getInteractionDelay(100))
                 } else if (isRelevance(l)) {
@@ -74,7 +86,21 @@ abstract class AbstractPhaseStrategy : PhaseStrategy {
                         if (surrenderImmediatelyForPlayedOpponentCard()) return true
                         if (surrenderImmediatelyForResolvedOpponentHero()) return true
                         if (surrenderImmediatelyForCurrentRank()) return true
-                        if (phaseTransitionDetected || war.currentTurnStep == StepEnum.FINAL_GAMEOVER) return true
+                        if (phaseTransitionDetected || war.currentTurnStep == StepEnum.FINAL_GAMEOVER) {
+                            if (war.currentTurnStep == StepEnum.FINAL_GAMEOVER) {
+                                val tailResult = PowerLogTerminalTailReader.observeUntilComplete(
+                                    file = logFile,
+                                    maxLines = 256,
+                                    deadlineNanos = System.nanoTime() + 100_000_000L,
+                                    observeLine = PowerLogListener::observeCurrentGameTerminalEvidenceLine,
+                                )
+                                log.info {
+                                    "POWER_LOG_TERMINAL_TAIL_DRAIN result=${tailResult.stopReason} " +
+                                        "lines=${tailResult.linesRead}"
+                                }
+                            }
+                            return true
+                        }
                     } else if (l.contains(SHOW_ENTITY)) {
                         val phaseTransitionDetected = dealShowEntityThenIsOver(l, dealShowEntity(l, logFile))
                         if (surrenderImmediatelyForPlayedOpponentCard()) return true

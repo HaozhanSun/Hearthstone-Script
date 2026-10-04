@@ -15,7 +15,10 @@ internal class CurrentGamePowerLogTerminalTracker {
     private val gameGeneration = AtomicLong(0L)
     @Volatile
     private var currentGameGeneration: Long? = null
+    @Volatile
+    private var currentCreateGameTimestamp: String? = null
     private val playStates = linkedMapOf<String, String>()
+    private val concededPlayers = linkedSetOf<String>()
 
     @Synchronized
     fun observeLine(line: String, currentSessionEvidence: Boolean = true) {
@@ -26,16 +29,25 @@ internal class CurrentGamePowerLogTerminalTracker {
         // later live terminal lines can be correlated to the same game.
         if (!currentSessionEvidence) return
         if (line.contains("CREATE_GAME")) {
+            val timestamp = CREATE_GAME_TIMESTAMP.find(line)?.groupValues?.get(1)
+            // Hearthstone writes CREATE_GAME once for GameState and again in
+            // the nested PowerTaskList dump with the same timestamp. Treat
+            // those as one game boundary, not two generations.
+            if (gameStarted && timestamp != null && timestamp == currentCreateGameTimestamp) return
             reset()
             gameStarted = true
             currentGameGeneration = gameGeneration.incrementAndGet()
+            currentCreateGameTimestamp = timestamp
             return
         }
         if (!gameStarted) return
         PLAYSTATE.find(line)?.let { match ->
             val entity = match.groupValues[1].trim()
             val state = match.groupValues[2]
-            if (entity.isNotBlank()) playStates[entity] = state
+            if (entity.isNotBlank()) {
+                playStates[entity] = state
+                if (state == "CONCEDED") concededPlayers += entity
+            }
             if (state in TERMINAL_PLAYSTATES) terminalPlayStateObserved = true
         }
         if (line.contains("tag=STEP value=FINAL_GAMEOVER")) finalGameOverObserved = true
@@ -53,16 +65,18 @@ internal class CurrentGamePowerLogTerminalTracker {
     @Synchronized
     fun currentGameSurrenderEvidence(
         ownEntityId: String,
-        opponentEntityId: String,
+        opponentEntityId: String?,
     ): CurrentGameSurrenderTerminalEvidence? {
         val generation = currentGameGeneration ?: return null
-        if (!gameStarted || ownEntityId.isBlank() || opponentEntityId.isBlank()) return null
+        if (!gameStarted || ownEntityId.isBlank()) return null
+        val resolvedOpponentEntityId = opponentEntityId?.takeIf { it.isNotBlank() }
         return CurrentGameSurrenderTerminalEvidence(
             gameIdentity = "$generation:$ownEntityId",
             ownEntityId = ownEntityId,
-            opponentEntityId = opponentEntityId,
+            opponentEntityId = resolvedOpponentEntityId,
             ownPlayState = playStates[ownEntityId],
-            opponentPlayState = playStates[opponentEntityId],
+            opponentPlayState = resolvedOpponentEntityId?.let(playStates::get),
+            ownConceded = ownEntityId in concededPlayers,
             finalGameOver = finalGameOverObserved,
             complete = completeStateObserved,
         )
@@ -75,10 +89,13 @@ internal class CurrentGamePowerLogTerminalTracker {
         finalGameOverObserved = false
         completeStateObserved = false
         currentGameGeneration = null
+        currentCreateGameTimestamp = null
         playStates.clear()
+        concededPlayers.clear()
     }
 
     private companion object {
+        val CREATE_GAME_TIMESTAMP = Regex("^D\\s+(\\d{2}:\\d{2}:\\d{2}\\.\\d+)")
         val PLAYSTATE = Regex("Entity=(.*?)\\s+tag=PLAYSTATE value=(WON|LOST|CONCEDED)\\b")
         val TERMINAL_PLAYSTATES = setOf("WON", "LOST", "CONCEDED")
     }
