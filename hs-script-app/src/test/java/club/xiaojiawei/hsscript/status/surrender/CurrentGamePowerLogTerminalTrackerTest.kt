@@ -220,6 +220,81 @@ class CurrentGamePowerLogTerminalTrackerTest {
         }
     }
 
+    @Test
+    fun `two sequential games retain second local surrender proof when model id is blank and phase stops at conceded`() {
+        val tracker = CurrentGamePowerLogTerminalTracker()
+        val fixture = File(
+            requireNotNull(javaClass.getResource("rank4-v548-two-game-blank-local-id-excerpt.log")).toURI(),
+        )
+        var firstIdentity: String? = null
+        var secondIdentity: String? = null
+        var secondTailResult: PowerLogTerminalTailReader.Result? = null
+
+        DiskLogFile(fixture.absolutePath).use { file ->
+            var gameNumber = 0
+            while (true) {
+                val line = file.readLine() ?: break
+                tracker.observeLine(line)
+                if (line.contains("GameState.DebugPrintPower() - CREATE_GAME")) gameNumber++
+
+                if (gameNumber == 1 && line.contains("tag=MULLIGAN_STATE value=INPUT")) {
+                    // GameUtil requests surrender before the WAR model has
+                    // populated war.me.gameId; Power.log already identifies
+                    // the local player from its INPUT mulligan state.
+                    firstIdentity = requireNotNull(tracker.currentGameIdentity(""))
+                    MandatoryRankSurrenderGuard.begin(firstIdentity)
+                }
+
+                if (gameNumber == 1 && line.contains("tag=STATE value=COMPLETE")) {
+                    val evidence = tracker.currentGameSurrenderEvidence("", "")
+                    assertTrue(MandatorySurrenderTerminalEvidence.authorizes(firstIdentity, evidence))
+                    val cleanup = requireNotNull(MandatoryRankSurrenderGuard.authorizeTerminalCleanup(evidence))
+                    assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", cleanup))
+                    assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED", cleanup))
+                }
+
+                if (gameNumber == 2 && line.contains("tag=MULLIGAN_STATE value=INPUT")) {
+                    secondIdentity = requireNotNull(tracker.currentGameIdentity(""))
+                    assertFalse(firstIdentity == secondIdentity, "the second CREATE_GAME owns a new generation")
+                    MandatoryRankSurrenderGuard.begin(secondIdentity)
+                }
+
+                if (gameNumber == 2 && line.contains("tag=PLAYSTATE value=CONCEDED")) {
+                    val partial = tracker.currentGameSurrenderEvidence("", null)
+                    assertEquals("SELF#1", partial?.ownEntityId)
+                    assertTrue(partial?.ownConceded == true)
+                    assertFalse(tracker.hasCompleteTerminalEvidence())
+
+                    // Match the live race: GameOver starts on CONCEDED and
+                    // drains the unread Power.log tail before it seeks EOF.
+                    secondTailResult = PowerLogTerminalTailReader.observeUntilComplete(
+                        file = file,
+                        maxLines = 16,
+                        deadlineNanos = System.nanoTime() + 100_000_000L,
+                        observeLine = { tracker.observeLine(it) },
+                    )
+                    break
+                }
+            }
+        }
+
+        assertNotNull(firstIdentity)
+        assertNotNull(secondIdentity)
+        assertEquals(PowerLogTerminalTailReader.StopReason.COMPLETE, secondTailResult?.stopReason)
+        assertTrue(tracker.hasCompleteTerminalEvidence())
+        val secondEvidence = tracker.currentGameSurrenderEvidence("", null)
+        assertEquals("LOST", secondEvidence?.ownPlayState)
+        assertTrue(secondEvidence?.ownConceded == true)
+        assertTrue(secondEvidence?.finalGameOver == true)
+        assertTrue(secondEvidence?.complete == true)
+        assertTrue(MandatorySurrenderTerminalEvidence.authorizes(secondIdentity, secondEvidence))
+        val secondCleanup = requireNotNull(MandatoryRankSurrenderGuard.authorizeTerminalCleanup(secondEvidence))
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", secondCleanup))
+        assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED", secondCleanup))
+        assertFalse(MandatoryRankSurrenderGuard.isPending())
+    }
+
     private fun readCapturedRealTerminalExcerpt(): List<String> =
         requireNotNull(javaClass.getResourceAsStream("rank4-v546-current-session-terminal-excerpt.log"))
             .bufferedReader(Charsets.UTF_8)

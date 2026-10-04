@@ -348,6 +348,13 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
             resultOutcome?.let { GameResultScreenshot.save(image, it, completedGameNumber) }
         }
         val accessFile = PowerLogListener.logFile
+        if (MandatoryRankSurrenderGuard.isPending()) {
+            // PLAYSTATE can synchronously move WAR into GAME_OVER before the
+            // outer listener consumes the rest of the same Power.log block.
+            // Drain that bounded current-game tail before seeking the shared
+            // cursor to EOF or evaluating the mandatory-surrender proof.
+            PowerLogListener.drainCurrentGameTerminalEvidence()
+        }
         accessFile?.seek(accessFile.length())
         val completeCurrentGamePowerLogTerminal =
             PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence()

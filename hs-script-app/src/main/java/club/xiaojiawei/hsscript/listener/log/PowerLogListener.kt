@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.listener.log
 
 import club.xiaojiawei.hsscript.bean.single.WarEx
+import club.xiaojiawei.hsscript.bean.DiskLogFile
 import club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME
 import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
@@ -9,6 +10,7 @@ import club.xiaojiawei.hsscript.status.RuntimeFaultBackoff
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.surrender.CurrentGamePowerLogTerminalTracker
 import club.xiaojiawei.hsscript.status.surrender.CurrentGameSurrenderTerminalEvidence
+import club.xiaojiawei.hsscript.status.surrender.PowerLogTerminalTailReader
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
@@ -55,6 +57,8 @@ object PowerLogListener :
     @Volatile
     private var terminalTailFence = false
     private val currentGamePowerLogTerminalTracker = CurrentGamePowerLogTerminalTracker()
+    @Volatile
+    private var currentGameTerminalEvidencePosition: Long? = null
 
     /** True only when this CREATE_GAME has terminal PLAYSTATE and complete-game markers. */
     fun hasCurrentGameCompleteTerminalPowerLogEvidence(): Boolean =
@@ -76,6 +80,52 @@ object PowerLogListener :
             line,
             currentSessionEvidence = !replayingExistingLog || replayingVerifiedCurrentSessionGame,
         )
+        currentGameTerminalEvidencePosition = logFile?.getPosition() ?: currentGameTerminalEvidencePosition
+    }
+
+    /**
+     * The phase parser can stop at PLAYSTATE/FINAL_GAMEOVER while GameOver is
+     * already running. Drain only the unread tail from this verified bound log
+     * before the result path moves the shared cursor to EOF.
+     */
+    @Synchronized
+    internal fun drainCurrentGameTerminalEvidence(
+        maxLines: Int = 256,
+        timeoutNanos: Long = TimeUnit.MILLISECONDS.toNanos(100),
+    ): PowerLogTerminalTailReader.Result? {
+        val boundLog = logFile ?: return null
+        if (currentGamePowerLogTerminalTracker.hasCompleteTerminalEvidence()) {
+            return PowerLogTerminalTailReader.Result(PowerLogTerminalTailReader.StopReason.COMPLETE, 0)
+        }
+        val startPosition = currentGameTerminalEvidencePosition ?: boundLog.getPosition()
+        val path = boundLog.path()
+        return runCatching {
+            DiskLogFile(path).use { tail ->
+                tail.seek(startPosition)
+                val result = PowerLogTerminalTailReader.observeUntilComplete(
+                    file = tail,
+                    maxLines = maxLines,
+                    deadlineNanos = System.nanoTime() + timeoutNanos,
+                    observeLine = { line ->
+                        currentGamePowerLogTerminalTracker.observeLine(
+                            line,
+                            currentSessionEvidence = !replayingExistingLog || replayingVerifiedCurrentSessionGame,
+                        )
+                    },
+                )
+                currentGameTerminalEvidencePosition = tail.getPosition()
+                log.info {
+                    "POWER_LOG_TERMINAL_EVIDENCE_DRAIN result=${result.stopReason} " +
+                        "lines=${result.linesRead} from=$startPosition to=${tail.getPosition()} path=$path"
+                }
+                result
+            }
+        }.getOrElse { error ->
+            log.warn(error) {
+                "POWER_LOG_TERMINAL_EVIDENCE_DRAIN_FAILED from=$startPosition path=$path"
+            }
+            null
+        }
     }
 
     private const val RESERVE_SIZE_B = 4 * 1024 * 1024
@@ -118,6 +168,7 @@ object PowerLogListener :
         PowerLogUtil.resetPendingTagChanges()
         terminalTailFence = false
         currentGamePowerLogTerminalTracker.reset()
+        currentGameTerminalEvidencePosition = null
 
         logFile?.let {
             val unfinishedGameStart = unfinishedGameStartOffset(it.path())
@@ -168,6 +219,7 @@ object PowerLogListener :
                         "reason=terminal-or-no-create e2e=${System.getProperty("hs.script.e2e") == "true"}"
                 }
                 it.seek(it.length())
+                currentGameTerminalEvidencePosition = it.getPosition()
             }
         }
     }

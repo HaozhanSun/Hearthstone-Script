@@ -1,0 +1,16 @@
+D 20:16:05.0577912 GameState.DebugPrintPower() - CREATE_GAME
+D 20:16:05.0577912 GameState.DebugPrintPower() - TAG_CHANGE Entity=SELF#1 tag=MULLIGAN_STATE value=INPUT
+D 20:16:05.0577912 PowerTaskList.DebugPrintPower() -     CREATE_GAME
+D 20:17:00.6920914 GameState.DebugPrintPower() - TAG_CHANGE Entity=SELF#1 tag=PLAYSTATE value=CONCEDED
+D 20:17:00.6920914 GameState.DebugPrintPower() - TAG_CHANGE Entity=SELF#1 tag=PLAYSTATE value=LOST
+D 20:17:00.6920914 GameState.DebugPrintPower() - TAG_CHANGE Entity=OPPONENT#2 tag=PLAYSTATE value=WON
+D 20:17:00.6920914 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+D 20:17:00.6920914 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE
+D 20:19:20.8195905 GameState.DebugPrintPower() - CREATE_GAME
+D 20:19:20.8195905 PowerTaskList.DebugPrintPower() -     CREATE_GAME
+D 20:19:20.8361430 GameState.DebugPrintPower() - TAG_CHANGE Entity=SELF#1 tag=MULLIGAN_STATE value=INPUT
+D 20:20:15.6618960 GameState.DebugPrintPower() - TAG_CHANGE Entity=SELF#1 tag=PLAYSTATE value=CONCEDED
+D 20:20:15.6618960 GameState.DebugPrintPower() - TAG_CHANGE Entity=SELF#1 tag=PLAYSTATE value=LOST
+D 20:20:15.6618960 GameState.DebugPrintPower() - TAG_CHANGE Entity=OPPONENT#2 tag=PLAYSTATE value=WON
+D 20:20:15.6618960 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+D 20:20:15.6618960 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE
