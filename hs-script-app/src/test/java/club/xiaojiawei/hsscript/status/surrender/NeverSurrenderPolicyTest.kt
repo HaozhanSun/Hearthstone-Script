@@ -9,12 +9,13 @@ import java.nio.file.Path
 class NeverSurrenderPolicyTest {
 
     @Test
-    fun `setting is effective only for beta channel`() {
+    fun `setting is effective only for beta-derived channels`() {
         assertTrue(NeverSurrenderPolicy.enabledForChannel("beta", true))
         assertTrue(NeverSurrenderPolicy.enabledForChannel(" BETA ", true))
+        assertTrue(NeverSurrenderPolicy.enabledForChannel("release-candidate", true))
         assertFalse(NeverSurrenderPolicy.enabledForChannel("stable", true))
-        assertFalse(NeverSurrenderPolicy.enabledForChannel("beta", false))
         assertFalse(NeverSurrenderPolicy.enabledForChannel("unknown", true))
+        assertFalse(NeverSurrenderPolicy.enabledForChannel("beta", false))
     }
 
     @Test

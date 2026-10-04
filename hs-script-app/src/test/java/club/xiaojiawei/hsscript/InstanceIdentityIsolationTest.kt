@@ -16,6 +16,8 @@ class InstanceIdentityIsolationTest {
         assertEquals(programLockNameForChannel("stable"), programLockNameForChannel("STABLE"))
         assertEquals(programLockNameForChannel("beta"), programLockNameForChannel(" beta "))
         assertNotEquals(programLockNameForChannel("stable"), programLockNameForChannel("beta"))
+        assertNotEquals(programLockNameForChannel("stable"), programLockNameForChannel("release-candidate"))
+        assertNotEquals(programLockNameForChannel("beta"), programLockNameForChannel("release-candidate"))
 
         assertEquals(
             ExistingInstanceSignal.requestPathForChannel("stable"),
@@ -24,6 +26,10 @@ class InstanceIdentityIsolationTest {
         assertNotEquals(
             ExistingInstanceSignal.requestPathForChannel("stable"),
             ExistingInstanceSignal.requestPathForChannel("beta"),
+        )
+        assertNotEquals(
+            ExistingInstanceSignal.requestPathForChannel("beta"),
+            ExistingInstanceSignal.requestPathForChannel("release-candidate"),
         )
     }
 
@@ -37,7 +43,8 @@ class InstanceIdentityIsolationTest {
         assertTrue(!launcher.contains("Hearthstone Script\\deployment-manifest.json"))
 
         val channel = Files.readString(root.resolve("release-channel.json"))
-        assertTrue(channel.contains("\"runtimeDirectoryName\": \"Hearthstone Script Beta\""))
+        assertTrue(channel.contains("\"channel\": \"release-candidate\""))
+        assertTrue(channel.contains("\"runtimeDirectoryName\": \"Hearthstone Script Release Candidate\""))
     }
 
     @Test

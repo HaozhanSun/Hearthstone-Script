@@ -60,7 +60,7 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
 
 ## Visible build-footer timestamp verification
 
-- On every Beta or Stable invocation of `build-and-deploy.ps1`, capture the
+- On every Beta, Stable, or Release Candidate invocation of `build-and-deploy.ps1`, capture the
   build time once and update the root POM's `local-build-timestamp-pacific`
   before Maven packaging, even when the source version is already newer than
   the deployed manifest or no manifest exists yet. Version bumping and
@@ -100,12 +100,15 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
   are included; never use a blanket “all changes deployed” statement without
   that reconciliation.
 
-## Stable and beta release channels
+## Stable, beta, and Release Candidate channels
 
 - GitHub `main` is the stable branch. Keep it on the last known-good source
   line; do not merge experimental work merely because it compiles.
 - Experimental work belongs on `beta/*` branches and must declare `channel:
   beta` in `release-channel.json`.
+- Release Candidate source snapshots use `beta/release-candidate-*` branches
+  and declare `channel: release-candidate`; their runtime root, manifest, app
+  identity, icon, and shortcuts must be distinct from both Stable and Beta.
 - Stable and beta deployments use separate runtime roots, manifests, PIDs,
   logs, and shortcut names. A beta deployment must never overwrite the stable
   `Hearthstone Script` runtime or its shortcuts.

@@ -4,7 +4,7 @@ import club.xiaojiawei.hsscript.consts.ROOT_PATH
 import java.io.File
 
 /** Reads the installed artifact channel without consulting mutable user config. */
-internal enum class AppRuntimeChannel { BETA, STABLE, UNKNOWN }
+internal enum class AppRuntimeChannel { BETA, RELEASE_CANDIDATE, STABLE, UNKNOWN }
 
 internal object AppRuntimeChannelDetector {
     private val channelPattern = Regex("\"channel\"\\s*:\\s*\"([^\"]+)\"", RegexOption.IGNORE_CASE)
@@ -13,6 +13,7 @@ internal object AppRuntimeChannelDetector {
         channelPattern.find(metadata.orEmpty())?.groupValues?.getOrNull(1)?.lowercase()
     ) {
         "beta" -> AppRuntimeChannel.BETA
+        "release-candidate" -> AppRuntimeChannel.RELEASE_CANDIDATE
         "stable" -> AppRuntimeChannel.STABLE
         else -> AppRuntimeChannel.UNKNOWN
     }

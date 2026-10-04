@@ -8,10 +8,24 @@ function Assert-FileHash([string]$Path, [string]$Expected, [string]$Label) {
 
 function Resolve-Deployment([string]$ScriptDirectory) {
     $root = [System.IO.Path]::GetFullPath($ScriptDirectory).TrimEnd('\')
+    $rootName = Split-Path -Leaf $root
     $manifestPath = Join-Path $root 'deployment-manifest.json'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "Deployment manifest was not found: $manifestPath" }
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     if ([int]$manifest.schema -ne 1) { throw "Unsupported deployment manifest schema: $($manifest.schema)" }
+    $channelRoots = @{
+        stable = 'Hearthstone Script'
+        beta = 'Hearthstone Script Beta'
+        'release-candidate' = 'Hearthstone Script Release Candidate'
+    }
+    $manifestChannel = ([string]$manifest.releaseChannel).ToLowerInvariant()
+    if (-not $channelRoots.ContainsKey($manifestChannel)) {
+        throw "Unsupported deployment release channel: $manifestChannel"
+    }
+    if ($rootName -cne $channelRoots[$manifestChannel] -or
+        [string]$manifest.runtimeDirectoryName -cne $channelRoots[$manifestChannel]) {
+        throw "Deployment channel/root mismatch: channel=$manifestChannel root=$rootName declared=$($manifest.runtimeDirectoryName)"
+    }
 
     $appJar = Join-Path $root ([string]$manifest.appJar)
     $strategyLib = Join-Path $root ([string]$manifest.strategyPluginLib)

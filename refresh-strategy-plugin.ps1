@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Stable', 'Beta')]
+    [ValidateSet('Stable', 'Beta', 'ReleaseCandidate', 'release-candidate')]
     [string]$Channel = 'Beta',
     [string]$Reason = 'manual-strategy-refresh',
     [switch]$SkipTests
@@ -11,6 +11,7 @@ $projectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $MyInvocation.M
 $channelConfig = Get-Content (Join-Path $projectRoot 'release-channel.json') -Raw | ConvertFrom-Json
 $configuredChannel = ([string]$channelConfig.channel).ToLowerInvariant()
 $requestedChannel = $Channel.ToLowerInvariant()
+if ($requestedChannel -eq 'releasecandidate') { $requestedChannel = 'release-candidate' }
 if ($requestedChannel -ne $configuredChannel) {
     throw "Requested channel $requestedChannel does not match release-channel.json channel $configuredChannel"
 }

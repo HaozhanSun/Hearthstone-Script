@@ -94,7 +94,7 @@ object GameUtil {
     ): List<String> {
         require(platformPath.isNotBlank()) { "platformPath must not be blank" }
         return if (launchGame) {
-            if (runtimeChannel == AppRuntimeChannel.BETA) {
+            if (runtimeChannel == AppRuntimeChannel.BETA || runtimeChannel == AppRuntimeChannel.RELEASE_CANDIDATE) {
                 require(gamePath.isNotBlank()) { "gamePath must not be blank for Beta launch" }
                 listOf(platformPath, "--game=hs_beta", "--gamepath=$gamePath", "-uid", "hs_beta")
             } else {

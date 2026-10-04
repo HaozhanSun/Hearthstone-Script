@@ -1,7 +1,6 @@
 [CmdletBinding()]
 param(
     [string]$RuntimeRoot = "",
-    [ValidateSet('Stable', 'Beta')]
     [string]$Channel = "",
     [string]$ShortcutName = "",
     [switch]$SkipTests
@@ -15,9 +14,13 @@ $channelConfigPath = Join-Path $projectRoot 'release-channel.json'
 if (-not (Test-Path -LiteralPath $channelConfigPath -PathType Leaf)) { throw "Release channel configuration missing: $channelConfigPath" }
 $channelConfig = Get-Content -LiteralPath $channelConfigPath -Raw | ConvertFrom-Json
 $configuredChannel = ([string]$channelConfig.channel).ToLowerInvariant()
-if ([string]::IsNullOrWhiteSpace($Channel)) { $Channel = $configuredChannel }
-$Channel = $Channel.ToLowerInvariant()
-if ($Channel -notin @('stable', 'beta')) { throw "Unsupported release channel: $Channel" }
+if ([string]::IsNullOrWhiteSpace($Channel)) {
+    $Channel = $configuredChannel
+} else {
+    $Channel = $Channel.Trim().ToLowerInvariant()
+    if ($Channel -eq 'releasecandidate') { $Channel = 'release-candidate' }
+}
+if ($Channel -notin @('stable', 'beta', 'release-candidate')) { throw "Unsupported release channel: $Channel" }
 if ($Channel -ne $configuredChannel) { throw "Requested channel $Channel does not match release-channel.json channel $configuredChannel" }
 $stableRoot = "C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script"
 if ([string]::IsNullOrWhiteSpace($RuntimeRoot)) {
@@ -29,7 +32,7 @@ $iconFileName = [string]$channelConfig.iconFileName
 if ([string]::IsNullOrWhiteSpace($iconFileName)) { throw 'release-channel.json iconFileName is missing' }
 $runtimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\')
 $runtimeExists = Test-Path -LiteralPath $runtimeRoot -PathType Container
-if (-not $runtimeExists -and $Channel -eq 'beta') {
+if (-not $runtimeExists -and $Channel -ne 'stable') {
     New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
 }
 $pomPath = Join-Path $projectRoot 'pom.xml'
@@ -315,6 +318,7 @@ try {
     Copy-Item -LiteralPath $launcherVbsSource -Destination (Join-Path $runtimeRoot 'launch-as-admin.vbs') -Force
     Copy-Item -LiteralPath $launcherPsSource -Destination (Join-Path $runtimeRoot 'launch-newest-as-admin.ps1') -Force
     Copy-Item -LiteralPath $deploymentContractSource -Destination (Join-Path $runtimeRoot 'deployment-contract.ps1') -Force
+    Copy-Item -LiteralPath $channelConfigPath -Destination (Join-Path $runtimeRoot 'release-channel.json') -Force
 } finally {
     if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
 }
@@ -325,15 +329,16 @@ Sync-PaddleXOcrConfig $runtimeRoot
 
 $deployedJar = Join-Path $runtimeRoot (Split-Path -Leaf $builtJar)
 $iconPath = Join-Path $runtimeRoot $iconFileName
-if ($Channel -eq 'beta') {
-    $iconGenerator = Join-Path $projectRoot 'tools\create-beta-icon.ps1'
-    if (-not (Test-Path -LiteralPath $iconGenerator -PathType Leaf)) { throw "Beta icon generator missing: $iconGenerator" }
+if ($Channel -in @('beta', 'release-candidate')) {
+    $iconGenerator = Join-Path $projectRoot 'tools\create-channel-icon.ps1'
+    if (-not (Test-Path -LiteralPath $iconGenerator -PathType Leaf)) { throw "Channel icon generator missing: $iconGenerator" }
+    $badgeText = if ($Channel -eq 'release-candidate') { 'RC' } else { 'B' }
     # The generator is a PowerShell script, so LASTEXITCODE may still contain
     # the exit code of an earlier native build command. Use the invocation
     # status for this child script and reserve LASTEXITCODE for native tools.
     $global:LASTEXITCODE = 0
-    & $iconGenerator -SourceExe (Join-Path $runtimeRoot 'hs-script.exe') -OutputPath $iconPath
-    if (-not $?) { throw "Beta icon generation failed: $iconGenerator" }
+    & $iconGenerator -SourceExe (Join-Path $runtimeRoot 'hs-script.exe') -OutputPath $iconPath -BadgeText $badgeText
+    if (-not $?) { throw "Channel icon generation failed: $iconGenerator" }
 }
 if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) { throw "Application icon missing: $iconPath" }
 $appHash = (Get-FileHash -LiteralPath $deployedJar -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -376,7 +381,8 @@ $manifest = [ordered]@{
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
-& (Join-Path $projectRoot 'sync-shortcuts.ps1') -RuntimeRoot $runtimeRoot -ShortcutName $ShortcutName -IconPath $iconPath
+& (Join-Path $projectRoot 'sync-shortcuts.ps1') -RuntimeRoot $runtimeRoot -ShortcutName $ShortcutName `
+    -IconPath $iconPath -Description ([string]$channelConfig.displayName) -Channel $Channel
 if (-not $?) { throw "Shortcut synchronization failed" }
 
 Write-Output "DEPLOYED_JAR=$deployedJar"

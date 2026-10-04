@@ -37,6 +37,22 @@ if ($BranchName -eq 'main') {
     Write-Output "RELEASE_CHANNEL=stable"
 }
 elseif ($BranchName -like 'beta/*') {
+    if ($BranchName -like 'beta/release-candidate-*') {
+        if ($config.channel -ne 'release-candidate' -or $config.branch -ne $BranchName) {
+            throw "release-candidate branch metadata must declare channel=release-candidate and branch=$BranchName"
+        }
+        if ($config.runtimeDirectoryName -ne 'Hearthstone Script Release Candidate' -or
+            $config.shortcutName -ne 'Hearthstone Script Release Candidate.lnk') {
+            throw 'release-candidate channel must use its isolated runtime and shortcut'
+        }
+        if ($config.iconFileName -ne 'hs-script-release-candidate.ico') {
+            throw 'release-candidate channel must use hs-script-release-candidate.ico'
+        }
+        if ($version -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "release-candidate artifact version must be a unique numeric release version: $version"
+        }
+        Write-Output 'RELEASE_CHANNEL=release-candidate'
+    } else {
     if ($config.channel -ne 'beta' -or $config.branch -ne $BranchName) {
         throw "beta branch metadata must declare channel=beta and branch=$BranchName"
     }
@@ -46,9 +62,10 @@ elseif ($BranchName -like 'beta/*') {
     }
     if ($config.iconFileName -ne 'hs-script-beta.ico') { throw 'beta channel must use hs-script-beta.ico' }
     Write-Output "RELEASE_CHANNEL=beta"
+    }
 }
 else {
-    throw "Unsupported release branch: $BranchName. Use main or beta/*"
+    throw "Unsupported release branch: $BranchName. Use main or beta/* (RC branches must begin beta/release-candidate-)"
 }
 
 Write-Output "APPLICATION_VERSION=$version"

@@ -56,7 +56,7 @@ class LifecycleTraceTest {
 
     @Test
     fun lifecycleStartSchedulesTheAlwaysOnBetaFailureMonitorWithOptionalExtensionsDisabled() {
-        assertEquals("beta", BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL))
+        assertTrue(BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL))
         ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
         BetaScreenRecoveryService.onFeatureChanged(false)
         LifecycleTrace.stop("offline-test-setup")

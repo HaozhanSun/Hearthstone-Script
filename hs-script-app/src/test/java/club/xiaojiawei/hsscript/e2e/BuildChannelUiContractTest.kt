@@ -16,13 +16,19 @@ class BuildChannelUiContractTest {
     fun `main footer renders version channel and human readable Pacific artifact timestamp`() {
         assertEquals("Stable", BuildChannel.label("stable"))
         assertEquals("Beta", BuildChannel.label(" BETA "))
+        assertEquals("Release Candidate", BuildChannel.label(" release-candidate "))
         assertEquals("Unknown", BuildChannel.label("nightly"))
         assertEquals("stable", BuildChannel.identityToken("stable"))
         assertEquals("beta", BuildChannel.identityToken("beta"))
+        assertEquals("release-candidate", BuildChannel.identityToken(" RELEASE-CANDIDATE "))
         assertEquals("unknown", BuildChannel.identityToken("nightly"))
         assertEquals("hs-script-beta", BuildChannel.mainWindowTitle("hs-script", "beta"))
+        assertEquals("HS Script Release Candidate", BuildChannel.mainWindowTitle("hs-script", "release-candidate"))
         assertEquals("hs-script", BuildChannel.mainWindowTitle("hs-script", "stable"))
         assertEquals("hs-script", BuildChannel.mainWindowTitle("hs-script", "unknown"))
+        assertTrue(BuildChannel.isBetaDerived("beta"))
+        assertTrue(BuildChannel.isBetaDerived("release-candidate"))
+        assertTrue(!BuildChannel.isBetaDerived("stable"))
         val artifactTimestamp = "2026-10-01 09:50:57 PDT"
         assertEquals(
             "当前版本：v4.16.194 · 渠道：Beta\n构建时间（Pacific）：$artifactTimestamp",
@@ -53,7 +59,10 @@ class BuildChannelUiContractTest {
     fun `release channel is injected through build metadata and deploy arguments`() {
         val root = repositoryRoot()
         val channel = Files.readString(root.resolve("release-channel.json"))
-        assertTrue(channel.contains("\"channel\": \"beta\""))
+        assertTrue(channel.contains("\"channel\": \"release-candidate\""))
+        assertTrue(channel.contains("\"runtimeDirectoryName\": \"Hearthstone Script Release Candidate\""))
+        assertTrue(channel.contains("\"shortcutName\": \"Hearthstone Script Release Candidate.lnk\""))
+        assertTrue(channel.contains("\"iconFileName\": \"hs-script-release-candidate.ico\""))
 
         val buildInfoTemplate = Files.readString(root.resolve("hs-script-app/src/main/resources-filtered/build.info"))
         assertTrue(buildInfoTemplate.contains("channel=\${build-channel}"))
@@ -82,7 +91,7 @@ class BuildChannelUiContractTest {
     }
 
     @Test
-    fun `beta hidden-window lifecycle has a labeled tray and single-instance show signal`() {
+    fun `beta-derived hidden-window lifecycle has a labeled tray and single-instance show signal`() {
         val root = repositoryRoot()
         val mainApplication = Files.readString(root.resolve(
             "hs-script-app/src/main/java/club/xiaojiawei/hsscript/MainApplication.kt",
@@ -98,8 +107,8 @@ class BuildChannelUiContractTest {
         ))
         val assembly = Files.readString(root.resolve("hs-script-app/assembly.xml"))
 
-        assertTrue(mainApplication.contains("BETA_TRAY_INIT mode=AWT"))
-        assertTrue(mainApplication.contains("BETA_TRAY_READY mode=AWT"))
+        assertTrue(mainApplication.contains("CHANNEL_TRAY_INIT channel="))
+        assertTrue(mainApplication.contains("CHANNEL_TRAY_READY channel="))
         assertTrue(mainApplication.contains("显示窗口（\${BuildInfo.RELEASE_CHANNEL_LABEL}）"))
         assertTrue(mainApplication.contains("WindowUtil.showStage(WindowEnum.MAIN)"))
         assertTrue(mainApplication.contains("shutdownSoft()"))

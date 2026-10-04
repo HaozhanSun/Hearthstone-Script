@@ -191,7 +191,7 @@ internal object BetaScreenRecoveryService {
 
     /** Beta-only, always-on guard for failed startup handoffs and native crash dialogs. */
     private fun startStartupFailureMonitor() {
-        if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) != "beta" ||
+        if (!BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL) ||
             !lifecycleStarted || startupFailureMonitor?.isDone == false
         ) return
         // This monitor is a core Beta safety path, not an optional recovery
@@ -213,7 +213,7 @@ internal object BetaScreenRecoveryService {
 
     private fun isStartupFailureGenerationCurrent(generation: Long): Boolean =
         lifecycleStarted && startupFailureGeneration.get() == generation &&
-            BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
+            BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL)
 
     internal fun startupFailureMonitorScheduledForTest(): Boolean =
         startupFailureMonitor?.let { !it.isDone && !it.isCancelled } == true

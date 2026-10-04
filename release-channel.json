@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "channel": "beta",
-  "branch": "beta/rank4-mulligan-surrender-v4.16.547",
-  "displayName": "Hearthstone Script Beta",
-  "runtimeDirectoryName": "Hearthstone Script Beta",
-  "shortcutName": "Hearthstone Script Beta.lnk",
-  "iconFileName": "hs-script-beta.ico",
-  "artifactLabel": "beta",
+  "channel": "release-candidate",
+  "branch": "beta/release-candidate-v4.16.551",
+  "displayName": "HS Script Release Candidate",
+  "runtimeDirectoryName": "Hearthstone Script Release Candidate",
+  "shortcutName": "Hearthstone Script Release Candidate.lnk",
+  "iconFileName": "hs-script-release-candidate.ico",
+  "artifactLabel": "release-candidate",
   "promotionRule": "Only promote a beta commit after the online E2E completion gate passes."
 }

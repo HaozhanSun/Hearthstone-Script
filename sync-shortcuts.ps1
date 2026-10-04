@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$RuntimeRoot = "C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script",
+    [ValidateSet('stable', 'beta', 'release-candidate')]
+    [string]$Channel = 'stable',
     [string]$ShortcutName = "Hearthstone Script.lnk",
     [string]$Description = "",
     [string]$IconPath = "",
@@ -50,7 +52,8 @@ $legacyShortcutPath = Join-Path ([Environment]::GetFolderPath("Desktop")) $Legac
 $legacyRoot = [System.IO.Path]::GetFullPath($LegacyRuntimeRoot).TrimEnd('\')
 $legacyLauncher = Join-Path $legacyRoot "launch-as-admin.vbs"
 $legacyIcon = Join-Path $legacyRoot "hs-script.exe"
-if ((Test-Path -LiteralPath $legacyShortcutPath -PathType Leaf) -and
+if ($Channel -eq 'stable' -and
+    (Test-Path -LiteralPath $legacyShortcutPath -PathType Leaf) -and
     (Test-Path -LiteralPath $legacyLauncher -PathType Leaf) -and
     (Test-Path -LiteralPath $legacyIcon -PathType Leaf)) {
     $legacyShortcut = $shell.CreateShortcut($legacyShortcutPath)

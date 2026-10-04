@@ -1,6 +1,7 @@
-# Stable and beta release channels
+# Stable, beta, and release-candidate channels
 
-This repository has two intentionally separate release channels.
+These are intentionally separate release channels with distinct runtime roots,
+manifests, single-instance identities, and shortcuts.
 
 ## Stable
 
@@ -27,11 +28,28 @@ This repository has two intentionally separate release channels.
 - CI labels beta artifacts as beta and validates that the branch metadata and
   runtime identity are consistent.
 
+## Release Candidate
+
+- Release-candidate builds are prepared on `beta/release-candidate-*` branches
+  from a reviewed Beta source snapshot, but use `channel: release-candidate`.
+- They install only to `Hearthstone Script Release Candidate` and use
+  `Hearthstone Script Release Candidate.lnk` plus
+  `hs-script-release-candidate.ico` with an `RC` badge. They have their own
+  manifest and launcher directory; that launcher rejects manifests whose
+  declared channel/root do not match the Release Candidate runtime.
+- Release Candidate keeps Beta-derived app behavior, including the isolated
+  Beta Hearthstone executable selection and optional Beta recovery controls,
+  while using a distinct app title, mutex, activation signal, runtime root,
+  manifest, and shortcuts.
+- Preparing an RC artifact does not change Beta or Stable installations. Only
+  the secretary installs it, after reviewing the artifact and exact RC paths.
+
 ## Promotion and rollback
 
 1. Start from the last known-good stable commit and record the working-version
    comparison when repairing a regression.
-2. Develop and test on `beta/*` in an isolated worktree.
+2. Develop and test experimental and Release Candidate work on `beta/*` in an
+   isolated worktree.
 3. Deploy beta only to the beta runtime and run the online E2E gate against the
    exact beta artifact.
 4. Promote by merging the verified beta commit into `main`; do not copy a JAR

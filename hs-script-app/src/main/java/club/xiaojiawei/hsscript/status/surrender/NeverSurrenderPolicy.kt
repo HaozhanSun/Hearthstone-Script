@@ -7,9 +7,9 @@ import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
 
 /**
- * Beta-only kill switch for script-initiated concessions.
+ * Beta-derived-channel kill switch for script-initiated concessions.
  *
- * The setting is deliberately channel-scoped: a persisted Beta diagnostic
+ * The setting is deliberately channel-scoped: a persisted diagnostic
  * choice cannot silently alter Stable behavior.  This policy only blocks
  * automation requests.  It does not change authoritative terminal-state
  * parsing or result recording.
@@ -22,7 +22,7 @@ object NeverSurrenderPolicy {
     )
 
     internal fun enabledForChannel(channel: String?, setting: Boolean): Boolean =
-        setting && BuildChannel.identityToken(channel) == "beta"
+        setting && BuildChannel.isBetaDerived(channel)
 
     internal fun rankIsIneligible(rank: Int): Boolean =
         rank != 5 && rank != 10
@@ -41,14 +41,14 @@ object NeverSurrenderPolicy {
     fun blockSurrender(source: String, mandatoryRank: Boolean = false): Boolean {
         if (mandatoryRank) {
             log.info {
-                "SURRENDER_ALLOWED reason=mandatory-rank-policy channel=beta source=$source " +
+                "SURRENDER_ALLOWED reason=mandatory-rank-policy channel=${BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL)} source=$source " +
                     "dispatch=true queue=true retry=false replan=false"
             }
             return false
         }
         if (!shouldBlock(enabled(), mandatoryRank = false)) return false
         log.warn {
-            "SURRENDER_BLOCKED reason=never-surrender channel=beta source=$source " +
+            "SURRENDER_BLOCKED reason=never-surrender channel=${BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL)} source=$source " +
                 "dispatch=false queue=false retry=false replan=false"
         }
         return true

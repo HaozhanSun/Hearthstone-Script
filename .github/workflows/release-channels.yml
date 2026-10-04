@@ -20,9 +20,13 @@ jobs:
           $branch = '${{ github.ref_name }}'
           "branch=$branch" >> $env:GITHUB_OUTPUT
 
-      - name: Validate stable/beta separation
+      - name: Validate channel isolation
+        id: validate
         shell: pwsh
-        run: .\.github\scripts\verify-release-channel.ps1 -BranchName '${{ steps.channel.outputs.branch }}'
+        run: |
+          .\.github\scripts\verify-release-channel.ps1 -BranchName '${{ steps.channel.outputs.branch }}'
+          $config = Get-Content .\release-channel.json -Raw | ConvertFrom-Json
+          "release_channel=$($config.channel)" >> $env:GITHUB_OUTPUT
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -33,11 +37,11 @@ jobs:
 
       - name: Build package
         shell: pwsh
-        run: .\mvnw.cmd -f pom.xml -pl hs-script-app -am -Pjvm "-Djava.version=24" "-Dproject.build.outputTimestamp=0" "-DskipTests" package
+        run: .\mvnw.cmd -f pom.xml -pl hs-script-app -am -Pjvm "-Djava.version=24" "-Dproject.build.outputTimestamp=0" "-Dbuild-channel=${{ steps.validate.outputs.release_channel }}" "-DskipTests" package
 
       - name: Upload channel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hs-script-${{ steps.channel.outputs.branch == 'main' && 'stable' || 'beta' }}-${{ github.sha }}
+          name: hs-script-${{ steps.validate.outputs.release_channel }}-${{ github.sha }}
           path: hs-script-app/target/hs-script_*.jar
           if-no-files-found: error

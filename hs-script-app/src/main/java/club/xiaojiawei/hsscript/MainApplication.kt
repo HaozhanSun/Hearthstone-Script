@@ -349,11 +349,11 @@ class MainApplication : Application() {
             settingsItem,
             quitItem,
         )
-        if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta") {
+        if (BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL)) {
             if (initialized) {
-                log.info { "BETA_TRAY_READY mode=AWT label=$channelLabel show=available exit=available" }
+                log.info { "CHANNEL_TRAY_READY channel=${BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL)} mode=AWT label=$channelLabel show=available exit=available" }
             } else {
-                log.error { "BETA_TRAY_UNAVAILABLE label=$channelLabel show=unavailable exit=unavailable" }
+                log.error { "CHANNEL_TRAY_UNAVAILABLE channel=${BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL)} label=$channelLabel show=unavailable exit=unavailable" }
             }
         }
     }
@@ -585,10 +585,10 @@ class MainApplication : Application() {
                 // Beta E2E must retain a visible tray because closing the
                 // window is intentionally hide-only. Stable E2E keeps the
                 // native-tray skip used by the stability harness.
-                val betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
-                if (betaChannel) {
+                val betaDerivedChannel = BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL)
+                if (betaDerivedChannel) {
                     val channelLabel = "${BuildInfo.RELEASE_CHANNEL_LABEL} · $PROGRAM_NAME"
-                    log.info { "BETA_TRAY_INIT mode=AWT label=$channelLabel" }
+                    log.info { "CHANNEL_TRAY_INIT channel=${BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL)} mode=AWT label=$channelLabel" }
                     setSystemTray()
                 } else {
                     log.info { "E2E运行：跳过系统托盘结构初始化" }

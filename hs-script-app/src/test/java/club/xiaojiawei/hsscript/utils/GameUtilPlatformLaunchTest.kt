@@ -48,6 +48,17 @@ class GameUtilPlatformLaunchTest {
     }
 
     @Test
+    fun `Release Candidate startup retains the isolated Beta game install command`() {
+        val platform = "C:\\Program Files\\Battle.net\\Battle.net.exe"
+        val game = "D:\\Hearthstone"
+
+        assertEquals(
+            listOf(platform, "--game=hs_beta", "--gamepath=$game", "-uid", "hs_beta"),
+            GameUtil.buildPlatformCommand(platform, true, AppRuntimeChannel.RELEASE_CANDIDATE, game),
+        )
+    }
+
+    @Test
     fun `blank platform path is rejected before process creation`() {
         assertFailsWith<IllegalArgumentException> {
             GameUtil.buildPlatformCommand("  ", launchGame = true)
