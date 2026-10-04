@@ -17,8 +17,14 @@ internal class CurrentGamePowerLogTerminalTracker {
     private var currentGameGeneration: Long? = null
     @Volatile
     private var currentCreateGameTimestamp: String? = null
-    @Volatile
-    private var currentOwnEntityId: String? = null
+    /**
+     * Account identity explicitly correlated with WAR's local player in an
+     * earlier game from this same Power.log session. PlayerID is game-local;
+     * GameAccountId is the stable bridge across CREATE_GAME boundaries.
+     */
+    private var trustedLocalGameAccountId: String? = null
+    private val playerAccountIds = linkedMapOf<String, MutableSet<String>>()
+    private val playerNames = linkedMapOf<String, MutableSet<String>>()
     private val playStates = linkedMapOf<String, String>()
     private val concededPlayers = linkedSetOf<String>()
 
@@ -36,16 +42,22 @@ internal class CurrentGamePowerLogTerminalTracker {
             // the nested PowerTaskList dump with the same timestamp. Treat
             // those as one game boundary, not two generations.
             if (gameStarted && timestamp != null && timestamp == currentCreateGameTimestamp) return
-            reset()
+            resetCurrentGame()
             gameStarted = true
             currentGameGeneration = gameGeneration.incrementAndGet()
             currentCreateGameTimestamp = timestamp
             return
         }
         if (!gameStarted) return
-        LOCAL_MULLIGAN_INPUT.find(line)?.let { match ->
-            val entity = match.groupValues[1].trim()
-            if (entity.isNotBlank()) currentOwnEntityId = entity
+        PLAYER_ACCOUNT.find(line)?.let { match ->
+            val playerId = match.groupValues[1]
+            val accountId = "${match.groupValues[2]}:${match.groupValues[3]}"
+            playerAccountIds.getOrPut(playerId) { linkedSetOf() }.add(accountId)
+        }
+        PLAYER_NAME.find(line)?.let { match ->
+            val playerId = match.groupValues[1]
+            val name = match.groupValues[2].trim()
+            if (name.isNotBlank()) playerNames.getOrPut(playerId) { linkedSetOf() }.add(name)
         }
         PLAYSTATE.find(line)?.let { match ->
             val entity = match.groupValues[1].trim()
@@ -92,25 +104,73 @@ internal class CurrentGamePowerLogTerminalTracker {
         )
     }
 
-    private fun resolveOwnEntityId(ownEntityId: String): String? =
-        ownEntityId.takeIf { it.isNotBlank() } ?: currentOwnEntityId
+    private fun resolveOwnEntityId(ownEntityId: String): String? {
+        val suppliedOwnId = ownEntityId.takeIf { it.isNotBlank() }
+        val accountBoundOwnId = resolveTrustedLocalEntityId()
+        if (suppliedOwnId != null) {
+            // A live WAR mapping is authoritative, but it must not contradict
+            // an account binding already established for this Power.log
+            // session. Contradiction means ownership is ambiguous: fail closed.
+            if (accountBoundOwnId != null && accountBoundOwnId != suppliedOwnId) return null
+            rememberTrustedLocalAccount(suppliedOwnId)
+            return suppliedOwnId
+        }
+        return accountBoundOwnId
+    }
+
+    private fun rememberTrustedLocalAccount(ownEntityId: String) {
+        val playerIds = playerNames
+            .filterValues { names -> ownEntityId in names }
+            .keys
+        if (playerIds.size != 1) return
+        val accountIds = playerAccountIds[playerIds.single()].orEmpty()
+        if (accountIds.size != 1) return
+        val candidate = accountIds.single()
+        if (trustedLocalGameAccountId == null || trustedLocalGameAccountId == candidate) {
+            trustedLocalGameAccountId = candidate
+        }
+    }
+
+    private fun resolveTrustedLocalEntityId(): String? {
+        val trustedAccountId = trustedLocalGameAccountId ?: return null
+        val playerIds = playerAccountIds
+            .filterValues { accountIds -> trustedAccountId in accountIds }
+            .keys
+        if (playerIds.size != 1) return null
+        val names = playerNames[playerIds.single()].orEmpty()
+            .filter(::isUsablePlayerName)
+            .distinct()
+        return names.singleOrNull()
+    }
+
+    private fun isUsablePlayerName(name: String): Boolean =
+        name.isNotBlank() &&
+            !name.contains("UNKNOWN", ignoreCase = true) &&
+            !name.contains("HUMAN PLAYER", ignoreCase = true)
 
     @Synchronized
     fun reset() {
+        resetCurrentGame()
+        trustedLocalGameAccountId = null
+    }
+
+    private fun resetCurrentGame() {
         gameStarted = false
         terminalPlayStateObserved = false
         finalGameOverObserved = false
         completeStateObserved = false
         currentGameGeneration = null
         currentCreateGameTimestamp = null
-        currentOwnEntityId = null
+        playerAccountIds.clear()
+        playerNames.clear()
         playStates.clear()
         concededPlayers.clear()
     }
 
     private companion object {
         val CREATE_GAME_TIMESTAMP = Regex("^D\\s+(\\d{2}:\\d{2}:\\d{2}\\.\\d+)")
-        val LOCAL_MULLIGAN_INPUT = Regex("Entity=(.*?)\\s+tag=MULLIGAN_STATE value=INPUT\\b")
+        val PLAYER_ACCOUNT = Regex("Player EntityID=\\d+ PlayerID=(\\d+) GameAccountId=\\[hi=(\\d+) lo=(\\d+)\\]")
+        val PLAYER_NAME = Regex("PlayerID=(\\d+), PlayerName=(.+?)\\s*$")
         val PLAYSTATE = Regex("Entity=(.*?)\\s+tag=PLAYSTATE value=(WON|LOST|CONCEDED)\\b")
         val TERMINAL_PLAYSTATES = setOf("WON", "LOST", "CONCEDED")
     }

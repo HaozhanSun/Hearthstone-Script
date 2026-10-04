@@ -221,10 +221,10 @@ class CurrentGamePowerLogTerminalTrackerTest {
     }
 
     @Test
-    fun `two sequential games retain second local surrender proof when model id is blank and phase stops at conceded`() {
+    fun `two sequential games resolve local identity by previously confirmed GameAccountId`() {
         val tracker = CurrentGamePowerLogTerminalTracker()
         val fixture = File(
-            requireNotNull(javaClass.getResource("rank4-v548-two-game-blank-local-id-excerpt.log")).toURI(),
+            requireNotNull(javaClass.getResource("rank4-v549-two-game-account-binding-excerpt.log")).toURI(),
         )
         var firstIdentity: String? = null
         var secondIdentity: String? = null
@@ -238,10 +238,9 @@ class CurrentGamePowerLogTerminalTrackerTest {
                 if (line.contains("GameState.DebugPrintPower() - CREATE_GAME")) gameNumber++
 
                 if (gameNumber == 1 && line.contains("tag=MULLIGAN_STATE value=INPUT")) {
-                    // GameUtil requests surrender before the WAR model has
-                    // populated war.me.gameId; Power.log already identifies
-                    // the local player from its INPUT mulligan state.
-                    firstIdentity = requireNotNull(tracker.currentGameIdentity(""))
+                    // WAR provides an explicit local identity in game one.
+                    // Bind that name to GameAccountId, not to Mulligan INPUT.
+                    firstIdentity = requireNotNull(tracker.currentGameIdentity("laz#12793"))
                     MandatoryRankSurrenderGuard.begin(firstIdentity)
                 }
 
@@ -256,12 +255,17 @@ class CurrentGamePowerLogTerminalTrackerTest {
                 if (gameNumber == 2 && line.contains("tag=MULLIGAN_STATE value=INPUT")) {
                     secondIdentity = requireNotNull(tracker.currentGameIdentity(""))
                     assertFalse(firstIdentity == secondIdentity, "the second CREATE_GAME owns a new generation")
+                    assertEquals(
+                        null,
+                        tracker.currentGameIdentity("Izzy#31408"),
+                        "a WAR identity contradicting the previously account-bound local player is ambiguous",
+                    )
                     MandatoryRankSurrenderGuard.begin(secondIdentity)
                 }
 
                 if (gameNumber == 2 && line.contains("tag=PLAYSTATE value=CONCEDED")) {
                     val partial = tracker.currentGameSurrenderEvidence("", null)
-                    assertEquals("SELF#1", partial?.ownEntityId)
+                    assertEquals("laz#12793", partial?.ownEntityId)
                     assertTrue(partial?.ownConceded == true)
                     assertFalse(tracker.hasCompleteTerminalEvidence())
 
@@ -293,6 +297,45 @@ class CurrentGamePowerLogTerminalTrackerTest {
         assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
         assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED", secondCleanup))
         assertFalse(MandatoryRankSurrenderGuard.isPending())
+    }
+
+    @Test
+    fun `mulligan input cannot establish local ownership without account binding`() {
+        val tracker = CurrentGamePowerLogTerminalTracker()
+        tracker.observeLine("D 20:57:44.8466179 GameState.DebugPrintPower() - CREATE_GAME")
+        tracker.observeLine("D 20:57:44.8466179 GameState.DebugPrintPower() - TAG_CHANGE Entity=Izzy#31408 tag=MULLIGAN_STATE value=INPUT")
+
+        assertEquals(null, tracker.currentGameIdentity(""))
+        assertEquals(null, tracker.currentGameSurrenderEvidence("", null))
+    }
+
+    @Test
+    fun `ambiguous or changed GameAccountId mapping fails closed`() {
+        val ambiguous = CurrentGamePowerLogTerminalTracker()
+        seedFirstGameAccount(ambiguous)
+        ambiguous.observeLine("D 20:57:44.8466179 GameState.DebugPrintPower() - CREATE_GAME")
+        ambiguous.observeLine("D 20:57:44.8466179 GameState.DebugPrintPower() - Player EntityID=2 PlayerID=1 GameAccountId=[hi=144115193835963207 lo=36936081]")
+        ambiguous.observeLine("D 20:57:44.8466179 GameState.DebugPrintPower() - Player EntityID=3 PlayerID=2 GameAccountId=[hi=144115193835963207 lo=36936081]")
+        ambiguous.observeLine("D 20:57:44.8466179 GameState.DebugPrintGame() - PlayerID=1, PlayerName=laz#12793")
+        ambiguous.observeLine("D 20:57:44.8466179 GameState.DebugPrintGame() - PlayerID=2, PlayerName=Opponent#2")
+        assertEquals(null, ambiguous.currentGameIdentity(""), "duplicate account ownership must not be guessed")
+
+        val changed = CurrentGamePowerLogTerminalTracker()
+        seedFirstGameAccount(changed)
+        changed.observeLine("D 20:57:44.8466179 GameState.DebugPrintPower() - CREATE_GAME")
+        changed.observeLine("D 20:57:44.8466179 GameState.DebugPrintPower() - Player EntityID=2 PlayerID=1 GameAccountId=[hi=144115193835963207 lo=99999999]")
+        changed.observeLine("D 20:57:44.8466179 GameState.DebugPrintGame() - PlayerID=1, PlayerName=Other#2")
+        changed.observeLine("D 20:57:44.8466179 GameState.DebugPrintPower() - TAG_CHANGE Entity=Other#2 tag=MULLIGAN_STATE value=INPUT")
+        assertEquals(null, changed.currentGameIdentity(""), "a changed account without explicit WAR identity is not local proof")
+    }
+
+    private fun seedFirstGameAccount(tracker: CurrentGamePowerLogTerminalTracker) {
+        tracker.observeLine("D 20:54:30.4604634 GameState.DebugPrintPower() - CREATE_GAME")
+        tracker.observeLine("D 20:54:30.4604634 GameState.DebugPrintPower() - Player EntityID=2 PlayerID=1 GameAccountId=[hi=144115193835963207 lo=36936081]")
+        tracker.observeLine("D 20:54:30.4604634 GameState.DebugPrintPower() - Player EntityID=3 PlayerID=2 GameAccountId=[hi=144115193835963207 lo=694393783]")
+        tracker.observeLine("D 20:54:30.4604634 GameState.DebugPrintGame() - PlayerID=1, PlayerName=laz#12793")
+        tracker.observeLine("D 20:54:30.4604634 GameState.DebugPrintGame() - PlayerID=2, PlayerName=UNKNOWN HUMAN PLAYER")
+        assertEquals("1:laz#12793", tracker.currentGameIdentity("laz#12793"))
     }
 
     private fun readCapturedRealTerminalExcerpt(): List<String> =

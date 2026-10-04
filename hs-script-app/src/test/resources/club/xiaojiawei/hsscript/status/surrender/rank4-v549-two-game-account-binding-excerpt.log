@@ -1,0 +1,25 @@
+D 20:54:30.4604634 GameState.DebugPrintPower() - CREATE_GAME
+D 20:54:30.4604634 GameState.DebugPrintPower() -     Player EntityID=2 PlayerID=1 GameAccountId=[hi=144115193835963207 lo=36936081]
+D 20:54:30.4604634 GameState.DebugPrintPower() -     Player EntityID=3 PlayerID=2 GameAccountId=[hi=144115193835963207 lo=694393783]
+D 20:54:30.4604634 GameState.DebugPrintGame() - PlayerID=1, PlayerName=laz#12793
+D 20:54:30.4604634 GameState.DebugPrintGame() - PlayerID=2, PlayerName=UNKNOWN HUMAN PLAYER
+D 20:54:30.6225323 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=MULLIGAN_STATE value=INPUT
+D 20:54:30.6569845 GameState.DebugPrintPower() - TAG_CHANGE Entity=UNKNOWN HUMAN PLAYER tag=MULLIGAN_STATE value=INPUT
+D 20:55:25.5281371 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=CONCEDED
+D 20:55:25.5281371 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=LOST
+D 20:55:25.5281371 GameState.DebugPrintPower() - TAG_CHANGE Entity=sXnWMb#3488 tag=PLAYSTATE value=WON
+D 20:55:25.5281371 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+D 20:55:25.5281371 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE
+D 20:57:44.8466179 GameState.DebugPrintPower() - CREATE_GAME
+D 20:57:44.8466179 GameState.DebugPrintPower() -     Player EntityID=2 PlayerID=1 GameAccountId=[hi=144115193835963207 lo=36936081]
+D 20:57:44.8466179 GameState.DebugPrintPower() -     Player EntityID=3 PlayerID=2 GameAccountId=[hi=144115193835963207 lo=867937695]
+D 20:57:44.8466179 GameState.DebugPrintGame() - PlayerID=1, PlayerName=laz#12793
+D 20:57:44.8466179 GameState.DebugPrintGame() - PlayerID=2, PlayerName=UNKNOWN HUMAN PLAYER
+D 20:57:48.8184284 PowerTaskList.DebugPrintPower() -     TAG_CHANGE Entity=laz#12793 tag=MULLIGAN_STATE value=INPUT
+D 20:57:48.8184284 PowerTaskList.DebugPrintPower() -     TAG_CHANGE Entity=Izzy#31408 tag=MULLIGAN_STATE value=INPUT
+D 20:58:39.9816528 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=CONCEDED
+D 20:58:39.9816528 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=3479 value=1
+D 20:58:39.9816528 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=LOST
+D 20:58:39.9816528 GameState.DebugPrintPower() - TAG_CHANGE Entity=Izzy#31408 tag=PLAYSTATE value=WON
+D 20:58:39.9816528 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+D 20:58:39.9816528 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE
