@@ -158,6 +158,7 @@ object GameUtil {
     @Synchronized
     fun resetForNewGame() {
         cancelGameEndTask()
+        terminalPageCleanupCoordinator.resetForNewGame()
     }
 
     /** Input sequence for each bounded, positively-confirmed result-page attempt. */
@@ -466,6 +467,7 @@ object GameUtil {
     }
 
     private val gameEndTasks = GameEndTaskRegistry()
+    private val terminalPageCleanupCoordinator = TerminalPageCleanupCoordinator()
 
     fun getDailyTaskDescRect(index: Int): GameRect? = DAILY_TASK_DESC_RECTS.getOrNull(index)
 
@@ -1375,18 +1377,20 @@ object GameUtil {
     fun addGameEndTask(
         terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
     ) {
-        cancelGameEndTask()
-        log.info { "点掉${GAME_CN_NAME}结束结算页面" }
         if (terminalCleanupCapability != null) {
             // While mandatory-rank recovery is pending, use the bounded,
             // postchecked result-page path. Never let the legacy repeating
             // end-turn clicker inherit the one-purpose terminal capability.
+            // The coordinator must reject duplicate proof callbacks before
+            // they can cancel the already-running single-flight worker.
             dismissStaleGameEndScreen(
                 resultAlreadyObserved = true,
                 terminalCleanupCapability = terminalCleanupCapability,
             )
             return
         }
+        cancelGameEndTask()
+        log.info { "点掉${GAME_CN_NAME}结束结算页面" }
         if (Mode.currMode === ModeEnum.GAMEPLAY) {
             val gameEndClickInterval = RandomUtil.getActionInterval(1000).toLong()
             gameEndTasks.add(
@@ -1435,6 +1439,13 @@ object GameUtil {
     ) {
         val terminalCleanupAuthorized =
             MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCleanupCapability)
+        if (terminalCleanupCapability != null && !terminalCleanupAuthorized) {
+            log.warn {
+                "RESULT_PAGE_DISMISSAL_BLOCKED reason=terminal-cleanup-capability-invalid " +
+                    "dispatch=false"
+            }
+            return
+        }
         if (ResultPageDismissalPolicy.shouldStopWorker(
                 paused = PauseStatus.isPause,
                 gameplayMode = Mode.currMode === ModeEnum.GAMEPLAY,
@@ -1449,6 +1460,73 @@ object GameUtil {
             return
         }
 
+        val cleanupTicket = if (terminalCleanupAuthorized) {
+            val begin = terminalPageCleanupCoordinator.begin()
+            when (begin.state) {
+                TerminalPageCleanupCoordinator.BeginState.STARTED -> {
+                    log.info {
+                        "RESULT_PAGE_CLEANUP_COORDINATOR state=started " +
+                            "generation=${begin.ticket?.generation} maxInputs=${TerminalPageCleanupCoordinator.DEFAULT_MAX_INPUTS} " +
+                            "maxProbes=${TerminalPageCleanupCoordinator.DEFAULT_MAX_PROBES}"
+                    }
+                    // A terminal proof supersedes any surrender retry or
+                    // legacy click task. This happens only for the owner that
+                    // won single-flight admission.
+                    cancelGameEndTask()
+                    begin.ticket
+                }
+                TerminalPageCleanupCoordinator.BeginState.ALREADY_RUNNING -> {
+                    log.info {
+                        "RESULT_PAGE_CLEANUP_SUPPRESSED reason=single-flight-active " +
+                            "generation=${begin.ticket?.generation} dispatch=false"
+                    }
+                    return
+                }
+                TerminalPageCleanupCoordinator.BeginState.HELD -> {
+                    val heldTicket = begin.ticket
+                    val observation = runCatching {
+                        ScreenStateRecovery.observeResultScreenForRecovery()
+                    }.getOrElse { ResultScreenObservation(null, captureAuthorized = false) }
+                    val confirmedByFreshFrame = heldTicket != null &&
+                        ResultPageDismissalPolicy.decide(
+                            inWar = WarEx.inWar,
+                            resultPageVisible = observation.resultVisible,
+                            attempt = TerminalPageCleanupCoordinator.DEFAULT_MAX_PROBES + 1,
+                            maxAttempts = TerminalPageCleanupCoordinator.DEFAULT_MAX_INPUTS,
+                            clickAttempts = terminalPageCleanupCoordinator.snapshot().inputs,
+                            terminalCleanupAuthorized = true,
+                            captureAuthorized = observation.captureAuthorized,
+                        ) == ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED &&
+                        terminalPageCleanupCoordinator.confirmDestination(heldTicket)
+                    if (confirmedByFreshFrame &&
+                        MandatoryRankSurrenderGuard.confirmCompleted(
+                            "SCREEN_RESULT_DISMISSED",
+                            terminalCleanupCapability,
+                        )
+                    ) {
+                        log.info {
+                            "RESULT_PAGE_DISMISSAL_CONFIRMED source=held-state-fresh-destination-frame " +
+                                "dispatch=false inputs=${terminalPageCleanupCoordinator.snapshot().inputs}"
+                        }
+                    } else {
+                        log.info {
+                            "RESULT_PAGE_CLEANUP_HELD reason=previous-attempt-unconfirmed " +
+                                "visible=${observation.resultVisible ?: "UNKNOWN"} " +
+                                "captureAuthorized=${observation.captureAuthorized} dispatch=false " +
+                                "releaseRequires=fresh-destination-or-new-game"
+                        }
+                    }
+                    return
+                }
+                TerminalPageCleanupCoordinator.BeginState.COMPLETED -> {
+                    log.info { "RESULT_PAGE_CLEANUP_SUPPRESSED reason=already-confirmed dispatch=false" }
+                    return
+                }
+            }
+        } else {
+            null
+        }
+
         val attempt = AtomicInteger(0)
         val clickAttempts = AtomicInteger(0)
         val startingWarCount = WarEx.warCount
@@ -1456,10 +1534,33 @@ object GameUtil {
         lateinit var future: ScheduledFuture<*>
         future = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
             {
-                val number = attempt.incrementAndGet()
+                val number = if (cleanupTicket != null) {
+                    terminalPageCleanupCoordinator.nextProbe(cleanupTicket)
+                } else {
+                    attempt.incrementAndGet()
+                }
+                if (number == null) {
+                    log.error {
+                        "RESULT_PAGE_CLEANUP_HELD reason=shared-probe-budget-exhausted " +
+                            "dispatch=false confirmed=false"
+                    }
+                    future.cancel(false)
+                    gameEndTasks.remove(future)
+                    return@scheduleWithFixedDelay
+                }
                 val terminalCleanupStillAuthorized =
                     MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCleanupCapability)
                 val newGameDetected = WarEx.warCount > startingWarCount
+                if (cleanupTicket != null && !terminalCleanupStillAuthorized && !newGameDetected) {
+                    terminalPageCleanupCoordinator.hold(cleanupTicket)
+                    log.warn {
+                        "RESULT_PAGE_CLEANUP_HELD reason=terminal-capability-invalid " +
+                            "probe=$number dispatch=false"
+                    }
+                    future.cancel(false)
+                    gameEndTasks.remove(future)
+                    return@scheduleWithFixedDelay
+                }
                 if (ResultPageDismissalPolicy.shouldStopWorker(
                         paused = PauseStatus.isPause,
                         gameplayMode = Mode.currMode === ModeEnum.GAMEPLAY,
@@ -1467,6 +1568,13 @@ object GameUtil {
                         newGameDetected = newGameDetected,
                     )
                 ) {
+                    if (cleanupTicket != null) {
+                        if (PauseStatus.isPause && !newGameDetected) {
+                            terminalPageCleanupCoordinator.interrupt(cleanupTicket)
+                        } else {
+                            terminalPageCleanupCoordinator.hold(cleanupTicket)
+                        }
+                    }
                     if (newGameDetected) {
                         log.info {
                             "RESULT_PAGE_DISMISSAL_CANCELLED reason=new-game-detected " +
@@ -1486,8 +1594,14 @@ object GameUtil {
                         ScreenStateRecovery.observeResultScreenForRecovery()
                     } else ResultScreenObservation(null, captureAuthorized = false)
                     val visible = screenObservation.resultVisible
-                    val maxAttempts = if (terminalCleanupStillAuthorized) 2 else 5
-                    val clickNumber = clickAttempts.get()
+                    val maxAttempts = if (cleanupTicket != null) {
+                        TerminalPageCleanupCoordinator.DEFAULT_MAX_INPUTS
+                    } else if (terminalCleanupStillAuthorized) 2 else 5
+                    val clickNumber = if (cleanupTicket != null) {
+                        terminalPageCleanupCoordinator.snapshot().inputs
+                    } else {
+                        clickAttempts.get()
+                    }
                     when (ResultPageDismissalPolicy.decide(
                             inWar = WarEx.inWar,
                             resultPageVisible = visible,
@@ -1499,7 +1613,22 @@ object GameUtil {
                         )
                     ) {
                         ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED -> {
-                            log.info { "RESULT_PAGE_DISMISSAL_CONFIRMED source=visible-screen-postcheck attempt=$number" }
+                            val coordinatorConfirmed = cleanupTicket?.let {
+                                terminalPageCleanupCoordinator.confirmDestination(it)
+                            } ?: true
+                            if (!coordinatorConfirmed) {
+                                log.warn {
+                                    "RESULT_PAGE_DISMISSAL_BLOCKED reason=stale-cleanup-generation " +
+                                        "attempt=$number dispatch=false"
+                                }
+                                future.cancel(false)
+                                gameEndTasks.remove(future)
+                                return@scheduleWithFixedDelay
+                            }
+                            log.info {
+                                "RESULT_PAGE_DISMISSAL_CONFIRMED source=visible-screen-postcheck " +
+                                    "attempt=$number inputs=$clickNumber"
+                            }
                             if (terminalCleanupCapability != null &&
                                 MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCleanupCapability)
                             ) {
@@ -1517,6 +1646,7 @@ object GameUtil {
                             return@scheduleWithFixedDelay
                         }
                         ResultPageDismissalPolicy.Decision.BLOCKED_UNCONFIRMED_DURING_WAR -> {
+                            cleanupTicket?.let { terminalPageCleanupCoordinator.hold(it) }
                             log.warn {
                                 "RESULT_PAGE_DISMISSAL_BLOCKED reason=result-page-not-confirmed-during-war " +
                                     "attempt=$number postcheck=UNKNOWN dispatch=false"
@@ -1535,6 +1665,7 @@ object GameUtil {
                             return@scheduleWithFixedDelay
                         }
                         ResultPageDismissalPolicy.Decision.EXHAUSTED -> {
+                            cleanupTicket?.let { terminalPageCleanupCoordinator.hold(it) }
                             log.error { "RESULT_PAGE_DISMISSAL_FAILED reason=bounded-retries-exhausted attempt=$number confirmed=false" }
                             future.cancel(false)
                             gameEndTasks.remove(future)
@@ -1542,19 +1673,41 @@ object GameUtil {
                         }
                         ResultPageDismissalPolicy.Decision.DISPATCH_CLICK -> {
                             if (terminalCleanupStillAuthorized && !screenObservation.captureAuthorized) {
+                                cleanupTicket?.let { terminalPageCleanupCoordinator.hold(it) }
                                 log.warn {
                                     "RESULT_PAGE_DISMISSAL_BLOCKED reason=terminal-fallback-requires-current-authorized-capture " +
                                         "attempt=$number dispatch=false"
                                 }
                                 return@scheduleWithFixedDelay
                             }
-                            clickAttempts.incrementAndGet()
+                            val reservedAttempt = if (cleanupTicket != null) {
+                                terminalPageCleanupCoordinator.reserveInput(cleanupTicket)
+                            } else {
+                                clickAttempts.incrementAndGet()
+                            }
+                            if (reservedAttempt == null) {
+                                cleanupTicket?.let { terminalPageCleanupCoordinator.hold(it) }
+                                log.error {
+                                    "RESULT_PAGE_CLEANUP_HELD reason=shared-input-budget-exhausted " +
+                                        "probe=$number dispatch=false confirmed=false"
+                                }
+                                future.cancel(false)
+                                gameEndTasks.remove(future)
+                                return@scheduleWithFixedDelay
+                            }
                         }
                     }
 
                 runCatching {
-                    val clickNumber = clickAttempts.get()
-                    log.info { "E2E恢复：尝试关闭旧结算页面 #$clickNumber" }
+                    val clickNumber = if (cleanupTicket != null) {
+                        terminalPageCleanupCoordinator.snapshot().inputs
+                    } else {
+                        clickAttempts.get()
+                    }
+                    log.info {
+                        "E2E恢复：尝试关闭旧结算页面 #$clickNumber " +
+                            "probe=$number shared=${cleanupTicket != null}"
+                    }
                     // Match the known-working Unity sequence: one centered
                     // click, one foreground-verified Enter fallback, then
                     // bounded clicks in the control. SendInput acceptance is
@@ -1569,7 +1722,7 @@ object GameUtil {
                             )
                             log.info {
                                 "RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=$accepted " +
-                                    "acceptance=awaiting-current-client-postcheck"
+                                    "acceptance=awaiting-current-client-postcheck probe=$number sharedInput=$clickNumber"
                             }
                         }
                         ResultPageDismissalPolicy.Input.KEYBOARD_ENTER -> {
@@ -1577,7 +1730,7 @@ object GameUtil {
                             val accepted = MouseUtil.pressEnterForRecovery(terminalCleanupCapability)
                             log.info {
                                 "RESULT_PAGE_DISMISSAL_INPUT input=KEYBOARD_ENTER dispatchAccepted=$accepted " +
-                                    "acceptance=awaiting-current-client-postcheck"
+                                    "acceptance=awaiting-current-client-postcheck probe=$number sharedInput=$clickNumber"
                             }
                         }
                         ResultPageDismissalPolicy.Input.RETRY_CLICK -> {
@@ -1588,7 +1741,7 @@ object GameUtil {
                             )
                             log.info {
                                 "RESULT_PAGE_DISMISSAL_INPUT input=RETRY_CLICK dispatchAccepted=$accepted " +
-                                    "acceptance=awaiting-current-client-postcheck"
+                                    "acceptance=awaiting-current-client-postcheck probe=$number sharedInput=$clickNumber"
                             }
                         }
                         null -> log.error {

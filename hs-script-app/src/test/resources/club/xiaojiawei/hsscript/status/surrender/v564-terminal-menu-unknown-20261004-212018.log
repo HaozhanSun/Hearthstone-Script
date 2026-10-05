@@ -1,0 +1,15 @@
+Incident source: outputs/Hearthstone Script Beta/log/hs_script.log, lines 5383-5429.
+Screenshot: v564-terminal-menu-unknown-20261004-212018-636.png
+Power.log: D:/Hearthstone/Logs/Hearthstone_2026_10_04_21_17_59/Power.log, lines 1184-1203.
+
+2026-10-04 21:20:18.998 RANK_SURRENDER_TERMINAL_PROOF result=ACCEPTED source=CREATE_GAME_SCOPED_POWERLOG sameGame=true ownPlayState=LOST opponentPlayState=WON finalGameOver=true complete=true playerTerminal=CONCEDED
+2026-10-04 21:20:18.999 RANK_SURRENDER_TERMINAL_RECONCILED barrier=cleared terminalUiCleanup=pending ordinaryDispatch=false
+2026-10-04 21:20:22.323 SCREEN_RECOVERY_BLOCKED reason=authority-lost-before-capture gameWindow=native@0x910924 currentWindow=native@0x910924
+2026-10-04 21:20:22.408 RESULT_PAGE_DISMISSAL_WAIT reason=screen-transition-unconfirmed probe=1 clickAttempts=0 postcheck=UNKNOWN dispatch=false terminalCleanupAuthorized=true
+
+POWERLOG authoritative terminal state:
+D 21:20:13.8494040 PowerTaskList.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=CONCEDED
+D 21:20:13.8494040 PowerTaskList.DebugPrintPower() - TAG_CHANGE Entity=mBQHH#3707 tag=PLAYSTATE value=WON
+D 21:20:13.8494040 PowerTaskList.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=LOST
+D 21:20:13.8494040 PowerTaskList.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+D 21:20:13.8494040 PowerTaskList.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE

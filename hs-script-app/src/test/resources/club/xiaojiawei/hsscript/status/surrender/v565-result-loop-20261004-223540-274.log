@@ -1,0 +1,25 @@
+Incident source: outputs/Hearthstone Script Beta/log/hs_script.log, lines 8167-8355.
+Screenshot: debug-20261004-223540-274-screen-recovery-4f086dce-188f-4fee-a3d5-a49b7e892fc5.png
+Power.log: D:/Hearthstone/Logs/Hearthstone_2026_10_04_22_26_24/Power.log, lines 2280-2293.
+
+2026-10-04 22:34:03.671 RANK_SURRENDER_TERMINAL_PROOF result=ACCEPTED source=CREATE_GAME_SCOPED_POWERLOG sameGame=true ownPlayState=LOST opponentPlayState=UNKNOWN finalGameOver=true complete=true playerTerminal=LOST
+2026-10-04 22:34:03.672 RANK_SURRENDER_TERMINAL_RECONCILED barrier=cleared terminalUiCleanup=pending ordinaryDispatch=false
+2026-10-04 22:34:03.711 GAME_OVER_TAIL_FENCE enabled; awaiting next CREATE_GAME
+2026-10-04 22:34:19.551 RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:34:33.846 RESULT_PAGE_DISMISSAL_INPUT input=KEYBOARD_ENTER dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:34:48.160 ERROR RESULT_PAGE_DISMISSAL_FAILED reason=bounded-retries-exhausted attempt=3 confirmed=false
+2026-10-04 22:34:53.466 SCREEN_RECOVERY_APPLIED screen=RESULT next=DISMISS_STALE_RESULT
+2026-10-04 22:35:08.615 SCREEN_RECOVERY_SCHEDULED stuckForMs=60008 state=GAMEPLAY|GAMEPLAY|FILL_DECK|NONE|2
+2026-10-04 22:35:08.754 RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:35:23.148 SCREEN_RECOVERY_OBSERVATION provider=LEGACY detected=RESULT confidence=92 evidence=result-fixed-continue-visual
+2026-10-04 22:35:24.728 RESULT_PAGE_DISMISSAL_INPUT input=KEYBOARD_ENTER dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:35:40.973 ERROR RESULT_PAGE_DISMISSAL_FAILED reason=bounded-retries-exhausted attempt=3 confirmed=false
+2026-10-04 22:35:41.483 RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:35:51.543 SCREEN_RECOVERY_APPLIED screen=RESULT next=DISMISS_STALE_RESULT
+
+POWERLOG authoritative terminal state (same run, second game):
+D 22:33:58.4090385 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=CONCEDED
+D 22:33:58.4090385 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=LOST
+D 22:33:58.4090385 GameState.DebugPrintPower() - TAG_CHANGE Entity=扭曲的棕褐色魔嬰#31997 tag=PLAYSTATE value=WON
+D 22:33:58.4090385 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+D 22:33:58.4090385 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE
