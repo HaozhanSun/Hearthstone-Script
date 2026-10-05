@@ -44,11 +44,19 @@ internal object ResultPageDismissalPolicy {
         maxAttempts: Int,
         clickAttempts: Int = (attempt - 1).coerceAtLeast(0),
         terminalCleanupAuthorized: Boolean = false,
+        captureAuthorized: Boolean = false,
     ): Decision = when {
+        terminalCleanupAuthorized && resultPageVisible == false && captureAuthorized -> Decision.CONFIRMED_CLEARED
+        terminalCleanupAuthorized && attempt > maxAttempts -> Decision.EXHAUSTED
+        terminalCleanupAuthorized && resultPageVisible == false -> Decision.WAIT_FOR_SCREEN_TRANSITION
         resultPageVisible == false -> Decision.CONFIRMED_CLEARED
-        resultPageVisible == true && clickAttempts < maxAttempts -> Decision.DISPATCH_CLICK
-        // A terminal cleanup capability keeps only passive observation alive
-        // after its bounded click budget. It never authorizes speculative input.
+        terminalCleanupAuthorized && clickAttempts < maxAttempts && captureAuthorized &&
+            (resultPageVisible == true || resultPageVisible == null) -> Decision.DISPATCH_CLICK
+        !terminalCleanupAuthorized && resultPageVisible == true && clickAttempts < maxAttempts -> Decision.DISPATCH_CLICK
+        // Terminal proof permits at most the bounded, known upstream inputs.
+        // If capture is unavailable/unknown after that budget, stop; never wait
+        // forever or infer success from the input call.
+        terminalCleanupAuthorized && clickAttempts >= maxAttempts -> Decision.EXHAUSTED
         terminalCleanupAuthorized -> Decision.WAIT_FOR_SCREEN_TRANSITION
         attempt > maxAttempts -> Decision.EXHAUSTED
         resultPageVisible == true -> Decision.EXHAUSTED
@@ -56,3 +64,6 @@ internal object ResultPageDismissalPolicy {
         else -> Decision.WAIT_FOR_SCREEN_TRANSITION
     }
 }
+
+/** Null visibility is distinct from no capture: only an authorized current-client frame may ground a terminal fallback. */
+internal data class ResultScreenObservation(val resultVisible: Boolean?, val captureAuthorized: Boolean)

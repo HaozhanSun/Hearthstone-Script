@@ -1321,21 +1321,27 @@ object ScreenStateRecovery {
      * post-result destination; a live board, transitional screen, or
      * inconclusive capture returns null and cannot release the rank barrier.
      */
-    internal fun isResultVisibleForRecovery(): Boolean? {
+    internal fun observeResultScreenForRecovery(): ResultScreenObservation {
         val token = ScreenRecoveryRuntime.tokenOrNull()
-            ?: return UpstreamScreenStateRecovery.isResultVisibleForRecovery()
+            ?: return UpstreamScreenStateRecovery.observeResultScreenForRecovery()
         return runCatching {
-            val liveWindow = resolveLiveGameWindow() ?: return@runCatching null
-            val capture = captureScreen(liveWindow) ?: return@runCatching null
-            if (!ScreenRecoveryRuntime.isCurrent(token)) return@runCatching null
+            val liveWindow = resolveLiveGameWindow()
+                ?: return@runCatching ResultScreenObservation(null, captureAuthorized = false)
+            val capture = captureScreen(liveWindow)
+                ?: return@runCatching ResultScreenObservation(null, captureAuthorized = false)
+            if (!ScreenRecoveryRuntime.isCurrent(token)) {
+                return@runCatching ResultScreenObservation(null, captureAuthorized = false)
+            }
             val detection = detect(runOCR(capture), capture.visual)
-            if (!ScreenRecoveryRuntime.isCurrent(token)) return@runCatching null
-            resultPageVisibility(detection)
+            if (!ScreenRecoveryRuntime.isCurrent(token)) {
+                return@runCatching ResultScreenObservation(null, captureAuthorized = false)
+            }
+            ResultScreenObservation(resultPageVisibility(detection), captureAuthorized = true)
         }.getOrElse { error ->
             if (ScreenRecoveryRuntime.isCurrent(token)) {
                 log.warn(error) { "SCREEN_RECOVERY_RESULT_POSTCHECK_FAILED" }
             }
-            null
+            ResultScreenObservation(null, captureAuthorized = false)
         }
     }
 

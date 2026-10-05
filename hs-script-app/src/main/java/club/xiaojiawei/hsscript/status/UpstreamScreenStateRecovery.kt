@@ -265,7 +265,11 @@ object UpstreamScreenStateRecovery {
                 foregroundConfirmed = true,
                 sameWindow = currentWindow?.toString() == gameWindow.toString(),
             )
-            if (!ScreenRecoveryAuthorityGate.isAuthorized(evidence)) {
+            // Pixel authority is necessarily false before capture. Validate
+            // process/window/foreground ownership first, then captureIfAuthorized
+            // independently verifies that the resulting pixels belong to this
+            // current Hearthstone client before any action can use them.
+            if (!ScreenRecoveryAuthorityGate.isCapturePreAuthorized(evidence)) {
                 authorityRejected = true
                 log.warn {
                     "SCREEN_RECOVERY_BLOCKED reason=authority-lost-before-capture " +
@@ -802,13 +806,14 @@ object UpstreamScreenStateRecovery {
      * post-result destination; a live board, transitional screen, or
      * inconclusive capture returns null and cannot release the rank barrier.
      */
-    internal fun isResultVisibleForRecovery(): Boolean? = runCatching {
-        val authorizedCapture = captureVerifiedGameScreen() ?: return@runCatching null
+    internal fun observeResultScreenForRecovery(): ResultScreenObservation = runCatching {
+        val authorizedCapture = captureVerifiedGameScreen()
+            ?: return@runCatching ResultScreenObservation(null, captureAuthorized = false)
         val detection = detect(runOCR(authorizedCapture.capture), authorizedCapture.capture.visual)
-        resultPageVisibility(detection)
+        ResultScreenObservation(resultPageVisibility(detection), captureAuthorized = true)
     }.getOrElse { error ->
         log.warn(error) { "SCREEN_RECOVERY_RESULT_POSTCHECK_FAILED" }
-        null
+        ResultScreenObservation(null, captureAuthorized = false)
     }
 
     private fun resultPageVisibility(detection: Detection?): Boolean? =

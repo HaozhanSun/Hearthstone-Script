@@ -69,6 +69,37 @@ class ScreenRecoveryGateTest {
     }
 
     @Test
+    fun `pre-capture authority allows capture but cannot authorize dispatch until pixels are verified`() {
+        val preCaptureEvidence = ScreenRecoveryAuthorityEvidence(
+            processAlive = true,
+            windowPresent = true,
+            windowVerified = true,
+            foregroundConfirmed = true,
+            sameWindow = true,
+        )
+        val captureCalls = AtomicInteger()
+        val actionCalls = AtomicInteger()
+
+        val frame = ScreenRecoveryAuthorityGate.captureIfAuthorized(preCaptureEvidence) {
+            captureCalls.incrementAndGet()
+            "current-hearthstone-frame"
+        }
+        val prematurelyDispatched = ScreenRecoveryAuthorityGate.dispatchIfAuthorized(preCaptureEvidence) {
+            actionCalls.incrementAndGet()
+            true
+        }
+
+        assertEquals("current-hearthstone-frame", frame)
+        assertFalse(prematurelyDispatched)
+        assertEquals(1, captureCalls.get())
+        assertEquals(0, actionCalls.get(), "capture permission is not pixel verification or action permission")
+
+        val verified = preCaptureEvidence.copy(capturedPixelsVerified = true)
+        assertTrue(ScreenRecoveryAuthorityGate.dispatchIfAuthorized(verified) { actionCalls.incrementAndGet(); true })
+        assertEquals(1, actionCalls.get())
+    }
+
+    @Test
     fun `upstream fallback result postcheck requires a known post-result destination`() {
         assertEquals(true, UpstreamScreenStateRecovery.resultVisibilityForTest("RESULT", 90))
         assertEquals(false, UpstreamScreenStateRecovery.resultVisibilityForTest("DECK_SELECTION", 90))

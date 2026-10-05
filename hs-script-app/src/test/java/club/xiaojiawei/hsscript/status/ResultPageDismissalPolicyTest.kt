@@ -12,8 +12,8 @@ class ResultPageDismissalPolicyTest {
         assertEquals(null, ResultPageDismissalPolicy.inputForClickAttempt(6, 5))
 
         // Even if SendInput returned accepted=true, only a fresh observed
-        // transition releases the result barrier; a still-visible result is
-        // retried and UNKNOWN remains passive.
+        // transition releases the result barrier; after the two authorized
+        // terminal inputs, UNKNOWN exhausts instead of treating dispatch as success.
         assertEquals(
             ResultPageDismissalPolicy.Decision.DISPATCH_CLICK,
             ResultPageDismissalPolicy.decide(
@@ -23,18 +23,20 @@ class ResultPageDismissalPolicyTest {
                 maxAttempts = 5,
                 clickAttempts = 1,
                 terminalCleanupAuthorized = true,
+                captureAuthorized = true,
             ),
         )
         assertEquals(
-            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
+            ResultPageDismissalPolicy.Decision.EXHAUSTED,
             ResultPageDismissalPolicy.decide(
                 inWar = false,
                 resultPageVisible = null,
                 attempt = 3,
-                maxAttempts = 5,
+                maxAttempts = 2,
                 clickAttempts = 2,
                 terminalCleanupAuthorized = true,
             ),
+            "the center click plus one Enter exhaust the terminal fallback budget",
         )
         assertEquals(
             ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED,
@@ -42,9 +44,10 @@ class ResultPageDismissalPolicyTest {
                 inWar = false,
                 resultPageVisible = false,
                 attempt = 4,
-                maxAttempts = 5,
+                maxAttempts = 2,
                 clickAttempts = 2,
                 terminalCleanupAuthorized = true,
+                captureAuthorized = true,
             ),
         )
     }
@@ -131,7 +134,7 @@ class ResultPageDismissalPolicyTest {
             ResultPageDismissalPolicy.decide(inWar = false, resultPageVisible = null, attempt = 6, maxAttempts = 5),
         )
         assertEquals(
-            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
+            ResultPageDismissalPolicy.Decision.EXHAUSTED,
             ResultPageDismissalPolicy.decide(
                 inWar = false,
                 resultPageVisible = null,
@@ -140,9 +143,10 @@ class ResultPageDismissalPolicyTest {
                 clickAttempts = 5,
                 terminalCleanupAuthorized = true,
             ),
+            "authorized cleanup is bounded and must not idle forever after its click budget",
         )
         assertEquals(
-            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
+            ResultPageDismissalPolicy.Decision.EXHAUSTED,
             ResultPageDismissalPolicy.decide(
                 inWar = false,
                 resultPageVisible = true,
@@ -151,10 +155,10 @@ class ResultPageDismissalPolicyTest {
                 clickAttempts = 5,
                 terminalCleanupAuthorized = true,
             ),
-            "the terminal capability permits passive observation, not a sixth click",
+            "the terminal capability cannot permit a sixth click",
         )
         assertEquals(
-            ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED,
+            ResultPageDismissalPolicy.Decision.EXHAUSTED,
             ResultPageDismissalPolicy.decide(
                 inWar = false,
                 resultPageVisible = false,
@@ -163,6 +167,7 @@ class ResultPageDismissalPolicyTest {
                 clickAttempts = 5,
                 terminalCleanupAuthorized = true,
             ),
+            "an unverified negative postcheck cannot confirm dismissal",
         )
         assertEquals(
             ResultPageDismissalPolicy.Decision.EXHAUSTED,
@@ -174,6 +179,95 @@ class ResultPageDismissalPolicyTest {
                 clickAttempts = 5,
                 terminalCleanupAuthorized = false,
             ),
+        )
+    }
+
+    @Test
+    fun `terminal fallback needs a fresh authorized capture and ends after two inputs`() {
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = true,
+                attempt = 1,
+                maxAttempts = 2,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = false,
+            ),
+            "even OCR-positive classification cannot ground a terminal action without pixel-owned capture",
+        )
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = false,
+                attempt = 1,
+                maxAttempts = 2,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = false,
+            ),
+            "an unverified negative postcheck cannot release the terminal cleanup lock",
+        )
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = null,
+                attempt = 1,
+                maxAttempts = 2,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = false,
+            ),
+        )
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.DISPATCH_CLICK,
+            ResultPageDismissalPolicy.decide(
+                inWar = true,
+                resultPageVisible = null,
+                attempt = 1,
+                maxAttempts = 2,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = true,
+            ),
+            "same-game Power.log terminal proof plus current pixel-owned capture permits only bounded cleanup",
+        )
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.DISPATCH_CLICK,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = null,
+                attempt = 2,
+                maxAttempts = 2,
+                clickAttempts = 1,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = true,
+            ),
+        )
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.EXHAUSTED,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = null,
+                attempt = 3,
+                maxAttempts = 2,
+                clickAttempts = 2,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = true,
+            ),
+            "dispatching click/Enter is not confirmation; after two inputs the worker stops unless a destination is observed",
+        )
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = false,
+                attempt = 3,
+                maxAttempts = 2,
+                clickAttempts = 2,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = true,
+            ),
+            "only an observed post-result destination completes the cleanup",
         )
     }
 }

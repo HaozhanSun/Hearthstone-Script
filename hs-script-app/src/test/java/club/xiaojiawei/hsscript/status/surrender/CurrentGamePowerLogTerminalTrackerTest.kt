@@ -71,7 +71,7 @@ class CurrentGamePowerLogTerminalTrackerTest {
         val tracker = CurrentGamePowerLogTerminalTracker()
         lines.take(terminalStart).forEach { tracker.observeLine(it, currentSessionEvidence = true) }
         val requestedIdentity = requireNotNull(tracker.currentGameIdentity("laz#12793"))
-        MandatoryRankSurrenderGuard.begin(requestedIdentity)
+        val staleRetryCapability = MandatoryRankSurrenderGuard.begin(requestedIdentity)
         assertFalse(tracker.hasCompleteTerminalEvidence(), "the replayed prefix is an unfinished game")
 
         // These exact captured lines arrived live after the script's surrender click.
@@ -87,6 +87,10 @@ class CurrentGamePowerLogTerminalTrackerTest {
         assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", cleanup))
         assertFalse(MandatoryRankSurrenderGuard.isPending(), "authoritative same-game proof clears the rank barrier")
         assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+        assertFalse(
+            MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(staleRetryCapability),
+            "an in-flight OCR retry's surrender capability becomes invalid as soon as terminal proof is accepted",
+        )
         assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
         assertFalse(
             ActionDispatchGate.allowForState(

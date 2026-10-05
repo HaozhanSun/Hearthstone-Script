@@ -23,6 +23,7 @@ import club.xiaojiawei.hsscript.status.ScreenWatchdog
 import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 import club.xiaojiawei.hsscript.status.ScreenWatchdogRecoveryAction
 import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
+import club.xiaojiawei.hsscript.status.ResultScreenObservation
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
@@ -160,8 +161,8 @@ object GameUtil {
     }
 
     /** Input sequence for each bounded, positively-confirmed result-page attempt. */
-    internal fun staleResultInputForAttempt(attempt: Int): ResultPageDismissalPolicy.Input? =
-        ResultPageDismissalPolicy.inputForClickAttempt(attempt, maxAttempts = 5)
+    internal fun staleResultInputForAttempt(attempt: Int, maxAttempts: Int = 5): ResultPageDismissalPolicy.Input? =
+        ResultPageDismissalPolicy.inputForClickAttempt(attempt, maxAttempts)
 
     /**
      * Safe-native mode deliberately avoids the injected/native window helper.
@@ -875,6 +876,14 @@ object GameUtil {
                         surrenderStopRequested.set(true)
                         surrenderFutureRef.get()?.let { task -> gameEndTasks.cancel(task) }
                     }
+                    if (mandatoryRank && MandatoryRankSurrenderGuard.isTerminalCleanupPending()) {
+                        stopSurrenderTask()
+                        log.info {
+                            "RANK_SURRENDER_STALE_RETRY_CANCELLED reason=terminal-proof-already-accepted " +
+                                "ordinaryInput=false requeue=false"
+                        }
+                        return@scheduleWithFixedDelay
+                    }
                     if (surrenderStopRequested.get()) return@scheduleWithFixedDelay
                     fun currentSurrenderTerminalCleanupCapability(): MandatoryRankSurrenderGuard.TerminalCleanupCapability? {
                         MandatoryRankSurrenderGuard.existingTerminalCleanupCapability()?.let { return it }
@@ -993,6 +1002,19 @@ object GameUtil {
                             attempts = surrenderAttempts,
                             mandatoryRankSurrender = true,
                         )
+                        // OCR may take long enough for Power.log terminal proof
+                        // to arrive while this scheduled callback is in flight.
+                        // Discard that stale observation before its policy can
+                        // relabel the released barrier or dispatch a click.
+                        if (MandatoryRankSurrenderGuard.isTerminalCleanupPending()) {
+                            stopSurrenderTask()
+                            log.info {
+                                "RANK_SURRENDER_STALE_RETRY_CANCELLED reason=terminal-proof-accepted-during-inspection " +
+                                    "observedScreen=${observation.kind} ordinaryInput=false requeue=false " +
+                                    "screenshot=${observation.screenshotPath ?: "not-saved"}"
+                            }
+                            return@scheduleWithFixedDelay
+                        }
                         val decision = MandatoryRankSurrenderRecoveryPolicy.decide(observation.kind)
                         val unknownObservationOrdinal = if (
                             decision.action == MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY
@@ -1460,17 +1482,20 @@ object GameUtil {
                     // When Power.log still says inWar, require a fresh positive
                     // result-page observation before every click; never turn an
                     // UNKNOWN postcheck into a success or a speculative input.
-                    val visible = if (resultAlreadyObserved || number > 1) {
-                        ScreenStateRecovery.isResultVisibleForRecovery()
-                    } else null
+                    val screenObservation = if (resultAlreadyObserved || number > 1) {
+                        ScreenStateRecovery.observeResultScreenForRecovery()
+                    } else ResultScreenObservation(null, captureAuthorized = false)
+                    val visible = screenObservation.resultVisible
+                    val maxAttempts = if (terminalCleanupStillAuthorized) 2 else 5
                     val clickNumber = clickAttempts.get()
                     when (ResultPageDismissalPolicy.decide(
                             inWar = WarEx.inWar,
                             resultPageVisible = visible,
                             attempt = number,
-                            maxAttempts = 5,
+                            maxAttempts = maxAttempts,
                             clickAttempts = clickNumber,
                             terminalCleanupAuthorized = terminalCleanupStillAuthorized,
+                            captureAuthorized = screenObservation.captureAuthorized,
                         )
                     ) {
                         ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED -> {
@@ -1504,6 +1529,7 @@ object GameUtil {
                             log.info {
                                 "RESULT_PAGE_DISMISSAL_WAIT reason=screen-transition-unconfirmed " +
                                     "probe=$number clickAttempts=$clickNumber postcheck=${visible ?: "UNKNOWN"} dispatch=false " +
+                                    "captureAuthorized=${screenObservation.captureAuthorized} " +
                                     "terminalCleanupAuthorized=$terminalCleanupStillAuthorized"
                             }
                             return@scheduleWithFixedDelay
@@ -1514,7 +1540,16 @@ object GameUtil {
                             gameEndTasks.remove(future)
                             return@scheduleWithFixedDelay
                         }
-                        ResultPageDismissalPolicy.Decision.DISPATCH_CLICK -> clickAttempts.incrementAndGet()
+                        ResultPageDismissalPolicy.Decision.DISPATCH_CLICK -> {
+                            if (terminalCleanupStillAuthorized && !screenObservation.captureAuthorized) {
+                                log.warn {
+                                    "RESULT_PAGE_DISMISSAL_BLOCKED reason=terminal-fallback-requires-current-authorized-capture " +
+                                        "attempt=$number dispatch=false"
+                                }
+                                return@scheduleWithFixedDelay
+                            }
+                            clickAttempts.incrementAndGet()
+                        }
                     }
 
                 runCatching {
@@ -1525,24 +1560,36 @@ object GameUtil {
                     // bounded clicks in the control. SendInput acceptance is
                     // never UI acceptance; only the fresh result postcheck
                     // below can finish this task.
-                    when (staleResultInputForAttempt(clickNumber)) {
+                    when (staleResultInputForAttempt(clickNumber, maxAttempts)) {
                         ResultPageDismissalPolicy.Input.CENTER_CLICK -> {
                             log.info { "E2E恢复：结果页使用稳定中心点" }
-                            MouseUtil.leftButtonClickForRecovery(
+                            val accepted = MouseUtil.leftButtonClickForRecovery(
                                 GAME_END_CONTINUE_RECT.getCenterClickPos(),
                                 terminalCleanupCapability = terminalCleanupCapability,
                             )
+                            log.info {
+                                "RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=$accepted " +
+                                    "acceptance=awaiting-current-client-postcheck"
+                            }
                         }
                         ResultPageDismissalPolicy.Input.KEYBOARD_ENTER -> {
                             log.info { "E2E恢复：结果页中心点击未确认，使用一次前台 SendInput Enter 后备输入" }
-                            MouseUtil.pressEnterForRecovery(terminalCleanupCapability)
+                            val accepted = MouseUtil.pressEnterForRecovery(terminalCleanupCapability)
+                            log.info {
+                                "RESULT_PAGE_DISMISSAL_INPUT input=KEYBOARD_ENTER dispatchAccepted=$accepted " +
+                                    "acceptance=awaiting-current-client-postcheck"
+                            }
                         }
                         ResultPageDismissalPolicy.Input.RETRY_CLICK -> {
                             log.info { "E2E恢复：结果页继续控件有界重试" }
-                            MouseUtil.leftButtonClickForRecovery(
+                            val accepted = MouseUtil.leftButtonClickForRecovery(
                                 GAME_END_CONTINUE_RECT.getClickPos(),
                                 terminalCleanupCapability = terminalCleanupCapability,
                             )
+                            log.info {
+                                "RESULT_PAGE_DISMISSAL_INPUT input=RETRY_CLICK dispatchAccepted=$accepted " +
+                                    "acceptance=awaiting-current-client-postcheck"
+                            }
                         }
                         null -> log.error {
                             "RESULT_PAGE_DISMISSAL_FAILED reason=invalid-attempt-target attempt=$number " +

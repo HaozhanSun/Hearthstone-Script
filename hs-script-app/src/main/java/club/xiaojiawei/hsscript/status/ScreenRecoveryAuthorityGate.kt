@@ -16,7 +16,7 @@ internal object ScreenRecoveryAuthorityGate {
         evidence.processAlive && evidence.windowPresent && evidence.windowVerified &&
             evidence.foregroundConfirmed && evidence.sameWindow && evidence.capturedPixelsVerified
 
-    private fun isCapturePreAuthorized(evidence: ScreenRecoveryAuthorityEvidence): Boolean =
+    fun isCapturePreAuthorized(evidence: ScreenRecoveryAuthorityEvidence): Boolean =
         evidence.processAlive && evidence.windowPresent && evidence.windowVerified &&
             evidence.foregroundConfirmed && evidence.sameWindow
 
