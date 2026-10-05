@@ -24,6 +24,9 @@ class WindowMessageClickPolicyTest {
 
         assertTrue(BattleNetOwnerIdentityPolicy.evaluate(configuredImage, selfUpdateImage, verifiedBattleNet).allowed)
         assertTrue(BattleNetOwnerIdentityPolicy.evaluate(configuredImage, configuredImage, verifiedBattleNet).allowed)
+        assertTrue(BattleNetOwnerIdentityPolicy.isImageCandidate(configuredImage, selfUpdateImage))
+        assertTrue(BattleNetOwnerIdentityPolicy.isImageCandidate(configuredImage, configuredImage))
+        assertFalse(BattleNetOwnerIdentityPolicy.isImageCandidate(configuredImage, "C:\\Other\\Battle.net.exe"))
         assertFalse(BattleNetOwnerIdentityPolicy.evaluate(configuredImage, selfUpdateImage, null).allowed)
         assertFalse(
             BattleNetOwnerIdentityPolicy.evaluate(

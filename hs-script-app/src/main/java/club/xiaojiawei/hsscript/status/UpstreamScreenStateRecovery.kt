@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.MouseUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
+import com.sun.jna.platform.win32.WinDef
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
@@ -89,6 +90,11 @@ object UpstreamScreenStateRecovery {
         val gameWindowKnown: Boolean,
     )
 
+    private data class AuthorizedCapture(
+        val gameWindow: WinDef.HWND,
+        val capture: Capture,
+    )
+
     private data class VisualSignature(
         val sampleHash: Long,
         val warmRatio: Double,
@@ -156,14 +162,15 @@ object UpstreamScreenStateRecovery {
             return false
         }
 
-        val capture = captureScreen()
-        if (capture == null) {
+        val authorizedCapture = captureVerifiedGameScreen()
+        if (authorizedCapture == null) {
             log.warn {
-                "SCREEN_RECOVERY_FAILED reason=capture-null stuckForMs=$stuckForMs " +
+                "SCREEN_RECOVERY_FAILED reason=verified-game-capture-unavailable stuckForMs=$stuckForMs " +
                     "state=$stateFingerprint"
             }
             return false
         }
+        val capture = authorizedCapture.capture
 
         log.warn {
             "SCREEN_RECOVERY_TRIGGER stuckForMs=$stuckForMs state=$stateFingerprint " +
@@ -236,7 +243,101 @@ object UpstreamScreenStateRecovery {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-before-apply state=$stateFingerprint" }
             return false
         }
-        return apply(detection)
+        return applyWithVerifiedForeground(detection, authorizedCapture.gameWindow)
+    }
+
+    /** Resolve a fresh process-owned HWND, hold it foreground through capture, then capture. */
+    private fun captureVerifiedGameScreen(): AuthorizedCapture? {
+        val gameWindow = resolveVerifiedGameWindow()
+        if (gameWindow == null) {
+            log.warn {
+                "SCREEN_RECOVERY_BLOCKED reason=hearthstone-window-unverified " +
+                    "processAlive=${GameUtil.isAliveOfGame()}"
+            }
+            return null
+        }
+
+        var authorityRejected = false
+        val foregroundResult = MouseUtil.withRecoveryForeground(gameWindow) {
+            val currentWindow = resolveVerifiedGameWindow()
+            val evidence = ScreenRecoveryAuthorityEvidence(
+                processAlive = GameUtil.isAliveOfGame(),
+                windowPresent = currentWindow != null,
+                windowVerified = currentWindow != null && GameUtil.isVerifiedCurrentGameWindow(currentWindow),
+                foregroundConfirmed = true,
+                sameWindow = currentWindow?.toString() == gameWindow.toString(),
+            )
+            if (!ScreenRecoveryAuthorityGate.isAuthorized(evidence)) {
+                authorityRejected = true
+                log.warn {
+                    "SCREEN_RECOVERY_BLOCKED reason=authority-lost-before-capture " +
+                        "gameWindow=$gameWindow currentWindow=$currentWindow"
+                }
+                null
+            } else {
+                ScreenRecoveryAuthorityGate.captureIfAuthorized(evidence) { captureScreen() }
+            }
+        }
+        if (!foregroundResult.foregroundConfirmed) {
+            log.warn {
+                "SCREEN_RECOVERY_BLOCKED reason=game-foreground-unconfirmed gameWindow=$gameWindow"
+            }
+            return null
+        }
+        if (authorityRejected) return null
+        val capture = foregroundResult.value ?: return null
+        return AuthorizedCapture(gameWindow, capture)
+    }
+
+    /** Reacquire and revalidate the same Hearthstone HWND before applying any recovery action. */
+    private fun applyWithVerifiedForeground(detection: Detection, capturedWindow: WinDef.HWND): Boolean {
+        val currentWindow = resolveVerifiedGameWindow()
+        if (currentWindow == null || currentWindow.toString() != capturedWindow.toString()) {
+            log.warn {
+                "SCREEN_RECOVERY_BLOCKED reason=hearthstone-window-changed-before-apply " +
+                    "capturedWindow=$capturedWindow currentWindow=$currentWindow"
+            }
+            return false
+        }
+
+        var authorityRejected = false
+        val foregroundResult = MouseUtil.withRecoveryForeground(currentWindow) {
+            val freshWindow = resolveVerifiedGameWindow()
+            val evidence = ScreenRecoveryAuthorityEvidence(
+                processAlive = GameUtil.isAliveOfGame(),
+                windowPresent = freshWindow != null,
+                windowVerified = freshWindow != null && GameUtil.isVerifiedCurrentGameWindow(freshWindow),
+                foregroundConfirmed = true,
+                sameWindow = freshWindow?.toString() == capturedWindow.toString(),
+            )
+            if (!ScreenRecoveryAuthorityGate.isAuthorized(evidence)) {
+                authorityRejected = true
+                log.warn {
+                    "SCREEN_RECOVERY_BLOCKED reason=authority-lost-before-apply " +
+                        "capturedWindow=$capturedWindow currentWindow=$freshWindow"
+                }
+                false
+            } else {
+                ScreenRecoveryAuthorityGate.dispatchIfAuthorized(evidence) { apply(detection) }
+            }
+        }
+        if (!foregroundResult.foregroundConfirmed) {
+            log.warn {
+                "SCREEN_RECOVERY_BLOCKED reason=game-foreground-unconfirmed-before-apply gameWindow=$currentWindow"
+            }
+            return false
+        }
+        return !authorityRejected && foregroundResult.value == true
+    }
+
+    private fun resolveVerifiedGameWindow(): WinDef.HWND? {
+        if (!GameUtil.isAliveOfGame()) return null
+        val window = runCatching { GameUtil.findGameHWND() }.getOrNull()
+            ?.takeIf(GameUtil::isVerifiedCurrentGameWindow)
+            ?: return null
+        ScriptStatus.gameHWND = window
+        GameUtil.updateGameRect(window)
+        return window
     }
 
     private fun captureScreen(): Capture? = runCatching {
@@ -758,8 +859,8 @@ object UpstreamScreenStateRecovery {
      * inconclusive capture returns null and cannot release the rank barrier.
      */
     internal fun isResultVisibleForRecovery(): Boolean? = runCatching {
-        val capture = captureScreen() ?: return@runCatching null
-        val detection = detect(runOCR(capture), capture.visual)
+        val authorizedCapture = captureVerifiedGameScreen() ?: return@runCatching null
+        val detection = detect(runOCR(authorizedCapture.capture), authorizedCapture.capture.visual)
         resultPageVisibility(detection)
     }.getOrElse { error ->
         log.warn(error) { "SCREEN_RECOVERY_RESULT_POSTCHECK_FAILED" }

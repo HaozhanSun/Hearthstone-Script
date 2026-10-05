@@ -50,6 +50,17 @@ internal object BattleNetOwnerIdentityPolicy {
         return OwnerIdentityDecision(true, "configured-image-or-verified-blizzard-self-update")
     }
 
+    /** Cheap candidate filter only; the startup dispatch still requires Authenticode verification. */
+    fun isImageCandidate(configuredExecutablePath: String?, actualImagePath: String?): Boolean {
+        if (configuredExecutablePath.isNullOrBlank() || actualImagePath.isNullOrBlank()) return false
+        val configured = normalizePath(configuredExecutablePath) ?: return false
+        val actual = normalizePath(actualImagePath) ?: return false
+        if (!configured.parent.toString().equals(actual.parent.toString(), ignoreCase = true)) return false
+        val configuredName = configured.fileName.toString()
+        val actualName = actual.fileName.toString()
+        return actualName.equals(configuredName, ignoreCase = true) || selfUpdateImage.matches(actualName)
+    }
+
     private fun normalizePath(value: String): Path? = runCatching {
         Path.of(value.trim()).toAbsolutePath().normalize()
     }.getOrNull()?.takeIf { it.fileName != null && it.parent != null }

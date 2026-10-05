@@ -1,6 +1,5 @@
 package club.xiaojiawei.hsscript.utils
 
-import club.xiaojiawei.hsscript.enums.MouseControlModeEnum
 import com.sun.jna.platform.win32.WinDef.HWND
 import java.awt.Point
 
@@ -10,15 +9,18 @@ import java.awt.Point
  * that Battle.net accepted the launch-button action.
  */
 internal object PlatformMessageStartupDispatch {
-    fun dispatch(
-        upperClick: Point,
-        lowerClick: Point,
-        hwnd: HWND?,
-        click: (Point, HWND?, Int) -> Unit,
-        delay: () -> Unit,
-    ) {
-        click(upperClick, hwnd, MouseControlModeEnum.MESSAGE.code)
-        delay()
-        click(lowerClick, hwnd, MouseControlModeEnum.MESSAGE.code)
+    /** Battle.net Home CTA point, expressed in the selected client window's coordinates. */
+    fun startButtonPoint(clientWidth: Int, clientHeight: Int): Point? {
+        if (clientWidth < PlatformWindowDiscoveryPolicy.MIN_CLIENT_WIDTH ||
+            clientHeight < PlatformWindowDiscoveryPolicy.MIN_CLIENT_HEIGHT
+        ) return null
+        return Point((clientWidth * 0.11).toInt(), (clientHeight * 0.892).toInt())
     }
+
+    /** Returns whether targeted messages were queued, not whether Battle.net accepted the action. */
+    fun dispatch(
+        point: Point,
+        hwnd: HWND?,
+        click: (Point, HWND?) -> Boolean,
+    ): Boolean = click(point, hwnd)
 }

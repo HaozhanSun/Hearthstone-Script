@@ -7,12 +7,10 @@ import club.xiaojiawei.hsscript.utils.CMDUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.MouseUtil
 import club.xiaojiawei.hsscript.utils.PlatformMessageStartupDispatch
-import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscript.utils.getString
 import club.xiaojiawei.hsscriptbase.config.log
 import com.sun.jna.platform.win32.WinDef
 import org.jetbrains.kotlin.utils.addToStdlib.ifTrue
-import java.awt.Point
 import kotlin.io.path.Path
 import kotlin.io.path.exists
 
@@ -43,22 +41,31 @@ enum class GameStartupModeEnum(val comment: String, val introduction: String, va
     PLATFORM_MESSAGE(
         "${PLATFORM_CN_NAME}消息",
         "通过模拟鼠标消息点击${PLATFORM_CN_NAME}窗口里的进入游戏按钮的方式启动",
-        {
+        startup@{
             val platformHWND = GameUtil.findPlatformHWND()
-            val rect = WinDef.RECT()
-            SystemUtil.updateRECT(platformHWND, rect)
-            val upperClick = Point(145, rect.bottom - rect.top - 150)
-            val lowerClick = Point(145, rect.bottom - rect.top - 130)
-            PlatformMessageStartupDispatch.dispatch(
-                upperClick = upperClick,
-                lowerClick = lowerClick,
+            val clientRect = WinDef.RECT()
+            if (platformHWND == null ||
+                !com.sun.jna.platform.win32.User32.INSTANCE.GetClientRect(platformHWND, clientRect)
+            ) {
+                log.warn { "PLATFORM_MESSAGE_STARTUP_BLOCKED reason=launcher-client-rect-unavailable hwnd=$platformHWND" }
+                return@startup
+            }
+            val width = clientRect.right - clientRect.left
+            val height = clientRect.bottom - clientRect.top
+            val point = PlatformMessageStartupDispatch.startButtonPoint(width, height)
+            if (point == null) {
+                log.warn { "PLATFORM_MESSAGE_STARTUP_BLOCKED reason=launcher-client-size-invalid client=${width}x$height" }
+                return@startup
+            }
+            val queued = PlatformMessageStartupDispatch.dispatch(
+                point = point,
                 hwnd = platformHWND,
-                click = MouseUtil::leftButtonClick,
-                delay = SystemUtil::delayShort,
+                click = MouseUtil::postStartupWindowMessageClick,
             )
             log.info {
-                "PLATFORM_MESSAGE_STARTUP_DISPATCH transport=mouse-util-message hwnd=$platformHWND " +
-                    "clicksAttempted=2 acceptance=awaiting-game-process-window"
+                "PLATFORM_MESSAGE_STARTUP_DISPATCH transport=client-window-message hwnd=$platformHWND " +
+                    "client=${width}x$height point=(${point.x},${point.y}) messagesQueued=$queued " +
+                    "acceptance=awaiting-game-process-window"
             }
         }),
 

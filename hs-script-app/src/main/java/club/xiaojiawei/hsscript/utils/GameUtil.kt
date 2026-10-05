@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscript.bean.GameRect
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.consts.*
 import club.xiaojiawei.hsscript.dll.CSystemDll
+import club.xiaojiawei.hsscript.dll.Win32ProcessImagePath
 import club.xiaojiawei.hsscript.dll.height
 import club.xiaojiawei.hsscript.dll.width
 import club.xiaojiawei.hsscript.enums.ConfigEnum
@@ -1841,11 +1842,56 @@ object GameUtil {
         return pid.value
     }
 
-    fun findPlatformHWND(): WinDef.HWND? = SystemUtil.findHWND("Chrome_WidgetWin_0", PLATFORM_CN_NAME) ?: let {
-        SystemUtil.findHWND(
-            "Chrome_WidgetWin_0",
-            PLATFORM_US_NAME
-        )
+    fun findPlatformHWND(): WinDef.HWND? {
+        val configuredPlatformPath = ConfigUtil.getString(ConfigEnum.PLATFORM_PATH)
+        val candidates = mutableListOf<PlatformWindowCandidate>()
+        var enumerationOrder = 0
+        val enumerationSucceeded = runCatching {
+            User32.INSTANCE.EnumWindows(WinUser.WNDENUMPROC { hwnd, _ ->
+                val order = enumerationOrder++
+                val className = CharArray(256).also { User32.INSTANCE.GetClassName(hwnd, it, it.size) }
+                    .concatToString().trimEnd('\u0000')
+                val title = CharArray(512).also { User32.INSTANCE.GetWindowText(hwnd, it, it.size) }
+                    .concatToString().trimEnd('\u0000').trim()
+                if (setOf("Chrome_WidgetWin_0", "Chrome_WidgetWin_1")
+                        .any { it.equals(className, ignoreCase = true) } &&
+                    setOf(PLATFORM_CN_NAME, PLATFORM_US_NAME).any { it.equals(title, ignoreCase = true) }
+                ) {
+                    val ownerPid = windowProcessId(hwnd)
+                    val ownerImagePath = Win32ProcessImagePath.query(ownerPid)
+                    val clientRect = WinDef.RECT()
+                    val hasClientRect = User32.INSTANCE.GetClientRect(hwnd, clientRect)
+                    candidates += PlatformWindowCandidate(
+                        handle = Pointer.nativeValue(hwnd.pointer),
+                        className = className,
+                        title = title,
+                        ownerImageCandidate = BattleNetOwnerIdentityPolicy.isImageCandidate(
+                            configuredPlatformPath,
+                            ownerImagePath,
+                        ),
+                        valid = User32.INSTANCE.IsWindow(hwnd),
+                        visible = User32.INSTANCE.IsWindowVisible(hwnd),
+                        clientWidth = if (hasClientRect) clientRect.right - clientRect.left else 0,
+                        clientHeight = if (hasClientRect) clientRect.bottom - clientRect.top else 0,
+                        enumerationOrder = order,
+                    )
+                }
+                true
+            }, null)
+        }.getOrDefault(false)
+        if (!enumerationSucceeded) return null
+
+        val selected = PlatformWindowDiscoveryPolicy.select(
+            candidates = candidates,
+            expectedClassNames = setOf("Chrome_WidgetWin_0", "Chrome_WidgetWin_1"),
+            expectedTitles = setOf(PLATFORM_CN_NAME, PLATFORM_US_NAME),
+        ) ?: return null
+        val hwnd = WinDef.HWND(Pointer(selected.handle))
+        log.debug {
+            "PLATFORM_WINDOW_DISCOVERY selected hwnd=$hwnd title=${selected.title} " +
+                "client=${selected.clientWidth}x${selected.clientHeight} candidates=${candidates.size}"
+        }
+        return hwnd.takeIf { User32.INSTANCE.IsWindow(it) && User32.INSTANCE.IsWindowVisible(it) }
     }
 
     fun findLoginPlatformHWND(): WinDef.HWND? = SystemUtil.findHWND("Qt5151QWindowIcon", PLATFORM_LOGIN_CN_NAME)

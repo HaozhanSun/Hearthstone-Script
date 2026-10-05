@@ -14,6 +14,60 @@ import kotlin.test.assertTrue
 class ScreenRecoveryGateTest {
 
     @Test
+    fun `missing or unverified Hearthstone authority blocks capture and recovery action`() {
+        val captureCalls = AtomicInteger()
+        val actionCalls = AtomicInteger()
+        val invalidEvidence = listOf(
+            ScreenRecoveryAuthorityEvidence(false, false, false, false, false),
+            ScreenRecoveryAuthorityEvidence(true, false, false, true, false),
+            ScreenRecoveryAuthorityEvidence(true, true, false, true, true),
+            ScreenRecoveryAuthorityEvidence(true, true, true, false, true),
+            ScreenRecoveryAuthorityEvidence(true, true, true, true, false),
+        )
+
+        invalidEvidence.forEach { evidence ->
+            assertNull(ScreenRecoveryAuthorityGate.captureIfAuthorized(evidence) {
+                captureCalls.incrementAndGet()
+                "desktop-frame"
+            })
+            assertFalse(ScreenRecoveryAuthorityGate.dispatchIfAuthorized(evidence) {
+                actionCalls.incrementAndGet()
+                true
+            })
+        }
+
+        assertEquals(0, captureCalls.get(), "desktop capture must not run without live verified foreground game HWND")
+        assertEquals(0, actionCalls.get(), "recovery must not dispatch after authority is lost")
+    }
+
+    @Test
+    fun `verified foreground Hearthstone HWND permits the normal capture and action route`() {
+        val evidence = ScreenRecoveryAuthorityEvidence(
+            processAlive = true,
+            windowPresent = true,
+            windowVerified = true,
+            foregroundConfirmed = true,
+            sameWindow = true,
+        )
+        val captureCalls = AtomicInteger()
+        val actionCalls = AtomicInteger()
+
+        val frame = ScreenRecoveryAuthorityGate.captureIfAuthorized(evidence) {
+            captureCalls.incrementAndGet()
+            "hearthstone-frame"
+        }
+        val applied = ScreenRecoveryAuthorityGate.dispatchIfAuthorized(evidence) {
+            actionCalls.incrementAndGet()
+            true
+        }
+
+        assertEquals("hearthstone-frame", frame)
+        assertTrue(applied)
+        assertEquals(1, captureCalls.get())
+        assertEquals(1, actionCalls.get())
+    }
+
+    @Test
     fun `upstream fallback result postcheck requires a known post-result destination`() {
         assertEquals(true, UpstreamScreenStateRecovery.resultVisibilityForTest("RESULT", 90))
         assertEquals(false, UpstreamScreenStateRecovery.resultVisibilityForTest("DECK_SELECTION", 90))
