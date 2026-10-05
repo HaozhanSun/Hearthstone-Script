@@ -165,6 +165,12 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             return
         }
 
+        val terminalIdentity = PowerLogListener.bindVerifiedLocalMulliganEntity(tagChangeEntity.entity)
+        log.info {
+            "MULLIGAN_LOCAL_POWERLOG_IDENTITY_BOUND entity=${tagChangeEntity.entity} " +
+                "gameIdentity=${terminalIdentity ?: "UNRESOLVED"} source=verified-own-mulligan-input"
+        }
+
         if (PowerLogListener.replayingExistingLog) {
             replayedMulliganInput = tagChangeEntity
             log.info { "E2E恢复回放：跳过历史换牌点击，等待实时日志继续" }
@@ -346,6 +352,18 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
     internal fun cancelRankPreflight(reason: String) {
         rankPreflight?.cancel(reason)
         rankPreflight = null
+    }
+
+    /** Stop delayed rank retries once same-game terminal Power.log proof is accepted. */
+    @Synchronized
+    fun onAuthoritativeTerminalProofAccepted() {
+        cancelRankSurrenderRetry(resetBudget = true)
+        cancelRankPreflight("authoritative-terminal-proof")
+        rankSurrenderRequested.set(false)
+        log.info {
+            "MULLIGAN_RANK_RETRY_CANCELLED reason=authoritative-terminal-proof " +
+                "barrier=${MulliganRankDispatchBarrier.currentState()} ordinaryDispatch=false"
+        }
     }
 
     @Synchronized

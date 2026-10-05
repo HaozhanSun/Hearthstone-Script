@@ -83,6 +83,11 @@ internal class CurrentGamePowerLogTerminalTracker {
             ?.let { "$it:$resolvedOwnEntityId" }
     }
 
+    /** Caller must have independently classified this entity as the local player. */
+    @Synchronized
+    fun bindVerifiedLocalEntity(entityId: String): String? =
+        entityId.takeIf(String::isNotBlank)?.let(::currentGameIdentity)
+
     @Synchronized
     fun currentGameSurrenderEvidence(
         ownEntityId: String,

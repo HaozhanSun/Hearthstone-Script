@@ -2,8 +2,14 @@ package club.xiaojiawei.hsscript.status.surrender
 
 import club.xiaojiawei.hsscript.bean.DiskLogFile
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
+import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import java.io.File
 import java.nio.file.Files
+import java.security.MessageDigest
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import javax.imageio.ImageIO
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -105,6 +111,86 @@ class CurrentGamePowerLogTerminalTrackerTest {
             "observed result dismissal releases the terminal-only cleanup lock",
         )
         assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+    }
+
+    @Test
+    fun `verified mulligan identity releases terminal rank barrier and stops recovery retry`() {
+        val lines = readV563RankSurrenderTerminalExcerpt()
+        val tracker = CurrentGamePowerLogTerminalTracker()
+        val localInput = lines.first { it.contains("Entity=laz#12793 tag=MULLIGAN_STATE value=INPUT") }
+        lines.takeWhile { it != localInput }.forEach { tracker.observeLine(it) }
+
+        // This is the same trust boundary as ReplaceCardPhaseStrategy: only
+        // the event already classified as our own INPUT may bind the account.
+        val identity = requireNotNull(tracker.bindVerifiedLocalEntity("laz#12793"))
+        MandatoryRankSurrenderGuard.begin(identity)
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+        val surrenderCapability = requireNotNull(MulliganRankDispatchBarrier.requireSurrender(ticket))
+        assertTrue(MulliganRankDispatchBarrier.isSurrenderCapabilityValid(surrenderCapability))
+
+        val retryScheduler = Executors.newSingleThreadScheduledExecutor()
+        val retryFired = AtomicBoolean(false)
+        val queuedRetry = retryScheduler.schedule({ retryFired.set(true) }, 5, TimeUnit.SECONDS)
+        val retryFutureField = ReplaceCardPhaseStrategy::class.java
+            .getDeclaredField("rankSurrenderRetryFuture")
+            .apply { isAccessible = true }
+        retryFutureField.set(ReplaceCardPhaseStrategy, queuedRetry)
+
+        try {
+            lines.dropWhile { it != localInput }.forEach { tracker.observeLine(it) }
+            val terminal = tracker.currentGameSurrenderEvidence("", "law#31891")
+            assertNotNull(terminal)
+            assertEquals(identity, terminal?.gameIdentity)
+            assertEquals("LOST", terminal?.ownPlayState)
+            assertEquals("WON", terminal?.opponentPlayState)
+            assertTrue(terminal?.ownConceded == true)
+            assertTrue(terminal?.finalGameOver == true)
+            assertTrue(terminal?.complete == true)
+
+            val cleanup = MandatoryRankSurrenderGuard.authorizeTerminalCleanup(terminal)
+            assertNotNull(cleanup, "the current CREATE_GAME terminal result is locally attributable")
+            assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", cleanup))
+            ReplaceCardPhaseStrategy.onAuthoritativeTerminalProofAccepted()
+            assertTrue(queuedRetry.isCancelled, "accepted terminal proof must cancel the delayed surrender retry")
+            assertEquals(null, retryFutureField.get(ReplaceCardPhaseStrategy), "no retry remains queued")
+            assertFalse(retryFired.get(), "the canceled callback must not run later")
+            assertFalse(MandatoryRankSurrenderGuard.isPending())
+            assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+            assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
+            assertFalse(
+                ActionDispatchGate.allowForState(
+                    action = "recovery.left",
+                    paused = false,
+                    working = true,
+                    terminalCleanupPending = true,
+                ),
+                "terminal proof must stop repeated stale Mulligan recovery clicks",
+            )
+            assertTrue(
+                ActionDispatchGate.allowForState(
+                    action = "terminal-result.dismiss",
+                    paused = false,
+                    working = true,
+                    terminalCleanupPending = true,
+                    terminalCleanupCapabilityValid = true,
+                ),
+                "only the capability-authorized result dismissal may proceed",
+            )
+
+            // Preserve the exact result frame captured for this failed live run;
+            // its tooltip text is not authoritative and cannot override Power.log.
+            val screenshot = requireNotNull(javaClass.getResource("game-0001-loss-20261004-202935-244.png"))
+            val screenshotFile = File(screenshot.toURI())
+            val digest = MessageDigest.getInstance("SHA-256")
+                .digest(screenshotFile.readBytes()).joinToString("") { "%02X".format(it) }
+            assertEquals("322F882AB3F346FE0D392502650E12AC28BFD7204CBE09A369157A1507A14C6F", digest)
+            val image = ImageIO.read(screenshotFile)
+            assertEquals(1920, image.width)
+            assertEquals(1080, image.height)
+        } finally {
+            queuedRetry.cancel(true)
+            retryScheduler.shutdownNow()
+        }
     }
 
     @Test
@@ -345,6 +431,11 @@ class CurrentGamePowerLogTerminalTrackerTest {
 
     private fun readLiveV547Excerpt(): List<String> =
         requireNotNull(javaClass.getResourceAsStream("rank4-v547-live-game2-surrender-excerpt.log"))
+            .bufferedReader(Charsets.UTF_8)
+            .use { it.readLines() }
+
+    private fun readV563RankSurrenderTerminalExcerpt(): List<String> =
+        requireNotNull(javaClass.getResourceAsStream("v4.16.563-rank-surrender-terminal-excerpt.log"))
             .bufferedReader(Charsets.UTF_8)
             .use { it.readLines() }
 }

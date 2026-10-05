@@ -68,6 +68,15 @@ object PowerLogListener :
     fun currentGameSurrenderIdentity(ownEntityId: String): String? =
         currentGamePowerLogTerminalTracker.currentGameIdentity(ownEntityId)
 
+    /**
+     * Bind local ownership only after the phase parser has independently
+     * classified this entity as our current-game Mulligan INPUT. This gives
+     * terminal proof a stable local account bridge when WAR's player id is
+     * blank after a fast concession.
+     */
+    fun bindVerifiedLocalMulliganEntity(entityId: String): String? =
+        currentGamePowerLogTerminalTracker.bindVerifiedLocalEntity(entityId)
+
     fun currentGameSurrenderTerminalEvidence(
         ownEntityId: String,
         opponentEntityId: String?,

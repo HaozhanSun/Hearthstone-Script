@@ -381,6 +381,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         if (terminalCleanupCapability != null &&
             MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", terminalCleanupCapability)
         ) {
+            ReplaceCardPhaseStrategy.onAuthoritativeTerminalProofAccepted()
             club.xiaojiawei.hsscriptbase.config.log.info {
                 "RANK_SURRENDER_TERMINAL_RECONCILED barrier=cleared " +
                     "terminalUiCleanup=pending ordinaryDispatch=false"
