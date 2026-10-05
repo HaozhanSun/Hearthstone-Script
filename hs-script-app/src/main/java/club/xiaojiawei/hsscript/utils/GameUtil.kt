@@ -165,6 +165,13 @@ object GameUtil {
     internal fun staleResultInputForAttempt(attempt: Int, maxAttempts: Int = 5): ResultPageDismissalPolicy.Input? =
         ResultPageDismissalPolicy.inputForClickAttempt(attempt, maxAttempts)
 
+    internal fun terminalResultInputForAttempt(
+        attempt: Int,
+        maxAttempts: Int = TerminalPageCleanupCoordinator.DEFAULT_MAX_INPUTS,
+    ): ResultPageDismissalPolicy.Input? = ResultPageDismissalPolicy.terminalInputForClickAttempt(attempt, maxAttempts)
+
+    internal fun terminalContinueTargetForTest(): GameRect = GAME_END_CONTINUE_RECT
+
     /**
      * Safe-native mode deliberately avoids the injected/native window helper.
      * A non-null sentinel lets the existing lifecycle/input plumbing continue
@@ -1518,6 +1525,35 @@ object GameUtil {
                     }
                     return
                 }
+                TerminalPageCleanupCoordinator.BeginState.FAILED -> {
+                    val snapshot = terminalPageCleanupCoordinator.snapshot()
+                    val observation = runCatching {
+                        ScreenStateRecovery.observeResultScreenForRecovery()
+                    }.getOrElse { ResultScreenObservation(null, captureAuthorized = false) }
+                    val destinationConfirmed = begin.ticket != null &&
+                        observation.captureAuthorized && observation.resultVisible == false &&
+                        terminalPageCleanupCoordinator.confirmDestination(begin.ticket)
+                    if (destinationConfirmed &&
+                        MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCleanupCapability)
+                    ) {
+                        MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED", terminalCleanupCapability)
+                    }
+                    if (destinationConfirmed) {
+                        log.info {
+                            "RESULT_PAGE_DISMISSAL_CONFIRMED source=failed-episode-fresh-destination " +
+                                "inputs=${snapshot.inputs} probes=${snapshot.probes} dispatch=false"
+                        }
+                    } else {
+                        log.warn {
+                            "RESULT_PAGE_CLEANUP_FAILED reason=episode-already-failed " +
+                                "failureReason=${snapshot.failureReason ?: "unknown"} " +
+                                "visible=${observation.resultVisible ?: "UNKNOWN"} " +
+                                "captureAuthorized=${observation.captureAuthorized} " +
+                                "inputs=${snapshot.inputs} probes=${snapshot.probes} dispatch=false"
+                        }
+                    }
+                    return
+                }
                 TerminalPageCleanupCoordinator.BeginState.COMPLETED -> {
                     log.info { "RESULT_PAGE_CLEANUP_SUPPRESSED reason=already-confirmed dispatch=false" }
                     return
@@ -1530,7 +1566,10 @@ object GameUtil {
         val attempt = AtomicInteger(0)
         val clickAttempts = AtomicInteger(0)
         val startingWarCount = WarEx.warCount
-        val interval = if (terminalCleanupAuthorized) 2_000L else RandomUtil.getActionInterval(800).toLong()
+        // Live v4.16.565 result handling took roughly 15-25 seconds per
+        // accepted input once capture/focus work was included. Keep retries
+        // serialized and deliberately spaced rather than issuing a burst.
+        val interval = if (terminalCleanupAuthorized) 25_000L else RandomUtil.getActionInterval(800).toLong()
         lateinit var future: ScheduledFuture<*>
         future = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
             {
@@ -1540,9 +1579,10 @@ object GameUtil {
                     attempt.incrementAndGet()
                 }
                 if (number == null) {
+                    val snapshot = terminalPageCleanupCoordinator.snapshot()
                     log.error {
-                        "RESULT_PAGE_CLEANUP_HELD reason=shared-probe-budget-exhausted " +
-                            "dispatch=false confirmed=false"
+                        "RESULT_PAGE_CLEANUP_FAILED reason=${snapshot.failureReason ?: "shared-probe-budget-exhausted"} " +
+                            "inputs=${snapshot.inputs} probes=${snapshot.probes} confirmed=false dispatch=false"
                     }
                     future.cancel(false)
                     gameEndTasks.remove(future)
@@ -1590,7 +1630,7 @@ object GameUtil {
                     // When Power.log still says inWar, require a fresh positive
                     // result-page observation before every click; never turn an
                     // UNKNOWN postcheck into a success or a speculative input.
-                    val screenObservation = if (resultAlreadyObserved || number > 1) {
+                    val screenObservation = if (cleanupTicket != null || resultAlreadyObserved || number > 1) {
                         ScreenStateRecovery.observeResultScreenForRecovery()
                     } else ResultScreenObservation(null, captureAuthorized = false)
                     val visible = screenObservation.resultVisible
@@ -1665,8 +1705,16 @@ object GameUtil {
                             return@scheduleWithFixedDelay
                         }
                         ResultPageDismissalPolicy.Decision.EXHAUSTED -> {
-                            cleanupTicket?.let { terminalPageCleanupCoordinator.hold(it) }
-                            log.error { "RESULT_PAGE_DISMISSAL_FAILED reason=bounded-retries-exhausted attempt=$number confirmed=false" }
+                            if (cleanupTicket != null) {
+                                terminalPageCleanupCoordinator.fail(cleanupTicket, "result-visible-input-budget-exhausted")
+                            }
+                            val snapshot = cleanupTicket?.let { terminalPageCleanupCoordinator.snapshot() }
+                            log.error {
+                                "RESULT_PAGE_CLEANUP_FAILED reason=${snapshot?.failureReason ?: "bounded-retries-exhausted"} " +
+                                    "attempt=$number inputs=${snapshot?.inputs ?: clickNumber} " +
+                                    "probes=${snapshot?.probes ?: number} visible=${visible ?: "UNKNOWN"} " +
+                                    "confirmed=false dispatch=false"
+                            }
                             future.cancel(false)
                             gameEndTasks.remove(future)
                             return@scheduleWithFixedDelay
@@ -1686,10 +1734,11 @@ object GameUtil {
                                 clickAttempts.incrementAndGet()
                             }
                             if (reservedAttempt == null) {
-                                cleanupTicket?.let { terminalPageCleanupCoordinator.hold(it) }
+                                val snapshot = cleanupTicket?.let { terminalPageCleanupCoordinator.snapshot() }
                                 log.error {
-                                    "RESULT_PAGE_CLEANUP_HELD reason=shared-input-budget-exhausted " +
-                                        "probe=$number dispatch=false confirmed=false"
+                                    "RESULT_PAGE_CLEANUP_FAILED reason=${snapshot?.failureReason ?: "shared-input-budget-exhausted"} " +
+                                        "probe=$number inputs=${snapshot?.inputs ?: clickNumber} " +
+                                        "dispatch=false confirmed=false"
                                 }
                                 future.cancel(false)
                                 gameEndTasks.remove(future)
@@ -1713,7 +1762,12 @@ object GameUtil {
                     // bounded clicks in the control. SendInput acceptance is
                     // never UI acceptance; only the fresh result postcheck
                     // below can finish this task.
-                    when (staleResultInputForAttempt(clickNumber, maxAttempts)) {
+                    val input = if (terminalCleanupStillAuthorized) {
+                        terminalResultInputForAttempt(clickNumber, maxAttempts)
+                    } else {
+                        staleResultInputForAttempt(clickNumber, maxAttempts)
+                    }
+                    when (input) {
                         ResultPageDismissalPolicy.Input.CENTER_CLICK -> {
                             log.info { "E2E恢复：结果页使用稳定中心点" }
                             val accepted = MouseUtil.leftButtonClickForRecovery(

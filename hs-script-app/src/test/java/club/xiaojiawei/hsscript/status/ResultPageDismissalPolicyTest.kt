@@ -5,10 +5,13 @@ import org.junit.jupiter.api.Test
 
 class ResultPageDismissalPolicyTest {
     @Test
-    fun `OS accepted center click is not UI acceptance and second attempt uses upstream Enter fallback`() {
+    fun `OS accepted center click is not UI acceptance and terminal retries preserve live center Enter pairs`() {
         assertEquals(ResultPageDismissalPolicy.Input.CENTER_CLICK, ResultPageDismissalPolicy.inputForClickAttempt(1, 5))
         assertEquals(ResultPageDismissalPolicy.Input.KEYBOARD_ENTER, ResultPageDismissalPolicy.inputForClickAttempt(2, 5))
         assertEquals(ResultPageDismissalPolicy.Input.RETRY_CLICK, ResultPageDismissalPolicy.inputForClickAttempt(3, 5))
+        assertEquals(ResultPageDismissalPolicy.Input.CENTER_CLICK, ResultPageDismissalPolicy.terminalInputForClickAttempt(3, 16))
+        assertEquals(ResultPageDismissalPolicy.Input.KEYBOARD_ENTER, ResultPageDismissalPolicy.terminalInputForClickAttempt(4, 16))
+        assertEquals(ResultPageDismissalPolicy.Input.CENTER_CLICK, ResultPageDismissalPolicy.terminalInputForClickAttempt(5, 16))
         assertEquals(null, ResultPageDismissalPolicy.inputForClickAttempt(6, 5))
 
         // Even if SendInput returned accepted=true, only a fresh observed
@@ -183,7 +186,7 @@ class ResultPageDismissalPolicyTest {
     }
 
     @Test
-    fun `terminal fallback needs a fresh authorized capture and ends after two inputs`() {
+    fun `terminal fallback needs a fresh allow-listed result capture and stays bounded`() {
         assertEquals(
             ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
             ResultPageDismissalPolicy.decide(
@@ -220,7 +223,7 @@ class ResultPageDismissalPolicyTest {
             ),
         )
         assertEquals(
-            ResultPageDismissalPolicy.Decision.DISPATCH_CLICK,
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
             ResultPageDismissalPolicy.decide(
                 inWar = true,
                 resultPageVisible = null,
@@ -229,16 +232,27 @@ class ResultPageDismissalPolicyTest {
                 terminalCleanupAuthorized = true,
                 captureAuthorized = true,
             ),
-            "same-game Power.log terminal proof plus current pixel-owned capture permits only bounded cleanup",
+            "same-game terminal proof and an authorized capture do not allow input when screen classification is UNKNOWN",
+        )
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = null,
+                attempt = 1,
+                maxAttempts = 16,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = true,
+            ),
+            "an authorized capture is not enough: unknown/settings-overlay pixels are not an allow-listed result screen",
         )
         assertEquals(
             ResultPageDismissalPolicy.Decision.DISPATCH_CLICK,
             ResultPageDismissalPolicy.decide(
                 inWar = false,
-                resultPageVisible = null,
-                attempt = 2,
-                maxAttempts = 2,
-                clickAttempts = 1,
+                resultPageVisible = true,
+                attempt = 1,
+                maxAttempts = 16,
                 terminalCleanupAuthorized = true,
                 captureAuthorized = true,
             ),
@@ -247,23 +261,23 @@ class ResultPageDismissalPolicyTest {
             ResultPageDismissalPolicy.Decision.EXHAUSTED,
             ResultPageDismissalPolicy.decide(
                 inWar = false,
-                resultPageVisible = null,
-                attempt = 3,
-                maxAttempts = 2,
-                clickAttempts = 2,
+                resultPageVisible = true,
+                attempt = 17,
+                maxAttempts = 16,
+                clickAttempts = 16,
                 terminalCleanupAuthorized = true,
                 captureAuthorized = true,
             ),
-            "dispatching click/Enter is not confirmation; after two inputs the worker stops unless a destination is observed",
+            "dispatching the bounded sequence is not confirmation; exhaustion is explicit unless a destination is observed",
         )
         assertEquals(
             ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED,
             ResultPageDismissalPolicy.decide(
                 inWar = false,
                 resultPageVisible = false,
-                attempt = 3,
-                maxAttempts = 2,
-                clickAttempts = 2,
+                attempt = 17,
+                maxAttempts = 16,
+                clickAttempts = 16,
                 terminalCleanupAuthorized = true,
                 captureAuthorized = true,
             ),

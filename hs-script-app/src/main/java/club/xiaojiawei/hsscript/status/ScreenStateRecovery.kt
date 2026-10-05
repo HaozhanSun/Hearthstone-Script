@@ -1313,6 +1313,10 @@ object ScreenStateRecovery {
         resultContinueGrayLightRatio >= RESULT_CONTINUE_GRAY_LIGHT_MIN &&
             resultBannerLowSaturationRatio >= RESULT_BANNER_LOW_SATURATION_MIN
 
+    /** Replay fixture pixels through the production visual/modal classifier without desktop capture or OCR. */
+    internal fun classifyImageForResultFixture(image: BufferedImage): String? =
+        detect(OcrEvidence("", emptyMap()), visualSignature(image))?.kind?.code
+
     /**
      * Re-check the actual desktop after a result-page input was sent.
      *

@@ -38,13 +38,13 @@ class TerminalPageCleanupCoordinatorTest {
     }
 
     @Test
-    fun `dispatch acceptance does not reset global budget or confirm a still-visible result`() {
+    fun `dispatch acceptance does not reset the 16-input episode budget or confirm a still-visible result`() {
         val coordinator = TerminalPageCleanupCoordinator()
         val ticket = requireNotNull(coordinator.begin().ticket)
 
         var resultVisible: Boolean? = true
-        var dispatchAcceptedCount = 0
-        repeat(2) { index ->
+        repeat(TerminalPageCleanupCoordinator.DEFAULT_MAX_INPUTS) { index ->
+            assertEquals(TerminalPageCleanupCoordinator.BeginState.ALREADY_RUNNING, coordinator.begin().state)
             val probe = coordinator.nextProbe(ticket)
             assertNotNull(probe)
             val before = coordinator.snapshot()
@@ -63,7 +63,7 @@ class TerminalPageCleanupCoordinatorTest {
 
             val reserved = coordinator.reserveInput(ticket)
             assertEquals(index + 1, reserved)
-            dispatchAcceptedCount += 1 // Simulate Robot/SENDINPUT returning success.
+            // Simulate Robot/SENDINPUT returning success.
             // The independent UI observation deliberately remains positive.
             assertEquals(true, resultVisible)
             assertEquals(TerminalPageCleanupCoordinator.State.RUNNING, coordinator.snapshot().state)
@@ -83,19 +83,19 @@ class TerminalPageCleanupCoordinatorTest {
                 captureAuthorized = true,
             ),
         )
-        coordinator.hold(ticket)
-
-        assertEquals(2, dispatchAcceptedCount)
-        assertEquals(TerminalPageCleanupCoordinator.State.HELD, coordinator.snapshot().state)
-        assertEquals(2, coordinator.snapshot().inputs)
+        assertTrue(coordinator.fail(ticket, "result-visible-input-budget-exhausted"))
+        assertEquals(TerminalPageCleanupCoordinator.State.FAILED, coordinator.snapshot().state)
+        assertEquals("result-visible-input-budget-exhausted", coordinator.snapshot().failureReason)
+        assertEquals(TerminalPageCleanupCoordinator.DEFAULT_MAX_INPUTS, coordinator.snapshot().inputs)
         assertEquals(
-            TerminalPageCleanupCoordinator.BeginState.HELD,
+            TerminalPageCleanupCoordinator.BeginState.FAILED,
             coordinator.begin().state,
-            "later recovery callbacks must not reset the episode budget",
+            "later recovery callbacks must not silently restart an exhausted episode",
         )
         assertNull(coordinator.reserveInput(ticket))
 
-        // Only a fresh authorized observation of the destination releases the hold.
+        // Only a fresh authorized observation of the destination can still
+        // reconcile the completed screen after an explicit safe failure.
         resultVisible = false
         assertEquals(
             ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED,
@@ -142,13 +142,16 @@ class TerminalPageCleanupCoordinatorTest {
         assertEquals(false, coordinator.confirmDestination(firstTicket), "a stale worker cannot complete a resumed episode")
         assertEquals(TerminalPageCleanupCoordinator.State.RUNNING, coordinator.snapshot().state)
         assertEquals(2, coordinator.reserveInput(resumedTicket))
+        repeat(TerminalPageCleanupCoordinator.DEFAULT_MAX_INPUTS - 2) { index ->
+            assertEquals(index + 3, coordinator.reserveInput(resumedTicket))
+        }
         assertNull(coordinator.reserveInput(resumedTicket))
-        assertEquals(TerminalPageCleanupCoordinator.State.HELD, coordinator.snapshot().state)
-        assertEquals(2, coordinator.snapshot().inputs)
+        assertEquals(TerminalPageCleanupCoordinator.State.FAILED, coordinator.snapshot().state)
+        assertEquals(TerminalPageCleanupCoordinator.DEFAULT_MAX_INPUTS, coordinator.snapshot().inputs)
     }
 
     @Test
-    fun `unconfirmed observation loop exhausts bounded probes and stays held`() {
+    fun `unconfirmed observation loop ends in explicit failed state`() {
         val coordinator = TerminalPageCleanupCoordinator()
         val ticket = coordinator.begin().ticket!!
         repeat(TerminalPageCleanupCoordinator.DEFAULT_MAX_PROBES) {
@@ -156,8 +159,9 @@ class TerminalPageCleanupCoordinatorTest {
         }
 
         assertNull(coordinator.nextProbe(ticket))
-        assertEquals(TerminalPageCleanupCoordinator.State.HELD, coordinator.snapshot().state)
-        assertEquals(TerminalPageCleanupCoordinator.BeginState.HELD, coordinator.begin().state)
+        assertEquals(TerminalPageCleanupCoordinator.State.FAILED, coordinator.snapshot().state)
+        assertEquals("probe-budget-exhausted", coordinator.snapshot().failureReason)
+        assertEquals(TerminalPageCleanupCoordinator.BeginState.FAILED, coordinator.begin().state)
         assertEquals(0, coordinator.snapshot().inputs)
     }
 }

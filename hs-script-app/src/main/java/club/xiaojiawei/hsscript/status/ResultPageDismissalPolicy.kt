@@ -16,12 +16,19 @@ internal object ResultPageDismissalPolicy {
         EXHAUSTED,
     }
 
-    /** Preserve the known-working Unity result sequence without treating SendInput acceptance as success. */
+    /** Preserve the upstream-compatible stale-page sequence for non-terminal recovery. */
     fun inputForClickAttempt(clickAttempt: Int, maxAttempts: Int): Input? = when {
         clickAttempt !in 1..maxAttempts -> null
         clickAttempt == 1 -> Input.CENTER_CLICK
         clickAttempt == 2 -> Input.KEYBOARD_ENTER
         else -> Input.RETRY_CLICK
+    }
+
+    /** Repeat the exact live-observed click/Enter pair under the shared terminal episode budget. */
+    fun terminalInputForClickAttempt(clickAttempt: Int, maxAttempts: Int): Input? = when {
+        clickAttempt !in 1..maxAttempts -> null
+        clickAttempt % 2 == 1 -> Input.CENTER_CLICK
+        else -> Input.KEYBOARD_ENTER
     }
 
     /**
@@ -51,9 +58,9 @@ internal object ResultPageDismissalPolicy {
         terminalCleanupAuthorized && resultPageVisible == false -> Decision.WAIT_FOR_SCREEN_TRANSITION
         resultPageVisible == false -> Decision.CONFIRMED_CLEARED
         terminalCleanupAuthorized && clickAttempts < maxAttempts && captureAuthorized &&
-            (resultPageVisible == true || resultPageVisible == null) -> Decision.DISPATCH_CLICK
+            resultPageVisible == true -> Decision.DISPATCH_CLICK
         !terminalCleanupAuthorized && resultPageVisible == true && clickAttempts < maxAttempts -> Decision.DISPATCH_CLICK
-        // Terminal proof permits at most the bounded, known upstream inputs.
+        // Terminal proof permits only the bounded, visible-result allowlist.
         // If capture is unavailable/unknown after that budget, stop; never wait
         // forever or infer success from the input call.
         terminalCleanupAuthorized && clickAttempts >= maxAttempts -> Decision.EXHAUSTED

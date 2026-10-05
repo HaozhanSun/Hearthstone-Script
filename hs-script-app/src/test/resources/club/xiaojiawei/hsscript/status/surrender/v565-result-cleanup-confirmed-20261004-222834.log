@@ -1,0 +1,13 @@
+Incident source: outputs/Hearthstone Script Beta/log/hs_script.log, lines 7100-7466.
+Hearthstone session: D:/Hearthstone/Logs/Hearthstone_2026_10_04_22_26_24/Power.log.
+
+2026-10-04 22:28:34.415 RANK_SURRENDER_TERMINAL_PROOF result=ACCEPTED source=CREATE_GAME_SCOPED_POWERLOG sameGame=true ownPlayState=LOST opponentPlayState=WON finalGameOver=true complete=true playerTerminal=CONCEDED
+2026-10-04 22:28:49.864 RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:29:02.999 RESULT_PAGE_DISMISSAL_INPUT input=KEYBOARD_ENTER dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:29:35.491 RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:29:52.034 RESULT_PAGE_DISMISSAL_INPUT input=KEYBOARD_ENTER dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:30:09.081 RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:30:28.184 RESULT_PAGE_DISMISSAL_INPUT input=KEYBOARD_ENTER dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:31:45.937 RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:32:00.952 RESULT_PAGE_DISMISSAL_INPUT input=KEYBOARD_ENTER dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:32:05.136 RESULT_PAGE_DISMISSAL_CONFIRMED source=visible-screen-postcheck attempt=1

@@ -1,4 +1,4 @@
-Incident source: outputs/Hearthstone Script Beta/log/hs_script.log, lines 8167-8355.
+Incident source: outputs/Hearthstone Script Beta/log/hs_script.log, lines 8167-8445.
 Screenshot: debug-20261004-223540-274-screen-recovery-4f086dce-188f-4fee-a3d5-a49b7e892fc5.png
 Power.log: D:/Hearthstone/Logs/Hearthstone_2026_10_04_22_26_24/Power.log, lines 2280-2293.
 
@@ -16,6 +16,10 @@ Power.log: D:/Hearthstone/Logs/Hearthstone_2026_10_04_22_26_24/Power.log, lines 
 2026-10-04 22:35:40.973 ERROR RESULT_PAGE_DISMISSAL_FAILED reason=bounded-retries-exhausted attempt=3 confirmed=false
 2026-10-04 22:35:41.483 RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck
 2026-10-04 22:35:51.543 SCREEN_RECOVERY_APPLIED screen=RESULT next=DISMISS_STALE_RESULT
+2026-10-04 22:36:02.808 RESULT_PAGE_DISMISSAL_INPUT input=KEYBOARD_ENTER dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:36:11.112 RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck
+2026-10-04 22:36:24.576 ERROR RESULT_PAGE_DISMISSAL_FAILED reason=bounded-retries-exhausted attempt=3 confirmed=false
+2026-10-04 22:36:27.043 RESULT_PAGE_DISMISSAL_INPUT input=KEYBOARD_ENTER dispatchAccepted=true acceptance=awaiting-current-client-postcheck
 
 POWERLOG authoritative terminal state (same run, second game):
 D 22:33:58.4090385 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=CONCEDED
