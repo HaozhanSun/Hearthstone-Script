@@ -15,9 +15,7 @@ import com.sun.jna.platform.win32.WinDef
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
-import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
-import java.awt.Robot
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.File
@@ -275,7 +273,7 @@ object UpstreamScreenStateRecovery {
                 }
                 null
             } else {
-                ScreenRecoveryAuthorityGate.captureIfAuthorized(evidence) { captureScreen() }
+                ScreenRecoveryAuthorityGate.captureIfAuthorized(evidence) { captureScreen(gameWindow) }
             }
         }
         if (!foregroundResult.foregroundConfirmed) {
@@ -309,6 +307,7 @@ object UpstreamScreenStateRecovery {
                 windowVerified = freshWindow != null && GameUtil.isVerifiedCurrentGameWindow(freshWindow),
                 foregroundConfirmed = true,
                 sameWindow = freshWindow?.toString() == capturedWindow.toString(),
+                capturedPixelsVerified = true,
             )
             if (!ScreenRecoveryAuthorityGate.isAuthorized(evidence)) {
                 authorityRejected = true
@@ -340,73 +339,18 @@ object UpstreamScreenStateRecovery {
         return window
     }
 
-    private fun captureScreen(): Capture? = runCatching {
-        if (GraphicsEnvironment.isHeadless()) return null
-        val allScreens = GraphicsEnvironment
-            .getLocalGraphicsEnvironment()
-            .screenDevices
-            .map { it.defaultConfiguration.bounds }
-            .fold(Rectangle()) { all, next -> all.union(next) }
-        if (allScreens.width <= 0 || allScreens.height <= 0) return null
-
-        // GAME_RECT is the most useful crop when the game is windowed. If it
-        // is not initialized yet, capture the desktop only for cheap visual
-        // checks and durable evidence; PaddleX receives bounded ROIs below.
-        val gameRect = ScriptStatus.GAME_RECT
-        val gameRectKnown = gameRect.right - gameRect.left >= 400 &&
-            gameRect.bottom - gameRect.top >= 300
-
-        // Recovery OCR is a desktop Robot capture.  The Beta UI can remain
-        // visible in front of Hearthstone, so without an explicit focus check
-        // the probe can OCR Codex/the script log instead of the game and leave
-        // the lifecycle permanently in mode=NONE.  Use the same bounded focus
-        // primitive as recovery input before taking the observation.  If the
-        // client cannot be made foreground, fail closed rather than treating
-        // unrelated desktop text as a Hearthstone screen.
-        val gameWindow = ScriptStatus.gameHWND
-        if (RuntimeSafety.safeNative && gameWindow != null) {
-            val focused = MouseUtil.focusWindowForInput(gameWindow)
-            log.info {
-                "SCREEN_RECOVERY_FOREGROUND gameWindow=$gameWindow confirmed=$focused"
-            }
-            if (!focused) {
-                log.warn {
-                    "SCREEN_RECOVERY_CAPTURE_SKIPPED reason=game-foreground-unconfirmed " +
-                        "gameWindow=$gameWindow"
-                }
-                return null
-            }
-        }
-        val candidate = if (gameRectKnown) {
-            Rectangle(
-                gameRect.left,
-                gameRect.top,
-                gameRect.right - gameRect.left,
-                gameRect.bottom - gameRect.top,
-            )
-        } else {
-            allScreens
-        }
-        val bounds = candidate.intersection(allScreens)
-        if (bounds.width < 400 || bounds.height < 300) return null
-        val image = try {
-            Robot().createScreenCapture(bounds)
-        } catch (_: Exception) {
-            Robot().createScreenCapture(allScreens)
-        }
+    private fun captureScreen(hwnd: WinDef.HWND): Capture? {
+        val authorizedFrame = ScreenRecoveryWindowCapture.capture(hwnd) ?: return null
+        val image = authorizedFrame.image
         val saved = DebugScreenshotRing.save(image, "screen-recovery", "stale-screen")
-        val file = saved?.file
-        Capture(
+        return Capture(
             image,
-            bounds,
-            file,
+            authorizedFrame.bounds,
+            saved?.file,
             visualSignature(image),
-            gameRectKnown,
-            ScriptStatus.gameHWND != null,
+            gameRectKnown = true,
+            gameWindowKnown = true,
         )
-    }.getOrElse { error ->
-        log.warn(error) { "SCREEN_RECOVERY_FAILED reason=capture-exception" }
-        null
     }
 
     private fun runOCR(capture: Capture): String {

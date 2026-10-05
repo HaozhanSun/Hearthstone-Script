@@ -13,6 +13,7 @@ import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
+import club.xiaojiawei.hsscript.status.CurrentGameScreenReadinessPolicy
 import club.xiaojiawei.hsscript.status.BetaScreenRecoveryService
 import club.xiaojiawei.hsscript.utils.*
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
@@ -368,9 +369,40 @@ class GameStarter : AbstractStarter() {
                 val deadline = System.currentTimeMillis() + 15_000L
                 while (System.currentTimeMillis() < deadline && !PauseStatus.isPause) {
                     attempt++
+                    val gameWindow = ScriptStatus.gameHWND
+                    val gameWindowVerified = gameWindow != null &&
+                        GameUtil.isVerifiedCurrentGameWindow(gameWindow)
+                    val attachedPowerLog = PowerLogListener.logFile
+                    val currentSessionPowerLog = GameUtil.getLatestLogDir()?.resolve("Power.log")
+                    val powerLogLength = attachedPowerLog?.length() ?: 0L
+                    val probeReady = CurrentGameScreenReadinessPolicy.isReady(
+                        gameWindowVerified = gameWindowVerified,
+                        attachedPowerLogPath = attachedPowerLog?.path(),
+                        currentSessionPowerLogPath = currentSessionPowerLog?.absolutePath,
+                        powerLogLength = powerLogLength,
+                    )
+                    if (!probeReady) {
+                        val reason = when {
+                            !gameWindowVerified -> "game-window-unverified"
+                            attachedPowerLog == null -> "power-log-unbound"
+                            attachedPowerLog.path() != currentSessionPowerLog?.absolutePath -> "power-log-not-current-session"
+                            powerLogLength <= 0L -> "current-power-log-empty"
+                            else -> "startup-readiness-unknown"
+                        }
+                        log.info {
+                            "STARTUP_SCREEN_PROBE_DEFERRED attempt=$attempt reason=$reason " +
+                                "gameWindow=$gameWindow gameWindowVerified=$gameWindowVerified " +
+                                "powerLog=${attachedPowerLog?.path() ?: "none"} " +
+                                "currentPowerLog=${currentSessionPowerLog?.absolutePath ?: "none"} " +
+                                "powerLogLength=$powerLogLength"
+                        }
+                        Thread.sleep(1_000L)
+                        continue
+                    }
                     log.info {
                         "STARTUP_SCREEN_PROBE attempt=$attempt " +
-                            "gameWindow=${ScriptStatus.gameHWND != null} " +
+                            "gameWindow=$gameWindow gameWindowVerified=$gameWindowVerified " +
+                            "powerLog=${attachedPowerLog?.path() ?: "none"} powerLogLength=$powerLogLength " +
                             "working=${WorkTimeListener.working} war=${WarEx.inWar}"
                     }
                     val result = runCatching {

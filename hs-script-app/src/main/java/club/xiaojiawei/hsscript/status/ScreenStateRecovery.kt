@@ -18,13 +18,9 @@ import club.xiaojiawei.hsscript.utils.MouseUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
-import com.sun.jna.platform.win32.User32
 import com.sun.jna.platform.win32.WinDef
-import com.sun.jna.ptr.IntByReference
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
-import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
-import java.awt.Robot
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.File
@@ -225,7 +221,7 @@ object ScreenStateRecovery {
             ) {
                 null
             } else {
-                captureScreen(currentWindow, allowCachedGameRect = false)
+                captureScreen(currentWindow)
             }
         }
         if (!ScreenRecoveryRuntime.isCurrent(recoveryToken) || !captureResult.foregroundConfirmed) return null
@@ -294,10 +290,10 @@ object ScreenStateRecovery {
                 // replacing the startup coordinate sentinel. Resolve it
                 // again inside the foreground lease so capture and focus use
                 // the same live window.
-                captureScreen(ScriptStatus.gameHWND ?: gameWindow, allowCachedGameRect = false)
+                captureScreen(ScriptStatus.gameHWND ?: gameWindow)
             }
         } else {
-            MouseUtil.RecoveryForegroundResult(true, captureScreen(gameWindow, allowCachedGameRect = false))
+            MouseUtil.RecoveryForegroundResult(true, captureScreen(gameWindow))
         }
         if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return InspectionResult.DISABLED
         val powerLog = PowerLogListener.logFile
@@ -464,10 +460,10 @@ object ScreenStateRecovery {
             )
         val captureResult = if (RuntimeSafety.safeNative) {
             MouseUtil.withRecoveryForeground(gameWindow) {
-                captureScreen(ScriptStatus.gameHWND ?: gameWindow, allowCachedGameRect = false)
+                captureScreen(ScriptStatus.gameHWND ?: gameWindow)
             }
         } else {
-            MouseUtil.RecoveryForegroundResult(true, captureScreen(gameWindow, allowCachedGameRect = false))
+            MouseUtil.RecoveryForegroundResult(true, captureScreen(gameWindow))
         }
         if (!captureResult.foregroundConfirmed) {
             return StartGameErrorDialogProbe(
@@ -562,117 +558,20 @@ object ScreenStateRecovery {
         )
     }
 
-    private fun captureScreen(
-        hwnd: WinDef.HWND? = ScriptStatus.gameHWND,
-        allowCachedGameRect: Boolean = true,
-    ): Capture? = runCatching {
-        if (GraphicsEnvironment.isHeadless()) return null
-        val allScreens = GraphicsEnvironment
-            .getLocalGraphicsEnvironment()
-            .screenDevices
-            .map { it.defaultConfiguration.bounds }
-            .fold(Rectangle()) { all, next -> all.union(next) }
-        if (allScreens.width <= 0 || allScreens.height <= 0) return null
-
-        // GAME_RECT is the most useful crop when the game is windowed. If it
-        // is not initialized yet, resolve the client window itself. Never use
-        // the entire desktop: the script UI and other windows can otherwise
-        // be mistaken for Hearthstone and the image is unnecessarily large.
-        val gameRect = ScriptStatus.GAME_RECT
-        val gameRectKnown = gameRect.right - gameRect.left >= 400 &&
-            gameRect.bottom - gameRect.top >= 300
-
-        // Prefer the live HWND rectangle over the cached GAME_RECT. The
-        // cached rectangle can describe a previous fullscreen client while a
-        // launcher/restart has already produced a new window elsewhere.
-        val liveWindowRect = gameWindowBounds(hwnd)
-        val candidate = if (liveWindowRect != null) {
-            liveWindowRect
-        } else if (allowCachedGameRect && gameRectKnown) {
-            Rectangle(
-                gameRect.left,
-                gameRect.top,
-                gameRect.right - gameRect.left,
-                gameRect.bottom - gameRect.top,
-            )
-        } else if (allowCachedGameRect) {
-            gameWindowBounds(ScriptStatus.gameHWND)
-                ?: run {
-                    log.info { "SCREEN_RECOVERY_CAPTURE_SKIPPED reason=game-bounds-unknown" }
-                    return null
-                }
-        } else {
-            log.warn { "SCREEN_RECOVERY_CAPTURE_SKIPPED reason=live-window-bounds-unknown hwnd=$hwnd" }
-            return null
-        }
-        val bounds = candidate.intersection(allScreens)
-        if (bounds.width < 400 || bounds.height < 300) return null
-
-        val foregroundBefore = User32.INSTANCE.GetForegroundWindow()
-        val targetPid = hwnd?.let(::windowProcessId) ?: 0
-        val currentGamePid = GameUtil.findGameProcessIdForDiagnostics()
-        val foregroundPidBefore = foregroundBefore?.let(::windowProcessId) ?: 0
-        val foregroundBeforeOk = hwnd != null &&
-            targetPid > 0 && currentGamePid == targetPid.toLong() &&
-            GameWindowReadiness.sameVisibleGameProcess(
-                targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
-                foregroundVisible = foregroundBefore?.let(User32.INSTANCE::IsWindowVisible) ?: false,
-                targetPid = targetPid,
-                foregroundPid = foregroundPidBefore,
-            )
-        log.info {
-            "SCREEN_RECOVERY_CAPTURE_GATE phase=before hwnd=$hwnd " +
-                "foreground=$foregroundBefore targetPid=$targetPid foregroundPid=$foregroundPidBefore " +
-                "accepted=$foregroundBeforeOk bounds=$bounds"
-        }
-        if (!foregroundBeforeOk) {
-            log.warn { "SCREEN_RECOVERY_CAPTURE_REJECTED phase=before reason=foreground-mismatch hwnd=$hwnd" }
-            return null
-        }
-        val image = Robot().createScreenCapture(bounds)
-        val foregroundAfter = User32.INSTANCE.GetForegroundWindow()
-        val foregroundPidAfter = foregroundAfter?.let(::windowProcessId) ?: 0
-        val foregroundAfterOk = hwnd != null &&
-            targetPid > 0 && currentGamePid == targetPid.toLong() &&
-            GameUtil.findGameProcessIdForDiagnostics() == targetPid.toLong() &&
-            GameWindowReadiness.sameVisibleGameProcess(
-                targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
-                foregroundVisible = foregroundAfter?.let(User32.INSTANCE::IsWindowVisible) ?: false,
-                targetPid = targetPid,
-                foregroundPid = foregroundPidAfter,
-            )
-        val captureAccepted = targetPid > 0 && currentGamePid == targetPid.toLong() &&
-            GameUtil.findGameProcessIdForDiagnostics() == targetPid.toLong() &&
-            GameWindowReadiness.captureRemainsOnGame(
-                targetVisible = User32.INSTANCE.IsWindowVisible(hwnd),
-                foregroundVisibleBefore = foregroundBefore?.let(User32.INSTANCE::IsWindowVisible) ?: false,
-                foregroundVisibleAfter = foregroundAfter?.let(User32.INSTANCE::IsWindowVisible) ?: false,
-                targetPid = targetPid,
-                foregroundPidBefore = foregroundPidBefore,
-                foregroundPidAfter = foregroundPidAfter,
-            )
-        log.info {
-            "SCREEN_RECOVERY_CAPTURE_GATE phase=after hwnd=$hwnd " +
-                "foreground=$foregroundAfter targetPid=$targetPid foregroundPid=$foregroundPidAfter " +
-                "accepted=$captureAccepted beforeAccepted=$foregroundBeforeOk bounds=$bounds"
-        }
-        if (!captureAccepted) {
-            log.warn { "SCREEN_RECOVERY_CAPTURE_REJECTED phase=after reason=foreground-changed hwnd=$hwnd" }
-            return null
-        }
+    private fun captureScreen(hwnd: WinDef.HWND?): Capture? {
+        val authorizedFrame = ScreenRecoveryWindowCapture.capture(hwnd) ?: return null
+        val image = authorizedFrame.image
+        val bounds = authorizedFrame.bounds
         val saved = DebugScreenshotRing.save(image, "screen-recovery", "stale-screen")
         val file = saved?.file
-        Capture(
+        return Capture(
             image,
             bounds,
             file,
             visualSignature(image),
-            gameRectKnown,
-            ScriptStatus.gameHWND != null,
+            gameRectKnown = true,
+            gameWindowKnown = true,
         )
-    }.getOrElse { error ->
-        log.warn(error) { "SCREEN_RECOVERY_FAILED reason=capture-exception" }
-        null
     }
 
     private fun runOCR(capture: Capture): OcrEvidence {
@@ -764,19 +663,6 @@ object ScreenStateRecovery {
     private fun crop(image: BufferedImage, bounds: Rectangle): BufferedImage {
         val safe = bounds.intersection(Rectangle(0, 0, image.width, image.height))
         return image.getSubimage(safe.x, safe.y, safe.width.coerceAtLeast(1), safe.height.coerceAtLeast(1))
-    }
-
-    private fun gameWindowBounds(hwnd: WinDef.HWND?): Rectangle? {
-        if (hwnd == null) return null
-        val windowRect = WinDef.RECT()
-        if (!User32.INSTANCE.GetWindowRect(hwnd, windowRect)) return null
-        val width = windowRect.right - windowRect.left
-        val height = windowRect.bottom - windowRect.top
-        return if (width >= 400 && height >= 300) {
-            Rectangle(windowRect.left, windowRect.top, width, height)
-        } else {
-            null
-        }
     }
 
     private fun resizeForOcr(image: BufferedImage): BufferedImage {
@@ -1040,12 +926,6 @@ object ScreenStateRecovery {
             )
         }
         return null
-    }
-
-    private fun windowProcessId(hwnd: WinDef.HWND): Int {
-        val pid = IntByReference()
-        User32.INSTANCE.GetWindowThreadProcessId(hwnd, pid)
-        return pid.value
     }
 
     internal fun looksLikeReconnectDialogRoiText(ocrText: String): Boolean {
@@ -1446,7 +1326,7 @@ object ScreenStateRecovery {
             ?: return UpstreamScreenStateRecovery.isResultVisibleForRecovery()
         return runCatching {
             val liveWindow = resolveLiveGameWindow() ?: return@runCatching null
-            val capture = captureScreen(liveWindow, allowCachedGameRect = false) ?: return@runCatching null
+            val capture = captureScreen(liveWindow) ?: return@runCatching null
             if (!ScreenRecoveryRuntime.isCurrent(token)) return@runCatching null
             val detection = detect(runOCR(capture), capture.visual)
             if (!ScreenRecoveryRuntime.isCurrent(token)) return@runCatching null
@@ -1562,7 +1442,7 @@ object ScreenStateRecovery {
             if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return false
             val liveWindow = resolveLiveGameWindow()
             if (liveWindow != null) {
-                val capture = captureScreen(liveWindow, allowCachedGameRect = false)
+                val capture = captureScreen(liveWindow)
                 if (capture != null) {
                     val observed = detect(runOCR(capture), capture.visual)
                     val mode = Mode.currMode
@@ -1645,7 +1525,7 @@ object ScreenStateRecovery {
                 if (currentWindow == null || currentWindow.toString() != hwnd.toString() || currentPid != sourcePid) {
                     null
                 } else {
-                    captureScreen(currentWindow, allowCachedGameRect = false)
+                    captureScreen(currentWindow)
                 }
             }
             val capture = frameResult.value

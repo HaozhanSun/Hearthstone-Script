@@ -5,13 +5,11 @@ import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrCancelledException
 import club.xiaojiawei.hsscript.utils.ConfigUtil
+import club.xiaojiawei.hsscript.utils.GameUtil
+import club.xiaojiawei.hsscript.utils.MouseUtil
 import club.xiaojiawei.hsscriptbase.config.log
-import com.sun.jna.platform.win32.User32
-import com.sun.jna.platform.win32.WinDef
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
-import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
-import java.awt.Robot
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.File
@@ -877,31 +875,35 @@ object ScreenWatchdog {
             fields.contains("myturn=true")
     }
 
-    private fun captureScreen(): BufferedImage? = captureScreen(
-        preferCurrentGameWindow = ScreenRecoveryRuntime.isEnabled(),
-    )
+    private fun captureScreen(): BufferedImage? = captureCurrentGameWindow()
 
     /** Mandatory rank recovery is a narrowly gated exception to the optional general Beta recovery switch. */
-    private fun captureMandatoryRankRecoveryScreen(): BufferedImage? = captureScreen(preferCurrentGameWindow = true)
+    private fun captureMandatoryRankRecoveryScreen(): BufferedImage? = captureCurrentGameWindow()
 
-    private fun captureScreen(preferCurrentGameWindow: Boolean): BufferedImage? = runCatching {
-        if (GraphicsEnvironment.isHeadless()) return null
-        val allScreens = GraphicsEnvironment
-            .getLocalGraphicsEnvironment()
-            .screenDevices
-            .map { it.defaultConfiguration.bounds }
-            .fold(Rectangle()) { all, next -> all.union(next) }
-        if (allScreens.width <= 0 || allScreens.height <= 0) return null
-        val bounds = gameBounds(allScreens, preferCurrentGameWindow)
-            ?: run {
-                log.info { "SCREEN_WATCHDOG_CAPTURE_SKIPPED reason=game-bounds-unknown" }
-                return null
+    private fun captureCurrentGameWindow(): BufferedImage? {
+        val hwnd = ScriptStatus.gameHWND
+        if (hwnd == null || !GameUtil.isAliveOfGame() || !GameUtil.isVerifiedCurrentGameWindow(hwnd)) {
+            log.warn { "SCREEN_WATCHDOG_CAPTURE_REJECTED reason=current-game-window-unverified hwnd=${hwnd ?: "none"}" }
+            return null
+        }
+        val captureResult = MouseUtil.withRecoveryForeground(hwnd) {
+            val current = ScriptStatus.gameHWND
+                ?.takeIf { it.toString() == hwnd.toString() }
+                ?.takeIf(GameUtil::isVerifiedCurrentGameWindow)
+            if (current == null) {
+                null
+            } else {
+                ScreenRecoveryWindowCapture.capture(current)?.image
             }
-        if (bounds.width < 400 || bounds.height < 300) return null
-        Robot().createScreenCapture(bounds)
-    }.getOrElse { error ->
-        log.warn(error) { "SCREEN_WATCHDOG_CAPTURE_FAILED reason=capture-exception" }
-        null
+        }
+        if (!captureResult.foregroundConfirmed || captureResult.value == null) {
+            log.warn {
+                "SCREEN_WATCHDOG_CAPTURE_REJECTED reason=${if (captureResult.foregroundConfirmed) "pixel-authority-failed" else "foreground-unconfirmed"} " +
+                    "hwnd=$hwnd"
+            }
+            return null
+        }
+        return captureResult.value
     }
 
     private fun runOCR(image: BufferedImage): String {
@@ -929,43 +931,6 @@ object ScreenWatchdog {
             graphics.dispose()
         }
         return resized
-    }
-
-    /** Resolve only the Hearthstone client bounds; never OCR the whole desktop. */
-    private fun gameBounds(
-        allScreens: Rectangle,
-        preferCurrentGameWindow: Boolean = ScreenRecoveryRuntime.isEnabled(),
-    ): Rectangle? {
-        val gameRect = ScriptStatus.GAME_RECT
-        val cachedGameBounds = if (gameRect.right - gameRect.left >= 400 && gameRect.bottom - gameRect.top >= 300) {
-            Rectangle(
-                gameRect.left,
-                gameRect.top,
-                gameRect.right - gameRect.left,
-                gameRect.bottom - gameRect.top,
-            )
-        } else {
-            null
-        }
-        val hwnd = ScriptStatus.gameHWND
-        val windowRect = WinDef.RECT()
-        val currentWindowBounds = hwnd
-            ?.takeIf { User32.INSTANCE.IsWindow(it) }
-            ?.takeIf { User32.INSTANCE.GetWindowRect(it, windowRect) }
-            ?.let {
-                Rectangle(
-                    windowRect.left,
-                    windowRect.top,
-                    windowRect.right - windowRect.left,
-                    windowRect.bottom - windowRect.top,
-                )
-            }
-        return ScreenWatchdogCaptureBoundsPolicy.select(
-            cachedGameBounds = cachedGameBounds,
-            currentWindowBounds = currentWindowBounds,
-            desktopBounds = allScreens,
-            betaExtensionsEnabled = preferCurrentGameWindow,
-        )
     }
 
     private fun sanitize(value: String): String = value
