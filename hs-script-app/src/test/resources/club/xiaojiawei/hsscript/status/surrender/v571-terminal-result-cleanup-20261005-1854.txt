@@ -1,0 +1,13 @@
+Captured live v4.16.571 terminal-cleanup incident excerpt; source run was not counted as a successful cleanup.
+Controller PID=95700; Hearthstone PID=98660 (both subsequently stopped before this offline regression work).
+Power.log=D:\Hearthstone\Logs\Hearthstone_2026_10_05_18_51_57\Power.log
+18:54:02.8793411 PLAYSTATE=CONCEDED
+18:54:02.8793411 PLAYSTATE=LOST (local player)
+18:54:02.8793411 PLAYSTATE=WON (opponent)
+18:54:02.8793411 FINAL_GAMEOVER
+18:54:02.8793411 STATE=COMPLETE
+hs_script.log 18:54:08.012 sameGame=true ownPlayState=LOST opponentPlayState=UNKNOWN finalGameOver=true complete=true playerTerminal=LOST (authoritative terminal proof accepted)
+hs_script.log 18:56:43.093 RESULT_PAGE_CLEANUP_FAILED reason=episode-deadline-exceeded inputs=0 probes=3
+Observed screenshot after failure: v571-defeat-result-20261005-185648-493.png; Hearthstone visibly showed the defeat panel and “点击继续”.
+Earlier same-run screenshot: v571-defeat-result-20261005-185448-467.png; same defeat panel was visible.
+The result-panel clicks were not dispatched in this failed experiment. This fixture is regression input/evidence only, not a successful live E2E result.

@@ -39,8 +39,6 @@ object UpstreamScreenStateRecovery {
 
     private const val MAX_OCR_TEXT_LENGTH = 500
     private const val OCR_MAX_WIDTH = 1280
-    private const val RESULT_CONTINUE_GRAY_LIGHT_MIN = 0.025
-    private const val RESULT_BANNER_LOW_SATURATION_MIN = 0.30
     private const val RECONNECT_RETRY_INTERVAL_MS = 60_000L
     /**
      * The client displays a distinct slow-connection warning only after a
@@ -59,6 +57,7 @@ object UpstreamScreenStateRecovery {
         TOURNAMENT("TOURNAMENT"),
         MATCHMAKING("MATCHMAKING"),
         RESULT("RESULT"),
+        RANK_PROGRESS_CONTINUATION("RANK_PROGRESS_CONTINUATION"),
         RECONNECT("RECONNECT"),
         RECONNECT_FAILURE("RECONNECT_FAILURE"),
         LOGIN("LOGIN"),
@@ -100,6 +99,7 @@ object UpstreamScreenStateRecovery {
         val loadingCentralDarkRatio: Double,
         val resultContinueGrayLightRatio: Double,
         val resultBannerLowSaturationRatio: Double,
+        val resultBannerWarmRatio: Double = 0.0,
     ) {
         override fun toString(): String =
             "hash=${java.lang.Long.toUnsignedString(sampleHash, 16)} " +
@@ -107,13 +107,15 @@ object UpstreamScreenStateRecovery {
                 "blueRatio=${"%.3f".format(Locale.ROOT, blueRatio)} " +
                 "loadingCentralDark=${"%.3f".format(Locale.ROOT, loadingCentralDarkRatio)} " +
                 "resultContinueGrayLight=${"%.3f".format(Locale.ROOT, resultContinueGrayLightRatio)} " +
-                "resultBannerLowSaturation=${"%.3f".format(Locale.ROOT, resultBannerLowSaturationRatio)}"
+                "resultBannerLowSaturation=${"%.3f".format(Locale.ROOT, resultBannerLowSaturationRatio)} " +
+                "resultBannerWarm=${"%.3f".format(Locale.ROOT, resultBannerWarmRatio)}"
     }
 
     private data class RegionSignal(
         val grayLightRatio: Double,
         val lowSaturationRatio: Double,
         val darkRatio: Double,
+        val warmRatio: Double = 0.0,
     )
 
     private data class Detection(
@@ -489,6 +491,7 @@ object UpstreamScreenStateRecovery {
             loadingCentralDarkRatio = loadingCenterSignal.darkRatio,
             resultContinueGrayLightRatio = continueSignal.grayLightRatio,
             resultBannerLowSaturationRatio = bannerSignal.lowSaturationRatio,
+            resultBannerWarmRatio = bannerSignal.warmRatio,
         )
     }
 
@@ -507,6 +510,7 @@ object UpstreamScreenStateRecovery {
         var grayLight = 0
         var lowSaturation = 0
         var dark = 0
+        var warm = 0
         var y = y0
         while (y < y1) {
             var x = x0
@@ -521,16 +525,18 @@ object UpstreamScreenStateRecovery {
                 if (maximum - minimum <= 35) lowSaturation++
                 if (maximum - minimum <= 35 && average >= 180) grayLight++
                 if (average < 70) dark++
+                if (r > 70 && r > g * 1.12 && r > b * 1.12) warm++
                 samples++
                 x += 2
             }
             y += 2
         }
-        if (samples == 0) return RegionSignal(0.0, 0.0, 0.0)
+        if (samples == 0) return RegionSignal(0.0, 0.0, 0.0, 0.0)
         return RegionSignal(
             grayLightRatio = grayLight.toDouble() / samples,
             lowSaturationRatio = lowSaturation.toDouble() / samples,
             darkRatio = dark.toDouble() / samples,
+            warmRatio = warm.toDouble() / samples,
         )
     }
 
@@ -542,10 +548,30 @@ object UpstreamScreenStateRecovery {
         if (text.contains("选择套牌") || has("套牌", "狂野对战")) {
             return Detection(ScreenKind.DECK_SELECTION, ModeEnum.TOURNAMENT, 100, "deck-selection-title")
         }
-        if (looksLikeResultText(text)) {
+        if (ResultPageEvidencePolicy.looksLikeRankProgressContinuationVisual(
+                visual.resultContinueGrayLightRatio,
+                visual.resultBannerLowSaturationRatio,
+                visual.loadingCentralDarkRatio,
+                visual.resultBannerWarmRatio,
+            )
+        ) {
+            return Detection(
+                ScreenKind.RANK_PROGRESS_CONTINUATION,
+                ModeEnum.GAMEPLAY,
+                93,
+                "post-result-rank-progress-visual",
+            )
+        }
+        if (ResultPageEvidencePolicy.looksLikeResultText(text)) {
             return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 95, "result-text")
         }
-        if (looksLikeResultVisual(visual.resultContinueGrayLightRatio, visual.resultBannerLowSaturationRatio)) {
+        if (looksLikeResultVisual(
+                visual.resultContinueGrayLightRatio,
+                visual.resultBannerLowSaturationRatio,
+                visual.loadingCentralDarkRatio,
+                visual.resultBannerWarmRatio,
+            )
+        ) {
             return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
         }
         // The live client uses "搜寻对手" while some localized/client builds
@@ -776,15 +802,8 @@ object UpstreamScreenStateRecovery {
      * path treats the page as actionable from its phase event; this fallback
      * uses the same action label for a stale-screen recovery path.
      */
-    internal fun looksLikeResultText(ocrText: String): Boolean {
-        val text = ocrText.lowercase(Locale.ROOT)
-            .replace("写击继续", "点击继续")
-            .replace("击继续", "点击继续")
-        return text.contains("点击继续") ||
-            text.contains("胜利") && text.contains("继续") ||
-            text.contains("失败") && text.contains("继续") ||
-            text.contains("对战结束") && text.contains("继续")
-    }
+    internal fun looksLikeResultText(ocrText: String): Boolean =
+        ResultPageEvidencePolicy.looksLikeResultText(ocrText)
 
     /**
      * OCR-free result-page fallback.  A single bright pixel cluster is not
@@ -794,9 +813,18 @@ object UpstreamScreenStateRecovery {
     internal fun looksLikeResultVisual(
         resultContinueGrayLightRatio: Double,
         resultBannerLowSaturationRatio: Double,
-    ): Boolean =
-        resultContinueGrayLightRatio >= RESULT_CONTINUE_GRAY_LIGHT_MIN &&
-            resultBannerLowSaturationRatio >= RESULT_BANNER_LOW_SATURATION_MIN
+        loadingCentralDarkRatio: Double,
+        resultBannerWarmRatio: Double,
+    ): Boolean = ResultPageEvidencePolicy.looksLikeResultVisual(
+        resultContinueGrayLightRatio,
+        resultBannerLowSaturationRatio,
+        loadingCentralDarkRatio,
+        resultBannerWarmRatio,
+    )
+
+    /** Offline replay seam for exact captured client frames. */
+    internal fun classifyImageForResultFixture(image: BufferedImage): String? =
+        detect("", visualSignature(image))?.kind?.code
 
     /**
      * Re-check the actual desktop after a result-page input was sent.
@@ -810,7 +838,12 @@ object UpstreamScreenStateRecovery {
         val authorizedCapture = captureVerifiedGameScreen()
             ?: return@runCatching ResultScreenObservation(null, captureAuthorized = false)
         val detection = detect(runOCR(authorizedCapture.capture), authorizedCapture.capture.visual)
-        ResultScreenObservation(resultPageVisibility(detection), captureAuthorized = true)
+        ResultScreenObservation(
+            resultVisible = resultPageVisibility(detection),
+            captureAuthorized = true,
+            visualOnlyResultEvidence = detection?.evidence == "result-fixed-continue-visual",
+            rankProgressVisible = detection?.kind?.code == "RANK_PROGRESS_CONTINUATION",
+        )
     }.getOrElse { error ->
         log.warn(error) { "SCREEN_RECOVERY_RESULT_POSTCHECK_FAILED" }
         ResultScreenObservation(null, captureAuthorized = false)
@@ -919,6 +952,30 @@ object UpstreamScreenStateRecovery {
                     resultAlreadyObserved = true,
                     terminalCleanupCapability = cleanupCapability,
                 )
+            }
+
+            ScreenKind.RANK_PROGRESS_CONTINUATION -> {
+                val cleanupCapability =
+                    club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+                        .existingTerminalCleanupCapability()
+                if (club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+                        .isTerminalCleanupCapabilityValid(cleanupCapability)
+                ) {
+                    Mode.recover(ModeEnum.GAMEPLAY, "visible-post-result-rank-progress", enterStrategy = false)
+                    log.info {
+                        "SCREEN_RECOVERY_APPLIED screen=RANK_PROGRESS_CONTINUATION " +
+                            "action=CONTINUE_WITH_TERMINAL_CAPABILITY"
+                    }
+                    GameUtil.dismissStaleGameEndScreen(
+                        resultAlreadyObserved = true,
+                        terminalCleanupCapability = cleanupCapability,
+                    )
+                } else {
+                    log.warn {
+                        "SCREEN_RECOVERY_RANK_PROGRESS_BLOCKED reason=terminal-cleanup-capability-required " +
+                            "dispatch=false"
+                    }
+                }
             }
 
             ScreenKind.MATCHMAKING -> {

@@ -1,0 +1,22 @@
+Live v4.16.574-local terminal-cleanup failure evidence (offline fixture excerpt)
+Controller PID: 98800
+Hearthstone PID: 89336
+Power.log: D:\Hearthstone\Logs\Hearthstone_2026_10_05_20_36_29\Power.log
+Script log: C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script Beta\log\hs_script.log
+Result screenshot: debug-20261005-204311-968-screen-recovery-96eb2f39-5b72-4b21-a2f7-4b68000284b9.png
+Screenshot SHA-256: 75E4D321FFCD6285C99D6F0545E4E0935F1B149E8A364BAAA299E66A318740A8
+
+Authoritative Power.log lines 1109-1122:
+20:38:33.4230543 own laz#12793 PLAYSTATE=CONCEDED
+20:38:33.4230543 own laz#12793 PLAYSTATE=LOST
+20:38:33.4230543 opponent FwHLRB#3332 PLAYSTATE=WON
+20:38:33.4230543 GameEntity STEP=FINAL_GAMEOVER STATE=COMPLETE
+
+Script hs_script.log line 18643:
+2026-10-05 20:41:08.033 RESULT_PAGE_CLEANUP_FAILED reason=episode-deadline-exceeded inputs=0 probes=3 confirmed=false dispatch=false
+
+Current-session capture and classification at script log lines 18723, 18727, 18729-18730:
+2026-10-05 20:43:11.968 GAME_WINDOW_PIXEL_AUTHORITY targetPid=89336 accepted=true reason=exact-client-visible
+2026-10-05 20:43:12.348 SCREEN_RECOVERY_TRIGGER visual=loadingCentralDark=0.229 resultContinueGrayLight=0.040 resultBannerLowSaturation=0.525 resultBannerWarm=0.410
+2026-10-05 20:43:25.537 SCREEN_RECOVERY_OBSERVATION provider=LEGACY detected=UNKNOWN confidence=0 evidence=none
+2026-10-05 20:43:25.920 SCREEN_RECOVERY_UNRESOLVED confidence=0 screenshot=debug-20261005-204311-968-screen-recovery-96eb2f39-5b72-4b21-a2f7-4b68000284b9.png

@@ -164,4 +164,73 @@ class TerminalPageCleanupCoordinatorTest {
         assertEquals(TerminalPageCleanupCoordinator.BeginState.FAILED, coordinator.begin().state)
         assertEquals(0, coordinator.snapshot().inputs)
     }
+
+    @Test
+    fun `single flight owner expires by elapsed time even when probes are slow`() {
+        var nowMillis = 10_000L
+        val coordinator = TerminalPageCleanupCoordinator(
+            maxDurationMillis = 120_000L,
+            monotonicTimeMillis = { nowMillis },
+        )
+        val owner = coordinator.begin().ticket!!
+        assertEquals(1, coordinator.nextProbe(owner))
+        assertEquals(1, coordinator.reserveInput(owner))
+
+        nowMillis += 119_999L
+        assertEquals(TerminalPageCleanupCoordinator.BeginState.ALREADY_RUNNING, coordinator.begin().state)
+        nowMillis += 1L
+
+        val expired = coordinator.begin()
+        assertEquals(TerminalPageCleanupCoordinator.BeginState.FAILED, expired.state)
+        assertEquals(TerminalPageCleanupCoordinator.State.FAILED, coordinator.snapshot().state)
+        assertEquals("episode-deadline-exceeded", coordinator.snapshot().failureReason)
+        assertNull(coordinator.nextProbe(owner), "the expired owner cannot dispatch another UI action")
+        assertEquals(1, coordinator.snapshot().inputs)
+        assertNull(
+            coordinator.rearmAfterNoInputDeadline(expired.ticket!!, freshCaptureAuthorized = true, resultPageVisible = true),
+            "a deadline after an input must never renew the dispatch budget",
+        )
+    }
+
+    @Test
+    fun `zero-input deadline permits only one fresh authorized positive-result rearm and keeps budgets cumulative`() {
+        var nowMillis = 50_000L
+        val coordinator = TerminalPageCleanupCoordinator(
+            maxDurationMillis = 100L,
+            monotonicTimeMillis = { nowMillis },
+        )
+        val first = coordinator.begin().ticket!!
+        repeat(3) { assertNotNull(coordinator.nextProbe(first)) }
+        nowMillis += 100L
+        val expired = coordinator.begin()
+        assertEquals(TerminalPageCleanupCoordinator.BeginState.FAILED, expired.state)
+        assertEquals("episode-deadline-exceeded", coordinator.snapshot().failureReason)
+        assertEquals(0, coordinator.snapshot().inputs)
+
+        assertNull(
+            coordinator.rearmAfterNoInputDeadline(expired.ticket!!, freshCaptureAuthorized = false, resultPageVisible = true),
+            "unverified pixels cannot reopen an expired episode",
+        )
+        assertNull(
+            coordinator.rearmAfterNoInputDeadline(expired.ticket!!, freshCaptureAuthorized = true, resultPageVisible = null),
+            "UNKNOWN is not a result-page authorization",
+        )
+        val rearmed = requireNotNull(
+            coordinator.rearmAfterNoInputDeadline(expired.ticket!!, freshCaptureAuthorized = true, resultPageVisible = true),
+        )
+        assertEquals(TerminalPageCleanupCoordinator.State.RUNNING, coordinator.snapshot().state)
+        assertEquals(3, coordinator.snapshot().probes, "probe budget is cumulative across the bounded rearm")
+        assertEquals(0, coordinator.snapshot().inputs)
+        assertEquals(1, coordinator.snapshot().failedEpisodeRearms)
+        assertNull(coordinator.nextProbe(first), "the pre-expiry worker loses its single-flight lease")
+        assertEquals(4, coordinator.nextProbe(rearmed))
+        assertEquals(1, coordinator.reserveInput(rearmed), "dispatch remains explicitly budgeted after fresh result evidence")
+
+        assertTrue(coordinator.fail(rearmed, "episode-deadline-exceeded"))
+        val failedAgain = coordinator.begin()
+        assertNull(
+            coordinator.rearmAfterNoInputDeadline(failedAgain.ticket!!, freshCaptureAuthorized = true, resultPageVisible = true),
+            "one terminal generation may be rearmed at most once",
+        )
+    }
 }

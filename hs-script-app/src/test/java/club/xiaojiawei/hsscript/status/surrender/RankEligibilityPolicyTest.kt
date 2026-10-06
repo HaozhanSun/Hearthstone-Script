@@ -37,6 +37,13 @@ class RankEligibilityPolicyTest {
     }
 
     @Test
+    fun `rank three progression reward never authorizes ordinary play`() {
+        val decision = evaluate(detection(rank = 3, tier = CurrentRankDetector.RankTier.GOLD))
+        assertFalse(decision.eligible, "post-surrender Gold 3 screen is cleanup evidence, not play authorization")
+        assertEquals("rank-not-5-or-10", decision.reason)
+    }
+
+    @Test
     fun `all ranks other than exact five or ten including numeric Legend are denied`() {
         for (tier in CurrentRankDetector.RankTier.values()) {
             val decision = evaluate(detection(rank = 21, tier = tier))

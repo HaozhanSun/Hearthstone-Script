@@ -23,7 +23,9 @@ import club.xiaojiawei.hsscript.status.ScreenWatchdog
 import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 import club.xiaojiawei.hsscript.status.ScreenWatchdogRecoveryAction
 import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
+import club.xiaojiawei.hsscript.status.ResultPageEvidencePolicy
 import club.xiaojiawei.hsscript.status.ResultScreenObservation
+import club.xiaojiawei.hsscript.status.PostResultRankProgressPolicy
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
@@ -885,14 +887,21 @@ object GameUtil {
                         surrenderStopRequested.set(true)
                         surrenderFutureRef.get()?.let { task -> gameEndTasks.cancel(task) }
                     }
-                    if (mandatoryRank && MandatoryRankSurrenderGuard.isTerminalCleanupPending()) {
+                    fun stopForTerminalState(stage: String): Boolean {
+                        val terminalState = isTerminalGameState()
+                        val terminalProofAccepted = MandatoryRankSurrenderGuard.isTerminalCleanupPending()
+                        if (!ResultPageEvidencePolicy.shouldStopSurrenderRetry(terminalState, terminalProofAccepted)) {
+                            return false
+                        }
                         stopSurrenderTask()
                         log.info {
-                            "RANK_SURRENDER_STALE_RETRY_CANCELLED reason=terminal-proof-already-accepted " +
+                            "RANK_SURRENDER_STALE_RETRY_CANCELLED reason=terminal-state-priority stage=$stage " +
+                                "authoritativeTerminal=$terminalState terminalProofAccepted=$terminalProofAccepted " +
                                 "ordinaryInput=false requeue=false"
                         }
-                        return@scheduleWithFixedDelay
+                        return true
                     }
+                    if (stopForTerminalState("before-inspection")) return@scheduleWithFixedDelay
                     if (surrenderStopRequested.get()) return@scheduleWithFixedDelay
                     fun currentSurrenderTerminalCleanupCapability(): MandatoryRankSurrenderGuard.TerminalCleanupCapability? {
                         MandatoryRankSurrenderGuard.existingTerminalCleanupCapability()?.let { return it }
@@ -1015,11 +1024,9 @@ object GameUtil {
                         // to arrive while this scheduled callback is in flight.
                         // Discard that stale observation before its policy can
                         // relabel the released barrier or dispatch a click.
-                        if (MandatoryRankSurrenderGuard.isTerminalCleanupPending()) {
-                            stopSurrenderTask()
+                        if (stopForTerminalState("after-inspection")) {
                             log.info {
-                                "RANK_SURRENDER_STALE_RETRY_CANCELLED reason=terminal-proof-accepted-during-inspection " +
-                                    "observedScreen=${observation.kind} ordinaryInput=false requeue=false " +
+                                "RANK_SURRENDER_INSPECTION_DISCARDED observedScreen=${observation.kind} " +
                                     "screenshot=${observation.screenshotPath ?: "not-saved"}"
                             }
                             return@scheduleWithFixedDelay
@@ -1048,6 +1055,7 @@ object GameUtil {
                             }
                         }
                         val recoveryCapability = requireNotNull(mandatoryRankSurrenderCapability)
+                        if (stopForTerminalState("before-dispatch")) return@scheduleWithFixedDelay
                         when (decision.action) {
                             MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS -> {
                                 if (ActionDispatchGate.allow("surrender.retry.open-settings", recoveryCapability)) {
@@ -1543,6 +1551,24 @@ object GameUtil {
                             "RESULT_PAGE_DISMISSAL_CONFIRMED source=failed-episode-fresh-destination " +
                                 "inputs=${snapshot.inputs} probes=${snapshot.probes} dispatch=false"
                         }
+                        return
+                    }
+                    val rearmedTicket = begin.ticket?.let {
+                        terminalPageCleanupCoordinator.rearmAfterNoInputDeadline(
+                            failedTicket = it,
+                            freshCaptureAuthorized = observation.captureAuthorized &&
+                                MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCleanupCapability),
+                            resultPageVisible = observation.resultVisible,
+                        )
+                    }
+                    if (rearmedTicket != null) {
+                        log.warn {
+                            "RESULT_PAGE_CLEANUP_REARMED reason=zero-input-deadline-fresh-result " +
+                                "generation=${rearmedTicket.generation} priorProbes=${snapshot.probes} " +
+                                "inputs=${snapshot.inputs} rearm=${terminalPageCleanupCoordinator.snapshot().failedEpisodeRearms} " +
+                                "dispatch=false"
+                        }
+                        rearmedTicket
                     } else {
                         log.warn {
                             "RESULT_PAGE_CLEANUP_FAILED reason=episode-already-failed " +
@@ -1551,8 +1577,8 @@ object GameUtil {
                                 "captureAuthorized=${observation.captureAuthorized} " +
                                 "inputs=${snapshot.inputs} probes=${snapshot.probes} dispatch=false"
                         }
+                        return
                     }
-                    return
                 }
                 TerminalPageCleanupCoordinator.BeginState.COMPLETED -> {
                     log.info { "RESULT_PAGE_CLEANUP_SUPPRESSED reason=already-confirmed dispatch=false" }
@@ -1642,6 +1668,73 @@ object GameUtil {
                     } else {
                         clickAttempts.get()
                     }
+                    when (PostResultRankProgressPolicy.decide(
+                        rankProgressVisible = screenObservation.rankProgressVisible,
+                        terminalCleanupAuthorized = terminalCleanupStillAuthorized,
+                        captureAuthorized = screenObservation.captureAuthorized,
+                        rankProgressInputAttempts = cleanupTicket?.let {
+                            terminalPageCleanupCoordinator.snapshot().rankProgressInputs
+                        } ?: 0,
+                    )) {
+                        PostResultRankProgressPolicy.Action.CONTINUE -> {
+                            val reservedAttempt = cleanupTicket?.let {
+                                terminalPageCleanupCoordinator.reserveRankProgressInput(
+                                    it,
+                                    PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS,
+                                )
+                            }
+                            if (cleanupTicket == null || reservedAttempt == null) {
+                                cleanupTicket?.let {
+                                    terminalPageCleanupCoordinator.fail(it, "rank-progress-input-reservation-failed")
+                                }
+                                log.warn {
+                                    "RANK_PROGRESS_CONTINUE_BLOCKED reason=input-reservation-failed " +
+                                        "probe=$number dispatch=false"
+                                }
+                                future.cancel(false)
+                                gameEndTasks.remove(future)
+                                return@scheduleWithFixedDelay
+                            }
+                            val input = PostResultRankProgressPolicy.inputForAttempt(reservedAttempt)
+                            val accepted = when (input) {
+                                PostResultRankProgressPolicy.Input.CENTER_CLICK ->
+                                    MouseUtil.leftButtonClickForRecovery(
+                                        GAME_END_CONTINUE_RECT.getCenterClickPos(),
+                                        terminalCleanupCapability = terminalCleanupCapability,
+                                    )
+                                PostResultRankProgressPolicy.Input.KEYBOARD_ENTER ->
+                                    MouseUtil.pressEnterForRecovery(terminalCleanupCapability)
+                                null -> false
+                            }
+                            log.info {
+                                "RANK_PROGRESS_CONTINUE_INPUT input=$input dispatchAccepted=$accepted " +
+                                    "acceptance=awaiting-current-client-postcheck probe=$number " +
+                                    "sharedInput=$reservedAttempt"
+                            }
+                            return@scheduleWithFixedDelay
+                        }
+                        PostResultRankProgressPolicy.Action.WAIT_FOR_AUTHORIZED_CAPTURE -> {
+                            log.warn {
+                                "RANK_PROGRESS_CONTINUE_BLOCKED reason=terminal-proof-and-fresh-capture-required " +
+                                    "terminalCleanupAuthorized=$terminalCleanupStillAuthorized " +
+                                    "captureAuthorized=${screenObservation.captureAuthorized} dispatch=false"
+                            }
+                            return@scheduleWithFixedDelay
+                        }
+                        PostResultRankProgressPolicy.Action.INPUT_BUDGET_EXHAUSTED -> {
+                            cleanupTicket?.let {
+                                terminalPageCleanupCoordinator.fail(it, "rank-progress-input-budget-exhausted")
+                            }
+                            log.error {
+                                "RANK_PROGRESS_CONTINUE_FAILED reason=input-budget-exhausted " +
+                                    "probe=$number inputs=$clickNumber dispatch=false"
+                            }
+                            future.cancel(false)
+                            gameEndTasks.remove(future)
+                            return@scheduleWithFixedDelay
+                        }
+                        PostResultRankProgressPolicy.Action.NOT_APPLICABLE -> Unit
+                    }
                     when (ResultPageDismissalPolicy.decide(
                             inWar = WarEx.inWar,
                             resultPageVisible = visible,
@@ -1650,6 +1743,7 @@ object GameUtil {
                             clickAttempts = clickNumber,
                             terminalCleanupAuthorized = terminalCleanupStillAuthorized,
                             captureAuthorized = screenObservation.captureAuthorized,
+                            visualOnlyResultEvidence = screenObservation.visualOnlyResultEvidence,
                         )
                     ) {
                         ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED -> {

@@ -137,23 +137,24 @@ class ResultPageDismissalPolicyTest {
             ResultPageDismissalPolicy.decide(inWar = false, resultPageVisible = null, attempt = 6, maxAttempts = 5),
         )
         assertEquals(
-            ResultPageDismissalPolicy.Decision.EXHAUSTED,
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
             ResultPageDismissalPolicy.decide(
                 inWar = false,
                 resultPageVisible = null,
-                attempt = 100,
-                maxAttempts = 5,
+                attempt = 17,
+                maxAttempts = 16,
                 clickAttempts = 5,
                 terminalCleanupAuthorized = true,
+                captureAuthorized = true,
             ),
-            "authorized cleanup is bounded and must not idle forever after its click budget",
+            "a high probe count cannot exhaust an input budget when only five clicks were sent",
         )
         assertEquals(
             ResultPageDismissalPolicy.Decision.EXHAUSTED,
             ResultPageDismissalPolicy.decide(
                 inWar = false,
                 resultPageVisible = true,
-                attempt = 100,
+                attempt = 17,
                 maxAttempts = 5,
                 clickAttempts = 5,
                 terminalCleanupAuthorized = true,
@@ -165,7 +166,7 @@ class ResultPageDismissalPolicyTest {
             ResultPageDismissalPolicy.decide(
                 inWar = false,
                 resultPageVisible = false,
-                attempt = 100,
+                attempt = 17,
                 maxAttempts = 5,
                 clickAttempts = 5,
                 terminalCleanupAuthorized = true,

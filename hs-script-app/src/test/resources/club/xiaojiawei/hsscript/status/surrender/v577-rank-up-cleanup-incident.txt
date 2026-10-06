@@ -1,0 +1,19 @@
+Incident: deployed Beta v4.16.577 rank-3 surrender cleanup; failed run, not a success.
+Beta PID 97944; Hearthstone PID 91120 (both stopped by operator after incident).
+Authoritative Power.log: D:\Hearthstone\Logs\Hearthstone_2026_10_05_21_53_39\Power.log
+  line 19843: D 22:10:48.4677753 ... Entity=laz#12793 tag=PLAYSTATE value=LOST
+  line 19844: D 22:10:48.4677753 ... Entity=secrecy#31765 tag=PLAYSTATE value=WON
+  line 19853: D 22:10:48.4677753 ... Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+  line 19854: D 22:10:48.4677753 ... Entity=GameEntity tag=STATE value=COMPLETE
+Beta log: C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script Beta\log\hs_script.log
+  22:10:53.180 RANK_SURRENDER_TERMINAL_PROOF result=ACCEPTED source=CREATE_GAME_SCOPED_POWERLOG sameGame=true ownPlayState=LOST ... complete=true playerTerminal=LOST
+  22:10:53.183 RESULT_PAGE_CLEANUP_COORDINATOR state=started generation=4 maxInputs=16 maxProbes=20
+  22:11:31.155 RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck probe=1 sharedInput=1
+  22:12:09.084 RESULT_PAGE_DISMISSAL_INPUT input=KEYBOARD_ENTER dispatchAccepted=true acceptance=awaiting-current-client-postcheck probe=2 sharedInput=2
+  22:13:01.735 SCREEN_RECOVERY_TRIGGER ... resultContinueGrayLight=0.045 resultBannerLowSaturation=0.103 resultBannerWarm=0.414 loadingCentralDark=0.236
+  22:13:13.535 SCREEN_RECOVERY_OBSERVATION provider=LEGACY ... detected=UNKNOWN confidence=0 evidence=none
+  22:13:18.253 RESULT_PAGE_CLEANUP_FAILED reason=episode-deadline-exceeded inputs=2 probes=3 confirmed=false dispatch=false
+  22:15:31.742 SCREEN_RECOVERY_TRIGGER ... resultContinueGrayLight=0.050 resultBannerLowSaturation=0.096 resultBannerWarm=0.437 loadingCentralDark=0.240
+Post-input screenshot visibly shows centered Gold 3 badge, “黄金3” ribbon, and “点击继续”. Current rank is 3 and remains ineligible for ordinary play.
+Screenshot fixture SHA-256: 383BA353BCA5459CAA12C41EA4522284DE369AECC32A294209A0F523ED288837
+The two accepted SendInput events are not evidence that the game advanced; the rank-up panel remained visible.

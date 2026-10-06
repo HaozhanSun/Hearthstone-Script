@@ -1,0 +1,8 @@
+Live incident: 2026-10-05, Beta PID 84624, Hearthstone PID 95920.
+The game-results image is the pre-overlay board frame, SHA256=63BDC7A2523ACF203966C5E6270B95A7A736047FB87DEFED7A45C834DC0509BF.
+18:15:16.7446296 Power.log own PLAYSTATE=CONCEDED then LOST; STEP=FINAL_GAMEOVER; STATE=COMPLETE.
+18:15:21.516 hs_script.log RANK_SURRENDER_TERMINAL_PROOF result=ACCEPTED source=CREATE_GAME_SCOPED_POWERLOG sameGame=true ownPlayState=LOST opponentPlayState=WON finalGameOver=true complete=true playerTerminal=CONCEDED
+18:17:55.902 hs_script.log GAME_WINDOW_PIXEL_AUTHORITY targetPid=95920 accepted=true reason=exact-client-visible
+18:17:56.307 hs_script.log SCREEN_RECOVERY_TRIGGER screenshot=debug-20261005-181755-903-screen-recovery-5297d14d-a7aa-451b-9bcc-68f05c34fbc7.png visual=loadingCentralDark=0.261 resultContinueGrayLight=0.040 resultBannerLowSaturation=0.486
+18:17:57.945 hs_script.log RESULT_PAGE_CLEANUP_FAILED reason=episode-deadline-exceeded inputs=0 probes=3 confirmed=false dispatch=false
+The later defeat-overlay screenshot SHA256=47EB19615CC0D1D4F936FA8DB8F718D92228119C95AD77F27F8EECC9F7CE8E96.

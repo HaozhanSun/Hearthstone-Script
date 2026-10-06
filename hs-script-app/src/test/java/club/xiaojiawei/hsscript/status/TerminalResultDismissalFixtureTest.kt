@@ -97,7 +97,7 @@ class TerminalResultDismissalFixtureTest {
             ),
         )
         assertEquals(
-            ResultPageDismissalPolicy.Decision.EXHAUSTED,
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
             ResultPageDismissalPolicy.decide(
                 inWar = false,
                 resultPageVisible = null,
@@ -107,6 +107,7 @@ class TerminalResultDismissalFixtureTest {
                 terminalCleanupAuthorized = true,
                 captureAuthorized = false,
             ),
+            "probe count is bounded by the coordinator, while input count remains zero",
         )
     }
 
@@ -169,10 +170,15 @@ class TerminalResultDismissalFixtureTest {
         val image: BufferedImage = requireNotNull(ImageIO.read(ByteArrayInputStream(screenshot)))
         assertEquals(1920, image.width)
         assertEquals(1080, image.height)
+        assertTrue(
+            ScreenStateRecovery.looksLikeResultVisual(0.039, 0.516, 0.273, 0.414),
+            "the calibrated result signature must accept the recorded rank-up panel ratios",
+        )
         assertEquals(
             "RESULT",
             ScreenStateRecovery.classifyImageForResultFixture(image),
-            "the v565 result-only image must pass the production allowlist before cleanup input is permitted",
+            "the v565 result-only image must pass the production allowlist before cleanup input is permitted; " +
+                ScreenStateRecovery.resultVisualEvidenceForFixture(image),
         )
         val target = GameUtil.terminalContinueTargetForTest()
         assertEquals(-0.09, target.left, 0.0001)
@@ -289,6 +295,48 @@ class TerminalResultDismissalFixtureTest {
         assertEquals(16, coordinator.snapshot().inputs, "the episode budget is shared across all recovery callbacks")
     }
 
+    @Test
+    fun `v568 rank-up continuation is distinct from the defeat result after five dispatched inputs`() {
+        val screenshot = requireNotNull(javaClass.getResourceAsStream(V568_RANK_RESULT_SCREENSHOT)).use { it.readBytes() }
+        assertEquals(V568_RANK_RESULT_SCREENSHOT_SHA256, sha256(screenshot))
+        val image = requireNotNull(ImageIO.read(ByteArrayInputStream(screenshot)))
+        assertEquals(1920, image.width)
+        assertEquals(1080, image.height)
+        val detected = ScreenStateRecovery.classifyImageForResultFixture(image)
+        assertEquals(
+            "RANK_PROGRESS_CONTINUATION",
+            detected,
+            "the recorded Gold 4 progression page is an intermediate Continue state, not the original defeat page",
+        )
+
+        val incident = requireNotNull(javaClass.getResourceAsStream(V568_RANK_RESULT_LOG))
+            .bufferedReader().use { it.readText() }
+        assertTrue(incident.contains("GAME_WINDOW_PIXEL_AUTHORITY hwnd=native@0x6109da"))
+        assertTrue(incident.contains("resultContinueGrayLight=0.049 resultBannerLowSaturation=0.087"))
+        assertTrue(incident.contains("RESULT_PAGE_CLEANUP_SUPPRESSED reason=single-flight-active generation=4 dispatch=false"))
+        assertTrue(incident.contains("reason=result-visible-input-budget-exhausted attempt=17 inputs=5 probes=17 visible=UNKNOWN"))
+        assertTrue(incident.contains("SCREEN_RECOVERY_BLOCKED reason=hearthstone-window-unverified processAlive=false"))
+        assertTrue(incident.contains("ACTION_BLOCKED action=startup.handoff reason=terminal-result-cleanup-pending"))
+        assertEquals(
+            5,
+            Regex("RESULT_PAGE_DISMISSAL_INPUT input=").findAll(incident).count(),
+            "the live owner logged five OS-accepted inputs, not sixteen; dispatch acceptance was not client acceptance",
+        )
+        assertEquals(2, Regex("tag=PLAYSTATE value=CONCEDED").findAll(incident).count())
+        assertEquals(2, Regex("tag=STATE value=COMPLETE").findAll(incident).count())
+        assertTrue(incident.contains("stableThrough=2026-10-05 16:11 PDT"))
+        assertEquals(
+            PostResultRankProgressPolicy.Action.CONTINUE,
+            PostResultRankProgressPolicy.decide(
+                rankProgressVisible = detected == "RANK_PROGRESS_CONTINUATION",
+                terminalCleanupAuthorized = true,
+                captureAuthorized = true,
+                rankProgressInputAttempts = 0,
+            ),
+            "the fresh authorized rank progression frame permits its distinct bounded Continue action",
+        )
+    }
+
     private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
         .digest(bytes).joinToString("") { "%02X".format(it) }
 
@@ -300,5 +348,8 @@ class TerminalResultDismissalFixtureTest {
         const val V565_LOOP_LOG = "/club/xiaojiawei/hsscript/status/surrender/v565-result-loop-20261004-223540-274.log"
         const val V565_LOOP_SCREENSHOT_SHA256 = "1E19CB7625B6C33E3323789AA5F90B368A63B2C50F20C81C43B806FB0F455A25"
         const val V565_CONFIRMED_LOG = "/club/xiaojiawei/hsscript/status/surrender/v565-result-cleanup-confirmed-20261004-222834.log"
+        const val V568_RANK_RESULT_SCREENSHOT = "/club/xiaojiawei/hsscript/status/surrender/v568-rank-result-screen-20261005-160420-871.png"
+        const val V568_RANK_RESULT_LOG = "/club/xiaojiawei/hsscript/status/surrender/v568-rank-result-sequence-20261005-1600.log"
+        const val V568_RANK_RESULT_SCREENSHOT_SHA256 = "189E7759F7500C54376F8F08D5CBCB2E741AE7BC2DC3718141EDFBAB05D295A2"
     }
 }

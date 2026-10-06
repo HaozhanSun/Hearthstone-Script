@@ -1,0 +1,29 @@
+2026-10-05 15:57:22.198 [ExtraPool Thread-9] [GameUtil.kt:1777] INFO  RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck probe=1 sharedInput=1
+2026-10-05 15:57:34.213 [ExtraPool Thread-5] [GameUtil.kt:1486] INFO  RESULT_PAGE_CLEANUP_SUPPRESSED reason=single-flight-active generation=4 dispatch=false
+2026-10-05 15:57:59.431 [Lifecycle Monitor] [LifecycleTrace.kt:51] INFO  LIFECYCLE_HEARTBEAT pid=89048 pause=false working=true mainWindowShowing=true mode=GAMEPLAY inWar=false warPhase=FILL_DECK myTurn=false phaseDealing=false replaying=false logFile=D:\Hearthstone\Logs\Hearthstone_2026_10_05_15_47_12\Power.log logPos=226283 logLen=226282 warCount=2
+2026-10-05 15:57:59.783 [ExtraPool Thread-3] [GameUtil.kt:1785] INFO  RESULT_PAGE_DISMISSAL_INPUT input=KEYBOARD_ENTER dispatchAccepted=true acceptance=awaiting-current-client-postcheck probe=2 sharedInput=2
+2026-10-05 15:58:37.963 [ExtraPool Thread-5] [GameUtil.kt:1777] INFO  RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck probe=3 sharedInput=3
+2026-10-05 15:59:14.127 [ExtraPool Thread-6] [GameUtil.kt:1785] INFO  RESULT_PAGE_DISMISSAL_INPUT input=KEYBOARD_ENTER dispatchAccepted=true acceptance=awaiting-current-client-postcheck probe=4 sharedInput=4
+2026-10-05 15:59:50.466 [ExtraPool Thread-0] [GameUtil.kt:1777] INFO  RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck probe=5 sharedInput=5
+2026-10-05 16:00:33.132 [ExtraPool Thread-7] [GameUtil.kt:1699] INFO  RESULT_PAGE_DISMISSAL_WAIT reason=screen-transition-unconfirmed probe=6 clickAttempts=5 postcheck=UNKNOWN dispatch=false captureAuthorized=true terminalCleanupAuthorized=true
+2026-10-05 16:04:20.153 [ExtraPool Thread-5] [ScreenRecoveryWindowCapture.kt:105] INFO  GAME_WINDOW_PIXEL_AUTHORITY hwnd=native@0x6109da targetPid=80644 clientBounds=java.awt.Rectangle[x=0,y=0,width=1920,height=1080] source=robot-client-window image=1920x1080 foregroundBefore=6359514 foregroundAfter=6359514 targetCoverageBefore=1.00 targetCoverageAfter=1.00 accepted=true reason=exact-client-visible
+2026-10-05 16:04:21.283 [ExtraPool Thread-2] [UpstreamScreenStateRecovery.kt:173] WARN  SCREEN_RECOVERY_TRIGGER stuckForMs=450058 state=GAMEPLAY|GAMEPLAY|FILL_DECK|NONE|2 bounds=java.awt.Rectangle[x=0,y=0,width=1920,height=1080] screenshot=debug-20261005-160420-871-screen-recovery-978681cc-5e3d-44fc-9553-730df6a77c72.png visual=hash=872ec32a3b847bcc warmRatio=0.102 blueRatio=0.027 loadingCentralDark=0.210 resultContinueGrayLight=0.049 resultBannerLowSaturation=0.087
+2026-10-05 16:04:35.245 [ExtraPool Thread-5] [GameUtil.kt:1699] INFO  RESULT_PAGE_DISMISSAL_WAIT reason=screen-transition-unconfirmed probe=12 clickAttempts=5 postcheck=UNKNOWN dispatch=false captureAuthorized=true terminalCleanupAuthorized=true
+2026-10-05 16:05:08.274 [ExtraPool Thread-1] [GameUtil.kt:1486] INFO  RESULT_PAGE_CLEANUP_SUPPRESSED reason=single-flight-active generation=4 dispatch=false
+2026-10-05 16:05:16.523 [ExtraPool Thread-6] [GameUtil.kt:1699] INFO  RESULT_PAGE_DISMISSAL_WAIT reason=screen-transition-unconfirmed probe=13 clickAttempts=5 postcheck=UNKNOWN dispatch=false captureAuthorized=true terminalCleanupAuthorized=true
+2026-10-05 16:07:46.826 [ExtraPool Thread-8] [UpstreamScreenStateRecovery.kt:251] WARN  SCREEN_RECOVERY_BLOCKED reason=hearthstone-window-unverified processAlive=false
+2026-10-05 16:07:46.829 [ExtraPool Thread-8] [GameUtil.kt:1712] ERROR RESULT_PAGE_CLEANUP_FAILED reason=result-visible-input-budget-exhausted attempt=17 inputs=5 probes=17 visible=UNKNOWN confirmed=false dispatch=false
+2026-10-05 16:07:47.367 [LaunchProgramPool Thread-0] [ActionDispatchGate.kt:70] WARN  ACTION_BLOCKED action=startup.handoff reason=terminal-result-cleanup-pending pause=false working=true dispatch=false
+2026-10-05 16:07:47.368 [LaunchProgramPool Thread-0] [GameStarter.kt:268] WARN  GAME_STARTUP_HANDOFF_BLOCKED lane=secondary mode=PLATFORM_ARG reason=action-dispatch-gate attemptNotRecorded=true
+
+Power.log=D:\Hearthstone\Logs\Hearthstone_2026_10_05_15_47_12\Power.log length=226282 stableThrough=2026-10-05 16:11 PDT
+1143:D 15:49:16.7869395 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=CONCEDED
+1145:D 15:49:16.7869395 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=LOST
+1146:D 15:49:16.7869395 GameState.DebugPrintPower() - TAG_CHANGE Entity=Rocket#14972 tag=PLAYSTATE value=WON
+1157:D 15:49:16.7869395 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+1158:D 15:49:16.7869395 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE
+2277:D 15:56:39.1958531 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=CONCEDED
+2279:D 15:56:39.1958531 GameState.DebugPrintPower() - TAG_CHANGE Entity=Miserable#21424 tag=PLAYSTATE value=WON
+2280:D 15:56:39.1958531 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=LOST
+2289:D 15:56:39.1958531 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+2290:D 15:56:39.1958531 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE

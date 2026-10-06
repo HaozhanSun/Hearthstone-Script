@@ -1,0 +1,16 @@
+INCIDENT_FIXTURE=game-0003-rank-surrender-settings-menu-remained-open
+SCREENSHOT=v569-settings-menu-after-terminal-20261005-171244-936.png
+SCREENSHOT_SHA256=8A86E3B2AFC054954CC7C9B05D44F73238B8DF5751DA10545240EFF4AAB0467A
+2026-10-05 17:12:39.754 [ExtraPool Thread-8] [GameUtil.kt:1070] INFO  RANK_SURRENDER_CONFIRMATION_INPUT target=ACCEPT_NOW button=现在认输 dispatch=requested acceptance=awaiting-current-game-powerlog
+2026-10-05 17:12:40.302 [ListenLogPool Thread-0] [AbstractPhaseStrategy.kt:186] INFO  SURRENDER_POLICY_SKIPPED reason=terminal-state-priority phase=REPLACE_CARD step=FINAL_GAMEOVER
+2026-10-05 17:12:40.302 [ListenLogPool Thread-0] [War.kt:64] INFO  最后阶段-游戏结束
+2026-10-05 17:12:42.191 [ExtraPool Thread-4] [GameUtil.kt:1042] INFO  RANK_SURRENDER_SCREEN_STEP screen=MULLIGAN action=CLICK_SETTINGS reason=confirmed-mulligan-with-rank-deny provider=LEGACY evidenceReason=authoritative-mulligan-input-and-fresh-mulligan-visual unknownObservationOrdinal=reset screenshot=C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script Beta\log\unknown-states\screen-watchdog\2026-10-05\unknown-state-20261005-171241-686-screen-watchdog-normal-surrender-retry-58ba32fd-11dc-4871-b8f9-2a1a951f3243.png
+2026-10-05 17:12:42.818 [E2E Robot Input] [MouseUtil.kt:622] INFO  E2E_INPUT_ROBOT_SENT client=(1905,1063) screen=(1905,1063) hwnd=native@0x530a12 foregroundAfter=native@0x530a12 focusedAfter=true
+2026-10-05 17:12:45.336 [ListenLogPool Thread-0] [GameOverPhaseStrategy.kt:370] INFO  RANK_SURRENDER_TERMINAL_PROOF result=ACCEPTED source=CREATE_GAME_SCOPED_POWERLOG sameGame=true ownPlayState=LOST opponentPlayState=WON finalGameOver=true complete=true playerTerminal=CONCEDED
+2026-10-05 17:12:45.336 [ListenLogPool Thread-0] [GameUtil.kt:1474] INFO  RESULT_PAGE_CLEANUP_COORDINATOR state=started generation=6 maxInputs=16 maxProbes=20
+2026-10-05 17:13:23.729 [ExtraPool Thread-8] [GameUtil.kt:1777] INFO  RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck probe=1 sharedInput=1
+2026-10-05 17:13:25.641 [ExtraPool Thread-7] [UpstreamScreenStateRecovery.kt:186] INFO  SCREEN_RECOVERY_OBSERVATION provider=LEGACY ocr=:字XX示盾>|||||-二于7.扣击继续 detected=RESULT confidence=95 evidence=result-text
+2026-10-05 17:13:27.333 [ExtraPool Thread-7] [UpstreamScreenStateRecovery.kt:915] WARN  SCREEN_RECOVERY_APPLIED screen=RESULT next=DISMISS_STALE_RESULT
+2026-10-05 17:13:27.333 [ExtraPool Thread-7] [GameUtil.kt:1486] INFO  RESULT_PAGE_CLEANUP_SUPPRESSED reason=single-flight-active generation=6 dispatch=false
+2026-10-05 17:17:17.144 [ExtraPool Thread-5] [GameUtil.kt:1699] INFO  RESULT_PAGE_DISMISSAL_WAIT reason=screen-transition-unconfirmed probe=7 clickAttempts=6 postcheck=UNKNOWN dispatch=false captureAuthorized=true terminalCleanupAuthorized=true
+2026-10-05 17:19:18.427 [ExtraPool Thread-9] [GameUtil.kt:1777] INFO  RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true acceptance=awaiting-current-client-postcheck probe=10 sharedInput=7

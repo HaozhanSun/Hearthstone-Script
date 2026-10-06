@@ -52,9 +52,14 @@ internal object ResultPageDismissalPolicy {
         clickAttempts: Int = (attempt - 1).coerceAtLeast(0),
         terminalCleanupAuthorized: Boolean = false,
         captureAuthorized: Boolean = false,
+        visualOnlyResultEvidence: Boolean = false,
     ): Decision = when {
+        visualOnlyResultEvidence && !terminalCleanupAuthorized -> Decision.WAIT_FOR_SCREEN_TRANSITION
         terminalCleanupAuthorized && resultPageVisible == false && captureAuthorized -> Decision.CONFIRMED_CLEARED
-        terminalCleanupAuthorized && attempt > maxAttempts -> Decision.EXHAUSTED
+        // `attempt` is a screen probe sequence number, not a dispatched-input
+        // count. Probe exhaustion is owned by TerminalPageCleanupCoordinator;
+        // only clickAttempts may consume this action budget.
+        terminalCleanupAuthorized && clickAttempts >= maxAttempts -> Decision.EXHAUSTED
         terminalCleanupAuthorized && resultPageVisible == false -> Decision.WAIT_FOR_SCREEN_TRANSITION
         resultPageVisible == false -> Decision.CONFIRMED_CLEARED
         terminalCleanupAuthorized && clickAttempts < maxAttempts && captureAuthorized &&
@@ -63,7 +68,6 @@ internal object ResultPageDismissalPolicy {
         // Terminal proof permits only the bounded, visible-result allowlist.
         // If capture is unavailable/unknown after that budget, stop; never wait
         // forever or infer success from the input call.
-        terminalCleanupAuthorized && clickAttempts >= maxAttempts -> Decision.EXHAUSTED
         terminalCleanupAuthorized -> Decision.WAIT_FOR_SCREEN_TRANSITION
         attempt > maxAttempts -> Decision.EXHAUSTED
         resultPageVisible == true -> Decision.EXHAUSTED
@@ -73,4 +77,9 @@ internal object ResultPageDismissalPolicy {
 }
 
 /** Null visibility is distinct from no capture: only an authorized current-client frame may ground a terminal fallback. */
-internal data class ResultScreenObservation(val resultVisible: Boolean?, val captureAuthorized: Boolean)
+internal data class ResultScreenObservation(
+    val resultVisible: Boolean?,
+    val captureAuthorized: Boolean,
+    val visualOnlyResultEvidence: Boolean = false,
+    val rankProgressVisible: Boolean = false,
+)

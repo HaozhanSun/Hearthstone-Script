@@ -62,8 +62,6 @@ object ScreenStateRecovery {
 
     private const val MAX_OCR_TEXT_LENGTH = 500
     private const val OCR_MAX_WIDTH = 1280
-    private const val RESULT_CONTINUE_GRAY_LIGHT_MIN = 0.025
-    private const val RESULT_BANNER_LOW_SATURATION_MIN = 0.30
     private const val RECONNECT_RETRY_INTERVAL_MS = 60_000L
     private const val RECOVERY_POSTCHECK_TIMEOUT_MS = 3_000L
     private const val RECOVERY_POSTCHECK_POLL_MS = 300L
@@ -97,6 +95,7 @@ object ScreenStateRecovery {
         TOURNAMENT("TOURNAMENT"),
         MATCHMAKING("MATCHMAKING"),
         RESULT("RESULT"),
+        RANK_PROGRESS_CONTINUATION("RANK_PROGRESS_CONTINUATION"),
         RECONNECT("RECONNECT"),
         RECONNECT_FAILURE("RECONNECT_FAILURE"),
         RECONNECT_SPINNER("RECONNECT_SPINNER"),
@@ -142,6 +141,7 @@ object ScreenStateRecovery {
         val loadingCentralDarkRatio: Double,
         val resultContinueGrayLightRatio: Double,
         val resultBannerLowSaturationRatio: Double,
+        val resultBannerWarmRatio: Double = 0.0,
         val centeredModalPanelVisual: Boolean = false,
     ) {
         override fun toString(): String =
@@ -151,6 +151,7 @@ object ScreenStateRecovery {
                 "loadingCentralDark=${"%.3f".format(Locale.ROOT, loadingCentralDarkRatio)} " +
                 "resultContinueGrayLight=${"%.3f".format(Locale.ROOT, resultContinueGrayLightRatio)} " +
                 "resultBannerLowSaturation=${"%.3f".format(Locale.ROOT, resultBannerLowSaturationRatio)} " +
+                "resultBannerWarm=${"%.3f".format(Locale.ROOT, resultBannerWarmRatio)} " +
                 "centeredModalPanel=$centeredModalPanelVisual"
     }
 
@@ -722,6 +723,7 @@ object ScreenStateRecovery {
             loadingCentralDarkRatio = loadingCenterSignal.darkRatio,
             resultContinueGrayLightRatio = continueSignal.grayLightRatio,
             resultBannerLowSaturationRatio = bannerSignal.lowSaturationRatio,
+            resultBannerWarmRatio = bannerSignal.warmRatio,
             centeredModalPanelVisual = looksLikeCenteredModalPanelVisual(
                 lowSaturationRatio = reconnectDialogPanelSignal.lowSaturationRatio,
                 darkRatio = reconnectDialogPanelSignal.darkRatio,
@@ -802,15 +804,38 @@ object ScreenStateRecovery {
         // a known reconnect state, do not act on the background screen. The
         // dedicated matchmaking probe may click only after its exact OCR
         // contract succeeds; otherwise this remains an unresolved observation.
+        if (ResultPageEvidencePolicy.looksLikeRankProgressContinuationVisual(
+                visual.resultContinueGrayLightRatio,
+                visual.resultBannerLowSaturationRatio,
+                visual.loadingCentralDarkRatio,
+                visual.resultBannerWarmRatio,
+            )
+        ) {
+            return Detection(
+                ScreenKind.RANK_PROGRESS_CONTINUATION,
+                ModeEnum.GAMEPLAY,
+                93,
+                "post-result-rank-progress-visual",
+            )
+        }
+        if (ResultPageEvidencePolicy.looksLikeResultText(text)) {
+            return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 95, "result-text")
+        }
+        if (looksLikeResultVisual(
+                visual.resultContinueGrayLightRatio,
+                visual.resultBannerLowSaturationRatio,
+                visual.loadingCentralDarkRatio,
+                visual.resultBannerWarmRatio,
+            )
+        ) {
+            return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
+        }
+        // A real result panel may also satisfy the generic centered-modal
+        // guard. Let only the stronger terminal evidence above take priority;
+        // all other unrecognized modal overlays remain unresolved.
         if (visual.centeredModalPanelVisual) return null
         if (text.contains("选择套牌") || has("套牌", "狂野对战")) {
             return Detection(ScreenKind.DECK_SELECTION, ModeEnum.TOURNAMENT, 100, "deck-selection-title")
-        }
-        if (looksLikeResultText(text)) {
-            return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 95, "result-text")
-        }
-        if (looksLikeResultVisual(visual.resultContinueGrayLightRatio, visual.resultBannerLowSaturationRatio)) {
-            return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
         }
         if (looksLikeShopOverlayText(text) && looksLikeShopOverlayVisual(visual)) {
             return Detection(ScreenKind.SHOP_OVERLAY, ModeEnum.HUB, 94, "shop-overlay-text-and-visual")
@@ -1239,6 +1264,7 @@ object ScreenStateRecovery {
                 detection.kind != ScreenKind.RECONNECT &&
                 detection.kind != ScreenKind.RECONNECT_FAILURE &&
                 detection.kind != ScreenKind.RECONNECT_SPINNER &&
+                detection.kind != ScreenKind.RANK_PROGRESS_CONTINUATION &&
                 detection.kind != ScreenKind.LOADING,
             action = when (detection.kind) {
                 ScreenKind.HOME_TASK_OVERLAY -> "DISMISS_HOME_TASK_OVERLAY"
@@ -1252,6 +1278,7 @@ object ScreenStateRecovery {
                 ScreenKind.LOGIN,
                 -> "ENTER_MODE_STRATEGY"
                 ScreenKind.RESULT -> "DISMISS_STALE_RESULT"
+                ScreenKind.RANK_PROGRESS_CONTINUATION -> "CONTINUE_WITH_TERMINAL_CAPABILITY"
                 ScreenKind.MATCHMAKING -> "WAIT_FOR_GAMEPLAY"
                 ScreenKind.RECONNECT -> "CLICK_RECONNECT"
                 ScreenKind.RECONNECT_FAILURE -> "RESTART_CLIENT"
@@ -1274,11 +1301,13 @@ object ScreenStateRecovery {
             mode = detection.mode,
             enterStrategy = detection.kind != ScreenKind.DECK_SELECTION &&
                 detection.kind != ScreenKind.HOME_TASK_OVERLAY &&
-                detection.kind != ScreenKind.RECONNECT_FAILURE,
+                detection.kind != ScreenKind.RECONNECT_FAILURE &&
+                detection.kind != ScreenKind.RANK_PROGRESS_CONTINUATION,
             action = when (detection.kind) {
                 ScreenKind.HOME_TASK_OVERLAY -> "DISMISS_HOME_TASK_OVERLAY"
                 ScreenKind.DECK_SELECTION -> "START_MATCHING"
                 ScreenKind.RECONNECT_FAILURE -> "RESTART_CLIENT"
+                ScreenKind.RANK_PROGRESS_CONTINUATION -> "CONTINUE_WITH_TERMINAL_CAPABILITY"
                 else -> "OTHER"
             },
         )
@@ -1291,15 +1320,8 @@ object ScreenStateRecovery {
      * path treats the page as actionable from its phase event; this fallback
      * uses the same action label for a stale-screen recovery path.
      */
-    internal fun looksLikeResultText(ocrText: String): Boolean {
-        val text = ocrText.lowercase(Locale.ROOT)
-            .replace("写击继续", "点击继续")
-            .replace("击继续", "点击继续")
-        return text.contains("点击继续") ||
-            text.contains("胜利") && text.contains("继续") ||
-            text.contains("失败") && text.contains("继续") ||
-            text.contains("对战结束") && text.contains("继续")
-    }
+    internal fun looksLikeResultText(ocrText: String): Boolean =
+        ResultPageEvidencePolicy.looksLikeResultText(ocrText)
 
     /**
      * OCR-free result-page fallback.  A single bright pixel cluster is not
@@ -1309,13 +1331,26 @@ object ScreenStateRecovery {
     internal fun looksLikeResultVisual(
         resultContinueGrayLightRatio: Double,
         resultBannerLowSaturationRatio: Double,
-    ): Boolean =
-        resultContinueGrayLightRatio >= RESULT_CONTINUE_GRAY_LIGHT_MIN &&
-            resultBannerLowSaturationRatio >= RESULT_BANNER_LOW_SATURATION_MIN
+        loadingCentralDarkRatio: Double,
+        resultBannerWarmRatio: Double,
+    ): Boolean = ResultPageEvidencePolicy.looksLikeResultVisual(
+        resultContinueGrayLightRatio,
+        resultBannerLowSaturationRatio,
+        loadingCentralDarkRatio,
+        resultBannerWarmRatio,
+    )
 
     /** Replay fixture pixels through the production visual/modal classifier without desktop capture or OCR. */
     internal fun classifyImageForResultFixture(image: BufferedImage): String? =
         detect(OcrEvidence("", emptyMap()), visualSignature(image))?.kind?.code
+
+    internal fun resultVisualEvidenceForFixture(image: BufferedImage): String {
+        val visual = visualSignature(image)
+        return "continue=${visual.resultContinueGrayLightRatio} " +
+            "banner=${visual.resultBannerLowSaturationRatio} " +
+            "bannerWarm=${visual.resultBannerWarmRatio} " +
+            "centerDark=${visual.loadingCentralDarkRatio} modal=${visual.centeredModalPanelVisual}"
+    }
 
     /**
      * Re-check the actual desktop after a result-page input was sent.
@@ -1340,7 +1375,12 @@ object ScreenStateRecovery {
             if (!ScreenRecoveryRuntime.isCurrent(token)) {
                 return@runCatching ResultScreenObservation(null, captureAuthorized = false)
             }
-            ResultScreenObservation(resultPageVisibility(detection), captureAuthorized = true)
+            ResultScreenObservation(
+                resultVisible = resultPageVisibility(detection),
+                captureAuthorized = true,
+                visualOnlyResultEvidence = detection?.evidence == "result-fixed-continue-visual",
+                rankProgressVisible = detection?.kind == ScreenKind.RANK_PROGRESS_CONTINUATION,
+            )
         }.getOrElse { error ->
             if (ScreenRecoveryRuntime.isCurrent(token)) {
                 log.warn(error) { "SCREEN_RECOVERY_RESULT_POSTCHECK_FAILED" }
@@ -1477,6 +1517,9 @@ object ScreenStateRecovery {
                             observed.kind != ScreenKind.RECONNECT_FAILURE &&
                             GameUtil.findGameProcessIdForDiagnostics()?.let { it != sourcePid } == true
                         ScreenKind.RESULT -> observed?.kind != ScreenKind.RESULT || GameUtil.isTerminalGameState()
+                        ScreenKind.RANK_PROGRESS_CONTINUATION ->
+                            (observed?.kind == ScreenKind.RANK_PROGRESS_CONTINUATION && mode == ModeEnum.GAMEPLAY) ||
+                                (observed?.kind?.let { it in POST_RESULT_DESTINATIONS } == true && !WarEx.inWar)
                         else -> observed?.kind == detection.kind && mode == detection.mode
                     }
                     log.info {
@@ -1631,6 +1674,7 @@ object ScreenStateRecovery {
                 ScreenKind.HOME_TASK_OVERLAY,
                 ScreenKind.MATCHMAKING,
                 ScreenKind.RESULT,
+                ScreenKind.RANK_PROGRESS_CONTINUATION,
                 ScreenKind.GAME_MODE,
                 ScreenKind.COLLECTION,
                 ScreenKind.PACK_OPENING,
@@ -1733,6 +1777,26 @@ object ScreenStateRecovery {
                     resultAlreadyObserved = true,
                     terminalCleanupCapability = cleanupCapability,
                 )
+            }
+
+            ScreenKind.RANK_PROGRESS_CONTINUATION -> {
+                val cleanupCapability = club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+                    .existingTerminalCleanupCapability()
+                if (club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+                        .isTerminalCleanupCapabilityValid(cleanupCapability)
+                ) {
+                    Mode.recover(ModeEnum.GAMEPLAY, "visible-post-result-rank-progress", enterStrategy = false)
+                    log.info { "SCREEN_RECOVERY_ACTION_REQUESTED screen=RANK_PROGRESS_CONTINUATION action=CONTINUE_WITH_TERMINAL_CAPABILITY" }
+                    GameUtil.dismissStaleGameEndScreen(
+                        resultAlreadyObserved = true,
+                        terminalCleanupCapability = cleanupCapability,
+                    )
+                } else {
+                    log.warn {
+                        "SCREEN_RECOVERY_RANK_PROGRESS_BLOCKED reason=terminal-cleanup-capability-required " +
+                            "dispatch=false"
+                    }
+                }
             }
 
             ScreenKind.MATCHMAKING -> {

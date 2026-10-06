@@ -1,0 +1,13 @@
+Incident: deployed Beta v4.16.575 post-surrender rank progression cleanup
+Power.log: D:\Hearthstone\Logs\Hearthstone_2026_10_05_21_07_53\Power.log
+Power.log authoritative terminal sequence at 21:10:08.2124829:
+  TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=CONCEDED
+  TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=LOST
+  TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+  TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE
+Script log: C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script Beta\log\hs_script.log
+  21:12:15.549 SCREEN_RECOVERY_TRIGGER ... screenshot=debug-20261005-211215-089-screen-recovery-638c8eae-99d2-43fe-ab8c-4028c679ab19.png ... resultContinueGrayLight=0.047 resultBannerLowSaturation=0.090 resultBannerWarm=0.649
+  21:12:27.948 SCREEN_RECOVERY_OBSERVATION provider=LEGACY ... detected=UNKNOWN confidence=0 evidence=none
+  21:12:29.030 RESULT_PAGE_CLEANUP_FAILED reason=episode-deadline-exceeded inputs=3 probes=3 confirmed=false dispatch=false
+Captured screen fixture SHA-256: 2FF3E87C2B67CE38C27FC6C825AC3CD6B00A8481223ED79E46D0F037029A9D2E
+Failure experiment only; this incident is not evidence of a successful cleanup or successful online run.

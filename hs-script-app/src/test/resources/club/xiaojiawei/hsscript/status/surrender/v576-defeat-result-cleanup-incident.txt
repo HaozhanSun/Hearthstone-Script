@@ -1,0 +1,15 @@
+Incident: deployed Beta v4.16.576 result-page dismissal failure; failed run, not a success.
+Beta PID 93572; Hearthstone PID 91976.
+Authoritative Power.log: D:\Hearthstone\Logs\Hearthstone_2026_10_05_21_35_31\Power.log
+  line 1107: D 21:37:43.8023772 ... Entity=laz#12793 tag=PLAYSTATE value=CONCEDED
+  line 1109: D 21:37:43.8023772 ... Entity=laz#12793 tag=PLAYSTATE value=LOST
+  line 1110: D 21:37:43.8023772 ... Entity=orange#15501 tag=PLAYSTATE value=WON
+  line 1119: D 21:37:43.8023772 ... Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+  line 1120: D 21:37:43.8023772 ... Entity=GameEntity tag=STATE value=COMPLETE
+Script log: C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script Beta\log\hs_script.log
+  21:38:24.418 SCREEN_RECOVERY_TRIGGER ... resultContinueGrayLight=0.040 resultBannerLowSaturation=0.511 resultBannerWarm=0.411 loadingCentralDark=0.170
+  21:38:34.461 RESULT_PAGE_DISMISSAL_WAIT reason=screen-transition-unconfirmed probe=1 clickAttempts=0 postcheck=UNKNOWN dispatch=false captureAuthorized=true terminalCleanupAuthorized=true
+  21:38:38.158 SCREEN_RECOVERY_OBSERVATION provider=LEGACY ... detected=UNKNOWN confidence=0 evidence=none
+Authoritative same-game terminal proof was accepted before this visible-cleanup failure.
+Screenshot fixture SHA-256: C843DB524222EE76CEBBF91040F7FBBA25F31DFD83F608F047726C091F5001FB
+The client continued showing a defeat/continue panel. No UI acceptance is inferred from this incident.

@@ -28,13 +28,15 @@ class ScreenStateRecoveryTest {
 
     @Test
     fun `recognizes grayscale result page when OCR is empty`() {
-        // Measured from the durable defeat screenshot captured at 02:37:
-        // the fixed continue band is 0.048 gray-light and the result banner
-        // is 0.484 low-saturation.  A live gameplay screenshot measured
-        // 0.007 and 0.066 respectively.
-        assertTrue(ScreenStateRecovery.looksLikeResultVisual(0.048, 0.484))
-        assertFalse(ScreenStateRecovery.looksLikeResultVisual(0.007, 0.066))
-        assertFalse(ScreenStateRecovery.looksLikeResultVisual(0.048, 0.066))
+        // Measured from the durable rank-result screenshot: the fixed continue
+        // band is 0.049 gray-light, banner low-saturation is 0.087, center
+        // dark is 0.210, and banner warm ratio is 0.497. Menu frames fail the
+        // warm-band check even if another region happens to look dim.
+        assertFalse(ScreenStateRecovery.looksLikeResultVisual(0.049, 0.087, 0.210, 0.497))
+        assertTrue(ResultPageEvidencePolicy.looksLikeRankProgressContinuationVisual(0.049, 0.087, 0.210, 0.497))
+        assertFalse(ScreenStateRecovery.looksLikeResultVisual(0.007, 0.066, 0.210, 0.497))
+        assertFalse(ScreenStateRecovery.looksLikeResultVisual(0.048, 0.066, 0.210, 0.497))
+        assertFalse(ScreenStateRecovery.looksLikeResultVisual(0.145, 0.276, 0.259, 0.732))
     }
 
     @Test
