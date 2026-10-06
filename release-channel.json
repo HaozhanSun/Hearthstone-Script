@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "channel": "beta",
-  "branch": "beta/post-surrender-rank-progress-v4.16.578",
+  "branch": "beta/shared-discover-policy-v4.16.579",
   "displayName": "Hearthstone Script Beta",
   "runtimeDirectoryName": "Hearthstone Script Beta",
   "shortcutName": "Hearthstone Script Beta.lnk",

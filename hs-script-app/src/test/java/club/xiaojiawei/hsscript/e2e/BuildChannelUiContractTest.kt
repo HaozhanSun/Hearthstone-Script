@@ -59,10 +59,23 @@ class BuildChannelUiContractTest {
     fun `release channel is injected through build metadata and deploy arguments`() {
         val root = repositoryRoot()
         val channel = Files.readString(root.resolve("release-channel.json"))
-        assertTrue(channel.contains("\"channel\": \"release-candidate\""))
-        assertTrue(channel.contains("\"runtimeDirectoryName\": \"Hearthstone Script Release Candidate\""))
-        assertTrue(channel.contains("\"shortcutName\": \"Hearthstone Script Release Candidate.lnk\""))
-        assertTrue(channel.contains("\"iconFileName\": \"hs-script-release-candidate.ico\""))
+        fun field(name: String): String? =
+            Regex("\\\"$name\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"").find(channel)?.groupValues?.get(1)
+        val expectedChannelFiles = when (field("channel")) {
+            "stable" -> Triple("Hearthstone Script", "Hearthstone Script.lnk", "hs-script.exe")
+            "beta" -> Triple("Hearthstone Script Beta", "Hearthstone Script Beta.lnk", "hs-script-beta.ico")
+            "release-candidate" -> Triple(
+                "Hearthstone Script Release Candidate",
+                "Hearthstone Script Release Candidate.lnk",
+                "hs-script-release-candidate.ico",
+            )
+            else -> null
+        }
+        val expectedFiles = expectedChannelFiles
+            ?: error("release-channel.json must identify a supported channel")
+        assertEquals(expectedFiles.first, field("runtimeDirectoryName"))
+        assertEquals(expectedFiles.second, field("shortcutName"))
+        assertEquals(expectedFiles.third, field("iconFileName"))
 
         val buildInfoTemplate = Files.readString(root.resolve("hs-script-app/src/main/resources-filtered/build.info"))
         assertTrue(buildInfoTemplate.contains("channel=\${build-channel}"))
