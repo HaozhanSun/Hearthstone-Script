@@ -100,7 +100,16 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.085..0.14 &&
             centerDarkRatio in 0.22..0.25 &&
             bannerWarmRatio in 0.37..0.45
-        return capturedRankProgressSignature || establishedRankProgressSignature || coolBoardGoldRewardSignature
+        // v4.16.580's live Gold 4 continuation frame had continue=.049,
+        // low-saturation=.086, center-dark=.318, warm=.503. The ornate large
+        // medal darkens more of the center than the earlier Gold 3 crop; keep
+        // the new range specific to its continue band and muted gold ribbon.
+        val largeGoldMedalRewardSignature = continueGrayLightRatio in 0.045..0.055 &&
+            bannerLowSaturationRatio in 0.075..0.10 &&
+            centerDarkRatio in 0.30..0.34 &&
+            bannerWarmRatio in 0.48..0.53
+        return capturedRankProgressSignature || establishedRankProgressSignature ||
+            coolBoardGoldRewardSignature || largeGoldMedalRewardSignature
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */
