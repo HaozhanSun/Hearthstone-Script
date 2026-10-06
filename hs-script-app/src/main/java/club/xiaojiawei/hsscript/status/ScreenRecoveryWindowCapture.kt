@@ -2,8 +2,11 @@ package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME
+import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscriptbase.config.log
+import club.xiaojiawei.hsscriptbase.enums.ModeEnum
+import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import com.sun.jna.Native
 import com.sun.jna.Pointer
 import com.sun.jna.platform.win32.User32
@@ -36,11 +39,15 @@ internal object ScreenRecoveryWindowCapture {
         }
     }
 
-    fun capture(hwnd: WinDef.HWND?): AuthorizedGameWindowFrame? {
+    fun capture(
+        hwnd: WinDef.HWND?,
+        purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+    ): AuthorizedGameWindowFrame? {
         if (GraphicsEnvironment.isHeadless()) return reject("headless-environment", hwnd)
         if (hwnd == null || !User32.INSTANCE.IsWindow(hwnd) || !User32.INSTANCE.IsWindowVisible(hwnd)) {
             return reject("game-window-missing-or-hidden", hwnd)
         }
+        val targetWindowVisibleBefore = User32.INSTANCE.IsWindowVisible(hwnd)
         if (!GameUtil.isAliveOfGame() || !GameUtil.isVerifiedCurrentGameWindow(hwnd)) {
             return reject("current-game-window-unverified", hwnd)
         }
@@ -58,7 +65,8 @@ internal object ScreenRecoveryWindowCapture {
             currentSessionPowerLogPath = currentPowerLog?.absolutePath,
             powerLogLength = attachedPowerLog?.length() ?: 0L,
         )
-        if (!currentPowerLogReady) {
+        val preSessionQueueModalBefore = preSessionQueueModalContext(purpose)
+        if (!currentPowerLogReady && !preSessionQueueModalBefore) {
             return reject(
                 "current-game-session-not-ready",
                 hwnd,
@@ -66,6 +74,15 @@ internal object ScreenRecoveryWindowCapture {
                     "currentPowerLog=${currentPowerLog?.absolutePath ?: "none"} " +
                     "powerLogLength=${attachedPowerLog?.length() ?: 0L}",
             )
+        }
+        if (!currentPowerLogReady) {
+            log.info {
+                "SCREEN_RECOVERY_CAPTURE_PRESESSION purpose=${purpose.name} " +
+                    "authority=current-pid-window-foreground-pixel-ownership " +
+                    "powerLog=${attachedPowerLog?.path() ?: "none"} " +
+                    "currentPowerLog=${currentPowerLog?.absolutePath ?: "none"} " +
+                    "powerLogLength=${attachedPowerLog?.length() ?: 0L}"
+            }
         }
         val clientBounds = clientBoundsOnScreen(hwnd)
             ?: return reject("native-client-bounds-unavailable", hwnd)
@@ -88,6 +105,8 @@ internal object ScreenRecoveryWindowCapture {
         val foregroundAfter = identity(User32.INSTANCE.GetForegroundWindow())
         val currentPidAfter = GameUtil.findGameProcessIdForDiagnostics()
         val processStillAlive = GameUtil.isAliveOfGame() && currentPidAfter == target.processId.toLong()
+        val targetWindowVisibleAfter = User32.INSTANCE.IsWindowVisible(hwnd)
+        val preSessionQueueModalAfter = preSessionQueueModalContext(purpose)
         val evidence = ScreenRecoveryCaptureEvidence(
             processAlive = processStillAlive,
             currentSessionReady = currentPowerLogReady,
@@ -100,6 +119,11 @@ internal object ScreenRecoveryWindowCapture {
             imageHeight = image.height,
             visibleOwnersBefore = ownersBefore,
             visibleOwnersAfter = ownersAfter,
+            purpose = purpose,
+            preSessionQueueModalAuthorized = preSessionQueueModalBefore && preSessionQueueModalAfter,
+            currentGameProcessId = currentPidAfter,
+            targetWindowVisibleBefore = targetWindowVisibleBefore,
+            targetWindowVisibleAfter = targetWindowVisibleAfter,
         )
         val reason = ScreenRecoveryCaptureAuthority.failureReason(evidence)
         log.info {
@@ -109,7 +133,8 @@ internal object ScreenRecoveryWindowCapture {
                 "foregroundAfter=${foregroundAfter?.rootWindow ?: "none"} " +
                 "targetCoverageBefore=${coverage(ownersBefore, target)} " +
                 "targetCoverageAfter=${coverage(ownersAfter, target)} " +
-                "accepted=${reason == null} reason=${reason ?: "exact-client-visible"}"
+                "purpose=${purpose.name} accepted=${reason == null} " +
+                "reason=${reason ?: "exact-client-visible"}"
         }
         if (reason != null) {
             log.warn {
@@ -120,6 +145,15 @@ internal object ScreenRecoveryWindowCapture {
         }
         return AuthorizedGameWindowFrame(image, clientBounds, evidence)
     }
+
+    private fun preSessionQueueModalContext(purpose: ScreenRecoveryCapturePurpose): Boolean =
+        ScreenRecoveryCapturePurposePolicy.allowsPreSessionQueueModal(
+            purpose = purpose,
+            tournamentMode = Mode.currMode === ModeEnum.TOURNAMENT,
+            activeGame = WarEx.inWar,
+            mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+            terminal = GameUtil.isTerminalGameState(),
+        )
 
     private fun clientBoundsOnScreen(hwnd: WinDef.HWND): Rectangle? = runCatching {
         val client = WinDef.RECT()

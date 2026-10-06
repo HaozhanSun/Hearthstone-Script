@@ -16,6 +16,9 @@ internal object MatchmakingDialogRecoveryPolicy {
 
     data class Decision(val action: Action, val reason: String)
 
+    /** Scheduler overlap is not a completed observation and must not exhaust real probe attempts. */
+    fun countsTowardAttemptBudget(probeReason: String): Boolean = probeReason != "probe-in-flight"
+
     fun decide(context: Context, probe: Probe, completedAttempts: Int, priorClickSent: Boolean): Decision {
         if (context.paused) return Decision(Action.CANCEL, "paused")
         if (!context.tournamentMode) return Decision(Action.CANCEL, "mode-changed")

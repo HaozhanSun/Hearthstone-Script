@@ -461,10 +461,16 @@ object ScreenStateRecovery {
             )
         val captureResult = if (RuntimeSafety.safeNative) {
             MouseUtil.withRecoveryForeground(gameWindow) {
-                captureScreen(ScriptStatus.gameHWND ?: gameWindow)
+                captureScreen(
+                    ScriptStatus.gameHWND ?: gameWindow,
+                    purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG,
+                )
             }
         } else {
-            MouseUtil.RecoveryForegroundResult(true, captureScreen(gameWindow))
+            MouseUtil.RecoveryForegroundResult(
+                true,
+                captureScreen(gameWindow, purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG),
+            )
         }
         if (!captureResult.foregroundConfirmed) {
             return StartGameErrorDialogProbe(
@@ -559,8 +565,11 @@ object ScreenStateRecovery {
         )
     }
 
-    private fun captureScreen(hwnd: WinDef.HWND?): Capture? {
-        val authorizedFrame = ScreenRecoveryWindowCapture.capture(hwnd) ?: return null
+    private fun captureScreen(
+        hwnd: WinDef.HWND?,
+        purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+    ): Capture? {
+        val authorizedFrame = ScreenRecoveryWindowCapture.capture(hwnd, purpose) ?: return null
         val image = authorizedFrame.image
         val bounds = authorizedFrame.bounds
         val saved = DebugScreenshotRing.save(image, "screen-recovery", "stale-screen")

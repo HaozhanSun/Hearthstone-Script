@@ -8,6 +8,24 @@ internal data class CapturedWindowIdentity(
     val processId: Int,
 )
 
+/** Pre-session capture is permitted only for the exact matchmaking error-modal probe. */
+internal enum class ScreenRecoveryCapturePurpose {
+    SCREEN_STATE_RECOVERY,
+    MATCHMAKING_ERROR_DIALOG,
+}
+
+/** The only pre-session Power.log exception: a queue-level opponent error modal. */
+internal object ScreenRecoveryCapturePurposePolicy {
+    fun allowsPreSessionQueueModal(
+        purpose: ScreenRecoveryCapturePurpose,
+        tournamentMode: Boolean,
+        activeGame: Boolean,
+        mulligan: Boolean,
+        terminal: Boolean,
+    ): Boolean = purpose == ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG &&
+        tournamentMode && !activeGame && !mulligan && !terminal
+}
+
 internal data class ScreenRecoveryCaptureEvidence(
     val processAlive: Boolean,
     val currentSessionReady: Boolean,
@@ -20,6 +38,11 @@ internal data class ScreenRecoveryCaptureEvidence(
     val imageHeight: Int,
     val visibleOwnersBefore: List<CapturedWindowIdentity?>,
     val visibleOwnersAfter: List<CapturedWindowIdentity?>,
+    val purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+    val preSessionQueueModalAuthorized: Boolean = false,
+    val currentGameProcessId: Long? = target?.processId?.toLong(),
+    val targetWindowVisibleBefore: Boolean = true,
+    val targetWindowVisibleAfter: Boolean = true,
 )
 
 /** Pixel-level authority checks for a desktop capture made while holding a game HWND foreground. */
@@ -44,7 +67,16 @@ internal object ScreenRecoveryCaptureAuthority {
     fun failureReason(evidence: ScreenRecoveryCaptureEvidence): String? {
         val target = evidence.target ?: return "target-window-missing"
         if (!evidence.processAlive) return "game-process-not-alive"
-        if (!evidence.currentSessionReady) return "current-game-session-not-ready"
+        if (evidence.currentGameProcessId != target.processId.toLong()) return "target-pid-not-current-game"
+        if (!evidence.targetWindowVisibleBefore || !evidence.targetWindowVisibleAfter) {
+            return "target-window-not-visible-before-and-after"
+        }
+        if (!evidence.currentSessionReady && !evidence.preSessionQueueModalAuthorized) {
+            return "current-game-session-not-ready"
+        }
+        if (!evidence.currentSessionReady &&
+            evidence.purpose != ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG
+        ) return "current-game-session-not-ready"
         if (target.rootWindow == 0L || target.processId <= 0) return "target-window-identity-invalid"
         if (evidence.foregroundBefore != target || evidence.foregroundAfter != target) {
             return "foreground-window-not-exact-target-before-and-after"

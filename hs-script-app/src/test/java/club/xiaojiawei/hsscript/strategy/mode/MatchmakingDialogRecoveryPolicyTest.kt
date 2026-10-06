@@ -14,6 +14,8 @@ import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.ScreenStateRoiSelector
 import javax.imageio.ImageIO
+import java.io.ByteArrayInputStream
+import java.util.concurrent.atomic.AtomicInteger
 
 class MatchmakingDialogRecoveryPolicyTest {
     private val active = MatchmakingDialogRecoveryPolicy.Context(
@@ -169,6 +171,93 @@ class MatchmakingDialogRecoveryPolicyTest {
     }
 
     @Test
+    fun `both v581 incident screenshots authorize only the exact modal and require fresh UI confirmation`() {
+        val modalScreenshots = listOf(
+            "/offline-ocr/screen-recovery/opponent-disconnect-user-attachment.png",
+            "/offline-ocr/screen-recovery/v581-opponent-disconnect-modal-recovery-exhausted.png",
+        )
+        val deckSelection = fixture("/offline-ocr/screen-recovery/deck-selection-screen.png")
+        val acceptedDispatches = AtomicInteger()
+
+        for (path in modalScreenshots) {
+            val screenshot = fixture(path)
+            val probe = probeImage(screenshot, path, OPPONENT_DISCONNECT_TEXT)
+            assertEquals(
+                MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE,
+                probe.state,
+                "the real screenshot must pass the production visual-modal plus exact-text contract: $path",
+            )
+            val decision = MatchmakingDialogRecoveryPolicy.decide(active, probe.state, 0, false)
+            assertEquals(MatchmakingDialogRecoveryPolicy.Action.CLICK_CONFIRM, decision.action)
+            assertTrue(
+                MatchmakingDialogRecoveryPolicy.dispatchConfirm(decision) {
+                    acceptedDispatches.incrementAndGet()
+                    true
+                } == true,
+                "the input adapter must accept the exact confirm dispatch before it is counted",
+            )
+
+            // This fresh, separate Hearthstone frame is the target-system evidence;
+            // the accepted SendInput/Robot return value alone is not confirmation.
+            val afterClick = probeImage(deckSelection, "fixture:deck-selection-after-confirm", "选择套牌 狂野对战 开始")
+            assertEquals(MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG, afterClick.state)
+            assertEquals(
+                MatchmakingDialogRecoveryPolicy.Action.CONFIRMED_DISMISSED,
+                MatchmakingDialogRecoveryPolicy.decide(active, afterClick.state, 1, priorClickSent = true).action,
+            )
+            assertEquals(
+                MatchmakingDialogRecoveryPolicy.Action.STOP_NOT_PRESENT,
+                MatchmakingDialogRecoveryPolicy.decide(active, afterClick.state, 1, priorClickSent = false).action,
+                "disappearance without an accepted dispatch is not attributed to our click",
+            )
+
+            val stillVisible = probeImage(screenshot, "fixture:dialog-still-visible", OPPONENT_DISCONNECT_TEXT)
+            assertEquals(
+                MatchmakingDialogRecoveryPolicy.Action.CLICK_CONFIRM,
+                MatchmakingDialogRecoveryPolicy.decide(active, stillVisible.state, 1, priorClickSent = true).action,
+                "a click request without visible state transition is not dismissal confirmation",
+            )
+        }
+        assertEquals(modalScreenshots.size, acceptedDispatches.get())
+    }
+
+    @Test
+    fun `no progress timeout with an unbound log neither pauses nor consumes modal retry budget`() {
+        val dialog = fixture("/offline-ocr/screen-recovery/opponent-disconnect-user-attachment.png")
+        val exactProbe = probeImage(dialog, "fixture:pregame-dialog", OPPONENT_DISCONNECT_TEXT)
+        assertEquals(MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE, exactProbe.state)
+
+        val watchdog = club.xiaojiawei.hsscript.status.NoProgressWatchdog(noProgressTimeoutMs = 1_000L)
+        fun unbound(nowMs: Long) = club.xiaojiawei.hsscript.status.NoProgressWatchdog.Snapshot(
+            nowMs = nowMs,
+            mode = "TOURNAMENT",
+            expectedMode = "TOURNAMENT",
+            screen = club.xiaojiawei.hsscript.status.NoProgressWatchdog.ScreenExpectation.STARTUP,
+            processAlive = true,
+            currentPid = 50204L,
+            boundPid = 50204L,
+            windowPresent = true,
+            powerLogPath = null,
+            boundPowerLogPath = null,
+            powerLogPosition = Long.MIN_VALUE,
+            powerLogLength = 0L,
+            powerLogAgeMs = Long.MAX_VALUE,
+            powerLogUsable = false,
+        )
+
+        val beforeTimeout = watchdog.observe(unbound(0L))
+        val afterTimeout = watchdog.observe(unbound(180_000L))
+        assertEquals(club.xiaojiawei.hsscript.status.NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, beforeTimeout.action)
+        assertEquals(club.xiaojiawei.hsscript.status.NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, afterTimeout.action)
+        assertEquals("power-log-unbound-or-unusable", afterTimeout.reason)
+        assertEquals(
+            MatchmakingDialogRecoveryPolicy.Action.CLICK_CONFIRM,
+            MatchmakingDialogRecoveryPolicy.decide(active, exactProbe.state, 0, false).action,
+            "the independent exact-modal probe remains bounded and actionable; timeout is not pause/click evidence",
+        )
+    }
+
+    @Test
     fun `low confidence and capture failure remain unknown and never dispatch confirm`() {
         val lowConfidence = StartGameErrorDialogClassifier.classify(
             title = "发生错误",
@@ -265,6 +354,19 @@ class MatchmakingDialogRecoveryPolicyTest {
     }
 
     @Test
+    fun `overlapping in-flight timer tick does not consume a completed probe attempt`() {
+        var completedAttempts = 0
+        repeat(20) {
+            if (MatchmakingDialogRecoveryPolicy.countsTowardAttemptBudget("probe-in-flight")) {
+                completedAttempts++
+            }
+        }
+        assertEquals(0, completedAttempts)
+        assertTrue(MatchmakingDialogRecoveryPolicy.countsTowardAttemptBudget("capture-unavailable"))
+        assertTrue(MatchmakingDialogRecoveryPolicy.countsTowardAttemptBudget("ocr-unverified-or-low-confidence"))
+    }
+
+    @Test
     fun `visible dialog permits at most twenty clicks before exhaustion`() {
         val visible = MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE
         assertEquals(
@@ -302,5 +404,22 @@ class MatchmakingDialogRecoveryPolicyTest {
             MatchmakingDialogRecoveryPolicy.Action.CANCEL,
             MatchmakingDialogRecoveryPolicy.decide(active.copy(gameStarted = true), visible, 0, false).action,
         )
+    }
+
+    private fun fixture(resource: String) = requireNotNull(javaClass.getResourceAsStream(resource)).use(ImageIO::read)
+
+    private fun probeImage(
+        image: java.awt.image.BufferedImage,
+        screenshot: String,
+        text: String,
+    ) = ScreenStateRecovery.probeStartGameErrorDialogForImage(image, screenshot) { crop, roi ->
+        assertTrue(crop.width > 0 && crop.height > 0)
+        assertEquals(ScreenStateRoiSelector.START_GAME_ERROR_MODAL_ROI, roi)
+        OcrRecognition(text, 0.96)
+    }
+
+    companion object {
+        private const val OPPONENT_DISCONNECT_TEXT =
+            "发生错误 由于你的对手无法连接，游戏无法继续。请再试一次。确定"
     }
 }

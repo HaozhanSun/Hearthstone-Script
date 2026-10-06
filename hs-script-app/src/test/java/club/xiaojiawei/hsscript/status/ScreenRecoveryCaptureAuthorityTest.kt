@@ -140,18 +140,159 @@ class ScreenRecoveryCaptureAuthorityTest {
         )
     }
 
+    @Test
+    fun `only the exact matchmaking modal purpose may capture before Power log is bound`() {
+        assertFalse(
+            CurrentGameScreenReadinessPolicy.isReady(
+                gameWindowVerified = true,
+                attachedPowerLogPath = null,
+                currentSessionPowerLogPath = "D:/Logs/session/Power.log",
+                powerLogLength = 0L,
+            ),
+            "a missing/late listener binding does not create current-session readiness",
+        )
+        assertFalse(
+            CurrentGameScreenReadinessPolicy.isReady(
+                gameWindowVerified = true,
+                attachedPowerLogPath = "D:/Logs/session/Power.log",
+                currentSessionPowerLogPath = "D:/Logs/session/Power.log",
+                powerLogLength = 0L,
+            ),
+            "a file that exists but is still zero bytes remains unbound for ordinary recovery",
+        )
+        val missingPowerLog = evidence(currentSessionReady = false)
+        assertEquals(
+            "current-game-session-not-ready",
+            ScreenRecoveryCaptureAuthority.failureReason(missingPowerLog),
+        )
+
+        val exactModal = evidence(
+            currentSessionReady = false,
+            purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG,
+            preSessionQueueModalAuthorized = true,
+        )
+        assertTrue(ScreenRecoveryCaptureAuthority.isAuthorized(exactModal))
+
+        assertFalse(
+            ScreenRecoveryCaptureAuthority.isAuthorized(
+                evidence(
+                    currentSessionReady = false,
+                    purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG,
+                ),
+            ),
+            "the purpose label alone cannot grant the pre-session exception",
+        )
+        assertEquals(
+            "current-game-session-not-ready",
+            ScreenRecoveryCaptureAuthority.failureReason(
+                evidence(
+                    currentSessionReady = false,
+                    purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+                    preSessionQueueModalAuthorized = true,
+                ),
+            ),
+            "even a positive queue context cannot remove the log gate from ordinary/game-state capture",
+        )
+
+        val occludedModal = evidence(
+            currentSessionReady = false,
+            purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG,
+            preSessionQueueModalAuthorized = true,
+            owners = List(63) { codex },
+        )
+        assertFalse(
+            ScreenRecoveryCaptureAuthority.isAuthorized(occludedModal),
+            "the purpose exception must not whitelist a foreign/full-screen overlay",
+        )
+
+        val wrongWindow = evidence(
+            currentSessionReady = false,
+            purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG,
+            preSessionQueueModalAuthorized = true,
+            foregroundAfter = codex,
+        )
+        assertEquals(
+            "foreground-window-not-exact-target-before-and-after",
+            ScreenRecoveryCaptureAuthority.failureReason(wrongWindow),
+        )
+
+        assertEquals(
+            "target-pid-not-current-game",
+            ScreenRecoveryCaptureAuthority.failureReason(
+                evidence(
+                    currentSessionReady = false,
+                    purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG,
+                    preSessionQueueModalAuthorized = true,
+                    currentGameProcessId = 777L,
+                ),
+            ),
+        )
+        assertEquals(
+            "target-window-not-visible-before-and-after",
+            ScreenRecoveryCaptureAuthority.failureReason(
+                evidence(
+                    currentSessionReady = false,
+                    purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG,
+                    preSessionQueueModalAuthorized = true,
+                    targetWindowVisibleAfter = false,
+                ),
+            ),
+        )
+        assertEquals(
+            "game-process-not-alive",
+            ScreenRecoveryCaptureAuthority.failureReason(
+                evidence(
+                    processAlive = false,
+                    currentSessionReady = false,
+                    purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG,
+                    preSessionQueueModalAuthorized = true,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `pre-session exception is limited to non-game tournament queue context`() {
+        fun allows(
+            purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG,
+            tournamentMode: Boolean = true,
+            activeGame: Boolean = false,
+            mulligan: Boolean = false,
+            terminal: Boolean = false,
+        ) = ScreenRecoveryCapturePurposePolicy.allowsPreSessionQueueModal(
+            purpose,
+            tournamentMode,
+            activeGame,
+            mulligan,
+            terminal,
+        )
+
+        assertTrue(allows())
+        assertFalse(allows(purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY))
+        assertFalse(allows(tournamentMode = false))
+        assertFalse(allows(activeGame = true))
+        assertFalse(allows(mulligan = true))
+        assertFalse(allows(terminal = true))
+    }
+
     private fun evidence(
         processAlive: Boolean = true,
+        currentSessionReady: Boolean = true,
         target: CapturedWindowIdentity? = game,
         foregroundBefore: CapturedWindowIdentity? = game,
         foregroundAfter: CapturedWindowIdentity? = game,
-        owners: List<CapturedWindowIdentity?>,
+        owners: List<CapturedWindowIdentity?> = List(63) { game },
         captureBounds: Rectangle = client,
         imageWidth: Int = client.width,
         imageHeight: Int = client.height,
+        purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+        preSessionQueueModalAuthorized: Boolean = false,
+        currentGameProcessId: Long? = game.processId.toLong(),
+        targetWindowVisibleBefore: Boolean = true,
+        targetWindowVisibleAfter: Boolean = true,
     ) = ScreenRecoveryCaptureEvidence(
         processAlive = processAlive,
-        currentSessionReady = true,
+        currentSessionReady = currentSessionReady,
         target = target,
         foregroundBefore = foregroundBefore,
         foregroundAfter = foregroundAfter,
@@ -161,6 +302,11 @@ class ScreenRecoveryCaptureAuthorityTest {
         imageHeight = imageHeight,
         visibleOwnersBefore = owners,
         visibleOwnersAfter = owners,
+        purpose = purpose,
+        preSessionQueueModalAuthorized = preSessionQueueModalAuthorized,
+        currentGameProcessId = currentGameProcessId,
+        targetWindowVisibleBefore = targetWindowVisibleBefore,
+        targetWindowVisibleAfter = targetWindowVisibleAfter,
     )
 
     private fun recoveryEvidence(capturedPixelsVerified: Boolean) = ScreenRecoveryAuthorityEvidence(

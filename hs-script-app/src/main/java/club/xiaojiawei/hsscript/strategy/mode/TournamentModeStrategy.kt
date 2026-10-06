@@ -415,6 +415,13 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                     return@LRunnable
                 }
                 val probe = ScreenStateRecovery.probeStartGameErrorDialogForMatchmaking()
+                if (!MatchmakingDialogRecoveryPolicy.countsTowardAttemptBudget(probe.reason)) {
+                    log.debug {
+                        "MATCHMAKING_ERROR_DIALOG_PROBE_DEFERRED trace=$traceId " +
+                            "reason=${probe.reason} attempts=$attempts retryBudgetConsumed=false input=none"
+                    }
+                    return@LRunnable
+                }
                 val retryDecision = retrySupervisor.observe(System.currentTimeMillis(), probe.state)
                 when (retryDecision.action) {
                     MatchmakingDialogRecoveryRetrySupervisor.Action.WAIT_COOLDOWN -> {
@@ -473,7 +480,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                             MouseUtil.leftButtonClickForRecovery(ERROR_RECT.getCenterClickPos())
                         } ?: false
                         attempts++
-                        priorClickSent = true
+                        priorClickSent = priorClickSent || accepted
                         log.warn {
                             "MATCHMAKING_ERROR_DIALOG_CLICK trace=$traceId attempt=$attempts " +
                                 "inputAccepted=$accepted targetSystemConfirmed=false " +
