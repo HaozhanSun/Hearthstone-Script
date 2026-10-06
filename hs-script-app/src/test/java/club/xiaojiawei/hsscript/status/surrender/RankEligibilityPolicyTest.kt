@@ -37,6 +37,49 @@ class RankEligibilityPolicyTest {
     }
 
     @Test
+    fun `queue dispatch boundary allows only fresh exact five or ten`() {
+        var dispatchCount = 0
+        val deniedEvidence = buildList {
+            (1..4).forEach { add(detection(it)) }
+            (6..9).forEach { add(detection(it)) }
+            (11..20).forEach { add(detection(it)) }
+            listOf(21, 233, 5220).forEach { add(detection(it)) }
+            add(null) // missing evidence, including provider failure/timeout/cancellation
+            add(detection(rank = null, agreementCount = 0)) // unresolved/conflicting ROIs
+            add(detection(5, confidence = 0.89))
+            add(detection(5, capturedAtMs = now - RankEligibilityCorePolicy.MAX_EVIDENCE_AGE_MS - 1))
+            add(detection(5, bounds = Rectangle()))
+            add(detection(5, provider = "UNVERIFIED"))
+            add(detection(5, provider = "LEGACY", confidence = null, agreementCount = 1))
+        }
+        for (evidence in deniedEvidence) {
+            val authorization = RankEligibilityPolicy.evaluate(
+                evidence, "TOURNAMENT", "TOURNAMENT", false, false, now,
+            )
+            val queue = MatchmakingGuardPolicy.authorizeQueueInput(true, false, false, authorization.toCoreDecision())
+            assertFalse(MatchmakingGuardPolicy.dispatchIfAuthorized(queue) { dispatchCount++ }, "evidence=$evidence")
+        }
+        for ((actualMode, inWar) in listOf("HUB" to false, "TOURNAMENT" to true)) {
+            val authorization = RankEligibilityPolicy.evaluate(
+                detection(5), "TOURNAMENT", actualMode, false, inWar, now,
+            )
+            val queue = MatchmakingGuardPolicy.authorizeQueueInput(true, false, false, authorization.toCoreDecision())
+            assertFalse(
+                MatchmakingGuardPolicy.dispatchIfAuthorized(queue) { dispatchCount++ },
+                "mode/state mismatch actualMode=$actualMode inWar=$inWar",
+            )
+        }
+        for (rank in listOf(5, 10)) {
+            val authorization = RankEligibilityPolicy.evaluate(
+                detection(rank), "TOURNAMENT", "TOURNAMENT", false, false, now,
+            )
+            val queue = MatchmakingGuardPolicy.authorizeQueueInput(true, false, false, authorization.toCoreDecision())
+            assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(queue) { dispatchCount++ }, "rank=$rank")
+        }
+        assertEquals(2, dispatchCount, "only exact rank 5 and 10 may reach the input callback")
+    }
+
+    @Test
     fun `rank three progression reward never authorizes ordinary play`() {
         val decision = evaluate(detection(rank = 3, tier = CurrentRankDetector.RankTier.GOLD))
         assertFalse(decision.eligible, "post-surrender Gold 3 screen is cleanup evidence, not play authorization")
@@ -78,8 +121,16 @@ class RankEligibilityPolicyTest {
 
     @Test
     fun `translated PaddleX failures and cancellation are denied as missing evidence`() {
-        // Detector/provider exceptions are normalized to absent evidence unless
-        // cancellation propagates; neither path can reuse a prior rank value.
+        // Provider failure, timeout, and cancellation are normalized by the
+        // queue boundary to absent evidence; no cached rank may be substituted.
+        for (failure in listOf("PaddleXOcrException", "PaddleXTimeout", "PaddleXCancelledException")) {
+            val queue = MatchmakingGuardPolicy.authorizeQueueInput(
+                true, false, false, evaluate(null).toCoreDecision(),
+            )
+            var dispatched = false
+            assertFalse(MatchmakingGuardPolicy.dispatchIfAuthorized(queue) { dispatched = true }, failure)
+            assertFalse(dispatched, "$failure must not dispatch matchmaking")
+        }
         assertEquals("rank-evidence-missing", evaluate(null).reason)
         assertEquals("rank-unresolved", evaluate(detection(rank = null)).reason)
         assertFalse(evaluate(detection(rank = 5, provider = "UNKNOWN")).eligible)
@@ -147,8 +198,9 @@ class RankEligibilityPolicyTest {
         agreementCount: Int = 1,
         capturedAtMs: Long = now,
         bounds: Rectangle = Rectangle(10, 20, 80, 90),
+        rankOverride: Int? = rank,
     ) = CurrentRankDetector.Detection(
-        rank = rank,
+        rank = rankOverride,
         tier = tier,
         ocrText = rank?.toString().orEmpty(),
         confidence = confidence,
@@ -157,4 +209,7 @@ class RankEligibilityPolicyTest {
         capturedAtMs = capturedAtMs,
         agreementCount = agreementCount,
     )
+
+    private fun RankEligibilityPolicy.Decision.toCoreDecision() =
+        RankEligibilityCorePolicy.Decision(eligible = eligible, reason = reason)
 }

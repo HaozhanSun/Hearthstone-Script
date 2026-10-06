@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.strategy.mode
 
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
+import club.xiaojiawei.hsscript.status.surrender.RankEligibilityCorePolicy
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -10,14 +11,22 @@ import kotlin.test.assertTrue
 
 class MatchmakingGuardPolicyTest {
     @Test
-    fun `queue input gate depends on runtime only and not rank evidence`() {
+    fun `queue authorization requires active runtime and rank authorization`() {
         assertEquals(true, MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = false))
         assertEquals(false, MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = true))
         assertEquals(false, MatchmakingGuardPolicy.runtimeAllowsInput(working = false, paused = false))
+
+        val allowedRank = RankEligibilityCorePolicy.Decision(true, "verified-exact-rank-5")
+        val deniedRank = RankEligibilityCorePolicy.Decision(false, "rank-not-5-or-10")
+        assertTrue(MatchmakingGuardPolicy.authorizeQueueInput(true, false, false, allowedRank).allowed)
+        assertFalse(MatchmakingGuardPolicy.authorizeQueueInput(true, false, false, deniedRank).allowed)
+        assertFalse(MatchmakingGuardPolicy.authorizeQueueInput(false, false, false, allowedRank).allowed)
+        assertFalse(MatchmakingGuardPolicy.authorizeQueueInput(true, true, false, allowedRank).allowed)
+        assertFalse(MatchmakingGuardPolicy.authorizeQueueInput(true, false, true, allowedRank).allowed)
     }
 
     @Test
-    fun `rank inspection is absent from the pre match queue path`() {
+    fun `fresh rank authorization happens before any pre match queue click`() {
         val relative = Path.of(
             "src", "main", "java", "club", "xiaojiawei", "hsscript", "strategy", "mode", "TournamentModeStrategy.kt",
         )
@@ -27,11 +36,33 @@ class MatchmakingGuardPolicyTest {
         val source = Files.readString(file)
         val startMatching = source.substringAfter("fun startMatching() {").substringBefore("private fun abortMatchmakingIfGameStarted")
 
-        assertTrue(startMatching.contains("MatchmakingGuardPolicy.runtimeAllowsInput"))
-        assertTrue(startMatching.contains("rankPolicy=POST_MULLIGAN"))
-        assertFalse(startMatching.contains("CurrentRankDetector"))
-        assertFalse(startMatching.contains("RankEligibilityPolicy"))
-        assertFalse(startMatching.contains("pre-match-deck-selection"))
+        assertTrue(startMatching.contains("CurrentRankDetector.detect"))
+        assertTrue(startMatching.contains("trigger = \"pre-match-deck-selection\""))
+        assertTrue(startMatching.contains("RankEligibilityPolicy.evaluate"))
+        assertTrue(startMatching.contains("MatchmakingGuardPolicy.dispatchIfAuthorized(queueAuthorization)"))
+        assertTrue(startMatching.contains("expectedMode = ModeEnum.TOURNAMENT.name"))
+        assertTrue(startMatching.contains("expectedInWar = false"))
+        val authorizationIndex = startMatching.indexOf("MatchmakingGuardPolicy.authorizeQueueInput")
+        val denialIndex = startMatching.indexOf("if (!dispatchMatchmaking)")
+        val firstQueueClickIndex = startMatching.indexOf("clickMatchmakingControl(START_RECT)")
+        assertTrue(authorizationIndex >= 0 && denialIndex > authorizationIndex)
+        assertTrue(firstQueueClickIndex > denialIndex, "all matchmaking input must follow the fail-closed gate")
+        assertTrue(startMatching.contains("rankPolicy=FRESH_EXACT_5_OR_10"))
+        assertFalse(startMatching.contains("POST_MULLIGAN"))
+    }
+
+    @Test
+    fun `deny decision cannot dispatch matchmaking input and exact ranks can`() {
+        var dispatches = 0
+        val deny = MatchmakingGuardPolicy.QueueAuthorization(false, "rank-not-5-or-10")
+        assertFalse(MatchmakingGuardPolicy.dispatchIfAuthorized(deny) { dispatches++ })
+        assertEquals(0, dispatches, "rank denial must send no queue input")
+
+        for (rank in listOf(5, 10)) {
+            val allow = MatchmakingGuardPolicy.QueueAuthorization(true, "verified-exact-rank-$rank")
+            assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(allow) { dispatches++ })
+        }
+        assertEquals(2, dispatches)
     }
 
     @Test

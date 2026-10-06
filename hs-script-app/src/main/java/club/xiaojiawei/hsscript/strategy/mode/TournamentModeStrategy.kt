@@ -13,6 +13,9 @@ import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
+import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
+import club.xiaojiawei.hsscript.status.surrender.RankEligibilityPolicy
+import club.xiaojiawei.hsscript.status.surrender.RankEligibilityCorePolicy
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
@@ -261,26 +264,66 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         log.info { "开始匹配 trace=$traceId" }
         val mandatoryRankSurrenderPending =
             club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending()
-        val dispatchMatchmaking = MatchmakingGuardPolicy.runtimeAllowsInput(
+        val runtimeReady = MatchmakingGuardPolicy.runtimeAllowsInput(
             working = WorkTimeListener.working,
             paused = PauseStatus.isPause,
             mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
         )
+        // Capture a new badge read for this queue attempt. Never use rank from
+        // a prior game or the mulligan cache as pre-match authorization.
+        val rankDetection = if (runtimeReady) {
+            runCatching {
+                CurrentRankDetector.detect(
+                    trigger = "pre-match-deck-selection",
+                    phase = "DECK_SELECTION",
+                )
+            }.getOrElse { error ->
+                log.warn(error) {
+                    "PRE_MATCH_RANK_CAPTURE_FAILED provider=OCR action=NO_QUEUE_INPUT " +
+                        "reason=${error.javaClass.simpleName}"
+                }
+                null
+            }
+        } else {
+            null
+        }
+        val rankAuthorization = RankEligibilityPolicy.evaluate(
+            detection = rankDetection,
+            expectedMode = ModeEnum.TOURNAMENT.name,
+            actualMode = Mode.currMode?.name,
+            expectedInWar = false,
+            inWar = WarEx.inWar,
+            nowMs = System.currentTimeMillis(),
+        )
+        val queueAuthorization = MatchmakingGuardPolicy.authorizeQueueInput(
+            working = WorkTimeListener.working,
+            paused = PauseStatus.isPause,
+            mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
+            rankAuthorization = RankEligibilityCorePolicy.Decision(
+                eligible = rankAuthorization.eligible,
+                reason = rankAuthorization.reason,
+            ),
+        )
+        val dispatchMatchmaking = queueAuthorization.allowed
         log.info {
-            "MATCHMAKING_GATE stage=PRE_MATCH rankPolicy=POST_MULLIGAN " +
+            "RANK_ELIGIBILITY_CHECK stage=PRE_MATCH provider=${rankDetection?.provider ?: "NONE"} " +
+                "rank=${rankDetection?.rank ?: "UNKNOWN"} tier=${rankDetection?.tier?.name ?: "UNKNOWN"} " +
+                "confidence=${rankDetection?.confidence ?: "unavailable"} agreement=${rankDetection?.agreementCount ?: 0} " +
+                "mode=${Mode.currMode?.name ?: "NONE"} inWar=${WarEx.inWar} " +
+                "decision=${if (rankAuthorization.eligible) "ALLOW" else "DENY"} " +
+                "reason=${rankAuthorization.reason}"
+        }
+        log.info {
+            "MATCHMAKING_GATE stage=PRE_MATCH rankPolicy=FRESH_EXACT_5_OR_10 " +
                 "mode=${Mode.currMode?.name ?: "NONE"} inWar=${WarEx.inWar} " +
                 "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} " +
                 "decision=${if (dispatchMatchmaking) "ALLOW" else "DENY"} " +
-                "reason=${when {
-                    dispatchMatchmaking -> "runtime-active"
-                    mandatoryRankSurrenderPending -> "mandatory-rank-surrender-pending"
-                    else -> "runtime-not-active"
-                }}"
+                "reason=${queueAuthorization.reason}"
         }
         if (!dispatchMatchmaking) {
             log.warn {
                 "MATCHMAKING_BLOCKED trace=$traceId " +
-                    "reason=${if (mandatoryRankSurrenderPending) "mandatory-rank-surrender-pending" else "runtime-not-active"} " +
+                    "reason=${queueAuthorization.reason} " +
                     "action=NO_QUEUE_INPUT"
             }
             return
@@ -291,7 +334,16 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         // automatic deck-completion dialog.  A single start click can leave
         // the client on the deck-selection page while the script has already
         // logged START_MATCHING, which is not a real state transition.
-        clickMatchmakingControl(START_RECT)
+        if (!MatchmakingGuardPolicy.dispatchIfAuthorized(queueAuthorization) {
+                clickMatchmakingControl(START_RECT)
+            }
+        ) {
+            log.warn {
+                "MATCHMAKING_BLOCKED trace=$traceId reason=${queueAuthorization.reason} " +
+                    "action=NO_QUEUE_INPUT"
+            }
+            return
+        }
         logMatchmakingCheckpoint(traceId, "after-start-click")
         SystemUtil.delayLong()
         if (abortMatchmakingIfGameStarted(traceId, "after-start-click")) return

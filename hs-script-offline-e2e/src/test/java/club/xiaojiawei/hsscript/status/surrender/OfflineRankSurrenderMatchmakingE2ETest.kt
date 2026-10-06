@@ -178,7 +178,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
     }
 
     @Test
-    fun `rank four deck selection queues first then mulligan policy mandates and accepts surrender`() {
+    fun `historical rank four deck selection is now denied before any queue input`() {
         val fixture = readFixture()
         val priorTicket = barrier.beginCurrentGame()
         assertNotNull(barrier.requireSurrender(priorTicket))
@@ -202,13 +202,22 @@ class OfflineRankSurrenderMatchmakingE2ETest {
             ),
         )
 
-        // Production startMatching calls this runtime-only gate. The current
-        // rank badge is intentionally not an input to pre-match eligibility.
-        assertTrue(queueAllowed(), "a rank-4 badge on deck selection must not block queue entry")
-        assertTrue(
-            MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = false),
-            "the production pre-match gate must not consume the rank-4 menu badge",
+        // This real historical deck-selection screenshot shows rank 4. The
+        // production pre-queue boundary must now reject it before any input.
+        val preQueueRank = RankEligibilityCorePolicy.evaluate(
+            evidence = detection(fixture.deckSelectionRankBadge, System.currentTimeMillis()),
+            expectedMode = "TOURNAMENT",
+            actualMode = "TOURNAMENT",
+            expectedInWar = false,
+            inWar = false,
+            nowMs = System.currentTimeMillis(),
         )
+        val preQueue = MatchmakingGuardPolicy.authorizeQueueInput(true, false, false, preQueueRank)
+        assertFalse(preQueue.allowed, "rank 4 must not enter matchmaking")
+        var queueInputSent = false
+        assertFalse(MatchmakingGuardPolicy.dispatchIfAuthorized(preQueue) { queueInputSent = true })
+        assertFalse(queueInputSent, "deny must produce no matchmaking input")
+        assertFalse(queueAllowed(rank = fixture.deckSelectionRankBadge))
 
         // After the next game is authoritative in Power.log, run the actual
         // eligibility policy on rank 4 and arm only the mandatory surrender.
@@ -389,11 +398,23 @@ class OfflineRankSurrenderMatchmakingE2ETest {
         assertEquals(111, dimensions.second)
     }
 
-    private fun queueAllowed(): Boolean = MatchmakingGuardPolicy.runtimeAllowsInput(
-        working = true,
-        paused = false,
-        mandatoryRankSurrenderPending = guard.isPending(),
-    )
+    private fun queueAllowed(rank: Int = 5): Boolean {
+        val now = System.currentTimeMillis()
+        val rankAuthorization = RankEligibilityCorePolicy.evaluate(
+            evidence = detection(rank, now),
+            expectedMode = "TOURNAMENT",
+            actualMode = "TOURNAMENT",
+            expectedInWar = false,
+            inWar = false,
+            nowMs = now,
+        )
+        return MatchmakingGuardPolicy.authorizeQueueInput(
+            working = true,
+            paused = false,
+            mandatoryRankSurrenderPending = guard.isPending(),
+            rankAuthorization = rankAuthorization,
+        ).allowed
+    }
 
     private fun queueBlocked(): Boolean = !queueAllowed()
 
