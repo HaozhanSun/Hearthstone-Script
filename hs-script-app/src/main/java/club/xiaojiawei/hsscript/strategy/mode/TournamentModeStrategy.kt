@@ -14,8 +14,6 @@ import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
 import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
-import club.xiaojiawei.hsscript.status.surrender.RankEligibilityPolicy
-import club.xiaojiawei.hsscript.status.surrender.RankEligibilityCorePolicy
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
@@ -264,46 +262,33 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         log.info { "开始匹配 trace=$traceId" }
         val mandatoryRankSurrenderPending =
             club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending()
-        val runtimeReady = MatchmakingGuardPolicy.runtimeAllowsInput(
+        // Capture a new badge read for this queue attempt. Never use rank from
+        // a prior game or the mulligan cache as pre-match authorization.
+        val rankGate = PreMatchRankGate.evaluate(
             working = WorkTimeListener.working,
             paused = PauseStatus.isPause,
             mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
-        )
-        // Capture a new badge read for this queue attempt. Never use rank from
-        // a prior game or the mulligan cache as pre-match authorization.
-        val rankDetection = if (runtimeReady) {
-            runCatching {
-                CurrentRankDetector.detect(
-                    trigger = "pre-match-deck-selection",
-                    phase = "DECK_SELECTION",
-                )
-            }.getOrElse { error ->
-                log.warn(error) {
-                    "PRE_MATCH_RANK_CAPTURE_FAILED provider=OCR action=NO_QUEUE_INPUT " +
-                        "reason=${error.javaClass.simpleName}"
-                }
-                null
-            }
-        } else {
-            null
-        }
-        val rankAuthorization = RankEligibilityPolicy.evaluate(
-            detection = rankDetection,
             expectedMode = ModeEnum.TOURNAMENT.name,
             actualMode = Mode.currMode?.name,
             expectedInWar = false,
             inWar = WarEx.inWar,
-            nowMs = System.currentTimeMillis(),
+            nowMs = { System.currentTimeMillis() },
+            detectFreshRank = {
+                CurrentRankDetector.detect(
+                    trigger = "pre-match-deck-selection",
+                    phase = "DECK_SELECTION",
+                )
+            },
         )
-        val queueAuthorization = MatchmakingGuardPolicy.authorizeQueueInput(
-            working = WorkTimeListener.working,
-            paused = PauseStatus.isPause,
-            mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
-            rankAuthorization = RankEligibilityCorePolicy.Decision(
-                eligible = rankAuthorization.eligible,
-                reason = rankAuthorization.reason,
-            ),
-        )
+        val rankDetection = rankGate.detection
+        val rankAuthorization = rankGate.rankDecision
+        val queueAuthorization = rankGate.queueAuthorization
+        rankGate.captureFailure?.let { error ->
+            log.warn(error) {
+                "PRE_MATCH_RANK_CAPTURE_FAILED provider=OCR action=NO_QUEUE_INPUT " +
+                    "reason=${error.javaClass.simpleName}"
+            }
+        }
         val dispatchMatchmaking = queueAuthorization.allowed
         log.info {
             "RANK_ELIGIBILITY_CHECK stage=PRE_MATCH provider=${rankDetection?.provider ?: "NONE"} " +
