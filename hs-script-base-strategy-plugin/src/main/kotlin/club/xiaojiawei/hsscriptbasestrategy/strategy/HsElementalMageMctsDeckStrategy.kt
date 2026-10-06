@@ -6,6 +6,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.MCTSArg
 import club.xiaojiawei.hsscriptcardsdk.bean.MctsRootSelectionPolicy
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptstrategysdk.deck.MCTSDeckStrategy
+import club.xiaojiawei.hsscriptstrategysdk.deck.MctsDiscoverCandidateOverride
 
 /** Selectable entry point for the offline-first Elemental Mage MCTS. */
 class HsElementalMageMctsDeckStrategy : MCTSDeckStrategy() {
@@ -52,4 +53,16 @@ class HsElementalMageMctsDeckStrategy : MCTSDeckStrategy() {
 
     override fun executeDiscoverChooseCard(vararg cards: Card): Int =
         cards.indices.maxByOrNull { ElementalMageMctsModel.discoverScore(cards[it]) } ?: 0
+
+    override fun discoverCandidateOverride(
+        cards: List<Card>,
+        hand: List<Card>,
+        nextTurnMana: Int,
+        nextTurnNumber: Int,
+    ): MctsDiscoverCandidateOverride? = ElementalMageMctsModel.discoverChainOverride(
+        offered = cards,
+        hand = hand,
+        nextTurnMana = nextTurnMana,
+        nextTurnNumber = nextTurnNumber,
+    )
 }

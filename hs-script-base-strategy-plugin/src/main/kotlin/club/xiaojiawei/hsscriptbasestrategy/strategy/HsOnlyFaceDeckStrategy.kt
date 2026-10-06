@@ -14,7 +14,7 @@ import club.xiaojiawei.hsscriptbasestrategy.util.DeckStrategyUtil
  * @date 2025/4/12 11:16
  */
 class HsOnlyFaceDeckStrategy : MCTSDeckStrategy() {
-    override fun name(): String = "打脸策略"
+    override fun name(): String = "打脸策略 V1.1"
 
     override fun getRunMode(): Array<RunModeEnum> =
         arrayOf(RunModeEnum.CASUAL, RunModeEnum.STANDARD, RunModeEnum.WILD, RunModeEnum.PRACTICE)
@@ -23,7 +23,7 @@ class HsOnlyFaceDeckStrategy : MCTSDeckStrategy() {
 
     override fun id(): String = "e71234fa-4-only-face-deck-97e9-1f4e126cd33b"
 
-    override fun description(): String = "我的眼里只有脸"
+    override fun description(): String = "我的眼里只有脸；发现选择规则 V1.1"
 
     override fun executeChangeCard(cards: HashSet<Card>) {
         HsCommonDeckStrategy().executeChangeCard(cards)

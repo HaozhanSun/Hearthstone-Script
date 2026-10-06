@@ -2,7 +2,9 @@ package club.xiaojiawei.hsscript.strategy
 
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.bean.GameRect
+import club.xiaojiawei.hsscript.bean.DeckDecoder
 import club.xiaojiawei.hsscript.bean.single.WarEx
+import club.xiaojiawei.hsscript.listener.log.DeckLogListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.E2ETrace
@@ -33,9 +35,12 @@ import club.xiaojiawei.hsscriptcardsdk.data.COIN_CARD_ID
 import club.xiaojiawei.hsscriptcardsdk.data.BaseData
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsReplayTrace
 import club.xiaojiawei.hsscriptcardsdk.status.WAR
+import club.xiaojiawei.hsscriptcardsdk.util.CardDBUtil
 import club.xiaojiawei.hsscriptstrategysdk.TimelineEvent
 import club.xiaojiawei.hsscriptstrategysdk.DeckStrategy
 import club.xiaojiawei.hsscriptstrategysdk.deck.MCTSDeckStrategy
+import club.xiaojiawei.hsscriptstrategysdk.deck.DiscoverSelectionPolicy
+import java.util.concurrent.ConcurrentHashMap
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 
 /**
@@ -46,6 +51,7 @@ import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 object DeckStrategyActuator {
 
     private val war = WAR
+    private val discoverDeckCardIdsByCode = ConcurrentHashMap<String, Set<String>>()
     private const val MAX_MCTS_TURN_END_REPLANS = MctsTurnEndReplanPolicy.MAX_REPLANS
 
     fun reset() {
@@ -651,9 +657,73 @@ object DeckStrategyActuator {
 
         SystemUtil.delayMedium()
         var index = -1
+        val strategy = DeckStrategyManager.currentDeckStrategy
         try {
-            index = (DeckStrategyManager.currentDeckStrategy?.executeDiscoverChooseCard(*cards.toTypedArray())
-                ?: 0).coerceIn(0, cards.size - 1)
+            index = if (strategy != null && cards.isNotEmpty()) {
+                val deckSnapshot = currentDiscoverDeckSnapshot(strategy)
+                val nextTurnMana = DiscoverSelectionPolicy.nextTurnAvailableMana(
+                    currentTurnCrystals = war.me.resources,
+                    maxCrystals = war.me.maxResources,
+                )
+                val mctsStrategy = strategy as? MCTSDeckStrategy
+                val override = mctsStrategy?.discoverCandidateOverride(
+                    cards = cards,
+                    hand = war.me.handArea.cards.toList(),
+                    nextTurnMana = nextTurnMana,
+                    nextTurnNumber = war.me.turn + 1,
+                )
+                val decision = DiscoverSelectionPolicy.select(
+                    strategy = strategy,
+                    cards = cards,
+                    handSize = war.me.handArea.cards.size,
+                    selectedDeckCardIds = deckSnapshot.cardIds,
+                    deckSnapshotStatus = deckSnapshot.status,
+                    override = override,
+                )
+                val chosen = cards[decision.index.coerceIn(cards.indices)]
+                val details = linkedMapOf<String, Any?>(
+                    "strategy" to strategy.name(),
+                    "strategyId" to strategy.id(),
+                    "handSize" to war.me.handArea.cards.size,
+                    "currentManaCrystals" to war.me.resources,
+                    "currentTurnLockedCrystals" to war.me.overloadLocked,
+                    "nextTurnMana" to nextTurnMana,
+                    "nextTurnOverloadEstimate" to 0,
+                    "nextTurnManaApproximation" to "resources+1-capped-at-max; current-turn overloadLocked is not future debt",
+                    "nextTurn" to (war.me.turn + 1),
+                    "selectedDeckSource" to deckSnapshot.source,
+                    "selectedDeckName" to deckSnapshot.name,
+                    "selectedDeckStatus" to deckSnapshot.status,
+                    "selectedDeckCardCount" to deckSnapshot.cardIds.size,
+                    "offered" to cards.mapIndexed { i, card ->
+                        mapOf("index" to i, "cardId" to card.cardId, "name" to card.entityName, "cost" to card.cost)
+                    },
+                    "candidateIndices" to decision.candidateIndices,
+                    "deckMatchIndices" to decision.deckMatchIndices,
+                    "elementalOverride" to override?.reason,
+                    "chosenIndex" to decision.index,
+                    "chosenCardId" to chosen.cardId,
+                    "chosenCardName" to chosen.entityName,
+                    "rule" to decision.reason,
+                )
+                log.info {
+                    "DISCOVER_SELECTION strategy=${strategy.name()} mcts=${mctsStrategy != null} hand=${war.me.handArea.cards.size} " +
+                        "nextMana=$nextTurnMana deckSource=${deckSnapshot.source} deckStatus=${deckSnapshot.status} " +
+                        "candidates=${decision.candidateIndices} deckMatches=${decision.deckMatchIndices} " +
+                        "chosen=${decision.index}:${chosen.cardId} rule=${decision.reason}"
+                }
+                if (mctsStrategy != null) {
+                    MctsReplayTrace.record(
+                        war = war,
+                        event = "discover_selection",
+                        reason = decision.reason,
+                        details = details,
+                    )
+                }
+                decision.index.coerceIn(cards.indices)
+            } else {
+                (strategy?.executeDiscoverChooseCard(*cards.toTypedArray()) ?: 0).coerceIn(0, cards.size - 1)
+            }
         } catch (e: Exception) {
             log.error(e) { "执行发现选择策略异常" }
         } finally {
@@ -670,6 +740,42 @@ object DeckStrategyActuator {
         log.info { "执行发现选牌策略完毕，选择第${index + 1}张，${card}" }
 
         checkSurrender()
+    }
+
+    private data class MctsDiscoverDeckSnapshot(
+        val cardIds: Set<String>,
+        val status: String,
+        val source: String,
+        val name: String?,
+    )
+
+    private fun currentDiscoverDeckSnapshot(strategy: DeckStrategy): MctsDiscoverDeckSnapshot {
+        val selectedGameDeck = DeckLogListener.selectedGameDeck()?.takeIf { it.code.isNotBlank() }
+        val strategyDeckCode = strategy.deckCode().takeIf { it.isNotBlank() }
+        val selected = selectedGameDeck
+        val code = selected?.code ?: strategyDeckCode
+            ?: return MctsDiscoverDeckSnapshot(emptySet(), "selected-deck-unavailable", "none", null)
+        val source = if (selected != null) "Decks.log-selected-game-deck" else "strategy-deck-code"
+        val name = selected?.name
+        val cards = discoverDeckCardIdsByCode[code] ?: runCatching {
+            val decoded = DeckDecoder().decode(code)
+            CardDBUtil.queryCardsByDbfIds(decoded.cards.map { it.dbfId })
+                .values
+                .map { it.cardId }
+                .filter { it.isNotBlank() }
+                .map(DiscoverSelectionPolicy::canonicalCardId)
+                .toSet()
+                .also { discoverDeckCardIdsByCode[code] = it }
+        }.getOrElse { error ->
+            log.warn(error) { "MCTS_DISCOVER_DECK_DECODE_FAILED source=$source name=${name ?: "?"}" }
+            return MctsDiscoverDeckSnapshot(emptySet(), "deck-code-decode-failed", source, name)
+        }
+        return MctsDiscoverDeckSnapshot(
+            cardIds = cards,
+            status = if (cards.isEmpty()) "deck-decoded-no-card-ids" else "deck-card-ids-ready",
+            source = source,
+            name = name,
+        )
     }
 
     fun chooseTimeLine(timeLineEvent: TimelineEvent) {

@@ -13,7 +13,7 @@ class StandardCannonWarriorStrategyTest {
     fun `standard cannon warrior is selectable only in standard`() {
         val strategy = HsStandardCannonWarriorMctsDeckStrategy()
 
-        assertEquals("Standard Cannon Warrior V1.0", strategy.name())
+        assertEquals("Standard Cannon Warrior V1.1", strategy.name())
         assertEquals(arrayOf(RunModeEnum.STANDARD).toList(), strategy.runModes.toList())
         assertTrue(strategy.id().contains("standard-cannon-warrior-v1-0"))
         assertNotEquals(strategy.id(), HsPirateWarriorMctsDeckStrategy().id())
@@ -42,6 +42,14 @@ class StandardCannonWarriorStrategyTest {
                 "club.xiaojiawei.hsscriptbasestrategy.strategy.HsStandardCannonWarriorMctsDeckStrategy",
             ),
         )
+    }
+
+    @Test
+    fun `all maintained MCTS descriptors expose the discover-policy revision`() {
+        assertTrue(HsMCTSDeckStrategy().name().endsWith("V1.1"))
+        assertTrue(HsOnlyFaceDeckStrategy().name().endsWith("V1.1"))
+        assertTrue(HsElementalMageMctsDeckStrategy().name().startsWith("元素法 V1.4 · build "))
+        assertTrue(HsPirateWarriorMctsDeckStrategy().name().startsWith("海盗战 V2.9 · build "))
     }
 
     @Test

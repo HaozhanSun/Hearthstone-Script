@@ -14,6 +14,7 @@ import club.xiaojiawei.hsscriptcardsdk.mcts.MctsDecisionModel
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsLethalTelemetry
 import java.util.concurrent.ConcurrentHashMap
 import club.xiaojiawei.hsscriptcardsdk.mcts.defaultMctsActionOrderPhase
+import club.xiaojiawei.hsscriptstrategysdk.deck.MctsDiscoverCandidateOverride
 
 /**
  * First offline-safe Elemental Mage model.
@@ -107,7 +108,7 @@ object ElementalMageMctsModel : MctsDecisionModel {
         // Elemental model remains responsible only for its chain bookkeeping.
         MctsLethalTelemetry.recordBeforeAttackDecision(
             war = war,
-            strategy = "元素法 V1.3",
+            strategy = "元素法 V1.4",
             step = turn,
             selectedAction = null,
         )
@@ -130,6 +131,37 @@ object ElementalMageMctsModel : MctsDecisionModel {
 
     fun elementalAvailable(war: War): Boolean =
         war.me.handArea.cards.any { isPlayable(it, war) && isElemental(it) }
+
+    /**
+     * Protect the turn-three-onward elemental chain only when the next turn
+     * would otherwise have no playable Elemental in hand. The shared generic
+     * Discover policy ranks choices inside this narrowed candidate set.
+     */
+    fun discoverChainOverride(
+        offered: List<Card>,
+        hand: List<Card>,
+        nextTurnMana: Int,
+        nextTurnNumber: Int,
+    ): MctsDiscoverCandidateOverride? {
+        if (nextTurnNumber < MIN_ELEMENTAL_CHAIN_TURN) return null
+        val handCanContinue = hand.any { card ->
+            isElemental(card) && isKnownEnoughForDiscover(card) && card.cost in 0..nextTurnMana
+        }
+        if (handCanContinue) return null
+        val continuationIndices = offered.indices.filter { index ->
+            val card = offered[index]
+            isElemental(card) &&
+                card.cardType === CardTypeEnum.MINION &&
+                isKnownEnoughForDiscover(card) &&
+                card.cost in 0..nextTurnMana
+        }
+        return continuationIndices.takeIf { it.isNotEmpty() }?.let {
+            MctsDiscoverCandidateOverride(it, "elemental-chain-break-next-turn-no-playable-hand-elemental")
+        }
+    }
+
+    private fun isKnownEnoughForDiscover(card: Card): Boolean =
+        !card.isUncertain || MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)
 
     fun isPlayable(card: Card, war: War): Boolean =
         (!card.isUncertain || MctsCardDiagnostics.braveOpaqueFallbackAllowed(card)) &&

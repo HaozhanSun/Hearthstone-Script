@@ -35,14 +35,14 @@ class WildOnlyMctsStrategyModeTest {
             true,
             HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().contains(revision),
         )
-        assertEquals("2.8", PirateMctsStrategyVersion.REVISION)
+        assertEquals("2.9", PirateMctsStrategyVersion.REVISION)
         assertEquals(
             true,
-            HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().startsWith("海盗瞎 V2.8 · build "),
+            HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().startsWith("海盗瞎 V2.9 · build "),
         )
         assertEquals(
             true,
-            HsPirateWarriorMctsDeckStrategy().name().startsWith("海盗战 V2.8 · build "),
+            HsPirateWarriorMctsDeckStrategy().name().startsWith("海盗战 V2.9 · build "),
         )
     }
 }

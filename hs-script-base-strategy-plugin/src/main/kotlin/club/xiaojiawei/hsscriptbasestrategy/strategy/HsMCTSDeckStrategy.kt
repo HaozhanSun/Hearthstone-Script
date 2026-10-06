@@ -12,9 +12,9 @@ import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
  * @date 2024/9/8 14:56
  */
 class HsMCTSDeckStrategy : MCTSDeckStrategy() {
-    override fun name(): String = "mcts策略"
+    override fun name(): String = "mcts策略 V1.1"
 
-    override fun description(): String = "通过蒙特卡洛树搜索算法来计算最佳出牌，需要适配卡牌支持"
+    override fun description(): String = "通过蒙特卡洛树搜索算法来计算最佳出牌；发现选择规则 V1.1，需要适配卡牌支持"
 
     override fun getRunMode(): Array<RunModeEnum> =
         arrayOf(RunModeEnum.CASUAL, RunModeEnum.STANDARD, RunModeEnum.WILD, RunModeEnum.PRACTICE)

@@ -12,6 +12,7 @@ import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
 import club.xiaojiawei.hsscriptcardsdk.mcts.CardTimingPolicy
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsActionOrderPhase
 import club.xiaojiawei.hsscriptcardsdk.mcts.MctsCardDiagnostics
+import club.xiaojiawei.hsscriptstrategysdk.deck.DiscoverSelectionPolicy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -22,7 +23,8 @@ class ElementalMageMctsStrategyTest {
     fun `elemental mage is visible only as a wild strategy`() {
         val strategy = HsElementalMageMctsDeckStrategy()
 
-        assertEquals("元素法 V1.3", strategy.name().substringBefore(" ·"))
+        assertEquals("元素法 V1.4", strategy.name().substringBefore(" ·"))
+        assertTrue(strategy.name().startsWith("元素法 V1.4 · build "))
         assertEquals(listOf(RunModeEnum.WILD), strategy.runModes.toList())
         assertFalse(strategy.runModes.contains(RunModeEnum.STANDARD))
         assertTrue(strategy.id().contains("elemental-mage-mcts-v1-2"))
@@ -74,6 +76,77 @@ class ElementalMageMctsStrategyTest {
         assertEquals(2, second.consecutiveTurns)
         assertEquals(0, reset.consecutiveTurns)
         assertFalse(reset.lastTurnPlayedElemental)
+    }
+
+    @Test
+    fun `discover protects elemental chain only when no hand elemental can continue it`() {
+        val offered = listOf(
+            testCard("BIG_NON_ELEMENTAL", "高费非元素", 9, CardRaceEnum.UNKNOWN),
+            testCard("DISCOVER_ELEMENTAL", "发现元素", 3, CardRaceEnum.ELEMENTAL),
+        )
+        val inHandPlayable = testCard("HAND_ELEMENTAL", "手牌元素", 3, CardRaceEnum.ELEMENTAL)
+        val inHandTooExpensive = testCard("HAND_EXPENSIVE_ELEMENTAL", "高费手牌元素", 4, CardRaceEnum.ELEMENTAL)
+
+        val maintained = ElementalMageMctsModel.discoverChainOverride(
+            offered = offered,
+            hand = listOf(inHandPlayable),
+            nextTurnMana = 3,
+            nextTurnNumber = 3,
+        )
+        val broken = ElementalMageMctsModel.discoverChainOverride(
+            offered = offered,
+            hand = listOf(inHandTooExpensive),
+            nextTurnMana = 3,
+            nextTurnNumber = 3,
+        )
+
+        assertEquals(null, maintained)
+        assertEquals(listOf(1), broken?.candidateIndices)
+        assertTrue(broken?.reason?.contains("elemental-chain-break") == true)
+    }
+
+    @Test
+    fun `discover elemental continuation respects next turn threshold and chain start`() {
+        val offered = listOf(
+            testCard("ELEMENTAL_COST_4", "四费元素", 4, CardRaceEnum.ELEMENTAL),
+            testCard("ELEMENTAL_COST_3", "三费元素", 3, CardRaceEnum.ELEMENTAL),
+        )
+        val belowThreshold = ElementalMageMctsModel.discoverChainOverride(
+            offered, emptyList(), nextTurnMana = 3, nextTurnNumber = 2,
+        )
+        val exactManaThreshold = ElementalMageMctsModel.discoverChainOverride(
+            offered, emptyList(), nextTurnMana = 3, nextTurnNumber = 3,
+        )
+
+        assertEquals(null, belowThreshold)
+        assertEquals(listOf(1), exactManaThreshold?.candidateIndices)
+    }
+
+    @Test
+    fun `elemental chain override takes precedence over generic hand and deck preferences`() {
+        val strategy = HsElementalMageMctsDeckStrategy()
+        val offered = listOf(
+            testCard("DECK_NON_ELEMENTAL", "牌组高费随从", 9, CardRaceEnum.UNKNOWN),
+            testCard("DISCOVER_ELEMENTAL", "续链元素", 3, CardRaceEnum.ELEMENTAL),
+        )
+        val override = strategy.discoverCandidateOverride(
+            cards = offered,
+            hand = emptyList(),
+            nextTurnMana = 3,
+            nextTurnNumber = 3,
+        )
+        val decision = DiscoverSelectionPolicy.select(
+            cards = offered,
+            handSize = 2,
+            selectedDeckCardIds = setOf("DECK_NON_ELEMENTAL"),
+            deckSnapshotStatus = "ready",
+            override = override,
+        ) { 0 }
+
+        assertEquals(1, decision.index)
+        assertEquals(listOf(1), decision.candidateIndices)
+        assertTrue(decision.reason.contains("elemental-chain-break"))
+        assertTrue(decision.reason.contains("hand<=3-highest-cost"))
     }
 
     @Test

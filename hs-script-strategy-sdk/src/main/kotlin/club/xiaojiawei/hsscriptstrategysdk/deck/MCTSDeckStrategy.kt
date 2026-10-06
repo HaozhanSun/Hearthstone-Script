@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.PlayAction
 import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.TurnOverAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
+import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
@@ -92,6 +93,14 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
     private var activeDecisionModel: MctsDecisionModel? = null
 
     private val experimentalTurnState = MctsTurnSessionState()
+
+    /** Deck-specific Discover rules narrow offered choices before shared ranking. */
+    open fun discoverCandidateOverride(
+        cards: List<Card>,
+        hand: List<Card>,
+        nextTurnMana: Int,
+        nextTurnNumber: Int,
+    ): MctsDiscoverCandidateOverride? = null
 
     fun hasUnconfirmedExperimentalDispatch(): Boolean =
         lastExperimentalTurnHadUnconfirmedDispatch

@@ -382,6 +382,7 @@ class PirateWarriorMctsModelTest {
 
     @Test
     fun `released pirate warrior strategy exposes a versioned display name`() {
+        assertEquals("2.9", PirateMctsStrategyVersion.REVISION)
         assertTrue(
             HsPirateWarriorMctsDeckStrategy().name()
                 .startsWith("海盗战 V${PirateMctsStrategyVersion.REVISION} · build "),

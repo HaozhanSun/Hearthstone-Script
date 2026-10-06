@@ -10,10 +10,10 @@ import club.xiaojiawei.hsscriptstrategysdk.deck.MCTSDeckStrategy
 
 /** Independent Standard entry point for the screenshot-derived Warrior deck. */
 class HsStandardCannonWarriorMctsDeckStrategy : MCTSDeckStrategy() {
-    override fun name(): String = "Standard Cannon Warrior V1.0"
+    override fun name(): String = "Standard Cannon Warrior V1.1"
 
     override fun description(): String =
-        "Standard Cannon Warrior V1.0：精确截图卡组、已确认 ID 优先、未知卡牌 parser-backed fail-closed"
+        "Standard Cannon Warrior V1.1：精确截图卡组、已确认 ID 优先、未知卡牌 parser-backed fail-closed、发现选择规则 V1.1"
 
     override fun getRunMode(): Array<RunModeEnum> = arrayOf(RunModeEnum.STANDARD)
 
@@ -32,7 +32,7 @@ class HsStandardCannonWarriorMctsDeckStrategy : MCTSDeckStrategy() {
 
     override fun executeMCTSOutCard(war: War): List<MCTSArg> {
         log.info {
-            "Standard Cannon Warrior V1.0：开始搜索 turn=${war.me.turn} " +
+            "Standard Cannon Warrior V1.1：开始搜索 turn=${war.me.turn} " +
                 "mana=${war.me.usableResource} confirmedIds=${StandardCannonWarriorMctsModel.confirmedCardIds.size}"
         }
         return listOf(
