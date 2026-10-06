@@ -1,12 +1,7 @@
 package club.xiaojiawei.hsscript.strategy.mode
 
-/**
- * Keeps bounded dialog recovery alive without pausing the script or clicking
- * during a cooldown. A new recovery cycle is armed only by a fresh exact OCR
- * observation after the cooldown; the caller must then take another fresh
- * probe before dispatching any input.
- */
-internal class MatchmakingDialogRecoveryRetrySupervisor(
+/** Bounded, non-pausing cooldown after an exhausted exact-dialog probe budget. */
+class MatchmakingDialogRecoveryRetrySupervisor(
     private val cooldownMs: Long = DEFAULT_COOLDOWN_MS,
 ) {
     enum class Action { ATTEMPT_ALLOWED, WAIT_COOLDOWN, REARMED }

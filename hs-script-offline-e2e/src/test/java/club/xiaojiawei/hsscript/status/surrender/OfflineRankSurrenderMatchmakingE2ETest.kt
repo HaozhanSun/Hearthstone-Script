@@ -7,6 +7,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.nio.ByteBuffer
@@ -22,12 +23,47 @@ class OfflineRankSurrenderMatchmakingE2ETest {
         val priorGameId: String,
         val nextGameId: String,
         val nextGamePowerLog: String,
-        val surrenderRequestLog: String,
+        val surrenderRequestEvidence: ScriptLogEvidence,
         val powerLog: String,
         val nextGameTerminalPowerLog: String,
         val historicalRank3Evidence: HistoricalRankEvidence,
         val deckSelection: DeckSelection,
     ) {
+        @Serializable
+        data class ScriptLogEvidence(
+            val file: String,
+            val sourceFile: String,
+            val sourceLineNumbers: List<Int>,
+            val captureDate: String,
+            val captureTime: String,
+            val processId: Int,
+            val powerLogSession: String,
+            val gameId: String?,
+            val sourceLogSha256: String,
+            val redactionMetadata: String,
+        )
+
+        @Serializable
+        data class HistoricalRankEvidence(
+            val rank: Int,
+            val phase: String,
+            val provider: String,
+            val confidence: Double,
+            val captureTime: String,
+            val processId: Int,
+            val powerLogSession: String,
+            val gameId: String?,
+            val sourceFile: String,
+            val sourceLog: String,
+            val sourceLines: List<Int>,
+            val sourceLogSha256: String,
+            val sourceScreenshot: String,
+            val screenshot: String,
+            val decision: String,
+            val reason: String,
+            val redactionMetadata: String,
+        )
+
         @Serializable
         data class Rank(
             val provider: String,
@@ -45,21 +81,6 @@ class OfflineRankSurrenderMatchmakingE2ETest {
             val confidence: Int,
             val evidence: String,
             val screenshot: String,
-        )
-
-        @Serializable
-        data class HistoricalRankEvidence(
-            val rank: Int,
-            val phase: String,
-            val provider: String,
-            val confidence: Double,
-            val captureTime: String,
-            val sourceScreenshot: String,
-            val sourceLog: String,
-            val sourceLines: String,
-            val screenshot: String,
-            val decision: String,
-            val reason: String,
         )
     }
 
@@ -192,11 +213,12 @@ class OfflineRankSurrenderMatchmakingE2ETest {
         // After the next game is authoritative in Power.log, run the actual
         // eligibility policy on rank 4 and arm only the mandatory surrender.
         val nextGame = resourceText(fixtureDirectory.resolve(fixture.nextGamePowerLog))
-        val surrenderRequest = resourceText(fixtureDirectory.resolve(fixture.surrenderRequestLog))
-        assertTrue(surrenderRequest.contains("SURRENDER_ACTION_REQUESTED"))
-        assertTrue(surrenderRequest.contains("SURRENDER_EXECUTOR_REQUESTED"))
         assertTrue(nextGame.contains("CREATE_GAME gameId=${fixture.nextGameId}"))
         assertTrue(nextGame.contains("MULLIGAN_STATE value=INPUT"))
+        assertFalse(
+            hasAcceptedSurrenderTerminal(nextGame, fixture.nextGameId),
+            "the tracked startup Power.log contains no terminal acceptance proof",
+        )
         val ticket = barrier.beginCurrentGame()
         val now = System.currentTimeMillis()
         val denied = RankEligibilityCorePolicy.evaluate(
@@ -222,10 +244,6 @@ class OfflineRankSurrenderMatchmakingE2ETest {
         assertTrue(guard.isPending())
         assertFalse(hasAcceptedSurrenderTerminal(priorTerminal, fixture.nextGameId))
         assertFalse(hasAcceptedSurrenderTerminal(nextGame, fixture.nextGameId))
-        assertFalse(
-            hasAcceptedSurrenderTerminal(surrenderRequest, fixture.nextGameId),
-            "request/executor log lines do not prove Power.log accepted the surrender",
-        )
         assertEquals(
             MandatoryRankSurrenderDeckSelectionRecovery.Result.BLOCKED,
             MandatoryRankSurrenderDeckSelectionRecovery.completeIfRequired(
@@ -251,6 +269,30 @@ class OfflineRankSurrenderMatchmakingE2ETest {
             ),
         )
         assertTrue(queueAllowed(), "the next cycle is unblocked only after authoritative surrender and fresh screen evidence")
+    }
+
+    @Test
+    fun `rank four script excerpt proves request decision but not authoritative acceptance`() {
+        val evidence = readFixture().surrenderRequestEvidence
+        assertEquals("hs_script-2026-10-03.1.log", evidence.sourceFile)
+        assertEquals(listOf(2999, 3012, 3013, 3014, 3015, 3016, 3017, 3018, 3019, 3020, 3021), evidence.sourceLineNumbers)
+        assertEquals("2026-10-03", evidence.captureDate)
+        assertEquals(58364, evidence.processId)
+        assertEquals("Hearthstone_2026_10_03_04_40_56", evidence.powerLogSession)
+        assertNull(evidence.gameId, "the script excerpt does not emit a gameId, so do not bind it to the sanitized Power.log id")
+        assertTrue(evidence.sourceLogSha256.matches(Regex("[A-F0-9]{64}")))
+        assertTrue(evidence.redactionMetadata.contains("<USER_HOME>"))
+
+        val scriptTrace = resourceText(fixtureDirectory.resolve(evidence.file))
+        assertTrue(scriptTrace.contains("RANK_ELIGIBILITY_CHECK stage=MULLIGAN") &&
+            scriptTrace.contains("rank=4 tier=GOLD") && scriptTrace.contains("reason=rank-not-5-or-10"))
+        assertTrue(scriptTrace.contains("SURRENDER_ACTION_REQUESTED") &&
+            scriptTrace.contains("source=mulligan-rank-preflight"))
+        assertTrue(scriptTrace.contains("SURRENDER_EXECUTOR_REQUESTED"))
+        assertFalse(scriptTrace.contains("PLAYSTATE value=CONCEDED"))
+        assertFalse(scriptTrace.contains("STEP value=FINAL_GAMEOVER"))
+        // This is a request/decision excerpt only. The terminal Power.log fixture
+        // remains the sole authority for accepted surrender in the separate lifecycle replay.
     }
 
     @Test
@@ -316,22 +358,35 @@ class OfflineRankSurrenderMatchmakingE2ETest {
     }
 
     @Test
-    fun `historical rank three mulligan badge is bound to its recorded OCR evidence`() {
+    fun `historical rank three decision trace remains source-bound and crop stays separate`() {
         val evidence = readFixture().historicalRank3Evidence
-        assertEquals(3, evidence.rank, "the supplied historical badge is rank 3, not rank 4")
+        assertEquals(3, evidence.rank)
         assertEquals("REPLACE_CARD", evidence.phase)
         assertEquals("PADDLEX", evidence.provider)
         assertEquals("DENY", evidence.decision)
         assertEquals("rank-evidence-stale", evidence.reason)
-        assertEquals("codex-clipboard-753456c0-3dd3-4f6e-b6c1-08c838c41a5f.png", evidence.sourceScreenshot)
-        val image = resourceBytes(Path.of(evidence.screenshot))
+        assertEquals("hs_script-2026-10-03.7.log", evidence.sourceFile)
+        assertEquals(listOf(19275, 19281, 19284, 19285, 19287), evidence.sourceLines)
+        assertEquals(77664, evidence.processId)
+        assertEquals("Hearthstone_2026_10_03_10_42_08", evidence.powerLogSession)
+        assertNull(evidence.gameId, "gameId is not present in the copied script-log lines")
+        assertTrue(evidence.sourceLogSha256.matches(Regex("[A-F0-9]{64}")))
+        assertTrue(evidence.redactionMetadata.contains("<USER_HOME>"))
+
+        val history = resourceText(fixtureDirectory.resolve(evidence.sourceLog))
+        evidence.sourceLines.forEach { lineNumber ->
+            assertTrue(history.lineSequence().any { it.startsWith("$lineNumber|") }, "missing source line $lineNumber")
+        }
+        assertTrue(history.contains("selectedRank=3") && history.contains("numericRank=3 rank=3"))
+        assertTrue(history.contains("decision=DENY reason=rank-evidence-stale"))
+        assertTrue(history.contains(evidence.sourceScreenshot))
+
+        // This supplied 106x111 crop is kept as a separate visual fixture; the
+        // script excerpt records its own full rank-ROI screenshot filename.
+        val image = resourceBytes(Path.of("offline-ocr", "rank3-mulligan-badge.png"))
         val dimensions = pngDimensions(image)
         assertEquals(106, dimensions.first)
         assertEquals(111, dimensions.second)
-        val historicLog = resourceText(fixtureDirectory.resolve(evidence.sourceLog))
-        assertTrue(historicLog.contains("RANK_OCR") && historicLog.contains("selectedRank=3"))
-        assertTrue(historicLog.contains("RANK_OCR_EVIDENCE") && historicLog.contains("numericRank=3 rank=3"))
-        assertTrue(historicLog.contains("RANK_ELIGIBILITY_CHECK") && historicLog.contains("reason=rank-evidence-stale"))
     }
 
     private fun queueAllowed(): Boolean = MatchmakingGuardPolicy.runtimeAllowsInput(

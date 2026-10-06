@@ -1,0 +1,20 @@
+{
+  "scenario": "startup-opponent-error-modal-with-unbound-zero-byte-powerlog",
+  "gameWindowVerified": true,
+  "attachedPowerLogPath": null,
+  "currentSessionPowerLogPath": null,
+  "powerLogLength": 0,
+  "exactQueueModalPurpose": true,
+  "tournamentMode": true,
+  "activeGame": false,
+  "mulligan": false,
+  "terminal": false,
+  "dialogProbe": "ERROR_DIALOG_VISIBLE",
+  "confirmDispatchAccepted": true,
+  "freshScreenKind": "DECK_SELECTION",
+  "freshScreenConfidence": 100,
+  "freshScreenEvidence": "deck-selection-title-roi",
+  "freshObservation": true,
+  "maxAttempts": 20,
+  "cooldownMs": 30000
+}

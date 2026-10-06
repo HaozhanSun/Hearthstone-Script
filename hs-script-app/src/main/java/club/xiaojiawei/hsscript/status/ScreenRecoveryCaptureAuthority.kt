@@ -22,8 +22,13 @@ internal object ScreenRecoveryCapturePurposePolicy {
         activeGame: Boolean,
         mulligan: Boolean,
         terminal: Boolean,
-    ): Boolean = purpose == ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG &&
-        tournamentMode && !activeGame && !mulligan && !terminal
+    ): Boolean = PreSessionQueueModalCapturePolicy.isAuthorized(
+        exactQueueModalPurpose = purpose == ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG,
+        tournamentMode = tournamentMode,
+        activeGame = activeGame,
+        mulligan = mulligan,
+        terminal = terminal,
+    )
 }
 
 internal data class ScreenRecoveryCaptureEvidence(
@@ -109,21 +114,4 @@ internal object ScreenRecoveryCaptureAuthority {
 
     fun targetRatio(owners: List<CapturedWindowIdentity?>, target: CapturedWindowIdentity): Double =
         if (owners.isEmpty()) 0.0 else owners.count { it == target }.toDouble() / owners.size
-}
-
-/** Startup probing is non-actionable until the current game process has emitted a bound live log. */
-internal object CurrentGameScreenReadinessPolicy {
-    fun isReady(
-        gameWindowVerified: Boolean,
-        attachedPowerLogPath: String?,
-        currentSessionPowerLogPath: String?,
-        powerLogLength: Long,
-    ): Boolean {
-        if (!gameWindowVerified || powerLogLength <= 0L) return false
-        if (attachedPowerLogPath.isNullOrBlank() || currentSessionPowerLogPath.isNullOrBlank()) return false
-        return normalizePath(attachedPowerLogPath) == normalizePath(currentSessionPowerLogPath)
-    }
-
-    private fun normalizePath(path: String): String =
-        path.replace('/', '\\').trimEnd('\\').lowercase()
 }

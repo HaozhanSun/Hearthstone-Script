@@ -1709,8 +1709,22 @@ object ScreenStateRecovery {
                 )
             }
             ScreenKind.DECK_SELECTION -> {
-                val guard = club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
                 val observationIsCurrent = ScreenRecoveryRuntime.isCurrent(recoveryToken)
+                if (!FreshDeckSelectionConfirmationPolicy.isConfirmed(
+                        screenKind = detection.kind.code,
+                        confidence = detection.confidence,
+                        evidence = detection.evidence,
+                        freshObservation = observationIsCurrent,
+                    )
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_DECK_SELECTION_UNCONFIRMED confidence=${detection.confidence} " +
+                            "evidence=${detection.evidence} freshObservation=$observationIsCurrent " +
+                            "dispatch=false"
+                    }
+                    return false
+                }
+                val guard = club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
                 val surrenderCompletion =
                     club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderDeckSelectionRecovery
                         .completeIfRequired(
