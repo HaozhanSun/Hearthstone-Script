@@ -1744,6 +1744,7 @@ object GameUtil {
                             terminalCleanupAuthorized = terminalCleanupStillAuthorized,
                             captureAuthorized = screenObservation.captureAuthorized,
                             visualOnlyResultEvidence = screenObservation.visualOnlyResultEvidence,
+                            priorResultPageConfirmed = resultAlreadyObserved,
                         )
                     ) {
                         ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED -> {
@@ -1800,7 +1801,15 @@ object GameUtil {
                         }
                         ResultPageDismissalPolicy.Decision.EXHAUSTED -> {
                             if (cleanupTicket != null) {
-                                terminalPageCleanupCoordinator.fail(cleanupTicket, "result-visible-input-budget-exhausted")
+                                val failureReason = if (
+                                    terminalCleanupStillAuthorized && resultAlreadyObserved &&
+                                    screenObservation.captureAuthorized && visible == null
+                                ) {
+                                    "unknown-result-fallback-input-budget-exhausted"
+                                } else {
+                                    "result-visible-input-budget-exhausted"
+                                }
+                                terminalPageCleanupCoordinator.fail(cleanupTicket, failureReason)
                             }
                             val snapshot = cleanupTicket?.let { terminalPageCleanupCoordinator.snapshot() }
                             log.error {
@@ -1837,6 +1846,15 @@ object GameUtil {
                                 future.cancel(false)
                                 gameEndTasks.remove(future)
                                 return@scheduleWithFixedDelay
+                            }
+                            if (terminalCleanupStillAuthorized && resultAlreadyObserved &&
+                                screenObservation.captureAuthorized && visible == null
+                            ) {
+                                log.warn {
+                                    "RESULT_PAGE_DISMISSAL_UNKNOWN_FALLBACK proof=prior-result-and-terminal-current-capture " +
+                                        "input=$reservedAttempt/${ResultPageDismissalPolicy.MAX_UNKNOWN_RESULT_FALLBACK_INPUTS} " +
+                                        "probe=$number acceptance=awaiting-client-postcheck"
+                                }
                             }
                         }
                     }

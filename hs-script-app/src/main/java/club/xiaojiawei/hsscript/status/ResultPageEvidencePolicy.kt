@@ -60,7 +60,16 @@ internal object ResultPageEvidencePolicy {
                 bannerLowSaturationRatio in 0.48..0.54 &&
                 centerDarkRatio in 0.15..0.19 &&
                 bannerWarmRatio in 0.39..0.44
-        return liveDefeatPlaqueVariant || lowCenterDarkDefeatPlaqueVariant
+        // v4.16.579 terminal-proof capture (1920x1080) retained the same warm
+        // defeat banner and continue band, but the broad centered artwork made
+        // centerDark=.429. Keep this high-dark variant tightly bounded so the
+        // rank-progress panel (.19..28) and ordinary screens remain excluded.
+        val highCenterDarkDefeatPlaqueVariant =
+            continueGrayLightRatio in 0.035..0.045 &&
+                bannerLowSaturationRatio in 0.49..0.52 &&
+                centerDarkRatio in 0.41..0.45 &&
+                bannerWarmRatio in 0.40..0.43
+        return liveDefeatPlaqueVariant || lowCenterDarkDefeatPlaqueVariant || highCenterDarkDefeatPlaqueVariant
     }
 
     /**

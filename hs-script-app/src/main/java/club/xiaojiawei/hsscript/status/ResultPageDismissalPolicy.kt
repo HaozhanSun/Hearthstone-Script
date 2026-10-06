@@ -53,6 +53,7 @@ internal object ResultPageDismissalPolicy {
         terminalCleanupAuthorized: Boolean = false,
         captureAuthorized: Boolean = false,
         visualOnlyResultEvidence: Boolean = false,
+        priorResultPageConfirmed: Boolean = false,
     ): Decision = when {
         visualOnlyResultEvidence && !terminalCleanupAuthorized -> Decision.WAIT_FOR_SCREEN_TRANSITION
         terminalCleanupAuthorized && resultPageVisible == false && captureAuthorized -> Decision.CONFIRMED_CLEARED
@@ -62,6 +63,10 @@ internal object ResultPageDismissalPolicy {
         terminalCleanupAuthorized && clickAttempts >= maxAttempts -> Decision.EXHAUSTED
         terminalCleanupAuthorized && resultPageVisible == false -> Decision.WAIT_FOR_SCREEN_TRANSITION
         resultPageVisible == false -> Decision.CONFIRMED_CLEARED
+        terminalCleanupAuthorized && priorResultPageConfirmed && captureAuthorized &&
+            resultPageVisible == null && clickAttempts >= MAX_UNKNOWN_RESULT_FALLBACK_INPUTS -> Decision.EXHAUSTED
+        terminalCleanupAuthorized && priorResultPageConfirmed && captureAuthorized &&
+            resultPageVisible == null && clickAttempts < MAX_UNKNOWN_RESULT_FALLBACK_INPUTS -> Decision.DISPATCH_CLICK
         terminalCleanupAuthorized && clickAttempts < maxAttempts && captureAuthorized &&
             resultPageVisible == true -> Decision.DISPATCH_CLICK
         !terminalCleanupAuthorized && resultPageVisible == true && clickAttempts < maxAttempts -> Decision.DISPATCH_CLICK
@@ -74,6 +79,9 @@ internal object ResultPageDismissalPolicy {
         inWar -> Decision.BLOCKED_UNCONFIRMED_DURING_WAR
         else -> Decision.WAIT_FOR_SCREEN_TRANSITION
     }
+
+    /** One center-click/Enter pair may recover a known result page when fresh postchecks are UNKNOWN. */
+    const val MAX_UNKNOWN_RESULT_FALLBACK_INPUTS = 2
 }
 
 /** Null visibility is distinct from no capture: only an authorized current-client frame may ground a terminal fallback. */
