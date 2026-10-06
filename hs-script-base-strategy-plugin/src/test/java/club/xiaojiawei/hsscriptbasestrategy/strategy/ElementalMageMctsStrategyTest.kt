@@ -123,6 +123,64 @@ class ElementalMageMctsStrategyTest {
     }
 
     @Test
+    fun `chain Discover uses SDK next-turn crystal forecast and only offers playable elemental minions`() {
+        val war = testWar(turn = 2, mana = 2).apply {
+            me.usedResources = 2
+            me.maxResources = 10
+        }
+        val handElementalTooExpensiveNextTurn = testCard(
+            "HAND_COST_4", "手牌四费元素", 4, CardRaceEnum.ELEMENTAL,
+        )
+        val offered = listOf(
+            testCard("OFFER_COST_3", "三费元素", 3, CardRaceEnum.ELEMENTAL),
+            testCard("OFFER_COST_4", "四费元素", 4, CardRaceEnum.ELEMENTAL),
+            testCard("OFFER_ELEMENTAL_SPELL", "元素法术", 1, CardRaceEnum.ELEMENTAL, CardTypeEnum.SPELL),
+            testCard("OFFER_NON_ELEMENTAL", "海盗随从", 1, CardRaceEnum.UNKNOWN),
+        )
+        val nextTurnMana = DiscoverSelectionPolicy.nextTurnAvailableMana(war.me.resources, war.me.maxResources)
+        val nextTurnNumber = war.me.turn + 1
+
+        assertEquals(0, war.me.usableResource)
+        assertEquals(3, nextTurnMana)
+        val override = ElementalMageMctsModel.discoverChainOverride(
+            offered = offered,
+            hand = listOf(handElementalTooExpensiveNextTurn),
+            nextTurnMana = nextTurnMana,
+            nextTurnNumber = nextTurnNumber,
+        )
+
+        assertEquals(3, nextTurnNumber)
+        assertEquals(listOf(0), override?.candidateIndices)
+        assertTrue(override?.reason?.contains("next-turn-no-playable-hand-elemental") == true)
+    }
+
+    @Test
+    fun `Discover does not override normal scoring when only non-elementals or elemental spells are offered`() {
+        val offered = listOf(
+            testCard("NON_ELEMENTAL", "海盗随从", 1, CardRaceEnum.UNKNOWN),
+            testCard("ELEMENTAL_SPELL", "元素法术", 1, CardRaceEnum.ELEMENTAL, CardTypeEnum.SPELL),
+        )
+
+        val override = ElementalMageMctsModel.discoverChainOverride(
+            offered = offered,
+            hand = emptyList(),
+            nextTurnMana = 3,
+            nextTurnNumber = 3,
+        )
+
+        assertEquals(null, override)
+        val fallback = DiscoverSelectionPolicy.select(
+            cards = offered,
+            handSize = 4,
+            selectedDeckCardIds = emptySet(),
+            deckSnapshotStatus = "selected-deck-unavailable",
+            override = override,
+        ) { candidates -> candidates.indexOfFirst { it.cardId == "ELEMENTAL_SPELL" } }
+        assertEquals(1, fallback.index)
+        assertTrue(fallback.reason.contains("existing-scorer"))
+    }
+
+    @Test
     fun `elemental chain override takes precedence over generic hand and deck preferences`() {
         val strategy = HsElementalMageMctsDeckStrategy()
         val offered = listOf(
@@ -136,12 +194,13 @@ class ElementalMageMctsStrategyTest {
             nextTurnNumber = 3,
         )
         val decision = DiscoverSelectionPolicy.select(
+            strategy = strategy,
             cards = offered,
             handSize = 2,
             selectedDeckCardIds = setOf("DECK_NON_ELEMENTAL"),
             deckSnapshotStatus = "ready",
             override = override,
-        ) { 0 }
+        )
 
         assertEquals(1, decision.index)
         assertEquals(listOf(1), decision.candidateIndices)

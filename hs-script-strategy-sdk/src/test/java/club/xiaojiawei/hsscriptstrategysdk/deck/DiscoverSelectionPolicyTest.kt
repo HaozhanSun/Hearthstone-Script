@@ -19,9 +19,10 @@ class MctsDiscoverSelectionPolicyTest {
             card("A_CARD", "a", 7),
         )
 
-        val decision = DiscoverSelectionPolicy.select(cards, 3, emptySet(), "no-deck") { 0 }
+        val decision = DiscoverSelectionPolicy.select(cards, 3, setOf("Z_CARD"), "ready") { 0 }
 
         assertEquals(2, decision.index)
+        assertEquals(listOf(0), decision.deckMatchIndices)
         assertEquals("hand<=3-highest-cost", decision.reason)
     }
 
@@ -54,6 +55,50 @@ class MctsDiscoverSelectionPolicyTest {
     }
 
     @Test
+    fun `scorer ties among deck matches choose a stable card regardless of offer order`() {
+        val firstOfferOrder = listOf(card("DECK_B", "b", 2), card("OUTSIDE", "outside", 8), card("DECK_A", "a", 3))
+        val secondOfferOrder = listOf(card("DECK_A", "a", 3), card("DECK_B", "b", 2), card("OUTSIDE", "outside", 8))
+        val equalScores = mapOf("DECK_A" to 10, "DECK_B" to 10)
+
+        fun choose(cards: List<Card>) = DiscoverSelectionPolicy.select(
+            cards = cards,
+            handSize = 4,
+            selectedDeckCardIds = setOf("DECK_A", "DECK_B"),
+            deckSnapshotStatus = "ready",
+        ) { candidates ->
+            candidates.indices.maxByOrNull { equalScores[candidates[it].cardId] ?: Int.MIN_VALUE } ?: -1
+        }
+
+        val first = choose(firstOfferOrder)
+        val second = choose(secondOfferOrder)
+
+        assertEquals("DECK_A", firstOfferOrder[first.index].cardId)
+        assertEquals("DECK_A", secondOfferOrder[second.index].cardId)
+        assertEquals(listOf(2, 0), first.candidateIndices)
+        assertEquals(listOf(0, 1), second.candidateIndices)
+    }
+
+    @Test
+    fun `hand size three bypasses scorer while the exact four card boundary invokes it`() {
+        val cards = listOf(card("A", "a", 4), card("B", "b", 6))
+        var scorerCalls = 0
+
+        val three = DiscoverSelectionPolicy.select(cards, 3, emptySet(), "ready") {
+            scorerCalls += 1
+            0
+        }
+        assertEquals(1, three.index)
+        assertEquals(0, scorerCalls)
+
+        val four = DiscoverSelectionPolicy.select(cards, 4, emptySet(), "ready") { candidates ->
+            scorerCalls += 1
+            candidates.indexOfFirst { it.cardId == "A" }
+        }
+        assertEquals(0, four.index)
+        assertEquals(1, scorerCalls)
+    }
+
+    @Test
     fun `invalid scorer result falls back deterministically`() {
         val cards = listOf(card("Z", "z", 1), card("A", "a", 1))
 
@@ -69,8 +114,11 @@ class MctsDiscoverSelectionPolicyTest {
             resources = 6
             usedResources = 5
             maxResources = 10
+            overloadLocked = 2
         }
         assertEquals(1, player.usableResource)
+        // RESOURCES is the turn-start crystal count. `usedResources` and the
+        // current-turn overload lock do not reduce next turn's forecast.
         assertEquals(7, DiscoverSelectionPolicy.nextTurnAvailableMana(player.resources, player.maxResources))
         assertEquals(10, DiscoverSelectionPolicy.nextTurnAvailableMana(10, 10))
         assertEquals(0, DiscoverSelectionPolicy.nextTurnAvailableMana(-2, -1))

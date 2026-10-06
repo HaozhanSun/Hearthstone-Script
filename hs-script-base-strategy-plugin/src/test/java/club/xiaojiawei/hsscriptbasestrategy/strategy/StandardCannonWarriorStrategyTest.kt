@@ -49,7 +49,23 @@ class StandardCannonWarriorStrategyTest {
         assertTrue(HsMCTSDeckStrategy().name().endsWith("V1.1"))
         assertTrue(HsOnlyFaceDeckStrategy().name().endsWith("V1.1"))
         assertTrue(HsElementalMageMctsDeckStrategy().name().startsWith("元素法 V1.4 · build "))
+        assertTrue(HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().startsWith("海盗瞎 V2.9 · build "))
         assertTrue(HsPirateWarriorMctsDeckStrategy().name().startsWith("海盗战 V2.9 · build "))
+        assertTrue(HsStandardCannonWarriorMctsDeckStrategy().description().contains("发现选择规则 V1.1"))
+
+        val registeredMctsStrategies = setOf(
+            HsMCTSDeckStrategy::class.java.name,
+            HsOnlyFaceDeckStrategy::class.java.name,
+            HsElementalMageMctsDeckStrategy::class.java.name,
+            HsPirateDemonHunterMctsGlobalPlanDeckStrategy::class.java.name,
+            HsPirateWarriorMctsDeckStrategy::class.java.name,
+            HsStandardCannonWarriorMctsDeckStrategy::class.java.name,
+        )
+        val serviceEntries = javaClass.classLoader
+            .getResourceAsStream("META-INF/services/club.xiaojiawei.hsscriptstrategysdk.DeckStrategy")
+            ?.bufferedReader()?.use { it.readLines().toSet() }
+            .orEmpty()
+        assertTrue(serviceEntries.containsAll(registeredMctsStrategies))
     }
 
     @Test
