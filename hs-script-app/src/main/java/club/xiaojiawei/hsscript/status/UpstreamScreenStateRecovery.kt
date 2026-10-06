@@ -843,6 +843,8 @@ object UpstreamScreenStateRecovery {
             captureAuthorized = true,
             visualOnlyResultEvidence = detection?.evidence == "result-fixed-continue-visual",
             rankProgressVisible = detection?.kind?.code == "RANK_PROGRESS_CONTINUATION",
+            destinationScreen = detection?.kind?.code?.takeIf { code -> POST_RESULT_DESTINATIONS.any { it.code == code } },
+            destinationConfidence = detection?.confidence ?: 0,
         )
     }.getOrElse { error ->
         log.warn(error) { "SCREEN_RECOVERY_RESULT_POSTCHECK_FAILED" }

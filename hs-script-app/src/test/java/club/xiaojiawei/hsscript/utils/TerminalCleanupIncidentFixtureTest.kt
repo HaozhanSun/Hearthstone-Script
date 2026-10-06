@@ -97,6 +97,7 @@ class TerminalCleanupIncidentFixtureTest {
                 clickAttempts = coordinator.snapshot().inputs,
                 terminalCleanupAuthorized = true,
                 captureAuthorized = true,
+                destinationTransitionConfirmed = true,
             ),
         )
         assertTrue(coordinator.confirmDestination(ticket))

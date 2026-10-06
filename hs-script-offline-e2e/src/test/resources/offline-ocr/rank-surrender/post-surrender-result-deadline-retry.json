@@ -1,0 +1,23 @@
+{
+  "scenario": "same-session-rank-surrender-lost-result-remains-visible-after-cleanup-deadline",
+  "rank": 4,
+  "terminalSurrender": true,
+  "ownPlayState": "LOST",
+  "opponentPlayState": "WON",
+  "powerLogConcededAt": "02:20:50",
+  "powerLogSameGameTerminalProof": true,
+  "finalGameOver": true,
+  "sourceScreenshotPath": "C:\\Users\\yzjsh\\Documents\\Codex\\2026-08-15\\for-all-these-delay-short-are-2\\outputs\\Hearthstone Script Beta\\log\\debug-screenshots\\debug-20261006-022346-702-screen-recovery-18aabd8a-b513-4771-8d16-6aabc517de4b.png",
+  "resultScreenKind": "RESULT",
+  "cleanupInputsBeforeDeadline": 2,
+  "cleanupProbesBeforeDeadline": 3,
+  "inputDispatchAccepted": false,
+  "episodeDeadlineMillis": 120000,
+  "retryIntervalMillis": 25000,
+  "freshRetryCaptureAuthorized": true,
+  "freshRetryResultVisible": true,
+  "retryTerminalCapabilityValid": true,
+  "postRetryDestinationKind": "DECK_SELECTION",
+  "postRetryDestinationConfidence": 92,
+  "postRetryDestinationFresh": true
+}

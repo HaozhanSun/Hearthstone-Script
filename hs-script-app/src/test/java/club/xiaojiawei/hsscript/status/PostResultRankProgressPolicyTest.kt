@@ -52,12 +52,15 @@ class PostResultRankProgressPolicyTest {
         val destinationProbe = requireNotNull(coordinator.nextProbe(ticket))
         val destinationDecision = ResultPageDismissalPolicy.decide(
             inWar = false,
-            resultPageVisible = ScreenStateRecovery.resultVisibilityForTest("HOME", 90),
+            resultPageVisible = ScreenStateRecovery.resultVisibilityForTest("MATCHMAKING", 90),
             attempt = destinationProbe,
             maxAttempts = TerminalPageCleanupCoordinator.DEFAULT_MAX_INPUTS,
             clickAttempts = coordinator.snapshot().inputs,
             terminalCleanupAuthorized = true,
             captureAuthorized = true,
+            destinationTransitionConfirmed = FreshPostResultDestinationPolicy.isConfirmed(
+                "MATCHMAKING", 90, freshCaptureAuthorized = true,
+            ),
         )
         assertEquals(ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED, destinationDecision)
         assertTrue(coordinator.confirmDestination(ticket), "only the fresh Home/queue destination completes the episode")

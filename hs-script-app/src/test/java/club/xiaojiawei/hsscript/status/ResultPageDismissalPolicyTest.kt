@@ -51,6 +51,7 @@ class ResultPageDismissalPolicyTest {
                 clickAttempts = 2,
                 terminalCleanupAuthorized = true,
                 captureAuthorized = true,
+                destinationTransitionConfirmed = true,
             ),
         )
     }
@@ -98,6 +99,34 @@ class ResultPageDismissalPolicyTest {
                 resultPageVisible = false,
                 attempt = 1,
                 maxAttempts = 5,
+            ),
+        )
+    }
+
+    @Test
+    fun `terminal cleanup requires explicit fresh deck or queue transition proof`() {
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = false,
+                attempt = 3,
+                maxAttempts = 16,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = true,
+                destinationTransitionConfirmed = false,
+            ),
+        )
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = false,
+                attempt = 3,
+                maxAttempts = 16,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = true,
+                destinationTransitionConfirmed = true,
             ),
         )
     }
@@ -281,6 +310,7 @@ class ResultPageDismissalPolicyTest {
                 clickAttempts = 16,
                 terminalCleanupAuthorized = true,
                 captureAuthorized = true,
+                destinationTransitionConfirmed = true,
             ),
             "only an observed post-result destination completes the cleanup",
         )

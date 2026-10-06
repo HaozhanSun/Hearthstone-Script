@@ -1,10 +1,12 @@
 package club.xiaojiawei.hsscript.utils
 
 import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
+import club.xiaojiawei.hsscript.status.FreshPostResultDestinationPolicy
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -81,6 +83,7 @@ class TerminalPageCleanupCoordinatorTest {
                 clickAttempts = coordinator.snapshot().inputs,
                 terminalCleanupAuthorized = true,
                 captureAuthorized = true,
+                destinationTransitionConfirmed = true,
             ),
         )
         assertTrue(coordinator.fail(ticket, "result-visible-input-budget-exhausted"))
@@ -107,6 +110,7 @@ class TerminalPageCleanupCoordinatorTest {
                 clickAttempts = coordinator.snapshot().inputs,
                 terminalCleanupAuthorized = true,
                 captureAuthorized = true,
+                destinationTransitionConfirmed = true,
             ),
         )
         assertTrue(coordinator.confirmDestination(ticket))
@@ -186,14 +190,20 @@ class TerminalPageCleanupCoordinatorTest {
         assertEquals("episode-deadline-exceeded", coordinator.snapshot().failureReason)
         assertNull(coordinator.nextProbe(owner), "the expired owner cannot dispatch another UI action")
         assertEquals(1, coordinator.snapshot().inputs)
-        assertNull(
-            coordinator.rearmAfterNoInputDeadline(expired.ticket!!, freshCaptureAuthorized = true, resultPageVisible = true),
-            "a deadline after an input must never renew the dispatch budget",
-        )
+        val resumed = coordinator.rearmAfterDeadline(
+                expired.ticket!!,
+                paused = false,
+                terminalCleanupAuthorized = true,
+                freshCaptureAuthorized = true,
+                resultPageVisible = true,
+            )
+        assertNotNull(resumed, "same-game terminal authority and a fresh positive result page permits one retry")
+        assertEquals(1, coordinator.snapshot().inputs, "deadline retry does not refund the prior input")
+        assertEquals(2, coordinator.reserveInput(resumed!!), "the retry uses the next cumulative input slot")
     }
 
     @Test
-    fun `zero-input deadline permits only one fresh authorized positive-result rearm and keeps budgets cumulative`() {
+    fun `deadline retry requires same-game proof and fresh authorized positive-result frame and keeps budgets cumulative`() {
         var nowMillis = 50_000L
         val coordinator = TerminalPageCleanupCoordinator(
             maxDurationMillis = 100L,
@@ -208,15 +218,53 @@ class TerminalPageCleanupCoordinatorTest {
         assertEquals(0, coordinator.snapshot().inputs)
 
         assertNull(
-            coordinator.rearmAfterNoInputDeadline(expired.ticket!!, freshCaptureAuthorized = false, resultPageVisible = true),
+            coordinator.rearmAfterDeadline(
+                expired.ticket!!,
+                paused = true,
+                terminalCleanupAuthorized = true,
+                freshCaptureAuthorized = true,
+                resultPageVisible = true,
+            ),
+            "pause blocks automatic renewal",
+        )
+        assertNull(
+            coordinator.rearmAfterDeadline(
+                expired.ticket!!,
+                paused = false,
+                terminalCleanupAuthorized = true,
+                freshCaptureAuthorized = false,
+                resultPageVisible = true,
+            ),
             "unverified pixels cannot reopen an expired episode",
         )
         assertNull(
-            coordinator.rearmAfterNoInputDeadline(expired.ticket!!, freshCaptureAuthorized = true, resultPageVisible = null),
+            coordinator.rearmAfterDeadline(
+                expired.ticket!!,
+                paused = false,
+                terminalCleanupAuthorized = true,
+                freshCaptureAuthorized = true,
+                resultPageVisible = null,
+            ),
             "UNKNOWN is not a result-page authorization",
         )
+        assertNull(
+            coordinator.rearmAfterDeadline(
+                expired.ticket!!,
+                paused = false,
+                terminalCleanupAuthorized = false,
+                freshCaptureAuthorized = true,
+                resultPageVisible = true,
+            ),
+            "a stale or different game cannot renew the terminal capability",
+        )
         val rearmed = requireNotNull(
-            coordinator.rearmAfterNoInputDeadline(expired.ticket!!, freshCaptureAuthorized = true, resultPageVisible = true),
+            coordinator.rearmAfterDeadline(
+                expired.ticket!!,
+                paused = false,
+                terminalCleanupAuthorized = true,
+                freshCaptureAuthorized = true,
+                resultPageVisible = true,
+            ),
         )
         assertEquals(TerminalPageCleanupCoordinator.State.RUNNING, coordinator.snapshot().state)
         assertEquals(3, coordinator.snapshot().probes, "probe budget is cumulative across the bounded rearm")
@@ -229,8 +277,52 @@ class TerminalPageCleanupCoordinatorTest {
         assertTrue(coordinator.fail(rearmed, "episode-deadline-exceeded"))
         val failedAgain = coordinator.begin()
         assertNull(
-            coordinator.rearmAfterNoInputDeadline(failedAgain.ticket!!, freshCaptureAuthorized = true, resultPageVisible = true),
+            coordinator.rearmAfterDeadline(
+                failedAgain.ticket!!,
+                paused = false,
+                terminalCleanupAuthorized = true,
+                freshCaptureAuthorized = true,
+                resultPageVisible = true,
+            ),
             "one terminal generation may be rearmed at most once",
         )
+    }
+
+    @Test
+    fun `deadline after two rejected sends permits one paced fresh-result retry without resetting budgets`() {
+        var nowMillis = 1_000L
+        val coordinator = TerminalPageCleanupCoordinator(maxDurationMillis = 100L, monotonicTimeMillis = { nowMillis })
+        val first = coordinator.begin().ticket!!
+        repeat(3) { assertNotNull(coordinator.nextProbe(first)) }
+        assertEquals(1, coordinator.reserveInput(first))
+        assertEquals(2, coordinator.reserveInput(first))
+        // A false adapter result is still a reserved attempt; the coordinator
+        // never treats it as proof of UI acceptance or refunds the budget.
+        nowMillis += 100L
+        val expired = coordinator.begin()
+        assertEquals(TerminalPageCleanupCoordinator.BeginState.FAILED, expired.state)
+        assertEquals(2, coordinator.snapshot().inputs)
+        assertEquals(3, coordinator.snapshot().probes)
+
+        val retry = requireNotNull(
+            coordinator.rearmAfterDeadline(
+                expired.ticket!!,
+                paused = false,
+                terminalCleanupAuthorized = true,
+                freshCaptureAuthorized = true,
+                resultPageVisible = true,
+            ),
+        )
+        assertNull(coordinator.nextProbe(first), "expired callback cannot dispatch after rearm")
+        assertEquals(4, coordinator.nextProbe(retry))
+        assertEquals(3, coordinator.reserveInput(retry), "one new bounded attempt, no budget reset")
+        assertEquals(3, coordinator.snapshot().inputs)
+        assertEquals(1, coordinator.snapshot().failedEpisodeRearms)
+
+        assertEquals(TerminalPageCleanupCoordinator.BeginState.ALREADY_RUNNING, coordinator.begin().state)
+        assertFalse(FreshPostResultDestinationPolicy.isConfirmed(null, 0, true))
+        assertTrue(FreshPostResultDestinationPolicy.isConfirmed("DECK_SELECTION", 90, true))
+        assertTrue(coordinator.confirmDestination(retry), "caller releases only after fresh authorized deck/queue proof")
+        assertEquals(TerminalPageCleanupCoordinator.State.COMPLETED, coordinator.snapshot().state)
     }
 }

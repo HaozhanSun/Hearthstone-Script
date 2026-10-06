@@ -23,6 +23,7 @@ import club.xiaojiawei.hsscript.status.ScreenWatchdog
 import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 import club.xiaojiawei.hsscript.status.ScreenWatchdogRecoveryAction
 import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
+import club.xiaojiawei.hsscript.status.FreshPostResultDestinationPolicy
 import club.xiaojiawei.hsscript.status.ResultPageEvidencePolicy
 import club.xiaojiawei.hsscript.status.ResultScreenObservation
 import club.xiaojiawei.hsscript.status.PostResultRankProgressPolicy
@@ -1511,6 +1512,11 @@ object GameUtil {
                             clickAttempts = terminalPageCleanupCoordinator.snapshot().inputs,
                             terminalCleanupAuthorized = true,
                             captureAuthorized = observation.captureAuthorized,
+                            destinationTransitionConfirmed = FreshPostResultDestinationPolicy.isConfirmed(
+                                observation.destinationScreen,
+                                observation.destinationConfidence,
+                                observation.captureAuthorized,
+                            ),
                         ) == ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED &&
                         terminalPageCleanupCoordinator.confirmDestination(heldTicket)
                     if (confirmedByFreshFrame &&
@@ -1538,9 +1544,14 @@ object GameUtil {
                     val observation = runCatching {
                         ScreenStateRecovery.observeResultScreenForRecovery()
                     }.getOrElse { ResultScreenObservation(null, captureAuthorized = false) }
-                    val destinationConfirmed = begin.ticket != null &&
+                    val destinationConfirmed =
                         observation.captureAuthorized && observation.resultVisible == false &&
-                        terminalPageCleanupCoordinator.confirmDestination(begin.ticket)
+                        FreshPostResultDestinationPolicy.isConfirmed(
+                            observation.destinationScreen,
+                            observation.destinationConfidence,
+                            observation.captureAuthorized,
+                        ) &&
+                        begin.ticket?.let(terminalPageCleanupCoordinator::confirmDestination) == true
                     if (destinationConfirmed &&
                         MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCleanupCapability)
                     ) {
@@ -1554,8 +1565,12 @@ object GameUtil {
                         return
                     }
                     val rearmedTicket = begin.ticket?.let {
-                        terminalPageCleanupCoordinator.rearmAfterNoInputDeadline(
+                        terminalPageCleanupCoordinator.rearmAfterDeadline(
                             failedTicket = it,
+                            paused = PauseStatus.isPause,
+                            terminalCleanupAuthorized = MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(
+                                terminalCleanupCapability,
+                            ),
                             freshCaptureAuthorized = observation.captureAuthorized &&
                                 MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCleanupCapability),
                             resultPageVisible = observation.resultVisible,
@@ -1563,7 +1578,7 @@ object GameUtil {
                     }
                     if (rearmedTicket != null) {
                         log.warn {
-                            "RESULT_PAGE_CLEANUP_REARMED reason=zero-input-deadline-fresh-result " +
+                            "RESULT_PAGE_CLEANUP_REARMED reason=deadline-fresh-result " +
                                 "generation=${rearmedTicket.generation} priorProbes=${snapshot.probes} " +
                                 "inputs=${snapshot.inputs} rearm=${terminalPageCleanupCoordinator.snapshot().failedEpisodeRearms} " +
                                 "dispatch=false"
@@ -1745,6 +1760,11 @@ object GameUtil {
                             captureAuthorized = screenObservation.captureAuthorized,
                             visualOnlyResultEvidence = screenObservation.visualOnlyResultEvidence,
                             priorResultPageConfirmed = resultAlreadyObserved,
+                            destinationTransitionConfirmed = FreshPostResultDestinationPolicy.isConfirmed(
+                                screenObservation.destinationScreen,
+                                screenObservation.destinationConfidence,
+                                screenObservation.captureAuthorized,
+                            ),
                         )
                     ) {
                         ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED -> {

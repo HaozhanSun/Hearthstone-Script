@@ -5,7 +5,7 @@ package club.xiaojiawei.hsscript.utils
  * and later screen-recovery callbacks. Input acceptance is deliberately not
  * represented here; only a fresh destination observation can complete it.
  */
-internal class TerminalPageCleanupCoordinator(
+class TerminalPageCleanupCoordinator(
     private val maxInputs: Int = DEFAULT_MAX_INPUTS,
     private val maxProbes: Int = DEFAULT_MAX_PROBES,
     private val maxDurationMillis: Long = DEFAULT_MAX_DURATION_MILLIS,
@@ -47,8 +47,6 @@ internal class TerminalPageCleanupCoordinator(
         expireIfOverdue()
         return when (state) {
             State.RUNNING -> BeginResult(BeginState.ALREADY_RUNNING, activeTicket)
-            // Return the generation token so recovery may still prove a fresh
-            // destination frame and release the hold without dispatching input.
             State.HELD -> BeginResult(BeginState.HELD, Ticket(generation))
             State.FAILED -> BeginResult(BeginState.FAILED, Ticket(generation))
             State.COMPLETED -> BeginResult(BeginState.COMPLETED, null)
@@ -62,7 +60,6 @@ internal class TerminalPageCleanupCoordinator(
         }
     }
 
-    /** Returns a shared probe number, or holds the episode after its bound. */
     @Synchronized
     fun nextProbe(ticket: Ticket): Int? {
         if (!isActive(ticket)) return null
@@ -75,7 +72,6 @@ internal class TerminalPageCleanupCoordinator(
         return probes
     }
 
-    /** Reserves a global input slot before dispatch, across all callbacks. */
     @Synchronized
     fun reserveInput(ticket: Ticket): Int? {
         if (!isActive(ticket)) return null
@@ -88,7 +84,6 @@ internal class TerminalPageCleanupCoordinator(
         return inputs
     }
 
-    /** Reserves both the shared input slot and the smaller rank-page retry budget. */
     @Synchronized
     fun reserveRankProgressInput(ticket: Ticket, maxRankProgressInputs: Int): Int? {
         if (!isActive(ticket)) return null
@@ -98,34 +93,9 @@ internal class TerminalPageCleanupCoordinator(
         return input
     }
 
-    /**
-     * Permit one new bounded worker only after a deadline failure dispatched
-     * no input and a fresh, authorized capture still positively sees RESULT.
-     * Probe/input budgets remain cumulative; stale callbacks lose ownership.
-     */
-    @Synchronized
-    fun rearmAfterNoInputDeadline(
-        failedTicket: Ticket,
-        freshCaptureAuthorized: Boolean,
-        resultPageVisible: Boolean?,
-    ): Ticket? {
-        if (!freshCaptureAuthorized || resultPageVisible != true) return null
-        if (failedTicket.generation != generation || state != State.FAILED) return null
-        if (failureReason != "episode-deadline-exceeded" || inputs != 0) return null
-        if (failedEpisodeRearms >= MAX_FAILED_EPISODE_REARMS || probes >= maxProbes) return null
-        val ticket = Ticket(generation)
-        activeTicket = ticket
-        state = State.RUNNING
-        failureReason = null
-        startedAtMillis = monotonicTimeMillis()
-        failedEpisodeRearms += 1
-        return ticket
-    }
-
     @Synchronized
     fun snapshot(): Snapshot = Snapshot(generation, state, probes, inputs, rankProgressInputs, failedEpisodeRearms, failureReason)
 
-    /** Only a separately authorized post-input capture may call this. */
     @Synchronized
     fun confirmDestination(ticket: Ticket): Boolean {
         if (ticket.generation != generation || state == State.COMPLETED) return false
@@ -137,7 +107,6 @@ internal class TerminalPageCleanupCoordinator(
         return true
     }
 
-    /** Non-confirmation is terminal for this episode: keep ordinary dispatch held. */
     @Synchronized
     fun hold(ticket: Ticket): Boolean {
         if (!isActive(ticket)) return false
@@ -145,7 +114,6 @@ internal class TerminalPageCleanupCoordinator(
         return true
     }
 
-    /** A bounded episode ends visibly and cannot be silently restarted by a callback. */
     @Synchronized
     fun fail(ticket: Ticket, reason: String): Boolean {
         if (!isActive(ticket)) return false
@@ -153,7 +121,6 @@ internal class TerminalPageCleanupCoordinator(
         return true
     }
 
-    /** Pause can stop the worker without discarding the shared input budget. */
     @Synchronized
     fun interrupt(ticket: Ticket): Boolean {
         if (!isActive(ticket)) return false
@@ -162,7 +129,6 @@ internal class TerminalPageCleanupCoordinator(
         return true
     }
 
-    /** A new authoritative CREATE_GAME boundary is the only episode reset. */
     @Synchronized
     fun resetForNewGame() {
         generation += 1
@@ -174,6 +140,33 @@ internal class TerminalPageCleanupCoordinator(
         failedEpisodeRearms = 0
         failureReason = null
         startedAtMillis = null
+    }
+
+    /**
+     * A deadline may be renewed once only when the same terminal capability
+     * and a fresh authorized frame still prove that the result page is shown.
+     * Global input/probe budgets remain cumulative, including already queued
+     * or rejected inputs; the click result itself is never acceptance proof.
+     */
+    @Synchronized
+    fun rearmAfterDeadline(
+        failedTicket: Ticket,
+        paused: Boolean,
+        terminalCleanupAuthorized: Boolean,
+        freshCaptureAuthorized: Boolean,
+        resultPageVisible: Boolean?,
+    ): Ticket? {
+        if (paused || !terminalCleanupAuthorized || !freshCaptureAuthorized || resultPageVisible != true) return null
+        if (failedTicket.generation != generation || state != State.FAILED) return null
+        if (failureReason != "episode-deadline-exceeded") return null
+        if (failedEpisodeRearms >= MAX_FAILED_EPISODE_REARMS || probes >= maxProbes || inputs >= maxInputs) return null
+        val ticket = Ticket(generation)
+        activeTicket = ticket
+        state = State.RUNNING
+        failureReason = null
+        startedAtMillis = monotonicTimeMillis()
+        failedEpisodeRearms += 1
+        return ticket
     }
 
     private fun expireIfOverdue(): Boolean {
@@ -198,9 +191,6 @@ internal class TerminalPageCleanupCoordinator(
     }
 
     companion object {
-        // The v4.16.565 live trace dispatched at least eight inputs across
-        // recovery re-entries. Keep a 2x margin, but spend at most one input
-        // per fresh, positive result-screen capture.
         const val DEFAULT_MAX_INPUTS = 16
         const val DEFAULT_MAX_PROBES = 20
         const val DEFAULT_MAX_DURATION_MILLIS = 120_000L

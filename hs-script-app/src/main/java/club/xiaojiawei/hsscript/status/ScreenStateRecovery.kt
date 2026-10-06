@@ -1389,6 +1389,8 @@ object ScreenStateRecovery {
                 captureAuthorized = true,
                 visualOnlyResultEvidence = detection?.evidence == "result-fixed-continue-visual",
                 rankProgressVisible = detection?.kind == ScreenKind.RANK_PROGRESS_CONTINUATION,
+                destinationScreen = detection?.kind?.code?.takeIf { it in POST_RESULT_DESTINATIONS.map(ScreenKind::code) },
+                destinationConfidence = detection?.confidence ?: 0,
             )
         }.getOrElse { error ->
             if (ScreenRecoveryRuntime.isCurrent(token)) {

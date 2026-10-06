@@ -54,9 +54,11 @@ internal object ResultPageDismissalPolicy {
         captureAuthorized: Boolean = false,
         visualOnlyResultEvidence: Boolean = false,
         priorResultPageConfirmed: Boolean = false,
+        destinationTransitionConfirmed: Boolean = false,
     ): Decision = when {
         visualOnlyResultEvidence && !terminalCleanupAuthorized -> Decision.WAIT_FOR_SCREEN_TRANSITION
-        terminalCleanupAuthorized && resultPageVisible == false && captureAuthorized -> Decision.CONFIRMED_CLEARED
+        terminalCleanupAuthorized && resultPageVisible == false && captureAuthorized && destinationTransitionConfirmed ->
+            Decision.CONFIRMED_CLEARED
         // `attempt` is a screen probe sequence number, not a dispatched-input
         // count. Probe exhaustion is owned by TerminalPageCleanupCoordinator;
         // only clickAttempts may consume this action budget.
@@ -90,4 +92,6 @@ internal data class ResultScreenObservation(
     val captureAuthorized: Boolean,
     val visualOnlyResultEvidence: Boolean = false,
     val rankProgressVisible: Boolean = false,
+    val destinationScreen: String? = null,
+    val destinationConfidence: Int = 0,
 )

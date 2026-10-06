@@ -72,7 +72,7 @@ class GoldFourRankProgressFixtureTest {
                 rankProgressInputAttempts = coordinator.snapshot().rankProgressInputs,
             ),
         )
-        val freshDestinationVisible = ScreenStateRecovery.resultVisibilityForTest("HOME", 90)
+        val freshDestinationVisible = ScreenStateRecovery.resultVisibilityForTest("DECK_SELECTION", 90)
         assertEquals(false, freshDestinationVisible)
         assertEquals(
             ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED,
@@ -84,6 +84,9 @@ class GoldFourRankProgressFixtureTest {
                 clickAttempts = coordinator.snapshot().inputs,
                 terminalCleanupAuthorized = true,
                 captureAuthorized = true,
+                destinationTransitionConfirmed = FreshPostResultDestinationPolicy.isConfirmed(
+                    "DECK_SELECTION", 90, freshCaptureAuthorized = true,
+                ),
             ),
         )
         assertTrue(coordinator.confirmDestination(ticket))
