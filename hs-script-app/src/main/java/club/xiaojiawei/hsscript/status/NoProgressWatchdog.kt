@@ -37,6 +37,7 @@ internal class NoProgressWatchdog(
         REBIND,
         RESTART,
         RECOVERY_RETRY_BACKOFF,
+        PAUSE_EXPIRED_MATCHMAKING_QUEUE,
     }
 
     data class Snapshot(
@@ -60,6 +61,8 @@ internal class NoProgressWatchdog(
         val powerLogUsable: Boolean = false,
         val authoritativeLiveMatch: Boolean = false,
         val screenConfirmed: Boolean = false,
+        val confirmedMatchmakingQueue: Boolean = false,
+        val matchmakingQueueExpired: Boolean = false,
     )
 
     data class Decision(
@@ -105,6 +108,20 @@ internal class NoProgressWatchdog(
                 return recoverOrBackoff("live-match-process-lineage-changed", snapshot.nowMs)
             }
             return decision(RecoveryAction.WAIT_EXPECTED, "live-match-preserved", snapshot.nowMs)
+        }
+        if (snapshot.confirmedMatchmakingQueue && snapshot.processAlive && snapshot.currentPid != null) {
+            return decision(
+                RecoveryAction.WAIT_EXPECTED,
+                "confirmed-matchmaking-queue-awaiting-create-game",
+                snapshot.nowMs,
+            )
+        }
+        if (snapshot.matchmakingQueueExpired && snapshot.processAlive && snapshot.currentPid != null) {
+            return decision(
+                RecoveryAction.PAUSE_EXPIRED_MATCHMAKING_QUEUE,
+                "confirmed-matchmaking-queue-deadline-expired-no-input",
+                snapshot.nowMs,
+            )
         }
         // With no live-match evidence and no game process, an absent Power.log
         // must not hold recovery in WAIT_EXPECTED forever. Still require a full

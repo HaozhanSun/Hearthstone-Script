@@ -66,6 +66,22 @@ class StartupMenuObservationPolicyTest {
             StartupMenuObservationPolicy.Decision.WAIT_FOR_TERMINAL_AUTHORITY,
             StartupMenuObservationPolicy.decide(false, authorized, false, true, false, 0, 2),
         )
+        assertTrue(StartupMenuObservationPolicy.isObservedMatchmaking("MATCHMAKING", 95))
+        assertFalse(StartupMenuObservationPolicy.isObservedMatchmaking("MATCHMAKING", 84))
+        assertEquals(
+            StartupMenuObservationPolicy.Decision.WAIT_FOR_MATCHMAKING,
+            StartupMenuObservationPolicy.decide(
+                currentSessionReady = false,
+                startupObservationAuthorized = true,
+                observedMenu = false,
+                activeMatch = false,
+                terminal = false,
+                completedObservations = Int.MAX_VALUE,
+                maxObservations = 0,
+                observedMatchmaking = true,
+            ),
+            "an observed active queue never ages into startup safe-pause",
+        )
         assertEquals(
             StartupMenuObservationPolicy.Decision.AUTHORITATIVE_SESSION_READY,
             StartupMenuObservationPolicy.decide(true, false, false, false, false, 2, 2),

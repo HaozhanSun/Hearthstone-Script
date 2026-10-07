@@ -244,6 +244,17 @@ internal object BetaScreenRecoveryService {
                 processStartedAtMs = processStartedAt,
             )
         }
+        val currentSessionMatchEvidence = PowerLogActiveMatchProbe.inspect(sessionLog, processStartedAt)
+        StartupMatchmakingQueueState.observeCurrentPowerLog(pid, currentSessionMatchEvidence)
+        val confirmedQueue = StartupMatchmakingQueueState.isPendingFor(pid, processAlive = pid != null)
+        if (confirmedQueue) {
+            log.info {
+                "BETA_STARTUP_RECOVERY action=WAIT reason=confirmed-matchmaking-queue-awaiting-create-game " +
+                    "gamePid=${pid ?: "none"} powerLogCurrent=${sessionLog != null} " +
+                    "powerLogGameCreated=${currentSessionMatchEvidence.gameCreated} actionInput=none restart=false pause=false"
+            }
+            return
+        }
         if (sessionLog != null && sessionLog.length() > 0L &&
             PowerLogListener.logFile?.path() != sessionLog.absolutePath
         ) {
@@ -622,6 +633,18 @@ internal object BetaScreenRecoveryService {
         val visualObservation = if (needsVisualConfirmation && currentPid != null) {
             runCatching { ScreenStateRecovery.observeFreshScreenForWatchdog() }.getOrNull()
         } else null
+        val currentPowerLogMatchEvidence = PowerLogActiveMatchProbe.inspect(latestPowerLog, processStartedAt)
+        StartupMatchmakingQueueState.observeCurrentPowerLog(currentPid, currentPowerLogMatchEvidence)
+        if (visualObservation != null && currentPid != null) {
+            StartupMatchmakingQueueState.observeScreen(
+                screen = visualObservation.screen,
+                confidence = visualObservation.confidence,
+                observedPid = visualObservation.pid,
+                currentPid = currentPid,
+                captureAuthorized = visualObservation.pid == currentPid &&
+                    GameUtil.isVerifiedCurrentGameWindow(ScriptStatus.gameHWND),
+            )
+        }
         val (screen, screenConfirmed) = when {
             WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState() ->
                 NoProgressWatchdog.ScreenExpectation.RESULT to true
@@ -691,6 +714,14 @@ internal object BetaScreenRecoveryService {
                 authoritativeLiveMatch = WarEx.inWar ||
                     WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
                 screenConfirmed = screenConfirmed,
+                confirmedMatchmakingQueue = StartupMatchmakingQueueState.isPendingFor(
+                    currentPid,
+                    processAlive = currentPid != null,
+                ),
+                matchmakingQueueExpired = StartupMatchmakingQueueState.isExpiredFor(
+                    currentPid,
+                    processAlive = currentPid != null,
+                ),
                 paddlexInitializing = runCatching {
                     OcrRuntime.currentProvider() == OcrProviderKind.PADDLEX &&
                         !PowerLogListener.replayingExistingLog && powerLogLength == 0L
@@ -728,6 +759,13 @@ internal object BetaScreenRecoveryService {
             return
         }
         when (decision.action) {
+            NoProgressWatchdog.RecoveryAction.PAUSE_EXPIRED_MATCHMAKING_QUEUE -> {
+                PauseStatus.isPause = true
+                log.error {
+                    "MATCHMAKING_QUEUE_SAFETY_STOP reason=${decision.reason} " +
+                        "pid=${currentPid ?: "none"} actionInput=none pause=true globalLeaseUnchanged=true"
+                }
+            }
             NoProgressWatchdog.RecoveryAction.WAIT,
             NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED,
             NoProgressWatchdog.RecoveryAction.NOOP_RESULT,

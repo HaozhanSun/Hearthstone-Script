@@ -8,7 +8,12 @@ object PowerLogActiveMatchProbe {
     const val MAX_SCAN_BYTES = 4L * 1024L * 1024L
     private const val PROCESS_START_CLOCK_SKEW_TOLERANCE_MS = 10_000L
     enum class State { NO_MATCH, ACTIVE_MATCH, TERMINAL, UNREADABLE }
-    data class Evidence(val state: State, val reason: String, val fileLength: Long = 0L)
+    data class Evidence(
+        val state: State,
+        val reason: String,
+        val fileLength: Long = 0L,
+        val gameCreated: Boolean = false,
+    )
 
     fun inspect(file: File?, currentProcessStartedAtMs: Long? = null): Evidence {
         if (file == null || !file.exists()) return Evidence(State.NO_MATCH, "power-log-not-created")
@@ -46,13 +51,14 @@ object PowerLogActiveMatchProbe {
                 gameSeen && TERMINAL_MARKERS.any(line::contains) -> terminal = true
             }
         }
-        return when {
+        val state = when {
             gameSeen && terminal -> Evidence(State.TERMINAL, "latest-game-terminal", fileLength)
             gameSeen && active -> Evidence(State.ACTIVE_MATCH, "latest-game-active-phase", fileLength)
             gameSeen -> Evidence(State.UNREADABLE, "latest-game-phase-incomplete", fileLength)
             truncatedAtBeginning -> Evidence(State.UNREADABLE, "scan-window-misses-game-boundary", fileLength)
             else -> Evidence(State.NO_MATCH, "no-game-segment", fileLength)
         }
+        return state.copy(gameCreated = gameSeen)
     }
 
     private val ACTIVE_MARKERS = listOf(

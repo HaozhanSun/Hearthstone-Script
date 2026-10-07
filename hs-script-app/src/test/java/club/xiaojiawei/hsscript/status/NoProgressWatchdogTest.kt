@@ -58,6 +58,60 @@ class NoProgressWatchdogTest {
     }
 
     @Test
+    fun `confirmed current pid matchmaking queue survives empty power log and no progress timeout`() {
+        val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1_000L)
+        val queue = { now: Long ->
+            snapshot(
+                now = now,
+                screen = NoProgressWatchdog.ScreenExpectation.MENU_OR_MATCHING,
+                currentPid = 97212L,
+                boundPid = null,
+                powerLogPath = "current-session/Power.log",
+                boundPowerLogPath = null,
+                powerLogUsable = false,
+                powerLogLength = 0L,
+                powerLogPosition = Long.MIN_VALUE,
+                screenConfirmed = true,
+                confirmedMatchmakingQueue = true,
+            )
+        }
+
+        assertEquals(
+            "confirmed-matchmaking-queue-awaiting-create-game",
+            watchdog.observe(queue(0L)).reason,
+        )
+        val late = watchdog.observe(queue(5_000_000L))
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, late.action)
+        assertEquals("confirmed-matchmaking-queue-awaiting-create-game", late.reason)
+        assertEquals(0, late.recoveryAttempt, "queue waiting must not enter rebind/restart recovery")
+    }
+
+    @Test
+    fun `expired confirmed matchmaking queue fails closed without recovery dispatch`() {
+        val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1_000L)
+        val decision = watchdog.observe(
+            NoProgressWatchdog.Snapshot(
+                nowMs = 5_000L,
+                mode = "STARTUP",
+                expectedMode = "STARTUP",
+                screen = NoProgressWatchdog.ScreenExpectation.STARTUP,
+                processAlive = true,
+                currentPid = 42L,
+                boundPid = 42L,
+                windowPresent = true,
+                powerLogPath = null,
+                boundPowerLogPath = null,
+                powerLogPosition = -1L,
+                powerLogLength = -1L,
+                powerLogAgeMs = -1L,
+                matchmakingQueueExpired = true,
+            ),
+        )
+        assertEquals(NoProgressWatchdog.RecoveryAction.PAUSE_EXPIRED_MATCHMAKING_QUEUE, decision.action)
+        assertEquals("confirmed-matchmaking-queue-deadline-expired-no-input", decision.reason)
+    }
+
+    @Test
     fun `missing game process with unbound log recovers only after a bounded grace and retry interval`() {
         val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1_000L)
         val missing = { now: Long ->
@@ -356,6 +410,7 @@ class NoProgressWatchdogTest {
         powerLogUsable: Boolean = true,
         authoritativeLiveMatch: Boolean = false,
         screenConfirmed: Boolean = false,
+        confirmedMatchmakingQueue: Boolean = false,
         powerLogPosition: Long = 0L,
         powerLogLength: Long = 0L,
     ) = NoProgressWatchdog.Snapshot(
@@ -383,6 +438,7 @@ class NoProgressWatchdogTest {
             screen == NoProgressWatchdog.ScreenExpectation.RESULT ||
             screen == NoProgressWatchdog.ScreenExpectation.MENU_OR_MATCHING ||
             screen == NoProgressWatchdog.ScreenExpectation.EXTERNAL_MODAL,
+        confirmedMatchmakingQueue = confirmedMatchmakingQueue,
     )
 }
 

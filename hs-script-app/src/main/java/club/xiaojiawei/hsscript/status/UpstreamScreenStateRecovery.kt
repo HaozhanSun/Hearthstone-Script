@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.status.DeckSelectionRecoveryPolicy
+import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.strategy.mode.LoginModeStrategy
 import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil
@@ -197,7 +198,38 @@ object UpstreamScreenStateRecovery {
                 "evidence=${detection?.evidence ?: "none"}"
         }
 
+        val currentObservationPid = GameUtil.findGameProcessIdForDiagnostics()
+        StartupMatchmakingQueueState.observeScreen(
+            screen = detection?.kind?.code,
+            confidence = detection?.confidence ?: 0,
+            observedPid = currentObservationPid,
+            currentPid = currentObservationPid,
+            captureAuthorized = capture.file != null && currentObservationPid != null &&
+                GameUtil.isVerifiedCurrentGameWindow(ScriptStatus.gameHWND),
+        )
+
         if (capture.startupMenuObservationOnly) {
+            val observedMatchmaking = StartupMenuObservationPolicy.isObservedMatchmaking(
+                detection?.kind?.code,
+                detection?.confidence ?: 0,
+            )
+            if (observedMatchmaking) {
+                val pid = GameUtil.findGameProcessIdForDiagnostics()
+                val queue = StartupMatchmakingQueueState.observeScreen(
+                    screen = detection?.kind?.code,
+                    confidence = detection?.confidence ?: 0,
+                    observedPid = pid,
+                    currentPid = GameUtil.findGameProcessIdForDiagnostics(),
+                    captureAuthorized = GameUtil.isVerifiedCurrentGameWindow(ScriptStatus.gameHWND) &&
+                        capture.file != null,
+                )
+                log.info {
+                    "SCREEN_RECOVERY_STARTUP_QUEUE_OBSERVATION screen=MATCHMAKING " +
+                        "confidence=${detection?.confidence ?: 0} accepted=${queue.isPending} " +
+                        "action=WAIT_FOR_CREATE_GAME powerLog=empty-or-unbound pid=${pid ?: "none"}"
+                }
+                return queue.isPending
+            }
             val observedMenu = StartupMenuObservationPolicy.isObservedMenu(
                 detection?.kind?.code,
                 detection?.confidence ?: 0,

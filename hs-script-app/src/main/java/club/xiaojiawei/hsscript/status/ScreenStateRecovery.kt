@@ -252,10 +252,13 @@ object ScreenStateRecovery {
         val detection = detect(runOCR(capture), capture.visual)
             ?.takeIf { it.confidence >= 85 }
             ?: return null
-        if (capture.startupMenuObservationOnly && !StartupMenuObservationPolicy.isObservedMenu(
-                detection.kind.code,
-                detection.confidence,
-            )
+        val observedQueue = StartupMenuObservationPolicy.isObservedMatchmaking(
+            detection.kind.code,
+            detection.confidence,
+        )
+        if (capture.startupMenuObservationOnly &&
+            !StartupMenuObservationPolicy.isObservedMenu(detection.kind.code, detection.confidence) &&
+            !observedQueue
         ) {
             log.info {
                 "SCREEN_RECOVERY_STARTUP_MENU_OBSERVATION screen=${detection.kind.code} " +
@@ -270,10 +273,19 @@ object ScreenStateRecovery {
             hwnd = gameWindow.toString(),
             screenshot = capture.file?.absolutePath,
         )
+        val queueState = StartupMatchmakingQueueState.observeScreen(
+            screen = observation.screen,
+            confidence = observation.confidence,
+            observedPid = observation.pid,
+            currentPid = GameUtil.findGameProcessIdForDiagnostics(),
+            captureAuthorized = captureResult.foregroundConfirmed && capture.file != null &&
+                GameUtil.isVerifiedCurrentGameWindow(gameWindow),
+        )
         log.info {
             "SCREEN_RECOVERY_FRESH_OBSERVATION detected=${observation.screen} " +
                 "confidence=${observation.confidence} pid=${observation.pid} hwnd=${observation.hwnd} " +
-                "screenshot=${observation.screenshot ?: "not-saved"}"
+                "screenshot=${observation.screenshot ?: "not-saved"} " +
+                "matchmakingQueue=${queueState.phase}"
         }
         if (capture.startupMenuObservationOnly) {
             log.info {
@@ -383,7 +395,38 @@ object ScreenStateRecovery {
                 "evidence=${detection?.evidence ?: "none"}"
         }
 
+        val currentObservationPid = GameUtil.findGameProcessIdForDiagnostics()
+        StartupMatchmakingQueueState.observeScreen(
+            screen = detection?.kind?.code,
+            confidence = detection?.confidence ?: 0,
+            observedPid = currentObservationPid,
+            currentPid = currentObservationPid,
+            captureAuthorized = captureResult.foregroundConfirmed && capture.file != null &&
+                GameUtil.isVerifiedCurrentGameWindow(gameWindow),
+        )
+
         if (capture.startupMenuObservationOnly) {
+            val observedMatchmaking = StartupMenuObservationPolicy.isObservedMatchmaking(
+                detection?.kind?.code,
+                detection?.confidence ?: 0,
+            )
+            if (observedMatchmaking) {
+                val pid = GameUtil.findGameProcessIdForDiagnostics()
+                val queue = StartupMatchmakingQueueState.observeScreen(
+                    screen = detection?.kind?.code,
+                    confidence = detection?.confidence ?: 0,
+                    observedPid = pid,
+                    currentPid = GameUtil.findGameProcessIdForDiagnostics(),
+                    captureAuthorized = captureResult.foregroundConfirmed && capture.file != null &&
+                        GameUtil.isVerifiedCurrentGameWindow(gameWindow),
+                )
+                log.info {
+                    "SCREEN_RECOVERY_STARTUP_QUEUE_OBSERVATION screen=MATCHMAKING " +
+                        "confidence=${detection?.confidence ?: 0} accepted=${queue.isPending} " +
+                        "action=WAIT_FOR_CREATE_GAME powerLog=empty-or-unbound pid=${pid ?: "none"}"
+                }
+                return if (queue.isPending) InspectionResult.OBSERVED_STARTUP_MENU else InspectionResult.NO_ACTION
+            }
             val initialPid = GameUtil.findGameProcessIdForDiagnostics()
                 ?: return InspectionResult.NO_ACTION
             val processStartedAt = GameUtil.findProcessStartedAtForDiagnostics(initialPid)

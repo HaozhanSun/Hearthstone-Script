@@ -16,6 +16,8 @@ import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.CurrentGameScreenReadinessPolicy
 import club.xiaojiawei.hsscript.status.ScreenRecoveryWindowCapture
 import club.xiaojiawei.hsscript.status.StartupMenuObservationPolicy
+import club.xiaojiawei.hsscript.status.StartupMatchmakingQueueState
+import club.xiaojiawei.hsscript.status.PowerLogActiveMatchProbe
 import club.xiaojiawei.hsscript.status.BetaScreenRecoveryService
 import club.xiaojiawei.hsscript.utils.*
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
@@ -387,6 +389,19 @@ class GameStarter : AbstractStarter() {
                     val attachedPowerLog = PowerLogListener.logFile
                     val currentSessionPowerLog = GameUtil.getLatestLogDir()?.resolve("Power.log")
                     val powerLogLength = attachedPowerLog?.length() ?: 0L
+                    val currentPid = GameUtil.findGameProcessIdForDiagnostics()
+                    val processStartedAt = currentPid?.let(GameUtil::findProcessStartedAtForDiagnostics)
+                    val powerLogEvidence = PowerLogActiveMatchProbe.inspect(currentSessionPowerLog, processStartedAt)
+                    StartupMatchmakingQueueState.observeCurrentPowerLog(currentPid, powerLogEvidence)
+                    if (StartupMatchmakingQueueState.isPendingFor(currentPid, currentPid != null)) {
+                        log.info {
+                            "STARTUP_MATCHMAKING_WAIT reason=confirmed-queue-awaiting-create-game " +
+                                "pid=${currentPid ?: "none"} powerLogGameCreated=${powerLogEvidence.gameCreated} " +
+                                "powerLog=${currentSessionPowerLog?.absolutePath ?: "none"} " +
+                                "length=${powerLogEvidence.fileLength} action=NO_INPUT"
+                        }
+                        return@execute
+                    }
                     val probeReady = CurrentGameScreenReadinessPolicy.isReady(
                         gameWindowVerified = gameWindowVerified,
                         attachedPowerLogPath = attachedPowerLog?.path(),
@@ -436,12 +451,24 @@ class GameStarter : AbstractStarter() {
                                 return@execute
                             }
                             startupMenuObservations++
+                            val observedMatchmaking = StartupMatchmakingQueueState.isPendingFor(
+                                GameUtil.findGameProcessIdForDiagnostics(),
+                                GameUtil.isAliveOfGame(),
+                            )
                             log.info {
                                 "STARTUP_MENU_PASSIVE_REOBSERVATION attempt=$startupMenuObservations " +
                                     "max=${StartupMenuObservationPolicy.MAX_PASSIVE_REOBSERVATIONS} " +
-                                    "screen=${if (menuObserved) "verified-home-or-quest-overlay" else "UNKNOWN_OR_UNCLASSIFIED"} " +
-                                    "result=${if (menuObserved) "guarded-startup-progression" else "NO_INPUT"} " +
+                                    "screen=${when { observedMatchmaking -> "verified-matchmaking"; menuObserved -> "verified-home-or-quest-overlay"; else -> "UNKNOWN_OR_UNCLASSIFIED" }} " +
+                                    "result=${if (observedMatchmaking) "WAIT_FOR_CREATE_GAME" else if (menuObserved) "guarded-startup-progression" else "NO_INPUT"} " +
                                     "gameWindowVerified=$gameWindowVerified pid=${GameUtil.findGameProcessIdForDiagnostics() ?: "none"}"
+                            }
+                            if (observedMatchmaking) {
+                                log.info {
+                                    "STARTUP_MATCHMAKING_WAIT reason=verified-queue-screen " +
+                                        "pid=${GameUtil.findGameProcessIdForDiagnostics() ?: "none"} " +
+                                        "action=NO_INPUT timeoutSuppressed=true"
+                                }
+                                return@execute
                             }
                             if (menuObserved) return@execute
                         } else if (startupMenuDecision ==
@@ -547,7 +574,11 @@ class GameStarter : AbstractStarter() {
                 ) {
                     val activeMatch = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD
                     val terminal = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState()
-                    if (!activeMatch && !terminal) {
+                    val confirmedQueue = StartupMatchmakingQueueState.isPendingFor(
+                        GameUtil.findGameProcessIdForDiagnostics(),
+                        GameUtil.isAliveOfGame(),
+                    )
+                    if (!activeMatch && !terminal && !confirmedQueue) {
                         val pauseActivated = synchronized(startupProbeLifecycleLock) {
                             if (startupProbeGeneration.get() != generation || PauseStatus.isPause ||
                                 !WorkTimeListener.working
@@ -569,7 +600,8 @@ class GameStarter : AbstractStarter() {
                         }
                     } else {
                         log.info {
-                            "STARTUP_SCREEN_PROBE_TIMEOUT_WAIT activeMatch=$activeMatch terminal=$terminal action=NO_INPUT"
+                            "STARTUP_SCREEN_PROBE_TIMEOUT_WAIT activeMatch=$activeMatch terminal=$terminal " +
+                                "confirmedMatchmakingQueue=$confirmedQueue action=NO_INPUT"
                         }
                     }
                 }

@@ -10,6 +10,8 @@ import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
+import club.xiaojiawei.hsscript.status.StartupMatchmakingQueueState
+import club.xiaojiawei.hsscript.status.MatchmakingQueueLifecycle
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
 import club.xiaojiawei.hsscript.status.TournamentStartupActionPolicy
@@ -358,6 +360,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         if (MatchmakingGuardPolicy.decide(evidence) != MatchmakingGuardPolicy.Decision.ABORT_GAME_STARTED) {
             return false
         }
+        StartupMatchmakingQueueState.observeGameCreated(GameUtil.findGameProcessIdForDiagnostics())
         cancelAllEnteredTasks()
         log.warn {
             "MATCHMAKING_ABORTED trace=$traceId reason=game-started stage=$stage " +
@@ -451,6 +454,12 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                     return@LRunnable
                 }
                 val probe = ScreenStateRecovery.probeStartGameErrorDialogForMatchmaking()
+                if (probe.state == MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE) {
+                    StartupMatchmakingQueueState.observeQueueTerminal(
+                        GameUtil.findGameProcessIdForDiagnostics(),
+                        "authoritative-start-game-error-dialog",
+                    )
+                }
                 if (!MatchmakingDialogRecoveryPolicy.countsTowardAttemptBudget(probe.reason)) {
                     log.debug {
                         "MATCHMAKING_ERROR_DIALOG_PROBE_DEFERRED trace=$traceId " +
@@ -597,6 +606,28 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                         cancelAllEnteredTasks()
                     } else if (abortMatchmakingIfGameStarted(traceId, "match-timeout")) {
                         cancelAllEnteredTasks()
+                    } else if (StartupMatchmakingQueueState.timeoutDisposition(
+                            GameUtil.findGameProcessIdForDiagnostics(),
+                            GameUtil.isAliveOfGame(),
+                        ) == MatchmakingQueueLifecycle.TimeoutDisposition.DEFER_WITHOUT_INPUT
+                    ) {
+                        log.info {
+                            "MATCHMAKING_TIMEOUT_DEFERRED trace=$traceId " +
+                                "reason=confirmed-queue-awaiting-create-game cancel=false retryInput=false"
+                        }
+                    } else if (StartupMatchmakingQueueState.timeoutDisposition(
+                            GameUtil.findGameProcessIdForDiagnostics(),
+                            GameUtil.isAliveOfGame(),
+                        ) == MatchmakingQueueLifecycle.TimeoutDisposition.STOP
+                    ) {
+                        val queuePhase = StartupMatchmakingQueueState.snapshotFor(
+                            GameUtil.findGameProcessIdForDiagnostics(),
+                            GameUtil.isAliveOfGame(),
+                        ).phase
+                        log.info {
+                            "MATCHMAKING_TIMEOUT_STOPPED trace=$traceId " +
+                                "reason=queue-phase-${queuePhase.name.lowercase()} input=none"
+                        }
                     } else {
                         log.info { "匹配失败，再次匹配中" }
                         SystemUtil.notice("匹配失败，再次匹配中")

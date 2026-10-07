@@ -1,7 +1,7 @@
 package club.xiaojiawei.hsscript.status
 
 /**
- * Allows a read-only startup/menu observation before Power.log is ready.
+ * Allows a read-only startup/menu/queue observation before Power.log is ready.
  * This is deliberately not an action permit: gameplay, rank, queue, and
  * matchmaking callers must continue to require CurrentGameScreenReadinessPolicy.
  */
@@ -21,6 +21,7 @@ object StartupMenuObservationPolicy {
         OBSERVE_STARTUP_MENU,
         WAIT_FOR_POWER_LOG,
         WAIT_EXPECTED_MENU,
+        WAIT_FOR_MATCHMAKING,
         WAIT_FOR_TERMINAL_AUTHORITY,
         BOUNDED_SAFE_PAUSE,
     }
@@ -33,9 +34,11 @@ object StartupMenuObservationPolicy {
         terminal: Boolean,
         completedObservations: Int,
         maxObservations: Int,
+        observedMatchmaking: Boolean = false,
     ): Decision = when {
         currentSessionReady -> Decision.AUTHORITATIVE_SESSION_READY
         activeMatch || terminal -> Decision.WAIT_FOR_TERMINAL_AUTHORITY
+        observedMatchmaking -> Decision.WAIT_FOR_MATCHMAKING
         observedMenu -> Decision.WAIT_EXPECTED_MENU
         !startupObservationAuthorized -> Decision.WAIT_FOR_POWER_LOG
         completedObservations < maxObservations.coerceAtLeast(0) -> Decision.OBSERVE_STARTUP_MENU
@@ -52,6 +55,9 @@ object StartupMenuObservationPolicy {
 
     fun isObservedMenu(screen: String?, confidence: Int): Boolean =
         screen in observableMenuScreens && confidence >= MIN_MENU_CONFIDENCE
+
+    fun isObservedMatchmaking(screen: String?, confidence: Int): Boolean =
+        screen == "MATCHMAKING" && confidence >= MatchmakingQueueLifecycle.MIN_MATCHMAKING_CONFIDENCE
 
     fun isAuthorized(
         gameWindowVerified: Boolean,
