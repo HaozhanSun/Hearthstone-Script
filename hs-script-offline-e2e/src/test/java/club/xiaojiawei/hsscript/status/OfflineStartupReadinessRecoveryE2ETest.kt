@@ -2,12 +2,15 @@ package club.xiaojiawei.hsscript.status
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import club.xiaojiawei.hsscript.status.TournamentModeVisualConfirmationPolicy
+import club.xiaojiawei.hsscript.status.WildModeTitleVisualMatcher
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.security.MessageDigest
 import java.nio.file.Path
+import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -23,6 +26,77 @@ class OfflineStartupReadinessRecoveryE2ETest {
         val events: List<String>,
         val expected: String,
     )
+
+    @Test
+    fun `trusted same pid wild title template rescues garbage OCR but all ambiguous or mismatched evidence blocks inputs`() {
+        val fixturePath = "offline-ocr/screen-recovery/tournament-mode-wild-garbage-20261007-044831.png"
+        val bytes = javaClass.classLoader.getResourceAsStream(fixturePath)?.use { it.readBytes() }
+            ?: error("Missing exact v4.16.589 Wild-title failure screenshot")
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02X".format(it) }
+        assertEquals("59912DABC25CEA59D960745180A0DFB9823846B84F540DBE26394A4C696317DB", digest)
+        val screenshot = ImageIO.read(bytes.inputStream()) ?: error("Wild-title screenshot is not decodable")
+        val confidence = WildModeTitleVisualMatcher.confidence(screenshot)
+            ?: error("Wild-title template matcher unavailable")
+        assertTrue(confidence >= TournamentModeVisualConfirmationPolicy.MIN_WILD_VISUAL_CONFIDENCE)
+        println("WILD_TITLE_TEMPLATE_MATCH confidence=${"%.4f".format(java.util.Locale.ROOT, confidence)} threshold=${TournamentModeVisualConfirmationPolicy.MIN_WILD_VISUAL_CONFIDENCE}")
+
+        val titleObscured = BufferedImage(screenshot.width, screenshot.height, BufferedImage.TYPE_INT_RGB)
+        val graphics = titleObscured.createGraphics()
+        try {
+            graphics.drawImage(screenshot, 0, 0, null)
+            graphics.color = java.awt.Color(36, 30, 27)
+            graphics.fillRect(649, 24, 120, 36)
+        } finally {
+            graphics.dispose()
+        }
+        val obscuredConfidence = WildModeTitleVisualMatcher.confidence(titleObscured)
+        assertTrue(
+            obscuredConfidence == null || obscuredConfidence < TournamentModeVisualConfirmationPolicy.MIN_WILD_VISUAL_CONFIDENCE,
+            "obscured/ambiguous title pixels cannot satisfy the Wild signature",
+        )
+
+        val currentPid = 101872L
+        val deckStartDispatches = AtomicInteger()
+        val queueDispatches = AtomicInteger()
+        fun modeAccepted(expected: String, ocr: String?, visual: Double?, capturePid: Long?): Boolean {
+            val classifiedOcr = when (ocr) {
+                null, "", "ESss" -> "UNKNOWN"
+                else -> ocr
+            }
+            val observed = TournamentModeVisualConfirmationPolicy.resolve(
+                ocrMode = classifiedOcr,
+                wildVisualConfidence = visual,
+                currentPid = currentPid,
+                capturedPid = capturePid,
+            )
+            return observed == expected
+        }
+
+        assertTrue(modeAccepted("WILD", "ESss", confidence, currentPid), "same-PID title pixels recover OCR garbage")
+        assertTrue(modeAccepted("WILD", "UNKNOWN", confidence, currentPid), "empty OCR may use only strong Wild template")
+        if (modeAccepted("WILD", "ESss", confidence, currentPid)) deckStartDispatches.incrementAndGet()
+        assertEquals(1, deckStartDispatches.get(), "confirmation opens only the normal deck/start continuation")
+        assertEquals(0, queueDispatches.get(), "mode proof alone must not bypass the independent rank-4 queue gate")
+
+        val rejectedEvidence = listOf(
+            modeAccepted("WILD", "STANDARD", null, currentPid), // recognized wrong mode
+            modeAccepted("STANDARD", "STANDARD", confidence, currentPid), // OCR/template conflict
+            modeAccepted("WILD", "AMBIGUOUS", confidence, currentPid), // OCR sees conflicting mode cues
+            modeAccepted("WILD", "SWITCHING", confidence, currentPid), // open mode selector is not a deck page
+            modeAccepted("WILD", "UNKNOWN", null, currentPid), // ambiguous visual
+            modeAccepted(
+                "WILD", "UNKNOWN",
+                TournamentModeVisualConfirmationPolicy.MIN_WILD_VISUAL_CONFIDENCE - 0.01,
+                currentPid,
+            ), // low confidence
+            modeAccepted("WILD", "UNKNOWN", confidence, currentPid + 1L), // stale/wrong PID
+        )
+        assertTrue(rejectedEvidence.none { it }, "mismatch, conflict, ambiguity, low confidence, and wrong PID all fail closed")
+        rejectedEvidence.forEach { if (it) deckStartDispatches.incrementAndGet() }
+        assertEquals(1, deckStartDispatches.get(), "rejected observations dispatch no deck/start input")
+        assertEquals(0, queueDispatches.get(), "rejected observations dispatch no matchmaking input")
+    }
 
     @Test
     fun `incident unknown retries are passive and trusted quest overlay gets one dismissal before fresh home`() {

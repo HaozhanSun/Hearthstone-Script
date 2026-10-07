@@ -3,16 +3,18 @@ package club.xiaojiawei.hsscript.status
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
+import club.xiaojiawei.hsscript.status.TournamentModeVisualConfirmationPolicy
+import club.xiaojiawei.hsscript.status.WildModeTitleVisualMatcher
+import club.xiaojiawei.hsscript.utils.GameUtil
+import club.xiaojiawei.hsscript.utils.MouseUtil
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
 import club.xiaojiawei.hsscriptstrategysdk.DeckStrategy
-import java.awt.GraphicsEnvironment
-import java.awt.Rectangle
-import java.awt.Robot
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.File
 import java.util.Locale
+import com.sun.jna.platform.win32.WinDef
 import net.sourceforge.tess4j.Tesseract
 
 enum class ObservedTournamentMode {
@@ -34,6 +36,8 @@ data class TournamentModeObservation(
     val observedMode: ObservedTournamentMode,
     val ocrText: String,
     val evidence: String,
+    val currentPid: Long? = null,
+    val capturedPid: Long? = null,
 )
 
 data class TournamentModeConfirmationResult(
@@ -153,7 +157,8 @@ object TournamentModeConfirmation {
                     "expectedMode=${result.expectedMode.name} observedMode=${result.observedMode.name} " +
                     "strategy=${result.strategyId ?: "n/a"} strategyName=${result.strategyName ?: "n/a"} " +
                     "deckSlot=${result.deckSlot ?: "n/a"} reason=${result.reason} " +
-                    "ocr=${result.ocrText.ifBlank { "<empty>" }.take(160)}"
+                    "ocr=${result.ocrText.ifBlank { "<empty>" }.take(160)} " +
+                    "evidence=${observation.evidence}"
             }
             when (result.state) {
                 TournamentModeConfirmationState.CONFIRMED,
@@ -175,18 +180,76 @@ object TournamentModeConfirmation {
     }
 
     fun observeCurrentMode(): TournamentModeObservation {
-        val screen = captureScreen() ?: return TournamentModeObservation(
+        val capture = captureTrustedCurrentGameFrame() ?: return TournamentModeObservation(
             observedMode = ObservedTournamentMode.UNKNOWN,
             ocrText = "",
-            evidence = "capture-failed",
+            evidence = "trusted-current-game-capture-unavailable",
         )
+        val screen = capture.image
         val titleRegion = cropTitleRegion(screen)
         val titleText = runOCR(titleRegion, "tournament-mode-title")
-        return TournamentModeObservation(
-            observedMode = classifyModeTitle(titleText),
-            ocrText = titleText,
-            evidence = "title-roi-ocr",
+        val ocrMode = classifyModeTitle(titleText)
+        val visualResolverOcrMode = when {
+            ocrMode == ObservedTournamentMode.SWITCHING -> "SWITCHING"
+            ocrMode == ObservedTournamentMode.UNKNOWN && containsModeCue(titleText) -> "AMBIGUOUS"
+            else -> ocrMode.name
+        }
+        val wildVisualConfidence = WildModeTitleVisualMatcher.confidence(screen)
+        val resolved = TournamentModeVisualConfirmationPolicy.resolve(
+            ocrMode = visualResolverOcrMode,
+            wildVisualConfidence = wildVisualConfidence,
+            currentPid = capture.currentPid,
+            capturedPid = capture.capturedPid,
         )
+        val observedMode = runCatching { ObservedTournamentMode.valueOf(resolved) }
+            .getOrDefault(ObservedTournamentMode.UNKNOWN)
+        val evidence = if (ocrMode == ObservedTournamentMode.UNKNOWN && observedMode == ObservedTournamentMode.WILD) {
+            "trusted-current-pid-wild-title-template"
+        } else {
+            "trusted-current-pid-title-roi-ocr"
+        }
+        log.info {
+            "TOURNAMENT_MODE_VISUAL_EVIDENCE ocrMode=${ocrMode.name} resolvedMode=${observedMode.name} " +
+                "wildTemplateConfidence=${wildVisualConfidence?.let { "%.4f".format(Locale.ROOT, it) } ?: "unavailable"} " +
+                "threshold=${TournamentModeVisualConfirmationPolicy.MIN_WILD_VISUAL_CONFIDENCE} " +
+                "currentPid=${capture.currentPid} capturedPid=${capture.capturedPid} evidence=$evidence"
+        }
+        return TournamentModeObservation(
+            observedMode = observedMode,
+            ocrText = titleText,
+            evidence = evidence,
+            currentPid = capture.currentPid,
+            capturedPid = capture.capturedPid,
+        )
+    }
+
+    private data class TrustedModeFrame(
+        val image: BufferedImage,
+        val currentPid: Long,
+        val capturedPid: Long,
+    )
+
+    private fun captureTrustedCurrentGameFrame(): TrustedModeFrame? {
+        val hwnd = GameUtil.findGameHWND() ?: return null
+        val pid = GameUtil.findGameProcessIdForDiagnostics() ?: return null
+        if (!GameUtil.isVerifiedCurrentGameWindow(hwnd, pid)) return null
+        val result = MouseUtil.withRecoveryForeground(hwnd) {
+            val currentHwnd = GameUtil.findGameHWND()
+            val currentPid = GameUtil.findGameProcessIdForDiagnostics()
+            if (currentHwnd == null || currentHwnd.toString() != hwnd.toString() || currentPid != pid) {
+                null
+            } else {
+                ScreenRecoveryWindowCapture.capture(hwnd, ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY)
+            }
+        }
+        if (!result.foregroundConfirmed) return null
+        val frame = result.value ?: return null
+        val capturedPid = frame.evidence.target?.processId?.toLong() ?: return null
+        if (capturedPid != pid || GameUtil.findGameProcessIdForDiagnostics() != pid ||
+            !GameUtil.isVerifiedCurrentGameWindow(hwnd, pid) ||
+            !ScreenRecoveryCaptureAuthority.isAuthorized(frame.evidence)
+        ) return null
+        return TrustedModeFrame(frame.image, pid, capturedPid)
     }
 
     private fun pauseForUnsafeMode(result: TournamentModeConfirmationResult?) {
@@ -240,27 +303,8 @@ object TournamentModeConfirmation {
             else -> null
         }
 
-    private fun captureScreen(): BufferedImage? = runCatching {
-        if (GraphicsEnvironment.isHeadless()) return null
-        val allScreens = GraphicsEnvironment
-            .getLocalGraphicsEnvironment()
-            .screenDevices
-            .map { it.defaultConfiguration.bounds }
-            .fold(Rectangle()) { all, next -> all.union(next) }
-        if (allScreens.width <= 0 || allScreens.height <= 0) return null
-        val gameRect = ScriptStatus.GAME_RECT
-        val candidate = if (gameRect.right - gameRect.left >= 400 && gameRect.bottom - gameRect.top >= 300) {
-            Rectangle(gameRect.left, gameRect.top, gameRect.right - gameRect.left, gameRect.bottom - gameRect.top)
-        } else {
-            allScreens
-        }
-        val bounds = candidate.intersection(allScreens)
-        if (bounds.width < 400 || bounds.height < 300) return null
-        Robot().createScreenCapture(bounds)
-    }.getOrElse { error ->
-        log.warn(error) { "TOURNAMENT_MODE_CONFIRMATION_CAPTURE_FAILED" }
-        null
-    }
+    private fun containsModeCue(text: String): Boolean =
+        listOf("标准", "狂野", "选择模式", "模式选择", "传统对战").any(text::contains)
 
     private fun cropTitleRegion(image: BufferedImage): BufferedImage {
         // The mode title is the single line in the top centre of the deck
