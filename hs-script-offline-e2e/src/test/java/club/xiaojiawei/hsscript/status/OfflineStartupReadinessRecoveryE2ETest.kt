@@ -222,6 +222,82 @@ class OfflineStartupReadinessRecoveryE2ETest {
     }
 
     @Test
+    fun `slow OCR with empty Power log preserves startup window and accepts the real deck selection frame`() {
+        val fixturePath = "offline-ocr/screen-recovery/live-20261007-052615-wild-deck-selection.png"
+        val bytes = javaClass.classLoader.getResourceAsStream(fixturePath)?.use { it.readBytes() }
+            ?: error("Missing exact 05:26:15 live deck-selection screenshot")
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02X".format(it) }
+        assertEquals("9B6C6ED929DB4640D14DF1DAEBE4FA3C04579747C97579D912A77486A1AD663B", digest)
+        val screenshot = ImageIO.read(bytes.inputStream()) ?: error("Live deck-selection screenshot is not decodable")
+        assertEquals(1920, screenshot.width)
+        assertEquals(1080, screenshot.height)
+
+        // Reproduce one 50s synchronous OCR call while Power.log is still empty.
+        // The call is not counted as time in which another observation could run.
+        assertEquals(PowerLogActiveMatchProbe.State.NO_MATCH, PowerLogActiveMatchProbe.assess(emptySequence()).state)
+        val initialDeadline = StartupMenuObservationPolicy.PASSIVE_REOBSERVATION_TIMEOUT_MS
+        var deadline = StartupMenuObservationPolicy.extendDeadlineForObservation(
+            initialDeadline,
+            startedAtMs = 0L,
+            completedAtMs = 50_000L,
+        )
+        var elapsed = 50_000L
+        var observations = 1
+        assertTrue(elapsed < deadline, "slow OCR must not auto-pause at the first completed observation")
+        assertEquals(
+            StartupMenuObservationPolicy.Decision.OBSERVE_STARTUP_MENU,
+            StartupMenuObservationPolicy.decide(
+                currentSessionReady = false,
+                startupObservationAuthorized = true,
+                observedMenu = false,
+                activeMatch = false,
+                terminal = false,
+                completedObservations = observations,
+                maxObservations = StartupMenuObservationPolicy.MAX_PASSIVE_REOBSERVATIONS,
+            ),
+        )
+
+        // A second deterministic 3s OCR read sees the captured current-PID
+        // Wild deck-selection screen, with the Power.log still empty.
+        deadline = StartupMenuObservationPolicy.extendDeadlineForObservation(deadline, elapsed, elapsed + 3_000L)
+        elapsed += 3_000L
+        observations++
+        assertTrue(elapsed < deadline)
+        assertTrue(observations <= StartupMenuObservationPolicy.MAX_PASSIVE_REOBSERVATIONS)
+        val wildConfidence = WildModeTitleVisualMatcher.confidence(screenshot)
+            ?: error("Current-session deck-selection screenshot has no Wild title evidence")
+        assertTrue(wildConfidence >= TournamentModeVisualConfirmationPolicy.MIN_WILD_VISUAL_CONFIDENCE)
+        val currentPid = 98656L
+        assertTrue(TournamentStartupActionPolicy.mayStartModeSelection(
+            screen = "TOURNAMENT",
+            confidence = 95,
+            currentPid = currentPid,
+            observedPid = currentPid,
+            working = true,
+            paused = false,
+        ), "fresh current-PID screenshot can continue the guarded startup path")
+        val queueDispatches = AtomicInteger()
+        val menuObserved = StartupMenuObservationPolicy.isObservedMenu("TOURNAMENT", 95)
+        assertTrue(menuObserved)
+        assertEquals(
+            StartupMenuObservationPolicy.Decision.WAIT_EXPECTED_MENU,
+            StartupMenuObservationPolicy.decide(false, true, menuObserved, false, false, 2, 30),
+        )
+        assertEquals(0, queueDispatches.get(), "verified deck selection does not bypass rank/matchmaking gates")
+
+        assertFalse(TournamentStartupActionPolicy.mayStartModeSelection(
+            screen = "TOURNAMENT",
+            confidence = 95,
+            currentPid = currentPid,
+            observedPid = currentPid,
+            working = false,
+            paused = true,
+        ), "after safe pause, no strategy click may be dispatched")
+        assertEquals(0, queueDispatches.get(), "a blocked post-pause continuation cannot enqueue matchmaking")
+    }
+
+    @Test
     fun `startup empty-log home flow only hands off on no-match and never queues from menu proof`() {
         // This checked-in screenshot is only an available harness fixture; the affected 21:53 run had no persisted pixels.
         val screenshot = javaClass.classLoader.getResourceAsStream(

@@ -279,6 +279,13 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
     }
 
     fun startMatching() {
+        if (PauseStatus.isPause || !WorkTimeListener.working) {
+            log.info {
+                "MATCHMAKING_REQUEST_IGNORED reason=${if (PauseStatus.isPause) "paused" else "runtime-not-working"} " +
+                    "action=NO_RANK_READ_NO_QUEUE_INPUT"
+            }
+            return
+        }
         val traceId = matchmakingTraceSequence.incrementAndGet()
         log.info { "开始匹配 trace=$traceId" }
         val mandatoryRankSurrenderPending =

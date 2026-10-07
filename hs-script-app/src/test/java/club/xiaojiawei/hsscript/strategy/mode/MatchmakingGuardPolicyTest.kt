@@ -36,6 +36,11 @@ class MatchmakingGuardPolicyTest {
         val source = Files.readString(file)
         val startMatching = source.substringAfter("fun startMatching() {").substringBefore("private fun abortMatchmakingIfGameStarted")
 
+        val runtimeGuardIndex = startMatching.indexOf("MATCHMAKING_REQUEST_IGNORED")
+        val firstTraceIndex = startMatching.indexOf("matchmakingTraceSequence.incrementAndGet()")
+        assertTrue(runtimeGuardIndex >= 0 && runtimeGuardIndex < firstTraceIndex,
+            "paused runtime exits before rank OCR, trace allocation, and blocked-matchmaking spam")
+        assertTrue(startMatching.contains("PauseStatus.isPause || !WorkTimeListener.working"))
         assertTrue(startMatching.contains("PreMatchRankGate.evaluate"))
         assertTrue(startMatching.contains("CurrentRankDetector.detect"))
         assertTrue(startMatching.contains("trigger = \"pre-match-deck-selection\""))

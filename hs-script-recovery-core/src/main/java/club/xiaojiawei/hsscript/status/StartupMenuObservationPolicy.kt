@@ -46,6 +46,10 @@ object StartupMenuObservationPolicy {
 
     fun nextCaptureAt(nowMs: Long): Long = nowMs + CAPTURE_COOLDOWN_MS
 
+    /** OCR/capture latency is not observation time: slow reads must not consume the retry window. */
+    fun extendDeadlineForObservation(deadlineMs: Long, startedAtMs: Long, completedAtMs: Long): Long =
+        deadlineMs + (completedAtMs - startedAtMs).coerceAtLeast(0L)
+
     fun isObservedMenu(screen: String?, confidence: Int): Boolean =
         screen in observableMenuScreens && confidence >= MIN_MENU_CONFIDENCE
 

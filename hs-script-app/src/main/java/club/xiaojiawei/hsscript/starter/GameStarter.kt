@@ -33,6 +33,7 @@ import com.sun.jna.platform.win32.WinDef.HWND
 import com.sun.jna.platform.win32.WinUser.*
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 internal object PlatformCloseReadiness {
     fun shouldClose(
@@ -63,6 +64,8 @@ class GameStarter : AbstractStarter() {
     private var platformCloseRequested = false
 
     private val startupProbeScheduled = AtomicBoolean(false)
+    private val startupProbeGeneration = AtomicLong(0L)
+    private val startupProbeLifecycleLock = Any()
 
     private var handoffState = GameStartupHandoffPolicy.State()
 
@@ -84,6 +87,7 @@ class GameStarter : AbstractStarter() {
     }
 
     public override fun execStart() {
+        synchronized(startupProbeLifecycleLock) { startupProbeGeneration.incrementAndGet() }
         platformCloseRequested = false
         startupProbeScheduled.set(false)
         handoffState = GameStartupHandoffPolicy.State()
@@ -358,6 +362,7 @@ class GameStarter : AbstractStarter() {
      */
     private fun scheduleStartupScreenProbe() {
         if (!startupProbeScheduled.compareAndSet(false, true)) return
+        val generation = startupProbeGeneration.get()
         log.info {
             "STARTUP_SCREEN_PROBE_SCHEDULED gameWindow=${ScriptStatus.gameHWND != null} " +
                 "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
@@ -370,9 +375,11 @@ class GameStarter : AbstractStarter() {
                 // attach. Give those listeners a short head start, but do not wait
                 // for the 30-second stale-screen fallback.
                 Thread.sleep(2_500L)
-                val deadline = System.currentTimeMillis() +
+                var deadline = System.currentTimeMillis() +
                     StartupMenuObservationPolicy.PASSIVE_REOBSERVATION_TIMEOUT_MS
-                while (System.currentTimeMillis() < deadline && !PauseStatus.isPause) {
+                while (System.currentTimeMillis() < deadline && !PauseStatus.isPause &&
+                    startupProbeGeneration.get() == generation
+                ) {
                     attempt++
                     val gameWindow = ScriptStatus.gameHWND
                     val gameWindowVerified = gameWindow != null &&
@@ -407,13 +414,27 @@ class GameStarter : AbstractStarter() {
                             // verifies PID/HWND/foreground pixels, NO_MATCH,
                             // tournament configuration and the one-dismissal
                             // limit. UNKNOWN/loading stays a no-action result.
+                            val observationStartedAt = System.currentTimeMillis()
                             val menuObserved = runCatching {
                                 ScreenStateRecovery.inspectAndRecover(
                                     stuckForMs = 0L,
                                     stateFingerprint = "STARTUP_MENU_OBSERVATION",
                                     startupProbe = true,
+                                    stateStillCurrent = {
+                                        startupProbeGeneration.get() == generation &&
+                                            WorkTimeListener.working && !PauseStatus.isPause
+                                    },
                                 )
                             }.getOrNull() == true
+                            deadline = StartupMenuObservationPolicy.extendDeadlineForObservation(
+                                deadline,
+                                observationStartedAt,
+                                System.currentTimeMillis(),
+                            )
+                            if (startupProbeGeneration.get() != generation || PauseStatus.isPause) {
+                                log.info { "STARTUP_SCREEN_PROBE_STALE generation=$generation action=NO_INPUT" }
+                                return@execute
+                            }
                             startupMenuObservations++
                             log.info {
                                 "STARTUP_MENU_PASSIVE_REOBSERVATION attempt=$startupMenuObservations " +
@@ -426,13 +447,28 @@ class GameStarter : AbstractStarter() {
                         } else if (startupMenuDecision ==
                             StartupMenuObservationPolicy.Decision.BOUNDED_SAFE_PAUSE
                         ) {
-                            PauseStatus.setAutomaticPause(true)
-                            log.info {
-                                "STARTUP_SCREEN_PROBE_SAFE_PAUSE reason=${startupMenuDecision.name} " +
-                                    "observations=$startupMenuObservations action=NO_INPUT " +
-                                    "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+                            if (System.currentTimeMillis() >= deadline) {
+                                val pauseActivated = synchronized(startupProbeLifecycleLock) {
+                                    if (startupProbeGeneration.get() != generation || PauseStatus.isPause ||
+                                        !WorkTimeListener.working
+                                    ) {
+                                        false
+                                    } else {
+                                        PauseStatus.setAutomaticPause(true)
+                                        true
+                                    }
+                                }
+                                if (!pauseActivated) {
+                                    log.info { "STARTUP_SCREEN_PROBE_STALE generation=$generation action=NO_INPUT" }
+                                    return@execute
+                                }
+                                log.info {
+                                    "STARTUP_SCREEN_PROBE_SAFE_PAUSE reason=${startupMenuDecision.name} " +
+                                        "observations=$startupMenuObservations action=NO_INPUT " +
+                                        "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+                                }
+                                return@execute
                             }
-                            return@execute
                         } else if (startupMenuDecision ==
                             StartupMenuObservationPolicy.Decision.WAIT_FOR_TERMINAL_AUTHORITY
                         ) {
@@ -440,6 +476,15 @@ class GameStarter : AbstractStarter() {
                                 "STARTUP_MENU_PASSIVE_WAIT reason=active-or-terminal-authority " +
                                     "activeMatch=$activeMatch terminal=$terminal action=NO_INPUT"
                             }
+                        }
+                        if (startupMenuDecision == StartupMenuObservationPolicy.Decision.BOUNDED_SAFE_PAUSE) {
+                            // The count is a capture cap, not permission to shorten the
+                            // minimum observation window. Wait passively for its deadline.
+                            Thread.sleep(minOf(
+                                StartupMenuObservationPolicy.CAPTURE_COOLDOWN_MS,
+                                (deadline - System.currentTimeMillis()).coerceAtLeast(1L),
+                            ))
+                            continue
                         }
                         val reason = when {
                             !gameWindowVerified -> "game-window-unverified"
@@ -466,12 +511,26 @@ class GameStarter : AbstractStarter() {
                             "powerLog=${attachedPowerLog?.path() ?: "none"} powerLogLength=$powerLogLength " +
                             "working=${WorkTimeListener.working} war=${WarEx.inWar}"
                     }
+                    val observationStartedAt = System.currentTimeMillis()
                     val result = runCatching {
                         ScreenStateRecovery.inspectAndRecover(
                             stuckForMs = 0L,
                             stateFingerprint = "STARTUP_PROBE",
                             startupProbe = true,
+                            stateStillCurrent = {
+                                startupProbeGeneration.get() == generation &&
+                                    WorkTimeListener.working && !PauseStatus.isPause
+                            },
                         )
+                    }
+                    deadline = StartupMenuObservationPolicy.extendDeadlineForObservation(
+                        deadline,
+                        observationStartedAt,
+                        System.currentTimeMillis(),
+                    )
+                    if (startupProbeGeneration.get() != generation || PauseStatus.isPause) {
+                        log.info { "STARTUP_SCREEN_PROBE_STALE generation=$generation action=NO_INPUT" }
+                        return@execute
                     }
                     var applied = false
                     result.onSuccess {
@@ -483,15 +542,30 @@ class GameStarter : AbstractStarter() {
                     if (applied) return@execute
                     Thread.sleep(2_000L)
                 }
-                if (System.currentTimeMillis() >= deadline && WorkTimeListener.working && !PauseStatus.isPause) {
+                if (startupProbeGeneration.get() == generation && System.currentTimeMillis() >= deadline &&
+                    WorkTimeListener.working && !PauseStatus.isPause
+                ) {
                     val activeMatch = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD
                     val terminal = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState()
                     if (!activeMatch && !terminal) {
-                        PauseStatus.setAutomaticPause(true)
-                        log.warn {
-                            "STARTUP_SCREEN_PROBE_SAFE_PAUSE reason=passive-observation-timeout " +
-                                "observations=$startupMenuObservations max=" +
-                                "${StartupMenuObservationPolicy.MAX_PASSIVE_REOBSERVATIONS} action=NO_INPUT"
+                        val pauseActivated = synchronized(startupProbeLifecycleLock) {
+                            if (startupProbeGeneration.get() != generation || PauseStatus.isPause ||
+                                !WorkTimeListener.working
+                            ) {
+                                false
+                            } else {
+                                PauseStatus.setAutomaticPause(true)
+                                true
+                            }
+                        }
+                        if (pauseActivated) {
+                            log.warn {
+                                "STARTUP_SCREEN_PROBE_SAFE_PAUSE reason=passive-observation-timeout " +
+                                    "observations=$startupMenuObservations max=" +
+                                    "${StartupMenuObservationPolicy.MAX_PASSIVE_REOBSERVATIONS} action=NO_INPUT"
+                            }
+                        } else {
+                            log.info { "STARTUP_SCREEN_PROBE_STALE generation=$generation action=NO_INPUT" }
                         }
                     } else {
                         log.info {

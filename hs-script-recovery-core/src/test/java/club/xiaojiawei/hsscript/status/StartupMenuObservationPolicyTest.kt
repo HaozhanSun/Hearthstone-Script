@@ -82,6 +82,23 @@ class StartupMenuObservationPolicyTest {
     }
 
     @Test
+    fun `slow OCR extends observation deadline instead of consuming retry window`() {
+        val initialDeadline = 60_000L
+        val afterFirstSlowRead = StartupMenuObservationPolicy.extendDeadlineForObservation(
+            deadlineMs = initialDeadline,
+            startedAtMs = 10_000L,
+            completedAtMs = 60_000L,
+        )
+        assertEquals(110_000L, afterFirstSlowRead)
+        assertTrue(60_000L < afterFirstSlowRead, "one 50s OCR must not exhaust the 60s observation window")
+        assertEquals(
+            110_000L,
+            StartupMenuObservationPolicy.extendDeadlineForObservation(afterFirstSlowRead, 60_000L, 60_000L),
+            "zero-latency observations leave the deadline unchanged",
+        )
+    }
+
+    @Test
     fun `home quest overlay is an observable menu but never an action authorization`() {
         assertTrue(StartupMenuObservationPolicy.isObservedMenu("HOME_TASK_OVERLAY", 85))
         assertFalse(StartupMenuObservationPolicy.isObservedMenu("HOME_TASK_OVERLAY", 84))
