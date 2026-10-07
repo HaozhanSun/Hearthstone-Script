@@ -43,6 +43,19 @@ class LifecycleTraceTest {
     }
 
     @Test
+    fun unresolvedScreenRecoveryPausesAtTheConfiguredBound() {
+        val tracker = ScreenRecoveryAttemptTracker(maxUnresolvedAttempts = 3)
+        assertEquals(false, tracker.record("HUB|TOURNAMENT", recovered = false))
+        assertEquals(false, tracker.record("HUB|TOURNAMENT", recovered = false))
+        assertEquals(true, tracker.record("HUB|TOURNAMENT", recovered = false))
+        assertEquals(false, tracker.record("HUB|TOURNAMENT", recovered = true), "success clears the failure streak")
+        assertEquals(false, tracker.record("HUB|TOURNAMENT", recovered = false))
+        assertEquals(false, tracker.record("HOME|TOURNAMENT", recovered = false), "a new state gets a fresh bounded budget")
+        assertEquals(false, tracker.record("HOME|TOURNAMENT", recovered = false))
+        assertEquals(true, tracker.record("HOME|TOURNAMENT", recovered = false))
+    }
+
+    @Test
     fun startupRecoveryGraceDefersRecoveryOnlyDuringTheGraceWindow() {
         val now = 1_000_000L
         ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)

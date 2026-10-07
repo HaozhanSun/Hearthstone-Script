@@ -6,6 +6,7 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.SpecialCardEnum
 import club.xiaojiawei.hsscript.ocr.OcrHealth
 import club.xiaojiawei.hsscript.ocr.OcrProviderKind
+import club.xiaojiawei.hsscript.ocr.OcrProviderMode
 import club.xiaojiawei.hsscript.ocr.OcrRecognition
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.ocr.OcrTextBridge
@@ -13,6 +14,8 @@ import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
 import club.xiaojiawei.hsscript.status.DebugScreenshotRing
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
+import club.xiaojiawei.hsscript.strategy.mode.PreMatchRankGate
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
@@ -653,6 +656,73 @@ class SurrenderPolicyTest {
             CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(1920, 1080, "MULLIGAN"),
             "screen-phase rank detection must use the same in-game lower-left ROI",
         )
+        assertEquals(Rectangle(1238, 129, 144, 205),
+            CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(1920, 1080, "DECK_SELECTION"))
+        assertEquals(Rectangle(1272, 221, 87, 70),
+            CurrentRankDetector.rankDigitBoundsForScreenPhaseForTest(1920, 1080, "DECK_SELECTION"))
+    }
+
+    @Test
+    fun `deck selection screenshot reads upper-right rank four and queue gate denies it`() {
+        val resource = javaClass.getResource("/offline-ocr/rank-detection/deck-selection-rank4-1920x1080.png")
+            ?: error("retained deck-selection rank screenshot missing")
+        val screen = ImageIO.read(resource)
+        val expectedBadge = CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(
+            screen.width, screen.height, "DECK_SELECTION",
+        )
+        val originalSettingsProvider = OcrRuntime.settingsProvider
+        val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
+        val originalProviderModeProvider = OcrRuntime.providerModeProvider
+        var recognizedBounds: Pair<Int, Int>? = null
+        try {
+            OcrRuntime.providerModeProvider = { OcrProviderMode.PADDLEX_ONLY }
+            OcrRuntime.settingsProvider = {
+                PaddleXOcrSettings(true, "python", "fixture", "cpu", "", 1000)
+            }
+            OcrRuntime.paddleXBridgeFactory = {
+                object : OcrTextBridge {
+                    override fun recognize(image: BufferedImage, desc: String): String = "4"
+                    override fun recognizeWithConfidence(image: BufferedImage, desc: String, roi: String?): OcrRecognition {
+                        recognizedBounds = image.width to image.height
+                        val expected = screen.getSubimage(expectedBadge.x, expectedBadge.y, expectedBadge.width, expectedBadge.height)
+                        for (y in 0 until expected.height) for (x in 0 until expected.width) {
+                            assertEquals(
+                                expected.getRGB(x, y), image.getRGB(x, y),
+                                "deck phase crop must exactly match screenshot badge at ($x,$y)",
+                            )
+                        }
+                        return OcrRecognition("4", confidence = 0.99)
+                    }
+                    override fun healthCheck() = OcrHealth(true, OcrProviderKind.PADDLEX, "fixture")
+                }
+            }
+
+            val detection = CurrentRankDetector.detectCapturedImage(
+                screen, saveEvidence = false, evidencePhase = "DECK_SELECTION",
+            )
+            assertEquals(4, detection?.rank)
+            assertEquals(expectedBadge.width to expectedBadge.height, recognizedBounds)
+            val gate = PreMatchRankGate.evaluate(
+                working = true,
+                paused = false,
+                mandatoryRankSurrenderPending = false,
+                expectedMode = "TOURNAMENT",
+                actualMode = "TOURNAMENT",
+                expectedInWar = false,
+                inWar = false,
+                nowMs = System::currentTimeMillis,
+                detectFreshRank = { detection },
+            )
+            var dispatches = 0
+            assertFalse(gate.rankDecision.eligible, "rank 4 must remain ineligible after the corrected visual read")
+            assertFalse(gate.queueAuthorization.allowed)
+            assertFalse(MatchmakingGuardPolicy.dispatchIfAuthorized(gate.queueAuthorization) { dispatches++ })
+            assertEquals(0, dispatches, "rank 4 must not dispatch matchmaking input")
+        } finally {
+            OcrRuntime.settingsProvider = originalSettingsProvider
+            OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
+            OcrRuntime.providerModeProvider = originalProviderModeProvider
+        }
     }
 
     @Test

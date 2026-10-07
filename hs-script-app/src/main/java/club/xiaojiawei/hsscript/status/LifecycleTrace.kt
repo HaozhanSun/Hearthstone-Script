@@ -10,6 +10,29 @@ import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import java.util.concurrent.atomic.AtomicBoolean
 
+internal class ScreenRecoveryAttemptTracker(private val maxUnresolvedAttempts: Int = 3) {
+    private var fingerprint: String? = null
+    private var unresolvedAttempts = 0
+
+    fun record(fingerprint: String, recovered: Boolean): Boolean {
+        if (this.fingerprint != fingerprint) {
+            this.fingerprint = fingerprint
+            unresolvedAttempts = 0
+        }
+        if (recovered) {
+            unresolvedAttempts = 0
+            return false
+        }
+        unresolvedAttempts++
+        return unresolvedAttempts >= maxUnresolvedAttempts.coerceAtLeast(1)
+    }
+
+    fun reset() {
+        fingerprint = null
+        unresolvedAttempts = 0
+    }
+}
+
 /**
  * Low-noise process/window heartbeat used to distinguish a hidden JavaFX
  * window from a terminated JVM or an unhandled worker-thread failure.
@@ -18,6 +41,7 @@ object LifecycleTrace {
     private const val GAME_OVER_STUCK_TIMEOUT_MS = 30_000L
     private const val STATE_RECOVERY_TIMEOUT_MS = 30_000L
     private const val STATE_RECOVERY_RETRY_INTERVAL_MS = 30_000L
+    private const val MAX_UNRESOLVED_STATE_RECOVERY_ATTEMPTS = 3
 
     @Volatile
     private var mainWindowShowing = false
@@ -32,6 +56,7 @@ object LifecycleTrace {
     private var stateRecoverySince = 0L
     private var stateRecoveryFingerprint = ""
     private var stateRecoveryAttemptAt = 0L
+    private val stateRecoveryAttemptTracker = ScreenRecoveryAttemptTracker(MAX_UNRESOLVED_STATE_RECOVERY_ATTEMPTS)
     private val stateRecoveryInFlight = AtomicBoolean(false)
 
     fun start() {
@@ -137,6 +162,7 @@ object LifecycleTrace {
             stateRecoverySince = 0L
             stateRecoveryFingerprint = ""
             stateRecoveryAttemptAt = 0L
+            stateRecoveryAttemptTracker.reset()
             return
         }
 
@@ -146,6 +172,7 @@ object LifecycleTrace {
             stateRecoveryFingerprint = fingerprint
             stateRecoverySince = now
             stateRecoveryAttemptAt = 0L
+            stateRecoveryAttemptTracker.reset()
             return
         }
         if (stateRecoverySince == 0L) stateRecoverySince = now
@@ -161,8 +188,9 @@ object LifecycleTrace {
         stateRecoveryAttemptAt = now
         log.info { "SCREEN_RECOVERY_SCHEDULED stuckForMs=$stuckFor state=$fingerprint" }
         EXTRA_THREAD_POOL.execute {
+            var recovered = false
             try {
-                ScreenStateRecovery.inspectAndRecover(
+                recovered = ScreenStateRecovery.inspectAndRecover(
                     stuckFor,
                     fingerprint,
                 ) {
@@ -186,6 +214,16 @@ object LifecycleTrace {
                         "link=${evidence?.link ?: "none"}"
                 }
             } finally {
+                if (stateFingerprint() == fingerprint && !PauseStatus.isPause) {
+                    val pauseForUnresolved = stateRecoveryAttemptTracker.record(fingerprint, recovered)
+                    if (pauseForUnresolved) {
+                        PauseStatus.setAutomaticPause(true)
+                        log.warn {
+                            "SCREEN_RECOVERY_PAUSED reason=unresolved-attempt-limit " +
+                                "attempts=$MAX_UNRESOLVED_STATE_RECOVERY_ATTEMPTS state=$fingerprint inputDispatch=false"
+                        }
+                    }
+                }
                 stateRecoveryInFlight.set(false)
             }
         }

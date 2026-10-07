@@ -66,7 +66,8 @@ internal object ScreenRecoveryWindowCapture {
             powerLogLength = attachedPowerLog?.length() ?: 0L,
         )
         val preSessionQueueModalBefore = preSessionQueueModalContext(purpose)
-        if (!currentPowerLogReady && !preSessionQueueModalBefore) {
+        val preSessionUiClassificationBefore = preSessionUiClassificationContext(purpose)
+        if (!currentPowerLogReady && !preSessionQueueModalBefore && !preSessionUiClassificationBefore) {
             return reject(
                 "current-game-session-not-ready",
                 hwnd,
@@ -121,6 +122,8 @@ internal object ScreenRecoveryWindowCapture {
             visibleOwnersAfter = ownersAfter,
             purpose = purpose,
             preSessionQueueModalAuthorized = preSessionQueueModalBefore && preSessionQueueModalAfter,
+            preSessionUiClassificationAuthorized = preSessionUiClassificationBefore &&
+                preSessionUiClassificationContext(purpose),
             currentGameProcessId = currentPidAfter,
             targetWindowVisibleBefore = targetWindowVisibleBefore,
             targetWindowVisibleAfter = targetWindowVisibleAfter,
@@ -148,6 +151,15 @@ internal object ScreenRecoveryWindowCapture {
 
     private fun preSessionQueueModalContext(purpose: ScreenRecoveryCapturePurpose): Boolean =
         ScreenRecoveryCapturePurposePolicy.allowsPreSessionQueueModal(
+            purpose = purpose,
+            tournamentMode = Mode.currMode === ModeEnum.TOURNAMENT,
+            activeGame = WarEx.inWar,
+            mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+            terminal = GameUtil.isTerminalGameState(),
+        )
+
+    private fun preSessionUiClassificationContext(purpose: ScreenRecoveryCapturePurpose): Boolean =
+        ScreenRecoveryCapturePurposePolicy.allowsPreSessionScreenClassification(
             purpose = purpose,
             tournamentMode = Mode.currMode === ModeEnum.TOURNAMENT,
             activeGame = WarEx.inWar,

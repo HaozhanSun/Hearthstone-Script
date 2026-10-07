@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "channel": "beta",
-  "branch": "beta/rank-before-queue-v4.16.583",
+  "branch": "beta/live-failure-fix-v4.16.584",
   "displayName": "Hearthstone Script Beta",
   "runtimeDirectoryName": "Hearthstone Script Beta",
   "shortcutName": "Hearthstone Script Beta.lnk",

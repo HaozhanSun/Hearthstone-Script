@@ -63,6 +63,17 @@ object CurrentRankDetector {
     private const val RANK_DIGIT_TOP = 0.86852
     private const val RANK_DIGIT_WIDTH = 0.018
     private const val RANK_DIGIT_HEIGHT = 0.04167
+    // Deck selection presents constructed rank on the upper-right season badge.
+    // These bounds cover the badge and its numeral while excluding the reward
+    // chest and the selected-deck panel at 1920x1080.
+    private const val DECK_RANK_BADGE_LEFT = 0.645
+    private const val DECK_RANK_BADGE_TOP = 0.12
+    private const val DECK_RANK_BADGE_WIDTH = 0.075
+    private const val DECK_RANK_BADGE_HEIGHT = 0.19
+    private const val DECK_RANK_DIGIT_LEFT = 0.663
+    private const val DECK_RANK_DIGIT_TOP = 0.205
+    private const val DECK_RANK_DIGIT_WIDTH = 0.045
+    private const val DECK_RANK_DIGIT_HEIGHT = 0.065
     // The stylized 10 badge is frequently OCR'd as a lone 1.  This narrow
     // inner window excludes the shield border and the player name, leaving
     // only the numeral row for a conservative two-digit layout check.
@@ -294,9 +305,9 @@ object CurrentRankDetector {
         evidencePhase: String = "REPLACE_CARD",
         capturedAtMs: Long = System.currentTimeMillis(),
     ): Detection? = runCatching {
-        val badgeRegionBounds = rankBadgeBoundsForTest(screen.width, screen.height)
+        val badgeRegionBounds = rankBadgeBoundsForPhaseForTest(screen.width, screen.height, evidencePhase)
         val badgeRegion = crop(screen, badgeRegionBounds)
-        val numericRegionBounds = rankDigitBoundsForTest(screen.width, screen.height)
+        val numericRegionBounds = rankDigitBoundsForPhaseForTest(screen.width, screen.height, evidencePhase)
         val numericRegion = crop(screen, numericRegionBounds)
         val tessData = File(TESS_DATA_PATH)
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
@@ -323,8 +334,8 @@ object CurrentRankDetector {
             RANK_EXPANDED_HEIGHT,
         )
         val badgeVisualRegion = badgeRegion
-        // Rank OCR is only invoked after live Mulligan input is confirmed, so
-        // every backend uses the lower-left in-game HUD badge crop.
+        // Gameplay uses the lower-left HUD badge; pre-match deck selection
+        // uses the upper-right constructed-rank badge.
         val digitRegion = numericRegion
         if (!OcrRuntime.isLegacySelected()) {
             val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
@@ -640,11 +651,17 @@ object CurrentRankDetector {
     private fun formatConfidence(confidence: Double?): String =
         confidence?.let { String.format(Locale.ROOT, "%.2f", it) } ?: "unavailable"
 
-    private fun rankBadgeBoundsForPhaseForTest(imageWidth: Int, imageHeight: Int, @Suppress("UNUSED_PARAMETER") phase: String): Rectangle =
-        rankBadgeBoundsForTest(imageWidth, imageHeight)
+    private fun rankBadgeBoundsForPhaseForTest(imageWidth: Int, imageHeight: Int, phase: String): Rectangle =
+        if (phase.equals("DECK_SELECTION", ignoreCase = true)) {
+            normalizedBounds(imageWidth, imageHeight, DECK_RANK_BADGE_LEFT, DECK_RANK_BADGE_TOP,
+                DECK_RANK_BADGE_WIDTH, DECK_RANK_BADGE_HEIGHT)
+        } else rankBadgeBoundsForTest(imageWidth, imageHeight)
 
-    private fun rankDigitBoundsForPhaseForTest(imageWidth: Int, imageHeight: Int, @Suppress("UNUSED_PARAMETER") phase: String): Rectangle =
-        rankDigitBoundsForTest(imageWidth, imageHeight)
+    private fun rankDigitBoundsForPhaseForTest(imageWidth: Int, imageHeight: Int, phase: String): Rectangle =
+        if (phase.equals("DECK_SELECTION", ignoreCase = true)) {
+            normalizedBounds(imageWidth, imageHeight, DECK_RANK_DIGIT_LEFT, DECK_RANK_DIGIT_TOP,
+                DECK_RANK_DIGIT_WIDTH, DECK_RANK_DIGIT_HEIGHT)
+        } else rankDigitBoundsForTest(imageWidth, imageHeight)
 
     internal fun rankBadgeBoundsForScreenPhaseForTest(
         imageWidth: Int,

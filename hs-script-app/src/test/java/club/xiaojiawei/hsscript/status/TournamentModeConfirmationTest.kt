@@ -1,12 +1,16 @@
 package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
+import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
+import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
+import club.xiaojiawei.hsscript.strategy.mode.PreMatchRankGate
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptstrategysdk.DeckStrategy
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.util.HashSet
+import java.awt.Rectangle
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -126,8 +130,10 @@ class TournamentModeConfirmationTest {
         assertTrue(tournament.contains("MATCHMAKING_INPUT_DISPATCH mode=normal"))
         assertTrue(tournament.contains("MouseUtil.leftButtonClick(pos, ScriptStatus.gameHWND)"))
         assertFalse(tournament.contains("leftButtonClickForRecovery(rect.getCenterClickPos())"))
-        assertTrue(tournament.contains("MATCHMAKING_POPUP_WATCHDOG_SKIPPED reason=no-positive-dialog-evidence"))
-        assertFalse(tournament.contains("scheduleMatchmakingDialogRecovery(traceId)"))
+        assertTrue(tournament.contains("MATCHMAKING_ERROR_DIALOG_PROBE_DEFERRED"))
+        assertTrue(tournament.contains("input=none"), "an unverified error-modal probe must not click")
+        assertTrue(tournament.contains("scheduleMatchmakingDialogRecovery(traceId)"))
+        assertTrue(tournament.contains("MatchmakingDialogRecoveryPolicy.dispatchConfirm(decision)"))
         assertTrue(confirmation.contains("title-roi-ocr"))
         assertTrue(confirmation.contains("TOURNAMENT_MODE_CONFIRMATION_OCR provider=LEGACY_FAST"))
         assertFalse(confirmation.contains("tournament-mode-fullscreen"))
@@ -200,6 +206,35 @@ class TournamentModeConfirmationTest {
             assertTrue(result)
             assertEquals(3, observations)
             assertFalse(PauseStatus.isAutomaticPause)
+
+            val now = System.currentTimeMillis()
+            val rankFour = CurrentRankDetector.Detection(
+                rank = 4,
+                tier = CurrentRankDetector.RankTier.UNKNOWN,
+                ocrText = "4",
+                confidence = 0.99,
+                captureBounds = Rectangle(0, 0, 1920, 1080),
+                provider = "PADDLEX",
+                capturedAtMs = now,
+                agreementCount = 1,
+            )
+            val rankGate = PreMatchRankGate.evaluate(
+                working = true,
+                paused = false,
+                mandatoryRankSurrenderPending = false,
+                expectedMode = "TOURNAMENT",
+                actualMode = "TOURNAMENT",
+                expectedInWar = false,
+                inWar = false,
+                nowMs = { now },
+                detectFreshRank = { rankFour },
+            )
+            var matchmakingInputs = 0
+            assertFalse(rankGate.queueAuthorization.allowed)
+            assertFalse(MatchmakingGuardPolicy.dispatchIfAuthorized(rankGate.queueAuthorization) {
+                matchmakingInputs++
+            }, "unknown mode-title fallback must not bypass the independent rank gate")
+            assertEquals(0, matchmakingInputs)
         } finally {
             PauseStatus.setAutomaticPause(false)
         }

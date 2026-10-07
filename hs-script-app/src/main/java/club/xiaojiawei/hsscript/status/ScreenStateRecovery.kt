@@ -127,6 +127,7 @@ object ScreenStateRecovery {
         val visual: VisualSignature,
         val gameRectKnown: Boolean,
         val gameWindowKnown: Boolean,
+        val currentSessionReady: Boolean = true,
     )
 
     private data class OcrEvidence(
@@ -415,6 +416,13 @@ object ScreenStateRecovery {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-before-apply state=$stateFingerprint" }
             return InspectionResult.NO_ACTION
         }
+        if (!ScreenRecoverySessionPolicy.mayApplyRecoveryInput(capture.currentSessionReady)) {
+            log.info {
+                "SCREEN_RECOVERY_CLASSIFICATION_ONLY reason=pre-session-power-log-unbound " +
+                    "detected=${detection.kind.code} inputDispatch=false state=$stateFingerprint"
+            }
+            return InspectionResult.NO_ACTION
+        }
         val sourcePid = GameUtil.findGameProcessIdForDiagnostics()
         if (!apply(detection, recoveryToken)) return InspectionResult.NO_ACTION
         val verified = confirmRecoveryTransition(detection, recoveryToken, sourcePid)
@@ -581,6 +589,7 @@ object ScreenStateRecovery {
             visualSignature(image),
             gameRectKnown = true,
             gameWindowKnown = true,
+            currentSessionReady = authorizedFrame.evidence.currentSessionReady,
         )
     }
 

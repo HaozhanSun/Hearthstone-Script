@@ -8,14 +8,23 @@ internal data class CapturedWindowIdentity(
     val processId: Int,
 )
 
-/** Pre-session capture is permitted only for the exact matchmaking error-modal probe. */
+/** Capture purposes distinguish read-only pre-session classification from modal handling. */
 internal enum class ScreenRecoveryCapturePurpose {
     SCREEN_STATE_RECOVERY,
     MATCHMAKING_ERROR_DIALOG,
 }
 
-/** The only pre-session Power.log exception: a queue-level opponent error modal. */
+/** Purpose-specific policy for captures made before the current Power.log is ready. */
 internal object ScreenRecoveryCapturePurposePolicy {
+    fun allowsPreSessionScreenClassification(
+        purpose: ScreenRecoveryCapturePurpose,
+        tournamentMode: Boolean,
+        activeGame: Boolean,
+        mulligan: Boolean,
+        terminal: Boolean,
+    ): Boolean = purpose == ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY &&
+        tournamentMode && !activeGame && !mulligan && !terminal
+
     fun allowsPreSessionQueueModal(
         purpose: ScreenRecoveryCapturePurpose,
         tournamentMode: Boolean,
@@ -29,6 +38,11 @@ internal object ScreenRecoveryCapturePurposePolicy {
         mulligan = mulligan,
         terminal = terminal,
     )
+}
+
+/** Pre-session visual evidence can classify a screen but cannot mutate recovery state or dispatch input. */
+internal object ScreenRecoverySessionPolicy {
+    fun mayApplyRecoveryInput(currentSessionReady: Boolean): Boolean = currentSessionReady
 }
 
 internal data class ScreenRecoveryCaptureEvidence(
@@ -45,6 +59,7 @@ internal data class ScreenRecoveryCaptureEvidence(
     val visibleOwnersAfter: List<CapturedWindowIdentity?>,
     val purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
     val preSessionQueueModalAuthorized: Boolean = false,
+    val preSessionUiClassificationAuthorized: Boolean = false,
     val currentGameProcessId: Long? = target?.processId?.toLong(),
     val targetWindowVisibleBefore: Boolean = true,
     val targetWindowVisibleAfter: Boolean = true,
@@ -76,12 +91,13 @@ internal object ScreenRecoveryCaptureAuthority {
         if (!evidence.targetWindowVisibleBefore || !evidence.targetWindowVisibleAfter) {
             return "target-window-not-visible-before-and-after"
         }
-        if (!evidence.currentSessionReady && !evidence.preSessionQueueModalAuthorized) {
-            return "current-game-session-not-ready"
+        if (!evidence.currentSessionReady) {
+            val authorizedForPurpose = when (evidence.purpose) {
+                ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG -> evidence.preSessionQueueModalAuthorized
+                ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY -> evidence.preSessionUiClassificationAuthorized
+            }
+            if (!authorizedForPurpose) return "current-game-session-not-ready"
         }
-        if (!evidence.currentSessionReady &&
-            evidence.purpose != ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG
-        ) return "current-game-session-not-ready"
         if (target.rootWindow == 0L || target.processId <= 0) return "target-window-identity-invalid"
         if (evidence.foregroundBefore != target || evidence.foregroundAfter != target) {
             return "foreground-window-not-exact-target-before-and-after"

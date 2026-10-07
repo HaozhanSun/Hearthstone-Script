@@ -173,6 +173,19 @@ class ScreenRecoveryCaptureAuthorityTest {
         )
         assertTrue(ScreenRecoveryCaptureAuthority.isAuthorized(exactModal))
 
+        val readOnlyClassification = evidence(
+            currentSessionReady = false,
+            preSessionUiClassificationAuthorized = true,
+        )
+        assertTrue(ScreenRecoveryCaptureAuthority.isAuthorized(readOnlyClassification))
+        assertFalse(ScreenRecoverySessionPolicy.mayApplyRecoveryInput(currentSessionReady = false))
+        assertTrue(ScreenRecoverySessionPolicy.mayApplyRecoveryInput(currentSessionReady = true))
+        var recoveryInputs = 0
+        if (ScreenRecoverySessionPolicy.mayApplyRecoveryInput(readOnlyClassification.currentSessionReady)) {
+            recoveryInputs++
+        }
+        assertEquals(0, recoveryInputs, "empty pre-match Power.log permits observation only, never recovery input")
+
         assertFalse(
             ScreenRecoveryCaptureAuthority.isAuthorized(
                 evidence(
@@ -191,7 +204,7 @@ class ScreenRecoveryCaptureAuthorityTest {
                     preSessionQueueModalAuthorized = true,
                 ),
             ),
-            "even a positive queue context cannot remove the log gate from ordinary/game-state capture",
+            "queue-modal authority cannot be reused as screen-classification authority",
         )
 
         val occludedModal = evidence(
@@ -273,6 +286,23 @@ class ScreenRecoveryCaptureAuthorityTest {
         assertFalse(allows(activeGame = true))
         assertFalse(allows(mulligan = true))
         assertFalse(allows(terminal = true))
+
+        fun allowsClassification(
+            purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+            tournamentMode: Boolean = true,
+            activeGame: Boolean = false,
+            mulligan: Boolean = false,
+            terminal: Boolean = false,
+        ) = ScreenRecoveryCapturePurposePolicy.allowsPreSessionScreenClassification(
+            purpose, tournamentMode, activeGame, mulligan, terminal,
+        )
+
+        assertTrue(allowsClassification())
+        assertFalse(allowsClassification(purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG))
+        assertFalse(allowsClassification(tournamentMode = false))
+        assertFalse(allowsClassification(activeGame = true))
+        assertFalse(allowsClassification(mulligan = true))
+        assertFalse(allowsClassification(terminal = true))
     }
 
     private fun evidence(
@@ -287,6 +317,7 @@ class ScreenRecoveryCaptureAuthorityTest {
         imageHeight: Int = client.height,
         purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
         preSessionQueueModalAuthorized: Boolean = false,
+        preSessionUiClassificationAuthorized: Boolean = false,
         currentGameProcessId: Long? = game.processId.toLong(),
         targetWindowVisibleBefore: Boolean = true,
         targetWindowVisibleAfter: Boolean = true,
@@ -304,6 +335,7 @@ class ScreenRecoveryCaptureAuthorityTest {
         visibleOwnersAfter = owners,
         purpose = purpose,
         preSessionQueueModalAuthorized = preSessionQueueModalAuthorized,
+        preSessionUiClassificationAuthorized = preSessionUiClassificationAuthorized,
         currentGameProcessId = currentGameProcessId,
         targetWindowVisibleBefore = targetWindowVisibleBefore,
         targetWindowVisibleAfter = targetWindowVisibleAfter,
