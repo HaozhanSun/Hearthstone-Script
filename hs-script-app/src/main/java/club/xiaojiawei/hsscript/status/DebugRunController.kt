@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit
 /** Application facade for the one-shot debug/test work-time override. */
 object DebugRunController {
     const val MAX_DURATION_MILLIS = DebugRunLease.MAX_DURATION_MILLIS
+    const val DEFAULT_DURATION_MILLIS = DebugRunLease.DEFAULT_DURATION_MILLIS
     const val PREARM_PROPERTY = "hs.script.debugrun.prearm"
     private val timestampFormatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME.withZone(ZoneOffset.UTC)
     private val metadataLock = Any()
@@ -35,9 +36,14 @@ object DebugRunController {
         },
     )
 
-    fun enable(reason: String = "toggle-on"): DebugRunLease.Snapshot = synchronized(metadataLock) {
+    fun enable(
+        reason: String = "toggle-on",
+        durationMinutes: Int = configuredDurationMinutes(),
+    ): DebugRunLease.Snapshot = synchronized(metadataLock) {
         val wasActive = lease.isActiveWithoutExpiring()
-        val snapshot = lease.enable()
+        val durationMillis = DebugRunDurationPolicy.toMillis(durationMinutes)
+            ?: throw IllegalArgumentException("Debug Run duration must be 1–${DebugRunDurationPolicy.MINUTES_MAX} minutes")
+        val snapshot = lease.enable(durationMillis)
         if (snapshot.state == DebugRunLease.State.ACTIVE && !wasActive) {
             activeRunId = UUID.randomUUID().toString()
         }
@@ -66,7 +72,7 @@ object DebugRunController {
         if (System.getProperty(PREARM_PROPERTY) != "true") return false
         synchronized(metadataLock) {
             if (lease.isActiveWithoutExpiring()) return true
-            val snapshot = lease.enable()
+            val snapshot = lease.enable(configuredDurationMillis())
             activeRunId = UUID.randomUUID().toString()
             logSnapshot("DEBUG_OVERRIDE_PREARMED", snapshot, "process-prearm", activeRunId)
             logSnapshot("DEBUG_OVERRIDE_ACTIVE", snapshot, "process-prearm", activeRunId)
@@ -97,7 +103,10 @@ object DebugRunController {
                 return@synchronized snapshot
             }
 
-            val snapshot = lease.resetForRestart(defaultEnabled = true)
+            val snapshot = lease.resetForRestart(
+                defaultEnabled = true,
+                defaultDurationMillis = configuredDurationMillis(),
+            )
             activeRunId = UUID.randomUUID().toString()
             ConfigUtil.putBoolean(ConfigEnum.DEBUG_RUN_MODE, true)
             logSnapshot("DEBUG_OVERRIDE_DEFAULT_ACTIVE", snapshot, reason, activeRunId)
@@ -108,6 +117,10 @@ object DebugRunController {
         }
 
     fun snapshot(): DebugRunLease.Snapshot = lease.snapshot()
+
+    fun configuredDurationMinutes(): Int = DebugRunDurationPolicy.normalizeMinutes(
+        ConfigUtil.getInt(ConfigEnum.DEBUG_RUN_DURATION_MINUTES),
+    )
 
     fun isActive(): Boolean = lease.isActiveWithoutExpiring()
 
@@ -161,4 +174,7 @@ object DebugRunController {
     private fun currentProvider(): String = runCatching {
         OcrRuntime.currentProvider().name
     }.getOrDefault("UNKNOWN")
+
+    private fun configuredDurationMillis(): Long =
+        DebugRunDurationPolicy.toMillis(configuredDurationMinutes()) ?: DEFAULT_DURATION_MILLIS
 }

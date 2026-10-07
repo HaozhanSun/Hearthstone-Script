@@ -370,6 +370,9 @@ enum class ConfigEnum(
     /** Debug/test run preference; the live deadline is never persisted. */
     DEBUG_RUN_MODE(group = DEV_CONFIG_GROUP, defaultValueInitializer = { FALSE_STR }),
 
+    /** Selected Debug Run duration in minutes; the active monotonic deadline itself is ephemeral. */
+    DEBUG_RUN_DURATION_MINUTES(group = DEV_CONFIG_GROUP, defaultValueInitializer = { "30" }),
+
     /**
      * 自动刷新游戏每日任务
      */

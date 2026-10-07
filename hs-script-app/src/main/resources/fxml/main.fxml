@@ -85,15 +85,22 @@
                         </graphic>
                     </ConfigCheckBox>
 
-                    <HBox alignment="CENTER" spacing="6">
+                    <HBox alignment="CENTER" spacing="5">
                         <ConfigCheckBox fx:id="debugRunModeCheckBox" text="调试/Test Run"
                                         styleClass="check-box-ui, check-box-ui-success"
                                         contentDisplay="RIGHT" config="DEBUG_RUN_MODE"
                                         onAction="#toggleDebugRun">
                             <tooltip>
-                                <Tooltip text="启动后默认开启一次，最多运行30分钟；到期或手动关闭后恢复正常时间表"/>
+                                <Tooltip text="启动后按所选时长开启；到期或手动关闭后恢复正常时间表。运行中修改时长仅对下一次启用生效。"/>
                             </tooltip>
                         </ConfigCheckBox>
+                        <TextField fx:id="debugRunDurationMinutes" prefWidth="48" maxWidth="48"
+                                   alignment="CENTER" promptText="30">
+                            <tooltip>
+                                <Tooltip text="Debug Run 时长（1–45 分钟；默认30分钟）"/>
+                            </tooltip>
+                        </TextField>
+                        <Label text="min (1–45)" style="-fx-font-size: 10px;"/>
                         <Label fx:id="debugRunStatus" text="DISABLED" style="-fx-font-size: 10px;"/>
                     </HBox>
 

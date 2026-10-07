@@ -15,7 +15,7 @@ class DebugRunLease(
 ) {
     init {
         require(maxDurationMillis in 1L..MAX_DURATION_MILLIS) {
-            "maxDurationMillis must be between 1 ms and 30 minutes"
+            "maxDurationMillis must be between 1 ms and 45 minutes"
         }
     }
 
@@ -36,7 +36,7 @@ class DebugRunLease(
     private var endEpochMillis = 0L
     private var expiryFuture: ScheduledFuture<*>? = null
 
-    fun enable(requestedDurationMillis: Long = maxDurationMillis): Snapshot {
+    fun enable(requestedDurationMillis: Long = DEFAULT_DURATION_MILLIS): Snapshot {
         var expired: Snapshot? = null
         val snapshot = synchronized(lock) {
             val nowNanos = nanoTime()
@@ -73,7 +73,10 @@ class DebugRunLease(
      * When requested by application startup policy, immediately arms a fresh
      * default lease instead of restoring the old deadline.
      */
-    fun resetForRestart(defaultEnabled: Boolean = false): Snapshot = synchronized(lock) {
+    fun resetForRestart(
+        defaultEnabled: Boolean = false,
+        defaultDurationMillis: Long = DEFAULT_DURATION_MILLIS,
+    ): Snapshot = synchronized(lock) {
         generation += 1
         expiryFuture?.cancel(false)
         expiryFuture = null
@@ -83,7 +86,7 @@ class DebugRunLease(
         endEpochMillis = 0L
         val nowNanos = nanoTime()
         if (defaultEnabled) {
-            startLocked(nowNanos, maxDurationMillis)
+            startLocked(nowNanos, defaultDurationMillis.coerceIn(1L, maxDurationMillis))
         } else {
             snapshotLocked(nowNanos)
         }
@@ -168,7 +171,8 @@ class DebugRunLease(
     }
 
     companion object {
-        const val MAX_DURATION_MILLIS: Long = 30L * 60L * 1000L
+        const val DEFAULT_DURATION_MILLIS: Long = 30L * 60L * 1000L
+        const val MAX_DURATION_MILLIS: Long = 45L * 60L * 1000L
         private const val NANOS_PER_MILLI = 1_000_000L
 
         /** Gate-only composition: the configured schedule remains authoritative. */

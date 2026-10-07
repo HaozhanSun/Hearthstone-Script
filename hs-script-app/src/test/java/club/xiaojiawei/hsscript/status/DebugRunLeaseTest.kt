@@ -11,6 +11,14 @@ import kotlin.test.assertTrue
 
 class DebugRunLeaseTest {
     @Test
+    fun `default activation remains thirty minutes while the hard cap is forty five`() {
+        val lease = DebugRunLease(nanoTime = { 0L })
+
+        assertEquals(30L * 60L * 1_000L, lease.enable().remainingMillis)
+        assertEquals(45L * 60L * 1_000L, DebugRunLease.MAX_DURATION_MILLIS)
+    }
+
+    @Test
     fun `default is disabled and gate does not change ordinary schedule`() {
         var nowNanos = 0L
         val lease = DebugRunLease(nanoTime = { nowNanos })
@@ -108,7 +116,7 @@ class DebugRunLeaseTest {
     }
 
     @Test
-    fun `restart can arm a fresh default thirty minute lease`() {
+    fun `restart can arm the selected duration within the forty five minute cap`() {
         var nowNanos = 0L
         var wallClock = 100L
         val lease = DebugRunLease(nanoTime = { nowNanos }, wallClockMillis = { wallClock })
@@ -116,13 +124,29 @@ class DebugRunLeaseTest {
         val beforeRestart = lease.enable(30_000L)
         nowNanos = 5_000_000_000L
         wallClock = 10_000L
-        val afterRestart = lease.resetForRestart(defaultEnabled = true)
+        val selectedDuration = 45L * 60L * 1_000L
+        val afterRestart = lease.resetForRestart(defaultEnabled = true, defaultDurationMillis = selectedDuration)
 
         assertEquals(DebugRunLease.State.ACTIVE, afterRestart.state)
-        assertEquals(DebugRunLease.MAX_DURATION_MILLIS, afterRestart.remainingMillis)
+        assertEquals(selectedDuration, afterRestart.remainingMillis)
         assertEquals(10_000L, afterRestart.startEpochMillis)
-        assertEquals(10_000L + DebugRunLease.MAX_DURATION_MILLIS, afterRestart.endEpochMillis)
+        assertEquals(10_000L + selectedDuration, afterRestart.endEpochMillis)
         assertNotEquals(beforeRestart.endEpochMillis, afterRestart.endEpochMillis)
+    }
+
+    @Test
+    fun `selected forty five minute lease expires at its own monotonic deadline`() {
+        var nowNanos = 0L
+        val lease = DebugRunLease(nanoTime = { nowNanos })
+        val selectedDuration = 45L * 60L * 1_000L
+
+        val active = lease.enable(selectedDuration)
+        assertEquals(selectedDuration, active.remainingMillis)
+        nowNanos = (selectedDuration - 1L) * 1_000_000L
+        assertTrue(lease.isActive())
+        nowNanos = selectedDuration * 1_000_000L
+        assertTrue(lease.expireIfNeeded())
+        assertEquals(DebugRunLease.State.EXPIRED, lease.snapshot().state)
     }
 
     @Test

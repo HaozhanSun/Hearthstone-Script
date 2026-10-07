@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
  */
 class DebugRunUiContractTest {
     @Test
-    fun `debug run UI is wired to the non-persistent thirty minute lease`() {
+    fun `debug run UI applies a persisted editable duration to a bounded one-shot lease`() {
         // Surefire normally runs with hs-script-app as user.dir, while an
         // IDE and a root Maven invocation can use the repository root.
         // Resolve both layouts so this contract test checks the packaged
@@ -29,10 +29,12 @@ class DebugRunUiContractTest {
         val fxmlText = Files.readString(fxml)
 
         assertTrue(fxmlText.contains("fx:id=\"debugRunModeCheckBox\""))
+        assertTrue(fxmlText.contains("fx:id=\"debugRunDurationMinutes\""))
         assertTrue(fxmlText.contains("config=\"DEBUG_RUN_MODE\""))
         assertTrue(fxmlText.contains("onAction=\"#toggleDebugRun\""))
         assertTrue(fxmlText.contains("fx:id=\"debugRunStatus\""))
-        assertTrue(fxmlText.contains("启动后默认开启一次，最多运行30分钟"))
+        assertTrue(fxmlText.contains("1–45 分钟；默认30分钟"))
+        assertTrue(fxmlText.contains("修改时长仅对下一次启用生效"))
 
         val config = moduleRoot.resolve(Path.of(
             "src",
@@ -48,6 +50,8 @@ class DebugRunUiContractTest {
         val configText = Files.readString(config)
         assertTrue(configText.contains("DEBUG_RUN_MODE"))
         assertTrue(configText.contains("defaultValueInitializer = { FALSE_STR }"))
+        assertTrue(configText.contains("DEBUG_RUN_DURATION_MINUTES"))
+        assertTrue(configText.contains("defaultValueInitializer = { \"30\" }"))
 
         val appText = Files.readString(moduleRoot.resolve(Path.of(
             "src", "main", "java", "club", "xiaojiawei", "hsscript", "MainApplication.kt",
@@ -64,6 +68,9 @@ class DebugRunUiContractTest {
             "src", "main", "java", "club", "xiaojiawei", "hsscript", "controller", "javafx", "MainController.kt",
         )))
         assertTrue(mainControllerText.contains("enableDefaultAfterRestart()"))
+        assertTrue(mainControllerText.contains("DebugRunDurationPolicy.parseMinutes"))
+        assertTrue(mainControllerText.contains("durationMinutes = minutes"))
+        assertTrue(mainControllerText.contains("ConfigEnum.DEBUG_RUN_DURATION_MINUTES"))
         assertTrue(mainControllerText.contains("startupDebugRun.state == DebugRunLease.State.ACTIVE"))
         assertTrue(mainControllerText.contains("ACTIVE ·"))
 
@@ -74,6 +81,8 @@ class DebugRunUiContractTest {
         assertTrue(controllerText.contains("DEBUG_OVERRIDE_UI_PREARM_RETAINED"))
         assertTrue(controllerText.contains("startupDefaultHandled"))
         assertTrue(controllerText.contains("DEBUG_OVERRIDE_DEFAULT_ACTIVE"))
+        assertTrue(controllerText.contains("defaultDurationMillis = configuredDurationMillis()"))
+        assertTrue(controllerText.contains("lease.enable(configuredDurationMillis())"))
 
         val runner = moduleRoot.resolve(Path.of("src", "main", "resources", "bat", "run-debug.ps1"))
         val runnerText = Files.readString(runner)
@@ -112,7 +121,15 @@ class DebugRunUiContractTest {
         assertTrue(Files.isRegularFile(lease), "DebugRunLease.kt must remain checked in")
         val leaseText = Files.readString(lease)
         assertTrue(leaseText.contains("MAX_DURATION_MILLIS"))
+        assertTrue(leaseText.contains("DEFAULT_DURATION_MILLIS"))
+        assertTrue(leaseText.contains("45 minutes"))
         assertTrue(leaseText.contains("effectiveCanWork"))
+
+        val durationPolicy = moduleRoot.resolve(Path.of(
+            "src", "main", "java", "club", "xiaojiawei", "hsscript", "status", "DebugRunDurationPolicy.kt",
+        ))
+        assertTrue(Files.isRegularFile(durationPolicy), "DebugRunDurationPolicy.kt must remain checked in")
+        assertTrue(Files.readString(durationPolicy).contains("MINUTES_MAX = 45"))
 
         val listener = moduleRoot.resolve(Path.of(
             "src",

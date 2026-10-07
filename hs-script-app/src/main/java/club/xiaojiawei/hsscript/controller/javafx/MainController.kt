@@ -21,6 +21,7 @@ import club.xiaojiawei.hsscript.listener.VersionListener
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.DebugRunController
+import club.xiaojiawei.hsscript.status.DebugRunDurationPolicy
 import club.xiaojiawei.hsscript.status.DebugRunLease
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.RuntimeSelectionSnapshot
@@ -29,6 +30,7 @@ import club.xiaojiawei.hsscript.status.RuntimeSelectionUiContract
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.WorkTimeStatus
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
+import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.ConfigUtil.getString
 import club.xiaojiawei.hsscript.utils.ConfigUtil.putString
 import club.xiaojiawei.hsscript.utils.FXUtil
@@ -62,6 +64,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javafx.scene.control.Toggle
 import javafx.scene.control.Tooltip
+import javafx.scene.control.TextField
 import javafx.scene.input.MouseButton
 import javafx.scene.input.MouseEvent
 import javafx.scene.layout.AnchorPane
@@ -87,6 +90,9 @@ class MainController : MainView() {
 
     @FXML
     private lateinit var debugRunModeCheckBox: ConfigCheckBox
+
+    @FXML
+    private lateinit var debugRunDurationMinutes: TextField
 
     @FXML
     private lateinit var debugRunStatus: Label
@@ -116,6 +122,12 @@ class MainController : MainView() {
             channelLabel = BuildInfo.RELEASE_CHANNEL_LABEL,
             buildTimestampPacific = BuildInfo.BUILD_TIMESTAMP_PACIFIC,
         )
+        debugRunDurationMinutes.text = DebugRunController.configuredDurationMinutes().toString()
+        debugRunDurationMinutes.textProperty().addListener { _, _, value ->
+            DebugRunDurationPolicy.parseMinutes(value)?.let { minutes ->
+                ConfigUtil.putInt(ConfigEnum.DEBUG_RUN_DURATION_MINUTES, minutes)
+            }
+        }
         val startupDebugRun = DebugRunController.enableDefaultAfterRestart()
         debugRunModeCheckBox.isSelected = startupDebugRun.state == DebugRunLease.State.ACTIVE
         updateDebugRunStatus()
@@ -173,7 +185,14 @@ class MainController : MainView() {
     @FXML
     protected fun toggleDebugRun() {
         if (debugRunModeCheckBox.isSelected) {
-            DebugRunController.enable("ui-toggle-on")
+            val minutes = DebugRunDurationPolicy.parseMinutes(debugRunDurationMinutes.text)
+            if (minutes == null) {
+                debugRunModeCheckBox.isSelected = false
+                debugRunStatus.text = "INVALID · 1–${DebugRunDurationPolicy.MINUTES_MAX} min"
+                return
+            }
+            ConfigUtil.putInt(ConfigEnum.DEBUG_RUN_DURATION_MINUTES, minutes)
+            DebugRunController.enable(reason = "ui-toggle-on", durationMinutes = minutes)
         } else {
             DebugRunController.disable("ui-toggle-off")
         }
@@ -183,6 +202,12 @@ class MainController : MainView() {
     private fun updateDebugRunStatus() {
         if (!::debugRunStatus.isInitialized) return
         val snapshot = DebugRunController.snapshot()
+        if (snapshot.state != DebugRunLease.State.ACTIVE &&
+            DebugRunDurationPolicy.parseMinutes(debugRunDurationMinutes.text) == null
+        ) {
+            debugRunStatus.text = "INVALID · 1–${DebugRunDurationPolicy.MINUTES_MAX} min"
+            return
+        }
         debugRunStatus.text = when (snapshot.state) {
             DebugRunLease.State.DISABLED -> "DISABLED"
             DebugRunLease.State.ACTIVE -> "ACTIVE · ${formatDebugRunRemaining(snapshot.remainingMillis)}"
