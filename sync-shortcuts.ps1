@@ -26,6 +26,7 @@ $shell = New-Object -ComObject WScript.Shell
 $target = Join-Path $env:SystemRoot "System32\wscript.exe"
 $arguments = '"' + $launcher + '"'
 $updated = [System.Collections.Generic.List[string]]::new()
+. (Join-Path $PSScriptRoot 'shortcut-sync-policy.ps1')
 
 foreach ($directory in $shortcutDirectories) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
@@ -42,6 +43,16 @@ foreach ($directory in $shortcutDirectories) {
     $shortcut.Save()
     $updated.Add($shortcutPath)
 }
+
+# Beta taskbar pins are the deployment source of truth. Windows may create a
+# numbered duplicate beside the canonical pin; retain the canonical link and
+# remove only numbered duplicates for this exact Beta shortcut identity.
+$taskbarDirectory = $shortcutDirectories[2]
+$removedBetaDuplicates = Remove-RedundantBetaTaskbarShortcuts `
+    -Directory $taskbarDirectory `
+    -Channel $Channel `
+    -ShortcutName $ShortcutName
+foreach ($path in $removedBetaDuplicates) { Write-Output "REMOVED_DUPLICATE_SHORTCUT=$path" }
 
 # Repair the pre-channel generic Desktop shortcut when it still exists. Older
 # installers left this shortcut pointing at the removed `outputs\Hearthstone`
