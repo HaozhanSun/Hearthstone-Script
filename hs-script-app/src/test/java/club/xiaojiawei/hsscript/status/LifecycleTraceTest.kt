@@ -43,16 +43,55 @@ class LifecycleTraceTest {
     }
 
     @Test
-    fun unresolvedScreenRecoveryPausesAtTheConfiguredBound() {
-        val tracker = ScreenRecoveryAttemptTracker(maxUnresolvedAttempts = 3)
-        assertEquals(false, tracker.record("HUB|TOURNAMENT", recovered = false))
-        assertEquals(false, tracker.record("HUB|TOURNAMENT", recovered = false))
-        assertEquals(true, tracker.record("HUB|TOURNAMENT", recovered = false))
-        assertEquals(false, tracker.record("HUB|TOURNAMENT", recovered = true), "success clears the failure streak")
-        assertEquals(false, tracker.record("HUB|TOURNAMENT", recovered = false))
-        assertEquals(false, tracker.record("HOME|TOURNAMENT", recovered = false), "a new state gets a fresh bounded budget")
-        assertEquals(false, tracker.record("HOME|TOURNAMENT", recovered = false))
-        assertEquals(true, tracker.record("HOME|TOURNAMENT", recovered = false))
+    fun unresolvedScreenRecoveryTripsOnTheExactSecondFailureForTheSameState() {
+        val tracker = ScreenRecoveryAttemptTracker(maxUnresolvedAttempts = 2)
+
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            tracker.record("HUB|TOURNAMENT", recovered = false),
+        )
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 2, shouldPause = true),
+            tracker.record("HUB|TOURNAMENT", recovered = false),
+            "the configured threshold trips on, not after, the second unresolved attempt",
+        )
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 3, shouldPause = true),
+            tracker.record("HUB|TOURNAMENT", recovered = false),
+            "the tracker reports the actual attempt count used by the pause log",
+        )
+    }
+
+    @Test
+    fun recoveryAndStateChangeResetTheUnresolvedAttemptStreak() {
+        val tracker = ScreenRecoveryAttemptTracker(maxUnresolvedAttempts = 2)
+        tracker.record("HUB|TOURNAMENT", recovered = false)
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldPause = false),
+            tracker.record("HUB|TOURNAMENT", recovered = true),
+            "a recovered screen clears the failure streak",
+        )
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            tracker.record("HUB|TOURNAMENT", recovered = false),
+        )
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            tracker.record("HOME|TOURNAMENT", recovered = false),
+            "a changed state gets a fresh bounded budget",
+        )
+        tracker.reset()
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            tracker.record("HOME|TOURNAMENT", recovered = false),
+            "an explicit lifecycle reset clears both fingerprint and count",
+        )
+    }
+
+    @Test
+    fun unresolvedRecoveryPauseBudgetIncludingMonitorPollingIsAtMostOneMinute() {
+        assertEquals(60_000L, LifecycleTrace.unresolvedRecoveryPauseBoundMsForTest())
+        assertTrue(LifecycleTrace.unresolvedRecoveryPauseBoundMsForTest() <= 60_000L)
     }
 
     @Test

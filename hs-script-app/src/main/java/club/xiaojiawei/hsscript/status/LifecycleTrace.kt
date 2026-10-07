@@ -10,21 +10,26 @@ import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import java.util.concurrent.atomic.AtomicBoolean
 
-internal class ScreenRecoveryAttemptTracker(private val maxUnresolvedAttempts: Int = 3) {
+internal class ScreenRecoveryAttemptTracker(private val maxUnresolvedAttempts: Int = 2) {
+    data class Decision(val unresolvedAttempts: Int, val shouldPause: Boolean)
+
     private var fingerprint: String? = null
     private var unresolvedAttempts = 0
 
-    fun record(fingerprint: String, recovered: Boolean): Boolean {
+    fun record(fingerprint: String, recovered: Boolean): Decision {
         if (this.fingerprint != fingerprint) {
             this.fingerprint = fingerprint
             unresolvedAttempts = 0
         }
         if (recovered) {
             unresolvedAttempts = 0
-            return false
+            return Decision(unresolvedAttempts, shouldPause = false)
         }
         unresolvedAttempts++
-        return unresolvedAttempts >= maxUnresolvedAttempts.coerceAtLeast(1)
+        return Decision(
+            unresolvedAttempts = unresolvedAttempts,
+            shouldPause = unresolvedAttempts >= maxUnresolvedAttempts.coerceAtLeast(1),
+        )
     }
 
     fun reset() {
@@ -40,8 +45,12 @@ internal class ScreenRecoveryAttemptTracker(private val maxUnresolvedAttempts: I
 object LifecycleTrace {
     private const val GAME_OVER_STUCK_TIMEOUT_MS = 30_000L
     private const val STATE_RECOVERY_TIMEOUT_MS = 30_000L
-    private const val STATE_RECOVERY_RETRY_INTERVAL_MS = 30_000L
-    private const val MAX_UNRESOLVED_STATE_RECOVERY_ATTEMPTS = 3
+    private const val STATE_RECOVERY_RETRY_INTERVAL_MS = 20_000L
+    private const val STATE_MONITOR_INTERVAL_MS = 10_000L
+    private const val MAX_UNRESOLVED_STATE_RECOVERY_ATTEMPTS = 2
+
+    internal fun unresolvedRecoveryPauseBoundMsForTest(): Long =
+        STATE_RECOVERY_TIMEOUT_MS + STATE_RECOVERY_RETRY_INTERVAL_MS + STATE_MONITOR_INTERVAL_MS
 
     @Volatile
     private var mainWindowShowing = false
@@ -76,7 +85,7 @@ object LifecycleTrace {
                     log.info { "LIFECYCLE_HEARTBEAT $state" }
                 }
                 try {
-                    Thread.sleep(10_000)
+                    Thread.sleep(STATE_MONITOR_INTERVAL_MS)
                 } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt()
                     return@Thread
@@ -215,12 +224,12 @@ object LifecycleTrace {
                 }
             } finally {
                 if (stateFingerprint() == fingerprint && !PauseStatus.isPause) {
-                    val pauseForUnresolved = stateRecoveryAttemptTracker.record(fingerprint, recovered)
-                    if (pauseForUnresolved) {
+                    val decision = stateRecoveryAttemptTracker.record(fingerprint, recovered)
+                    if (decision.shouldPause) {
                         PauseStatus.setAutomaticPause(true)
                         log.warn {
                             "SCREEN_RECOVERY_PAUSED reason=unresolved-attempt-limit " +
-                                "attempts=$MAX_UNRESOLVED_STATE_RECOVERY_ATTEMPTS state=$fingerprint inputDispatch=false"
+                                "attempts=${decision.unresolvedAttempts} state=$fingerprint inputDispatch=false"
                         }
                     }
                 }
