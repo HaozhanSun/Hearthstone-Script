@@ -32,6 +32,9 @@ class MatchmakingDialogRecoveryPolicyTest {
         val graphics = image.createGraphics()
         graphics.color = Color(35, 35, 35)
         graphics.fillRect(0, 0, image.width, image.height)
+        graphics.color = Color(180, 125, 70)
+        graphics.fillRect((image.width * 0.36).toInt(), (image.height * 0.13).toInt(),
+            (image.width * 0.28).toInt(), (image.height * 0.12).toInt())
         graphics.color = Color(220, 40, 35)
         graphics.fillRect((image.width * 0.42).toInt(), (image.height * 0.30).toInt(),
             (image.width * 0.18).toInt(), (image.height * 0.35).toInt())

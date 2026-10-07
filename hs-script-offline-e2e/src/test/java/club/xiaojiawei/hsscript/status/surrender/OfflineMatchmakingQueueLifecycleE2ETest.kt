@@ -20,11 +20,34 @@ class OfflineMatchmakingQueueLifecycleE2ETest {
         )).use(ImageIO::read)
 
         val liveQueueFrame = fixture("v4.16.594-queue-search-modal.png")
+        val animatedBlankCancelFrame = fixture("v4.16.595-queue-search-modal-animation-blank-cancel.png")
         val deckSelectionFrame = fixture("v4.16.594-deck-selection-negative.png")
         val positive = MatchmakingQueueModalVisualClassifier.classify(liveQueueFrame)
+        val animated = MatchmakingQueueModalVisualClassifier.classify(animatedBlankCancelFrame)
         val negative = MatchmakingQueueModalVisualClassifier.classify(deckSelectionFrame)
         assertTrue(positive.queueSearchModal, "real matchmaking modal must be visually recognized")
+        assertTrue(animated.queueSearchModal, "animated queue reels and a blank cancel control remain positive")
+        assertTrue(animated.cancelButtonWarmRatio < 0.34, "fixture must prove cancel fill is absent")
+        assertTrue(animated.searchPanelRedRatio > 0.50)
+        assertTrue(animated.searchHeaderWarmRatio > 0.24)
         assertFalse(negative.queueSearchModal, "deck selection background must not start/refresh queue state")
+        assertTrue(negative.searchPanelRedRatio < 0.46)
+        assertTrue(negative.searchHeaderWarmRatio < 0.20)
+
+        // The evidence contract is normalized to the captured client frame,
+        // not a fixed pixel resolution. Exercise the same composition at 2/3 scale.
+        val resized = java.awt.image.BufferedImage(1280, 720, java.awt.image.BufferedImage.TYPE_INT_RGB)
+        resized.createGraphics().also { graphics ->
+            graphics.drawImage(animatedBlankCancelFrame, 0, 0, resized.width, resized.height, null)
+            graphics.dispose()
+        }
+        assertTrue(MatchmakingQueueModalVisualClassifier.classify(resized).queueSearchModal)
+        val resizedDeck = java.awt.image.BufferedImage(1280, 720, java.awt.image.BufferedImage.TYPE_INT_RGB)
+        resizedDeck.createGraphics().also { graphics ->
+            graphics.drawImage(deckSelectionFrame, 0, 0, resizedDeck.width, resizedDeck.height, null)
+            graphics.dispose()
+        }
+        assertFalse(MatchmakingQueueModalVisualClassifier.classify(resizedDeck).queueSearchModal)
 
         val queue = MatchmakingQueueLifecycle()
         val currentPid = 104_164L

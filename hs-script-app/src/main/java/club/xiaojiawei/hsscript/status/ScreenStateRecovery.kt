@@ -658,11 +658,13 @@ object ScreenStateRecovery {
             StartupMatchmakingQueueState.observeVerifiedQueueModal(
                 capturePid,
                 queueModal.searchPanelRedRatio,
+                queueModal.searchHeaderWarmRatio,
                 queueModal.cancelButtonWarmRatio,
             )
             log.info {
                 "MATCHMAKING_QUEUE_VISUAL_PROBE pid=$capturePid " +
                     "searchPanelRedRatio=${"%.3f".format(Locale.ROOT, queueModal.searchPanelRedRatio)} " +
+                    "searchHeaderWarmRatio=${"%.3f".format(Locale.ROOT, queueModal.searchHeaderWarmRatio)} " +
                     "cancelButtonWarmRatio=${"%.3f".format(Locale.ROOT, queueModal.cancelButtonWarmRatio)} " +
                     "ocr=skipped action=none"
             }

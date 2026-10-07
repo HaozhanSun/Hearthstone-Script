@@ -7,16 +7,20 @@ object MatchmakingQueueModalVisualClassifier {
     data class Evidence(
         val queueSearchModal: Boolean,
         val searchPanelRedRatio: Double,
+        val searchHeaderWarmRatio: Double,
         val cancelButtonWarmRatio: Double,
     )
 
     fun classify(image: BufferedImage?): Evidence {
-        if (image == null || image.width < 400 || image.height < 300) return Evidence(false, 0.0, 0.0)
+        if (image == null || image.width < 400 || image.height < 300) return Evidence(false, 0.0, 0.0, 0.0)
         val searchPanel = sample(image, left = 0.42, right = 0.60, top = 0.30, bottom = 0.65)
+        // Stable title plate above the reels: unlike the cancel control, this
+        // remains visible throughout the search animation.
+        val searchHeader = sample(image, left = 0.36, right = 0.64, top = 0.13, bottom = 0.25)
         val cancelButton = sample(image, left = 0.45, right = 0.58, top = 0.80, bottom = 0.89)
         val confirmed = searchPanel.redRatio >= MIN_SEARCH_PANEL_RED_RATIO &&
-            cancelButton.warmRatio >= MIN_CANCEL_BUTTON_WARM_RATIO
-        return Evidence(confirmed, searchPanel.redRatio, cancelButton.warmRatio)
+            searchHeader.warmRatio >= MIN_SEARCH_HEADER_WARM_RATIO
+        return Evidence(confirmed, searchPanel.redRatio, searchHeader.warmRatio, cancelButton.warmRatio)
     }
 
     private fun sample(
@@ -52,6 +56,6 @@ object MatchmakingQueueModalVisualClassifier {
 
     private data class RegionRatios(val redRatio: Double, val warmRatio: Double)
 
-    private const val MIN_SEARCH_PANEL_RED_RATIO = 0.48
-    private const val MIN_CANCEL_BUTTON_WARM_RATIO = 0.34
+    private const val MIN_SEARCH_PANEL_RED_RATIO = 0.46
+    private const val MIN_SEARCH_HEADER_WARM_RATIO = 0.20
 }

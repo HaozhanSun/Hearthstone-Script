@@ -10,6 +10,7 @@ internal object StartupMatchmakingQueueState {
     fun observeVerifiedQueueModal(
         pid: Long?,
         searchPanelRedRatio: Double,
+        searchHeaderWarmRatio: Double,
         cancelButtonWarmRatio: Double,
         nowNanos: Long = System.nanoTime(),
     ): MatchmakingQueueLifecycle.Snapshot {
@@ -25,6 +26,7 @@ internal object StartupMatchmakingQueueState {
             log.info {
                 "MATCHMAKING_QUEUE_VISUAL_CONFIRMED pid=$pid " +
                     "searchPanelRedRatio=${"%.3f".format(java.util.Locale.ROOT, searchPanelRedRatio)} " +
+                    "searchHeaderWarmRatio=${"%.3f".format(java.util.Locale.ROOT, searchHeaderWarmRatio)} " +
                     "cancelButtonWarmRatio=${"%.3f".format(java.util.Locale.ROOT, cancelButtonWarmRatio)} " +
                     "phase=${snapshot.phase} actionInput=none"
             }
