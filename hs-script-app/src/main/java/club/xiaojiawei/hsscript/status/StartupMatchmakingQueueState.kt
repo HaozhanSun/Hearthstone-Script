@@ -7,6 +7,31 @@ import club.xiaojiawei.hsscript.utils.GameUtil
 internal object StartupMatchmakingQueueState {
     private val lifecycle = MatchmakingQueueLifecycle()
 
+    fun observeVerifiedQueueModal(
+        pid: Long?,
+        searchPanelRedRatio: Double,
+        cancelButtonWarmRatio: Double,
+        nowNanos: Long = System.nanoTime(),
+    ): MatchmakingQueueLifecycle.Snapshot {
+        val snapshot = observeScreen(
+            screen = "MATCHMAKING",
+            confidence = 95,
+            observedPid = pid,
+            currentPid = pid,
+            captureAuthorized = true,
+            nowNanos = nowNanos,
+        )
+        if (snapshot.isPending) {
+            log.info {
+                "MATCHMAKING_QUEUE_VISUAL_CONFIRMED pid=$pid " +
+                    "searchPanelRedRatio=${"%.3f".format(java.util.Locale.ROOT, searchPanelRedRatio)} " +
+                    "cancelButtonWarmRatio=${"%.3f".format(java.util.Locale.ROOT, cancelButtonWarmRatio)} " +
+                    "phase=${snapshot.phase} actionInput=none"
+            }
+        }
+        return snapshot
+    }
+
     fun observeScreen(
         screen: String?,
         confidence: Int,

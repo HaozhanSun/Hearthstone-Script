@@ -180,6 +180,8 @@ object ScreenStateRecovery {
         val screenshot: String? = null,
         val provider: String = "UNKNOWN",
         val reason: String,
+        val queueSearchModalVisible: Boolean = false,
+        val capturedGamePid: Long? = null,
     )
 
     internal data class RecoveryTransitionForTest(
@@ -249,7 +251,7 @@ object ScreenStateRecovery {
         if (GameUtil.findGameProcessIdForDiagnostics() != initialPid ||
             !GameUtil.isVerifiedCurrentGameWindow(gameWindow)
         ) return null
-        val detection = detect(runOCR(capture), capture.visual)
+        val detection = detectCapturedScreen(capture)
             ?.takeIf { it.confidence >= 85 }
             ?: return null
         val observedQueue = StartupMenuObservationPolicy.isObservedMatchmaking(
@@ -376,14 +378,16 @@ object ScreenStateRecovery {
                 "visual=${capture.visual}"
         }
 
-        val ocrEvidence = runOCR(capture)
+        val queueModal = MatchmakingQueueModalVisualClassifier.classify(capture.image)
+        val ocrEvidence = if (queueModal.queueSearchModal) OcrEvidence("", emptyMap()) else runOCR(capture)
         if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return InspectionResult.DISABLED
         val ocrText = ocrEvidence.text
         if (!stateStillCurrent()) {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-during-inspection state=$stateFingerprint" }
             return InspectionResult.NO_ACTION
         }
-        val detection = detect(ocrEvidence, capture.visual)
+        val detection = if (queueModal.queueSearchModal) queueModalDetection(queueModal)
+        else detect(ocrEvidence, capture.visual)
         if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return InspectionResult.DISABLED
         log.info {
             "SCREEN_RECOVERY_OBSERVATION " +
@@ -609,14 +613,7 @@ object ScreenStateRecovery {
     }
 
     private fun probeStartGameErrorDialogForMatchmakingSerial(): StartGameErrorDialogProbe {
-        val tessData = File(TESS_DATA_PATH)
-        val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
-        if (!chiSim.isFile) {
-            return StartGameErrorDialogProbe(
-                MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
-                reason = "missing-tessdata",
-            )
-        }
+        val capturePid = GameUtil.findGameProcessIdForDiagnostics()
         val gameWindow = resolveLiveGameWindow()
             ?: return StartGameErrorDialogProbe(
                 MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
@@ -647,6 +644,48 @@ object ScreenStateRecovery {
                 reason = "capture-unavailable",
             )
 
+        if (capturePid == null || GameUtil.findGameProcessIdForDiagnostics() != capturePid ||
+            !GameUtil.isAliveOfGame()
+        ) {
+            return StartGameErrorDialogProbe(
+                MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+                screenshot = capture.file?.absolutePath,
+                reason = "game-pid-changed-after-capture",
+            )
+        }
+        val queueModal = MatchmakingQueueModalVisualClassifier.classify(capture.image)
+        if (queueModal.queueSearchModal) {
+            StartupMatchmakingQueueState.observeVerifiedQueueModal(
+                capturePid,
+                queueModal.searchPanelRedRatio,
+                queueModal.cancelButtonWarmRatio,
+            )
+            log.info {
+                "MATCHMAKING_QUEUE_VISUAL_PROBE pid=$capturePid " +
+                    "searchPanelRedRatio=${"%.3f".format(Locale.ROOT, queueModal.searchPanelRedRatio)} " +
+                    "cancelButtonWarmRatio=${"%.3f".format(Locale.ROOT, queueModal.cancelButtonWarmRatio)} " +
+                    "ocr=skipped action=none"
+            }
+            return StartGameErrorDialogProbe(
+                state = MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG,
+                screenshot = capture.file?.absolutePath,
+                provider = "VISUAL",
+                reason = "verified-queue-search-modal-visual",
+                queueSearchModalVisible = true,
+                capturedGamePid = capturePid,
+            )
+        }
+        val tessData = File(TESS_DATA_PATH)
+        val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
+        if (!chiSim.isFile) {
+            return StartGameErrorDialogProbe(
+                MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+                screenshot = capture.file?.absolutePath,
+                reason = "missing-tessdata",
+                capturedGamePid = capturePid,
+            )
+        }
+
         return runCatching {
             probeStartGameErrorDialogForImage(capture.image, capture.file?.absolutePath) { roiImage, roiName ->
                 OcrRuntime.recognizeResult(
@@ -666,7 +705,7 @@ object ScreenStateRecovery {
                             "chars=${result.text.length}"
                     }
                 }
-            }
+            }.copy(capturedGamePid = capturePid)
         }.getOrElse { error ->
             log.warn(error) { "MATCHMAKING_ERROR_DIALOG_OCR_FAILED" }
             StartGameErrorDialogProbe(
@@ -689,6 +728,16 @@ object ScreenStateRecovery {
                 state = MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
                 screenshot = screenshot,
                 reason = "capture-unavailable",
+            )
+        }
+        val queueModal = MatchmakingQueueModalVisualClassifier.classify(image)
+        if (queueModal.queueSearchModal) {
+            return StartGameErrorDialogProbe(
+                state = MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG,
+                screenshot = screenshot,
+                provider = "VISUAL",
+                reason = "verified-queue-search-modal-visual",
+                queueSearchModalVisible = true,
             )
         }
         val roi = ScreenStateRoiSelector
@@ -958,6 +1007,21 @@ object ScreenStateRecovery {
 
     private fun detect(ocrText: String, visual: VisualSignature): Detection? =
         detect(OcrEvidence(ocrText, emptyMap()), visual)
+
+    private fun detectCapturedScreen(capture: Capture): Detection? {
+        val queueModal = MatchmakingQueueModalVisualClassifier.classify(capture.image)
+        if (queueModal.queueSearchModal) return queueModalDetection(queueModal)
+        return detect(runOCR(capture), capture.visual)
+    }
+
+    private fun queueModalDetection(evidence: MatchmakingQueueModalVisualClassifier.Evidence) =
+        Detection(
+            kind = ScreenKind.MATCHMAKING,
+            mode = ModeEnum.TOURNAMENT,
+            confidence = 96,
+            evidence = "queue-search-modal-visual-red=${"%.3f".format(Locale.ROOT, evidence.searchPanelRedRatio)}-" +
+                "cancel=${"%.3f".format(Locale.ROOT, evidence.cancelButtonWarmRatio)}",
+        )
 
     private fun detect(evidence: OcrEvidence, visual: VisualSignature): Detection? {
         targetedScreenDetection(evidence.targeted, visual)?.let { return it }
@@ -1550,7 +1614,7 @@ object ScreenStateRecovery {
             if (!ScreenRecoveryRuntime.isCurrent(token)) {
                 return@runCatching ResultScreenObservation(null, captureAuthorized = false)
             }
-            val detection = detect(runOCR(capture), capture.visual)
+            val detection = detectCapturedScreen(capture)
             if (!ScreenRecoveryRuntime.isCurrent(token)) {
                 return@runCatching ResultScreenObservation(null, captureAuthorized = false)
             }
@@ -1675,7 +1739,7 @@ object ScreenStateRecovery {
             if (liveWindow != null) {
                 val capture = captureScreen(liveWindow)
                 if (capture != null) {
-                    val observed = detect(runOCR(capture), capture.visual)
+                    val observed = detectCapturedScreen(capture)
                     val mode = Mode.currMode
                     val confirmed = when (detection.kind) {
                         ScreenKind.HOME -> observed?.kind == ScreenKind.HOME && mode == ModeEnum.HUB

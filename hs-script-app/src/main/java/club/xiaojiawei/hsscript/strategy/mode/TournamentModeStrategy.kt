@@ -454,6 +454,14 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                     return@LRunnable
                 }
                 val probe = ScreenStateRecovery.probeStartGameErrorDialogForMatchmaking()
+                if (probe.queueSearchModalVisible && probe.capturedGamePid != null) {
+                    log.info {
+                        "MATCHMAKING_QUEUE_VISUAL_PRESERVED trace=$traceId pid=${probe.capturedGamePid} " +
+                            "probe=verified-live-queue-modal input=none retryBudgetConsumed=false " +
+                            "startupRecovery=wait-for-create-game screenshot=${probe.screenshot ?: "none"}"
+                    }
+                    return@LRunnable
+                }
                 if (probe.state == MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE) {
                     StartupMatchmakingQueueState.observeQueueTerminal(
                         GameUtil.findGameProcessIdForDiagnostics(),

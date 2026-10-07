@@ -15,6 +15,8 @@ import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.ScreenStateRoiSelector
 import javax.imageio.ImageIO
 import java.io.ByteArrayInputStream
+import java.awt.Color
+import java.awt.image.BufferedImage
 import java.util.concurrent.atomic.AtomicInteger
 
 class MatchmakingDialogRecoveryPolicyTest {
@@ -23,6 +25,29 @@ class MatchmakingDialogRecoveryPolicyTest {
         tournamentMode = true,
         gameStarted = false,
     )
+
+    @Test
+    fun `verified queue modal is accepted visually even when OCR would fail`() {
+        val image = BufferedImage(1280, 720, BufferedImage.TYPE_INT_RGB)
+        val graphics = image.createGraphics()
+        graphics.color = Color(35, 35, 35)
+        graphics.fillRect(0, 0, image.width, image.height)
+        graphics.color = Color(220, 40, 35)
+        graphics.fillRect((image.width * 0.42).toInt(), (image.height * 0.30).toInt(),
+            (image.width * 0.18).toInt(), (image.height * 0.35).toInt())
+        graphics.color = Color(220, 130, 55)
+        graphics.fillRect((image.width * 0.45).toInt(), (image.height * 0.80).toInt(),
+            (image.width * 0.13).toInt(), (image.height * 0.09).toInt())
+        graphics.dispose()
+
+        val probe = ScreenStateRecovery.probeStartGameErrorDialogForImage(image, "fixture:queue-modal") { _, _ ->
+            error("OCR must not run after the independent visual queue contract succeeds")
+        }
+        assertEquals(MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG, probe.state)
+        assertEquals(true, probe.queueSearchModalVisible)
+        assertEquals("VISUAL", probe.provider)
+        assertEquals("verified-queue-search-modal-visual", probe.reason)
+    }
 
     @Test
     fun `only the exact start game error with confirm label is positive evidence`() {
