@@ -364,12 +364,14 @@ class GameStarter : AbstractStarter() {
         }
         EXTRA_THREAD_POOL.execute {
             var attempt = 0
+            var startupMenuObservations = 0
             try {
                 // The starter chain discovers Hearthstone before the log listeners
                 // attach. Give those listeners a short head start, but do not wait
                 // for the 30-second stale-screen fallback.
                 Thread.sleep(2_500L)
-                val deadline = System.currentTimeMillis() + 15_000L
+                val deadline = System.currentTimeMillis() +
+                    StartupMenuObservationPolicy.PASSIVE_REOBSERVATION_TIMEOUT_MS
                 while (System.currentTimeMillis() < deadline && !PauseStatus.isPause) {
                     attempt++
                     val gameWindow = ScriptStatus.gameHWND
@@ -385,49 +387,58 @@ class GameStarter : AbstractStarter() {
                         powerLogLength = powerLogLength,
                     )
                     if (!probeReady) {
+                        val activeMatch = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD
+                        val terminal = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER ||
+                            GameUtil.isTerminalGameState()
+                        val startupObservationAuthorized = gameWindow?.let(
+                            ScreenRecoveryWindowCapture::startupMenuObservationAllowed,
+                        ) == true
                         val startupMenuDecision = StartupMenuObservationPolicy.decide(
                             currentSessionReady = false,
-                            startupObservationAuthorized = attempt == 1 &&
-                                gameWindow?.let(ScreenRecoveryWindowCapture::startupMenuObservationAllowed) == true,
+                            startupObservationAuthorized = startupObservationAuthorized,
                             observedMenu = false,
-                            activeMatch = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
-                            terminal = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState(),
-                            completedObservations = 0,
-                            maxObservations = 1,
+                            activeMatch = activeMatch,
+                            terminal = terminal,
+                            completedObservations = startupMenuObservations,
+                            maxObservations = StartupMenuObservationPolicy.MAX_PASSIVE_REOBSERVATIONS,
                         )
                         if (startupMenuDecision == StartupMenuObservationPolicy.Decision.OBSERVE_STARTUP_MENU) {
+                            // The startup-only recovery branch independently
+                            // verifies PID/HWND/foreground pixels, NO_MATCH,
+                            // tournament configuration and the one-dismissal
+                            // limit. UNKNOWN/loading stays a no-action result.
                             val menuObserved = runCatching {
                                 ScreenStateRecovery.inspectAndRecover(
                                     stuckForMs = 0L,
                                     stateFingerprint = "STARTUP_MENU_OBSERVATION",
                                     startupProbe = true,
                                 )
-                            }.getOrNull()
-                            if (menuObserved == true) {
-                                log.info {
-                                    "STARTUP_SCREEN_PROBE_OBSERVED screen=verified-menu " +
-                                        "pid=${GameUtil.findGameProcessIdForDiagnostics() ?: "none"} " +
-                                        "action=NO_INPUT reason=current-power-log-not-ready"
-                                }
-                                return@execute
+                            }.getOrNull() == true
+                            startupMenuObservations++
+                            log.info {
+                                "STARTUP_MENU_PASSIVE_REOBSERVATION attempt=$startupMenuObservations " +
+                                    "max=${StartupMenuObservationPolicy.MAX_PASSIVE_REOBSERVATIONS} " +
+                                    "screen=${if (menuObserved) "verified-home-or-quest-overlay" else "UNKNOWN_OR_UNCLASSIFIED"} " +
+                                    "result=${if (menuObserved) "guarded-startup-progression" else "NO_INPUT"} " +
+                                    "gameWindowVerified=$gameWindowVerified pid=${GameUtil.findGameProcessIdForDiagnostics() ?: "none"}"
                             }
-                            val exhaustedDecision = StartupMenuObservationPolicy.decide(
-                                currentSessionReady = false,
-                                startupObservationAuthorized = true,
-                                observedMenu = false,
-                                activeMatch = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
-                                terminal = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER ||
-                                    GameUtil.isTerminalGameState(),
-                                completedObservations = 1,
-                                maxObservations = 1,
-                            )
-                            if (exhaustedDecision == StartupMenuObservationPolicy.Decision.BOUNDED_SAFE_PAUSE) {
-                                PauseStatus.setAutomaticPause(true)
-                                log.info {
-                                    "STARTUP_SCREEN_PROBE_SAFE_PAUSE reason=${exhaustedDecision.name} " +
-                                        "action=NO_INPUT working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
-                                }
-                                return@execute
+                            if (menuObserved) return@execute
+                        } else if (startupMenuDecision ==
+                            StartupMenuObservationPolicy.Decision.BOUNDED_SAFE_PAUSE
+                        ) {
+                            PauseStatus.setAutomaticPause(true)
+                            log.info {
+                                "STARTUP_SCREEN_PROBE_SAFE_PAUSE reason=${startupMenuDecision.name} " +
+                                    "observations=$startupMenuObservations action=NO_INPUT " +
+                                    "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+                            }
+                            return@execute
+                        } else if (startupMenuDecision ==
+                            StartupMenuObservationPolicy.Decision.WAIT_FOR_TERMINAL_AUTHORITY
+                        ) {
+                            log.info {
+                                "STARTUP_MENU_PASSIVE_WAIT reason=active-or-terminal-authority " +
+                                    "activeMatch=$activeMatch terminal=$terminal action=NO_INPUT"
                             }
                         }
                         val reason = when {
@@ -444,7 +455,9 @@ class GameStarter : AbstractStarter() {
                                 "currentPowerLog=${currentSessionPowerLog?.absolutePath ?: "none"} " +
                                 "powerLogLength=$powerLogLength"
                         }
-                        Thread.sleep(1_000L)
+                        // Match the capture cooldown so each counted passive
+                        // re-observation has a chance to produce a fresh frame.
+                        Thread.sleep(StartupMenuObservationPolicy.CAPTURE_COOLDOWN_MS)
                         continue
                     }
                     log.info {
@@ -469,6 +482,22 @@ class GameStarter : AbstractStarter() {
                     }
                     if (applied) return@execute
                     Thread.sleep(2_000L)
+                }
+                if (System.currentTimeMillis() >= deadline && WorkTimeListener.working && !PauseStatus.isPause) {
+                    val activeMatch = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD
+                    val terminal = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState()
+                    if (!activeMatch && !terminal) {
+                        PauseStatus.setAutomaticPause(true)
+                        log.warn {
+                            "STARTUP_SCREEN_PROBE_SAFE_PAUSE reason=passive-observation-timeout " +
+                                "observations=$startupMenuObservations max=" +
+                                "${StartupMenuObservationPolicy.MAX_PASSIVE_REOBSERVATIONS} action=NO_INPUT"
+                        }
+                    } else {
+                        log.info {
+                            "STARTUP_SCREEN_PROBE_TIMEOUT_WAIT activeMatch=$activeMatch terminal=$terminal action=NO_INPUT"
+                        }
+                    }
                 }
             } catch (error: InterruptedException) {
                 Thread.currentThread().interrupt()

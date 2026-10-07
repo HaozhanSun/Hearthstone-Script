@@ -103,6 +103,122 @@ class StartupHandoffActivityTrackerTest {
         )
     }
 
+    @Test
+    fun `unbound startup handoff yields to verified window passive menu observation without input`() {
+        val tracker = StartupHandoffActivityTracker(activeWindowMs = 90_000L)
+        val watchdog = NoProgressWatchdog(noProgressTimeoutMs = 1_000L)
+        tracker.recordAttempt(10_000L)
+
+        val handoffContext = startupContext()
+        assertTrue(tracker.shouldDeferNoProgress(handoffContext, 11_000L))
+        val missingSessionLog = watchdog.observe(startupSnapshot(now = 11_000L))
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, missingSessionLog.action)
+
+        // Once the actual game process/window is verified, the handoff deferral
+        // no longer applies. An unbound/empty session log remains non-actionable,
+        // while the independent screen path is permitted to observe only.
+        val liveWindowContext = handoffContext.copy(
+            gameProcessAlive = true,
+            powerLogPath = "run/Power.log",
+        )
+        assertFalse(tracker.shouldDeferNoProgress(liveWindowContext, 11_001L))
+        val unboundLiveLog = watchdog.observe(
+            startupSnapshot(now = 11_001L).copy(
+                processAlive = true,
+                currentPid = 97212L,
+                windowPresent = true,
+                powerLogPath = "run/Power.log",
+                powerLogPosition = Long.MIN_VALUE,
+                powerLogLength = 0L,
+                powerLogAgeMs = Long.MAX_VALUE,
+            ),
+        )
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, unboundLiveLog.action)
+        assertEquals("power-log-unbound-or-unusable", unboundLiveLog.reason)
+
+        val max = StartupMenuObservationPolicy.MAX_PASSIVE_REOBSERVATIONS
+        val overlayDismissDispatches = java.util.concurrent.atomic.AtomicInteger()
+        val queueDispatches = java.util.concurrent.atomic.AtomicInteger()
+        val gameplayDispatches = java.util.concurrent.atomic.AtomicInteger()
+        val unknownFrame = StartupMenuObservationPolicy.decide(
+            currentSessionReady = false,
+            startupObservationAuthorized = StartupMenuObservationPolicy.isAuthorized(
+                gameWindowVerified = true,
+                currentPid = 97212L,
+                windowPid = 97212L,
+                mode = "STARTUP",
+                working = true,
+                paused = false,
+                activeMatch = false,
+                terminal = false,
+            ),
+            observedMenu = StartupMenuObservationPolicy.isObservedMenu("UNKNOWN", 0),
+            activeMatch = false,
+            terminal = false,
+            completedObservations = 0,
+            maxObservations = max,
+        )
+        assertEquals(StartupMenuObservationPolicy.Decision.OBSERVE_STARTUP_MENU, unknownFrame)
+        assertEquals(0, overlayDismissDispatches.get(), "UNKNOWN/loading cannot authorize overlay input")
+
+        val questOverlay = StartupMenuObservationPolicy.decide(
+            currentSessionReady = false,
+            startupObservationAuthorized = true,
+            observedMenu = StartupMenuObservationPolicy.isObservedMenu("HOME_TASK_OVERLAY", 95),
+            activeMatch = false,
+            terminal = false,
+            completedObservations = 1,
+            maxObservations = max,
+        )
+        assertEquals(StartupMenuObservationPolicy.Decision.WAIT_EXPECTED_MENU, questOverlay)
+
+        fun progression(screen: VerifiedStartupMenuProgression.Screen, dismissals: Int = 0) =
+            VerifiedStartupMenuProgression.decide(
+                VerifiedStartupMenuProgression.Evidence(
+                    screen = screen,
+                    confidence = 95,
+                    pid = 97212L,
+                    currentPid = 97212L,
+                    windowPid = 97212L,
+                    foregroundAndPixelsVerified = true,
+                    configuredTournament = true,
+                    working = true,
+                    manuallyPaused = false,
+                    currentSessionPowerLogReady = false,
+                    activeMatch = PowerLogActiveMatchProbe.State.NO_MATCH,
+                    priorAuthoritativeLineage = false,
+                    overlayDismissals = dismissals,
+                    processLineageVerified = true,
+                ),
+            )
+        val dismissal = progression(VerifiedStartupMenuProgression.Screen.HOME_TASK_OVERLAY)
+        assertEquals(VerifiedStartupMenuProgression.Action.DISMISS_OVERLAY, dismissal)
+        if (dismissal == VerifiedStartupMenuProgression.Action.DISMISS_OVERLAY) {
+            overlayDismissDispatches.incrementAndGet()
+        }
+        assertEquals(1, overlayDismissDispatches.get(), "trusted overlay permits exactly one dismissal attempt")
+        assertEquals(
+            VerifiedStartupMenuProgression.Action.WAIT,
+            progression(VerifiedStartupMenuProgression.Screen.HOME_TASK_OVERLAY, overlayDismissDispatches.get()),
+            "a fresh overlay frame after the attempt cannot trigger another click",
+        )
+        assertEquals(
+            VerifiedStartupMenuProgression.Action.ENTER_HUB,
+            progression(VerifiedStartupMenuProgression.Screen.HOME, overlayDismissDispatches.get()),
+            "fresh HOME evidence can hand off to HUB after dismissal",
+        )
+        assertEquals(0, queueDispatches.get(), "startup menu proof is not queue authority")
+        assertEquals(0, gameplayDispatches.get(), "startup menu proof is not gameplay authority")
+
+        assertEquals(
+            StartupMenuObservationPolicy.Decision.BOUNDED_SAFE_PAUSE,
+            StartupMenuObservationPolicy.decide(false, true, false, false, false, max, max),
+        )
+        assertEquals(1, overlayDismissDispatches.get(), "bounded timeout cannot add another overlay dispatch")
+        assertEquals(0, queueDispatches.get())
+        assertEquals(0, gameplayDispatches.get())
+    }
+
     private fun startupContext() = StartupHandoffActivityTracker.Context(
         working = true,
         paused = false,

@@ -6,11 +6,12 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.security.MessageDigest
 import java.nio.file.Path
 import javax.imageio.ImageIO
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Replay the v4.16.586 log sequence without a game process or UI input. */
+/** Replay startup-readiness evidence without a game process or live UI input. */
 class OfflineStartupReadinessRecoveryE2ETest {
     @Serializable
     private data class Fixture(
@@ -22,6 +23,97 @@ class OfflineStartupReadinessRecoveryE2ETest {
         val events: List<String>,
         val expected: String,
     )
+
+    @Test
+    fun `incident unknown retries are passive and trusted quest overlay gets one dismissal before fresh home`() {
+        val fixturePath = "offline-ocr/screen-recovery/startup-loading-20261007-031712-802.png"
+        val bytes = javaClass.classLoader.getResourceAsStream(fixturePath)?.use { it.readBytes() }
+            ?: error("Missing exact v4.16.587 incident loading screenshot")
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02X".format(it) }
+        assertEquals("AA102DEF76E357630FEE89EA8858186D08336A44A65E01565788C20103264D36", digest)
+        val screenshot = ImageIO.read(bytes.inputStream()) ?: error("Incident screenshot is not decodable")
+        assertTrue(screenshot.width >= 1280 && screenshot.height >= 720)
+
+        val max = StartupMenuObservationPolicy.MAX_PASSIVE_REOBSERVATIONS
+        val queueDispatches = AtomicInteger()
+        val gameplayDispatches = AtomicInteger()
+        repeat(5) { completed ->
+            val decision = StartupMenuObservationPolicy.decide(false, true, false, false, false, completed, max)
+            assertEquals(StartupMenuObservationPolicy.Decision.OBSERVE_STARTUP_MENU, decision)
+            // The incident frame's logged OCR result was UNKNOWN/confidence=0.
+            assertFalse(StartupMenuObservationPolicy.isObservedMenu("UNKNOWN", 0))
+            assertEquals(0, queueDispatches.get())
+            assertEquals(0, gameplayDispatches.get())
+        }
+
+        val verifiedOverlay = StartupMenuObservationPolicy.isObservedMenu("HOME_TASK_OVERLAY", 95)
+        assertTrue(verifiedOverlay, "fresh authoritative OCR may recognize the quest overlay")
+        assertEquals(
+            StartupMenuObservationPolicy.Decision.WAIT_EXPECTED_MENU,
+            StartupMenuObservationPolicy.decide(false, true, verifiedOverlay, false, false, 5, max),
+        )
+
+        fun startupProgression(screen: VerifiedStartupMenuProgression.Screen, overlayDismissals: Int = 0) =
+            VerifiedStartupMenuProgression.decide(
+                VerifiedStartupMenuProgression.Evidence(
+                    screen = screen,
+                    confidence = 95,
+                    pid = 97212L,
+                    currentPid = 97212L,
+                    windowPid = 97212L,
+                    foregroundAndPixelsVerified = true,
+                    configuredTournament = true,
+                    working = true,
+                    manuallyPaused = false,
+                    currentSessionPowerLogReady = false,
+                    activeMatch = PowerLogActiveMatchProbe.State.NO_MATCH,
+                    priorAuthoritativeLineage = false,
+                    overlayDismissals = overlayDismissals,
+                    processLineageVerified = true,
+                ),
+            )
+
+        // Model the *next fresh frame* after UNKNOWN as an accepted,
+        // high-confidence quest overlay on the same current PID/HWND, with
+        // foreground pixels verified, configured Tournament, clean NO_MATCH
+        // evidence, no prior lineage, and the script working/unpaused.
+        // Only this full evidence bundle permits one overlay dismissal.
+        val overlayDismissals = AtomicInteger()
+        val overlayAction = startupProgression(VerifiedStartupMenuProgression.Screen.HOME_TASK_OVERLAY)
+        assertEquals(VerifiedStartupMenuProgression.Action.DISMISS_OVERLAY, overlayAction)
+        if (overlayAction == VerifiedStartupMenuProgression.Action.DISMISS_OVERLAY) {
+            overlayDismissals.incrementAndGet()
+        }
+        assertEquals(1, overlayDismissals.get(), "one verified dismissal dispatch is allowed")
+        assertEquals(
+            VerifiedStartupMenuProgression.Action.WAIT,
+            startupProgression(VerifiedStartupMenuProgression.Screen.HOME_TASK_OVERLAY, overlayDismissals.get()),
+            "fresh capture still showing the overlay must never dispatch a second click",
+        )
+
+        // A subsequent fresh HOME frame is sufficient for the guarded HUB
+        // handoff, but not itself a queue/gameplay dispatch authorization.
+        val freshHomeAction = startupProgression(
+            VerifiedStartupMenuProgression.Screen.HOME,
+            overlayDismissals.get(),
+        )
+        assertEquals(
+            VerifiedStartupMenuProgression.Action.ENTER_HUB,
+            freshHomeAction,
+        )
+        val freshHomeAccepted = freshHomeAction == VerifiedStartupMenuProgression.Action.ENTER_HUB
+        assertTrue(freshHomeAccepted, "only a fresh trusted HOME classification confirms the handoff")
+        assertEquals(0, queueDispatches.get(), "menu proof alone cannot start matchmaking")
+        assertEquals(0, gameplayDispatches.get(), "menu proof alone cannot dispatch gameplay")
+
+        assertEquals(
+            StartupMenuObservationPolicy.Decision.BOUNDED_SAFE_PAUSE,
+            StartupMenuObservationPolicy.decide(false, true, false, false, false, max, max),
+        )
+        assertEquals(0, queueDispatches.get())
+        assertEquals(0, gameplayDispatches.get())
+    }
 
     @Test
     fun `startup empty-log home flow only hands off on no-match and never queues from menu proof`() {

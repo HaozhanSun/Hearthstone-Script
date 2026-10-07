@@ -88,4 +88,31 @@ class StartupMenuObservationPolicyTest {
         assertFalse(StartupMenuObservationPolicy.isObservedMenu("MATCHMAKING", 100))
         assertFalse(StartupMenuObservationPolicy.isObservedMenu("UNKNOWN", 100))
     }
+
+    @Test
+    fun `unknown startup frames are passively retried then fail closed`() {
+        val max = StartupMenuObservationPolicy.MAX_PASSIVE_REOBSERVATIONS
+        repeat(max) { completed ->
+            assertEquals(
+                StartupMenuObservationPolicy.Decision.OBSERVE_STARTUP_MENU,
+                StartupMenuObservationPolicy.decide(
+                    currentSessionReady = false,
+                    startupObservationAuthorized = true,
+                    observedMenu = false,
+                    activeMatch = false,
+                    terminal = false,
+                    completedObservations = completed,
+                    maxObservations = max,
+                ),
+            )
+        }
+        assertEquals(
+            StartupMenuObservationPolicy.Decision.BOUNDED_SAFE_PAUSE,
+            StartupMenuObservationPolicy.decide(false, true, false, false, false, max, max),
+        )
+        assertEquals(
+            StartupMenuObservationPolicy.Decision.WAIT_FOR_TERMINAL_AUTHORITY,
+            StartupMenuObservationPolicy.decide(false, true, false, true, false, max, max),
+        )
+    }
 }
