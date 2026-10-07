@@ -40,7 +40,7 @@
         <!-- This build contains local changes on top of the upstream GA baseline. -->
         <upstream-baseline-version>v4.16.3-GA</upstream-baseline-version>
         <local-build-timestamp-pacific>2026-10-06 15:32:45 PDT</local-build-timestamp-pacific>
-        <build-channel>beta</build-channel>
+        <build-channel>UNKNOWN</build-channel>
 
         <!--java/fx-->
         <java.version>25</java.version>
