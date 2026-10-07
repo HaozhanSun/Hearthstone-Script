@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "channel": "beta",
-  "branch": "beta/live-failure-fix-v4.16.584",
+  "branch": "beta/startup-home-recovery-v4.16.587-integration",
   "displayName": "Hearthstone Script Beta",
   "runtimeDirectoryName": "Hearthstone Script Beta",
   "shortcutName": "Hearthstone Script Beta.lnk",

@@ -49,6 +49,7 @@ class ScreenRecoveryGateTest {
             foregroundConfirmed = true,
             sameWindow = true,
             capturedPixelsVerified = true,
+            currentSessionReady = true,
         )
         val captureCalls = AtomicInteger()
         val actionCalls = AtomicInteger()
@@ -76,6 +77,7 @@ class ScreenRecoveryGateTest {
             windowVerified = true,
             foregroundConfirmed = true,
             sameWindow = true,
+            currentSessionReady = true,
         )
         val captureCalls = AtomicInteger()
         val actionCalls = AtomicInteger()

@@ -14,6 +14,8 @@ import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.CurrentGameScreenReadinessPolicy
+import club.xiaojiawei.hsscript.status.ScreenRecoveryWindowCapture
+import club.xiaojiawei.hsscript.status.StartupMenuObservationPolicy
 import club.xiaojiawei.hsscript.status.BetaScreenRecoveryService
 import club.xiaojiawei.hsscript.utils.*
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
@@ -23,6 +25,7 @@ import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.LAUNCH_PROGRAM_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
+import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import club.xiaojiawei.hsscriptbase.util.isFalse
 import com.sun.jna.platform.win32.User32
@@ -382,6 +385,51 @@ class GameStarter : AbstractStarter() {
                         powerLogLength = powerLogLength,
                     )
                     if (!probeReady) {
+                        val startupMenuDecision = StartupMenuObservationPolicy.decide(
+                            currentSessionReady = false,
+                            startupObservationAuthorized = attempt == 1 &&
+                                gameWindow?.let(ScreenRecoveryWindowCapture::startupMenuObservationAllowed) == true,
+                            observedMenu = false,
+                            activeMatch = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+                            terminal = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState(),
+                            completedObservations = 0,
+                            maxObservations = 1,
+                        )
+                        if (startupMenuDecision == StartupMenuObservationPolicy.Decision.OBSERVE_STARTUP_MENU) {
+                            val menuObserved = runCatching {
+                                ScreenStateRecovery.inspectAndRecover(
+                                    stuckForMs = 0L,
+                                    stateFingerprint = "STARTUP_MENU_OBSERVATION",
+                                    startupProbe = true,
+                                )
+                            }.getOrNull()
+                            if (menuObserved == true) {
+                                log.info {
+                                    "STARTUP_SCREEN_PROBE_OBSERVED screen=verified-menu " +
+                                        "pid=${GameUtil.findGameProcessIdForDiagnostics() ?: "none"} " +
+                                        "action=NO_INPUT reason=current-power-log-not-ready"
+                                }
+                                return@execute
+                            }
+                            val exhaustedDecision = StartupMenuObservationPolicy.decide(
+                                currentSessionReady = false,
+                                startupObservationAuthorized = true,
+                                observedMenu = false,
+                                activeMatch = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+                                terminal = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER ||
+                                    GameUtil.isTerminalGameState(),
+                                completedObservations = 1,
+                                maxObservations = 1,
+                            )
+                            if (exhaustedDecision == StartupMenuObservationPolicy.Decision.BOUNDED_SAFE_PAUSE) {
+                                PauseStatus.setAutomaticPause(true)
+                                log.info {
+                                    "STARTUP_SCREEN_PROBE_SAFE_PAUSE reason=${exhaustedDecision.name} " +
+                                        "action=NO_INPUT working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+                                }
+                                return@execute
+                            }
+                        }
                         val reason = when {
                             !gameWindowVerified -> "game-window-unverified"
                             attachedPowerLog == null -> "power-log-unbound"
@@ -389,7 +437,7 @@ class GameStarter : AbstractStarter() {
                             powerLogLength <= 0L -> "current-power-log-empty"
                             else -> "startup-readiness-unknown"
                         }
-                        log.info {
+                        if (attempt == 1 || attempt == 15) log.info {
                             "STARTUP_SCREEN_PROBE_DEFERRED attempt=$attempt reason=$reason " +
                                 "gameWindow=$gameWindow gameWindowVerified=$gameWindowVerified " +
                                 "powerLog=${attachedPowerLog?.path() ?: "none"} " +

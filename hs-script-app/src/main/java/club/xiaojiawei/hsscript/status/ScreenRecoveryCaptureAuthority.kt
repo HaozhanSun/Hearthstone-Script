@@ -8,13 +8,14 @@ internal data class CapturedWindowIdentity(
     val processId: Int,
 )
 
-/** Capture purposes distinguish read-only pre-session classification from modal handling. */
+/** Narrow pre-session captures; only startup-menu capture is observational. */
 internal enum class ScreenRecoveryCapturePurpose {
     SCREEN_STATE_RECOVERY,
     MATCHMAKING_ERROR_DIALOG,
+    STARTUP_MENU_OBSERVATION,
 }
 
-/** Purpose-specific policy for captures made before the current Power.log is ready. */
+/** Purpose-specific gates for the two narrowly scoped pre-session probes. */
 internal object ScreenRecoveryCapturePurposePolicy {
     fun allowsPreSessionScreenClassification(
         purpose: ScreenRecoveryCapturePurpose,
@@ -38,6 +39,28 @@ internal object ScreenRecoveryCapturePurposePolicy {
         mulligan = mulligan,
         terminal = terminal,
     )
+
+    fun allowsStartupMenuObservation(
+        purpose: ScreenRecoveryCapturePurpose,
+        gameWindowVerified: Boolean,
+        currentPid: Long?,
+        windowPid: Long?,
+        mode: String?,
+        working: Boolean,
+        paused: Boolean,
+        activeMatch: Boolean,
+        terminal: Boolean,
+    ): Boolean = purpose == ScreenRecoveryCapturePurpose.STARTUP_MENU_OBSERVATION &&
+        StartupMenuObservationPolicy.isAuthorized(
+            gameWindowVerified = gameWindowVerified,
+            currentPid = currentPid,
+            windowPid = windowPid,
+            mode = mode,
+            working = working,
+            paused = paused,
+            activeMatch = activeMatch,
+            terminal = terminal,
+        )
 }
 
 /** Pre-session visual evidence can classify a screen but cannot mutate recovery state or dispatch input. */
@@ -60,6 +83,7 @@ internal data class ScreenRecoveryCaptureEvidence(
     val purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
     val preSessionQueueModalAuthorized: Boolean = false,
     val preSessionUiClassificationAuthorized: Boolean = false,
+    val preSessionStartupObservationAuthorized: Boolean = false,
     val currentGameProcessId: Long? = target?.processId?.toLong(),
     val targetWindowVisibleBefore: Boolean = true,
     val targetWindowVisibleAfter: Boolean = true,
@@ -95,6 +119,8 @@ internal object ScreenRecoveryCaptureAuthority {
             val authorizedForPurpose = when (evidence.purpose) {
                 ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG -> evidence.preSessionQueueModalAuthorized
                 ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY -> evidence.preSessionUiClassificationAuthorized
+                ScreenRecoveryCapturePurpose.STARTUP_MENU_OBSERVATION ->
+                    evidence.preSessionStartupObservationAuthorized
             }
             if (!authorizedForPurpose) return "current-game-session-not-ready"
         }
@@ -127,6 +153,13 @@ internal object ScreenRecoveryCaptureAuthority {
     }
 
     fun isAuthorized(evidence: ScreenRecoveryCaptureEvidence): Boolean = failureReason(evidence) == null
+
+    /** Purpose-aware, read-only capability; never sufficient for action dispatch. */
+    fun isReadOnlyStartupObservationAuthorized(evidence: ScreenRecoveryCaptureEvidence): Boolean =
+        !evidence.currentSessionReady &&
+            evidence.purpose == ScreenRecoveryCapturePurpose.STARTUP_MENU_OBSERVATION &&
+            evidence.preSessionStartupObservationAuthorized &&
+            failureReason(evidence) == null
 
     fun targetRatio(owners: List<CapturedWindowIdentity?>, target: CapturedWindowIdentity): Double =
         if (owners.isEmpty()) 0.0 else owners.count { it == target }.toDouble() / owners.size

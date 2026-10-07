@@ -8,13 +8,15 @@ internal data class ScreenRecoveryAuthorityEvidence(
     val foregroundConfirmed: Boolean,
     val sameWindow: Boolean,
     val capturedPixelsVerified: Boolean = false,
+    val currentSessionReady: Boolean = false,
 )
 
 /** Side-effect-free gate shared by capture, recovery dispatch, and offline tests. */
 internal object ScreenRecoveryAuthorityGate {
     fun isAuthorized(evidence: ScreenRecoveryAuthorityEvidence): Boolean =
         evidence.processAlive && evidence.windowPresent && evidence.windowVerified &&
-            evidence.foregroundConfirmed && evidence.sameWindow && evidence.capturedPixelsVerified
+            evidence.foregroundConfirmed && evidence.sameWindow && evidence.capturedPixelsVerified &&
+            evidence.currentSessionReady
 
     fun isCapturePreAuthorized(evidence: ScreenRecoveryAuthorityEvidence): Boolean =
         evidence.processAlive && evidence.windowPresent && evidence.windowVerified &&

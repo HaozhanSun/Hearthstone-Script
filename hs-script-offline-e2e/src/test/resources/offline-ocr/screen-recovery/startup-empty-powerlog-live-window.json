@@ -1,0 +1,17 @@
+{
+  "scenario": "v4.16.586 startup readiness deadlock replay",
+  "deploymentId": "hs-script_v4.16.586-local-20261006-210857PDT.jar|7ee143ca1390df30",
+  "scriptPid": 88848,
+  "gamePid": 97212,
+  "screenEvidence": "No matching screenshot persisted for 2026-10-06 21:53:30-21:56:30 PDT; menu wording was reported separately, not pixel-correlated to these log lines.",
+  "events": [
+    "verified-game-window",
+    "current-power-log-empty",
+    "startup-probe-deferred",
+    "NONE|NONE|FILL_DECK|NONE|0",
+    "capture-rejected-current-game-session-not-ready",
+    "unresolved-recovery-attempt-limit",
+    "automatic-pause"
+  ],
+  "expected": "verified read-only startup menu observation or bounded safe wait; no matchmaking/gameplay/rank dispatch; fresh current-session Power.log remains mandatory for in-game actions"
+}

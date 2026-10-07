@@ -45,6 +45,7 @@ object ScreenStateRecovery {
     enum class InspectionResult {
         DISABLED,
         APPLIED,
+        OBSERVED_STARTUP_MENU,
         NO_ACTION,
         DEFERRED_GAME_FOREGROUND,
     }
@@ -128,6 +129,7 @@ object ScreenStateRecovery {
         val gameRectKnown: Boolean,
         val gameWindowKnown: Boolean,
         val currentSessionReady: Boolean = true,
+        val startupMenuObservationOnly: Boolean = false,
     )
 
     private data class OcrEvidence(
@@ -206,8 +208,8 @@ object ScreenStateRecovery {
                 stateStillCurrent = stateStillCurrent,
             )
         }
-        return inspectBetaAndRecover(stuckForMs, stateFingerprint, startupProbe, stateStillCurrent) ==
-            InspectionResult.APPLIED
+        return inspectBetaAndRecover(stuckForMs, stateFingerprint, startupProbe, stateStillCurrent) in
+            setOf(InspectionResult.APPLIED, InspectionResult.OBSERVED_STARTUP_MENU)
     }
 
     /** Read-only, fresh screenshot observation for the Beta no-progress guard. */
@@ -223,7 +225,14 @@ object ScreenStateRecovery {
             ) {
                 null
             } else {
-                captureScreen(currentWindow)
+                captureScreen(
+                    currentWindow,
+                    purpose = if (ScreenRecoveryWindowCapture.startupMenuObservationAllowed(currentWindow)) {
+                        ScreenRecoveryCapturePurpose.STARTUP_MENU_OBSERVATION
+                    } else {
+                        ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY
+                    },
+                )
             }
         }
         if (!ScreenRecoveryRuntime.isCurrent(recoveryToken) || !captureResult.foregroundConfirmed) return null
@@ -234,6 +243,17 @@ object ScreenStateRecovery {
         val detection = detect(runOCR(capture), capture.visual)
             ?.takeIf { it.confidence >= 85 }
             ?: return null
+        if (capture.startupMenuObservationOnly && !StartupMenuObservationPolicy.isObservedMenu(
+                detection.kind.code,
+                detection.confidence,
+            )
+        ) {
+            log.info {
+                "SCREEN_RECOVERY_STARTUP_MENU_OBSERVATION screen=${detection.kind.code} " +
+                    "confidence=${detection.confidence} accepted=false action=NO_INPUT reason=not-a-menu-screen"
+            }
+            return null
+        }
         val observation = FreshScreenObservation(
             screen = detection.kind.code,
             confidence = detection.confidence,
@@ -245,6 +265,12 @@ object ScreenStateRecovery {
             "SCREEN_RECOVERY_FRESH_OBSERVATION detected=${observation.screen} " +
                 "confidence=${observation.confidence} pid=${observation.pid} hwnd=${observation.hwnd} " +
                 "screenshot=${observation.screenshot ?: "not-saved"}"
+        }
+        if (capture.startupMenuObservationOnly) {
+            log.info {
+                "SCREEN_RECOVERY_STARTUP_MENU_OBSERVATION screen=${observation.screen} " +
+                    "confidence=${observation.confidence} accepted=true action=NO_INPUT reason=power-log-not-ready"
+            }
         }
         return observation
     }
@@ -346,6 +372,19 @@ object ScreenStateRecovery {
                 "detected=${detection?.kind?.code ?: "UNKNOWN"} " +
                 "confidence=${detection?.confidence ?: 0} " +
                 "evidence=${detection?.evidence ?: "none"}"
+        }
+
+        if (capture.startupMenuObservationOnly) {
+            val observedMenu = StartupMenuObservationPolicy.isObservedMenu(
+                detection?.kind?.code,
+                detection?.confidence ?: 0,
+            )
+            log.info {
+                "SCREEN_RECOVERY_STARTUP_MENU_OBSERVATION " +
+                    "screen=${detection?.kind?.code ?: "UNKNOWN"} confidence=${detection?.confidence ?: 0} " +
+                    "accepted=$observedMenu action=NO_INPUT reason=power-log-not-ready"
+            }
+            return if (observedMenu) InspectionResult.OBSERVED_STARTUP_MENU else InspectionResult.NO_ACTION
         }
 
         // Keep one durable, categorized copy for every 30-second recovery
@@ -577,7 +616,11 @@ object ScreenStateRecovery {
         hwnd: WinDef.HWND?,
         purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
     ): Capture? {
-        val authorizedFrame = ScreenRecoveryWindowCapture.capture(hwnd, purpose) ?: return null
+        val effectivePurpose = if (
+            purpose == ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY &&
+            ScreenRecoveryWindowCapture.startupMenuObservationAllowed(hwnd)
+        ) ScreenRecoveryCapturePurpose.STARTUP_MENU_OBSERVATION else purpose
+        val authorizedFrame = ScreenRecoveryWindowCapture.capture(hwnd, effectivePurpose) ?: return null
         val image = authorizedFrame.image
         val bounds = authorizedFrame.bounds
         val saved = DebugScreenshotRing.save(image, "screen-recovery", "stale-screen")
@@ -590,6 +633,8 @@ object ScreenStateRecovery {
             gameRectKnown = true,
             gameWindowKnown = true,
             currentSessionReady = authorizedFrame.evidence.currentSessionReady,
+            startupMenuObservationOnly =
+                authorizedFrame.evidence.preSessionStartupObservationAuthorized,
         )
     }
 
@@ -1598,7 +1643,14 @@ object ScreenStateRecovery {
                 if (currentWindow == null || currentWindow.toString() != hwnd.toString() || currentPid != sourcePid) {
                     null
                 } else {
-                    captureScreen(currentWindow)
+                    captureScreen(
+                        currentWindow,
+                        purpose = if (ScreenRecoveryWindowCapture.startupMenuObservationAllowed(currentWindow)) {
+                            ScreenRecoveryCapturePurpose.STARTUP_MENU_OBSERVATION
+                        } else {
+                            ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY
+                        },
+                    )
                 }
             }
             val capture = frameResult.value
@@ -1616,6 +1668,13 @@ object ScreenStateRecovery {
             }
 
             val freshCapture = requireNotNull(capture)
+            if (freshCapture.startupMenuObservationOnly) {
+                log.info {
+                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_WAIT reason=power-log-not-ready " +
+                        "action=NO_INPUT pid=$sourcePid hwnd=$hwnd"
+                }
+                return@schedule
+            }
             val evidence = runOCR(freshCapture)
             val captureStillTrusted = GameUtil.findGameProcessIdForDiagnostics() == sourcePid &&
                 GameUtil.isVerifiedCurrentGameWindow(hwnd)

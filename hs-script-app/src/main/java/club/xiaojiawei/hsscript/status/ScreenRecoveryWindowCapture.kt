@@ -3,7 +3,9 @@ package club.xiaojiawei.hsscript.status
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME
 import club.xiaojiawei.hsscript.bean.single.WarEx
+import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
+import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
@@ -17,6 +19,7 @@ import com.sun.jna.win32.StdCallLibrary
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
 import java.awt.Robot
+import java.util.concurrent.atomic.AtomicLong
 
 internal data class AuthorizedGameWindowFrame(
     val image: java.awt.image.BufferedImage,
@@ -27,6 +30,8 @@ internal data class AuthorizedGameWindowFrame(
 /** Captures only the current game's client rectangle and rejects foreign pixels/occlusion. */
 internal object ScreenRecoveryWindowCapture {
     private const val GA_ROOT = WinUser.GA_ROOT
+    private val startupObservationNextAtMs = AtomicLong(0L)
+    private val startupObservationCooldownLoggedAtMs = AtomicLong(Long.MIN_VALUE)
 
     private interface CaptureUser32 : StdCallLibrary {
         fun ClientToScreen(hwnd: WinDef.HWND?, point: WinDef.POINT): Boolean
@@ -37,6 +42,30 @@ internal object ScreenRecoveryWindowCapture {
                 Native.load("user32", CaptureUser32::class.java)
             }
         }
+    }
+
+    fun startupMenuObservationAllowed(hwnd: WinDef.HWND?): Boolean {
+        if (hwnd == null || !User32.INSTANCE.IsWindow(hwnd) || !User32.INSTANCE.IsWindowVisible(hwnd)) return false
+        val target = identity(hwnd) ?: return false
+        val currentPid = GameUtil.findGameProcessIdForDiagnostics()
+        if (currentPid != target.processId.toLong()) return false
+        val attachedPowerLog = PowerLogListener.logFile
+        val currentPowerLog = GameUtil.getLatestLogDir()?.resolve(GAME_WAR_LOG_NAME)
+        if (CurrentGameScreenReadinessPolicy.isReady(
+                gameWindowVerified = GameUtil.isVerifiedCurrentGameWindow(hwnd),
+                attachedPowerLogPath = attachedPowerLog?.path(),
+                currentSessionPowerLogPath = currentPowerLog?.absolutePath,
+                powerLogLength = attachedPowerLog?.length() ?: 0L,
+            )
+        ) return false
+        // Tournament pre-session classification has its own narrower policy;
+        // don't replace it with startup-menu-only observation.
+        if (Mode.currMode === ModeEnum.TOURNAMENT || Mode.nextMode === ModeEnum.TOURNAMENT) return false
+        return preSessionStartupObservationContext(
+            hwnd,
+            ScreenRecoveryCapturePurpose.STARTUP_MENU_OBSERVATION,
+            target.processId.toLong(),
+        )
     }
 
     fun capture(
@@ -67,7 +96,21 @@ internal object ScreenRecoveryWindowCapture {
         )
         val preSessionQueueModalBefore = preSessionQueueModalContext(purpose)
         val preSessionUiClassificationBefore = preSessionUiClassificationContext(purpose)
-        if (!currentPowerLogReady && !preSessionQueueModalBefore && !preSessionUiClassificationBefore) {
+        val preSessionStartupObservationBefore =
+            preSessionStartupObservationContext(hwnd, purpose, target.processId.toLong())
+        if (preSessionStartupObservationBefore && !acquireStartupObservationPermit()) {
+            val now = System.currentTimeMillis()
+            if (startupObservationCooldownLoggedAtMs.getAndSet(now) < now - 60_000L) {
+                log.info {
+                    "SCREEN_RECOVERY_STARTUP_MENU_OBSERVATION_DEFERRED reason=capture-cooldown " +
+                        "cooldownMs=${StartupMenuObservationPolicy.CAPTURE_COOLDOWN_MS} action=NO_INPUT"
+                }
+            }
+            return null
+        }
+        if (!currentPowerLogReady && !preSessionQueueModalBefore &&
+            !preSessionUiClassificationBefore && !preSessionStartupObservationBefore
+        ) {
             return reject(
                 "current-game-session-not-ready",
                 hwnd,
@@ -79,6 +122,11 @@ internal object ScreenRecoveryWindowCapture {
         if (!currentPowerLogReady) {
             log.info {
                 "SCREEN_RECOVERY_CAPTURE_PRESESSION purpose=${purpose.name} " +
+                    "authorization=${when {
+                        preSessionStartupObservationBefore -> "read-only-startup-menu"
+                        preSessionUiClassificationBefore -> "read-only-tournament-classification"
+                        else -> "exact-queue-modal"
+                    }} " +
                     "authority=current-pid-window-foreground-pixel-ownership " +
                     "powerLog=${attachedPowerLog?.path() ?: "none"} " +
                     "currentPowerLog=${currentPowerLog?.absolutePath ?: "none"} " +
@@ -124,6 +172,9 @@ internal object ScreenRecoveryWindowCapture {
             preSessionQueueModalAuthorized = preSessionQueueModalBefore && preSessionQueueModalAfter,
             preSessionUiClassificationAuthorized = preSessionUiClassificationBefore &&
                 preSessionUiClassificationContext(purpose),
+            preSessionStartupObservationAuthorized =
+                preSessionStartupObservationBefore &&
+                    preSessionStartupObservationContext(hwnd, purpose, target.processId.toLong()),
             currentGameProcessId = currentPidAfter,
             targetWindowVisibleBefore = targetWindowVisibleBefore,
             targetWindowVisibleAfter = targetWindowVisibleAfter,
@@ -137,6 +188,8 @@ internal object ScreenRecoveryWindowCapture {
                 "targetCoverageBefore=${coverage(ownersBefore, target)} " +
                 "targetCoverageAfter=${coverage(ownersAfter, target)} " +
                 "purpose=${purpose.name} accepted=${reason == null} " +
+                "startupObservationOnly=${ScreenRecoveryCaptureAuthority.isReadOnlyStartupObservationAuthorized(evidence)} " +
+                "actionCapability=${if (currentPowerLogReady) "CURRENT_SESSION_ONLY" else "NONE"} " +
                 "reason=${reason ?: "exact-client-visible"}"
         }
         if (reason != null) {
@@ -166,6 +219,36 @@ internal object ScreenRecoveryWindowCapture {
             mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
             terminal = GameUtil.isTerminalGameState(),
         )
+
+    private fun preSessionStartupObservationContext(
+        hwnd: WinDef.HWND?,
+        purpose: ScreenRecoveryCapturePurpose,
+        windowPid: Long,
+    ): Boolean =
+        ScreenRecoveryCapturePurposePolicy.allowsStartupMenuObservation(
+            purpose = purpose,
+            gameWindowVerified = GameUtil.isVerifiedCurrentGameWindow(hwnd),
+            currentPid = GameUtil.findGameProcessIdForDiagnostics(),
+            windowPid = windowPid,
+            mode = Mode.currMode?.name ?: Mode.nextMode?.name ?: "NONE",
+            working = WorkTimeListener.working,
+            paused = PauseStatus.isPause,
+            activeMatch = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+            terminal = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState(),
+        )
+
+    private fun acquireStartupObservationPermit(): Boolean {
+        while (true) {
+            val now = System.currentTimeMillis()
+            val nextAllowedAt = startupObservationNextAtMs.get()
+            if (!StartupMenuObservationPolicy.isCaptureDue(now, nextAllowedAt)) return false
+            if (startupObservationNextAtMs.compareAndSet(
+                    nextAllowedAt,
+                    StartupMenuObservationPolicy.nextCaptureAt(now),
+                )
+            ) return true
+        }
+    }
 
     private fun clientBoundsOnScreen(hwnd: WinDef.HWND): Rectangle? = runCatching {
         val client = WinDef.RECT()

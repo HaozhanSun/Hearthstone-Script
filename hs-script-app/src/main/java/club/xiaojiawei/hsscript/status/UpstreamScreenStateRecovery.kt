@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
+import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.status.DeckSelectionRecoveryPolicy
 import club.xiaojiawei.hsscript.strategy.mode.LoginModeStrategy
@@ -86,6 +87,7 @@ object UpstreamScreenStateRecovery {
         val visual: VisualSignature,
         val gameRectKnown: Boolean,
         val gameWindowKnown: Boolean,
+        val startupMenuObservationOnly: Boolean = false,
     )
 
     private data class AuthorizedCapture(
@@ -193,6 +195,19 @@ object UpstreamScreenStateRecovery {
                 "detected=${detection?.kind?.code ?: "UNKNOWN"} " +
                 "confidence=${detection?.confidence ?: 0} " +
                 "evidence=${detection?.evidence ?: "none"}"
+        }
+
+        if (capture.startupMenuObservationOnly) {
+            val observedMenu = StartupMenuObservationPolicy.isObservedMenu(
+                detection?.kind?.code,
+                detection?.confidence ?: 0,
+            )
+            log.info {
+                "SCREEN_RECOVERY_STARTUP_MENU_OBSERVATION " +
+                    "screen=${detection?.kind?.code ?: "UNKNOWN"} confidence=${detection?.confidence ?: 0} " +
+                    "accepted=$observedMenu action=NO_INPUT reason=power-log-not-ready"
+            }
+            return observedMenu
         }
 
         // Keep one durable, categorized copy for every 30-second recovery
@@ -315,6 +330,7 @@ object UpstreamScreenStateRecovery {
                 foregroundConfirmed = true,
                 sameWindow = freshWindow?.toString() == capturedWindow.toString(),
                 capturedPixelsVerified = true,
+                currentSessionReady = freshWindow?.let(::hasCurrentSessionPowerLog) == true,
             )
             if (!ScreenRecoveryAuthorityGate.isAuthorized(evidence)) {
                 authorityRejected = true
@@ -346,8 +362,25 @@ object UpstreamScreenStateRecovery {
         return window
     }
 
+    private fun hasCurrentSessionPowerLog(hwnd: WinDef.HWND): Boolean {
+        val attached = PowerLogListener.logFile
+        val current = GameUtil.getLatestLogDir()?.resolve(club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME)
+        return CurrentGameScreenReadinessPolicy.isReady(
+            gameWindowVerified = GameUtil.isVerifiedCurrentGameWindow(hwnd),
+            attachedPowerLogPath = attached?.path(),
+            currentSessionPowerLogPath = current?.absolutePath,
+            powerLogLength = attached?.length() ?: 0L,
+        )
+    }
+
     private fun captureScreen(hwnd: WinDef.HWND): Capture? {
-        val authorizedFrame = ScreenRecoveryWindowCapture.capture(hwnd) ?: return null
+        val startupMenuObservationOnly = ScreenRecoveryWindowCapture.startupMenuObservationAllowed(hwnd)
+        val purpose = if (startupMenuObservationOnly) {
+            ScreenRecoveryCapturePurpose.STARTUP_MENU_OBSERVATION
+        } else {
+            ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY
+        }
+        val authorizedFrame = ScreenRecoveryWindowCapture.capture(hwnd, purpose) ?: return null
         val image = authorizedFrame.image
         val saved = DebugScreenshotRing.save(image, "screen-recovery", "stale-screen")
         return Capture(
@@ -357,6 +390,8 @@ object UpstreamScreenStateRecovery {
             visualSignature(image),
             gameRectKnown = true,
             gameWindowKnown = true,
+            startupMenuObservationOnly =
+                authorizedFrame.evidence.preSessionStartupObservationAuthorized,
         )
     }
 

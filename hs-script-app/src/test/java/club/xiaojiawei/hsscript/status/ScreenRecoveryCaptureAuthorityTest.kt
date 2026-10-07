@@ -265,6 +265,110 @@ class ScreenRecoveryCaptureAuthorityTest {
     }
 
     @Test
+    fun `startup observation is read-only and remains subject to exact PID foreground and pixel ownership`() {
+        fun startupAuthorized(
+            purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.STARTUP_MENU_OBSERVATION,
+            windowVerified: Boolean = true,
+            currentPid: Long? = game.processId.toLong(),
+            windowPid: Long? = game.processId.toLong(),
+            mode: String? = "NONE",
+            working: Boolean = true,
+            paused: Boolean = false,
+            activeMatch: Boolean = false,
+            terminal: Boolean = false,
+        ) = ScreenRecoveryCapturePurposePolicy.allowsStartupMenuObservation(
+            purpose, windowVerified, currentPid, windowPid, mode, working, paused, activeMatch, terminal,
+        )
+
+        assertTrue(startupAuthorized())
+        assertFalse(startupAuthorized(purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY))
+        assertFalse(startupAuthorized(windowVerified = false))
+        assertFalse(startupAuthorized(currentPid = 88848L))
+        assertFalse(startupAuthorized(windowPid = null))
+        assertFalse(startupAuthorized(mode = "GAMEPLAY"))
+        assertFalse(startupAuthorized(paused = true))
+        assertFalse(startupAuthorized(activeMatch = true))
+        assertFalse(startupAuthorized(terminal = true))
+
+        val observedFrame = evidence(
+            currentSessionReady = false,
+            purpose = ScreenRecoveryCapturePurpose.STARTUP_MENU_OBSERVATION,
+            preSessionStartupObservationAuthorized = true,
+        )
+        assertTrue(ScreenRecoveryCaptureAuthority.isAuthorized(observedFrame))
+        assertTrue(ScreenRecoveryCaptureAuthority.isReadOnlyStartupObservationAuthorized(observedFrame))
+        assertFalse(
+            ScreenRecoveryCaptureAuthority.isAuthorized(
+                evidence(
+                    currentSessionReady = false,
+                    purpose = ScreenRecoveryCapturePurpose.STARTUP_MENU_OBSERVATION,
+                ),
+            ),
+            "the purpose label itself cannot authorize a pre-session capture",
+        )
+        assertFalse(
+            ScreenRecoveryCaptureAuthority.isReadOnlyStartupObservationAuthorized(
+                observedFrame.copy(currentSessionReady = true),
+            ),
+        )
+        assertFalse(
+            ScreenRecoveryCaptureAuthority.isAuthorized(
+                observedFrame.copy(visibleOwnersBefore = List(63) { codex }, visibleOwnersAfter = List(63) { codex }),
+            ),
+            "startup observation keeps the pixel ownership gate; no overlay whitelist is used",
+        )
+
+        val dispatched = AtomicInteger()
+        assertFalse(
+            ScreenRecoveryAuthorityGate.dispatchIfAuthorized(
+                recoveryEvidence(capturedPixelsVerified = true, currentSessionReady = false),
+            ) { dispatched.incrementAndGet(); true },
+            "startup/menu observation must never authorize gameplay or matchmaking input",
+        )
+        assertEquals(0, dispatched.get())
+    }
+
+    @Test
+    fun `empty session log rejects generic capture while watchdog preserves live startup without recovery`() {
+        val generic = evidence(currentSessionReady = false)
+        assertEquals("current-game-session-not-ready", ScreenRecoveryCaptureAuthority.failureReason(generic))
+        val startupObservation = generic.copy(
+            purpose = ScreenRecoveryCapturePurpose.STARTUP_MENU_OBSERVATION,
+            preSessionStartupObservationAuthorized = true,
+        )
+        assertTrue(ScreenRecoveryCaptureAuthority.isReadOnlyStartupObservationAuthorized(startupObservation))
+
+        val snapshot = NoProgressWatchdog.Snapshot(
+            nowMs = 1_000L,
+            mode = "NONE",
+            expectedMode = "NONE",
+            screen = NoProgressWatchdog.ScreenExpectation.MENU_OR_MATCHING,
+            processAlive = true,
+            currentPid = game.processId.toLong(),
+            boundPid = game.processId.toLong(),
+            windowPresent = true,
+            powerLogPath = null,
+            boundPowerLogPath = null,
+            powerLogPosition = Long.MIN_VALUE,
+            powerLogLength = 0L,
+            powerLogAgeMs = Long.MAX_VALUE,
+            powerLogUsable = false,
+            screenConfirmed = true,
+        )
+        val decision = NoProgressWatchdog().observe(snapshot)
+        assertEquals(NoProgressWatchdog.RecoveryAction.WAIT_EXPECTED, decision.action)
+        assertEquals("power-log-unbound-or-unusable", decision.reason)
+
+        val actionCalls = AtomicInteger()
+        assertFalse(
+            ScreenRecoveryAuthorityGate.dispatchIfAuthorized(
+                recoveryEvidence(capturedPixelsVerified = true, currentSessionReady = false),
+            ) { actionCalls.incrementAndGet(); true },
+        )
+        assertEquals(0, actionCalls.get())
+    }
+
+    @Test
     fun `pre-session exception is limited to non-game tournament queue context`() {
         fun allows(
             purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG,
@@ -318,6 +422,7 @@ class ScreenRecoveryCaptureAuthorityTest {
         purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
         preSessionQueueModalAuthorized: Boolean = false,
         preSessionUiClassificationAuthorized: Boolean = false,
+        preSessionStartupObservationAuthorized: Boolean = false,
         currentGameProcessId: Long? = game.processId.toLong(),
         targetWindowVisibleBefore: Boolean = true,
         targetWindowVisibleAfter: Boolean = true,
@@ -336,17 +441,22 @@ class ScreenRecoveryCaptureAuthorityTest {
         purpose = purpose,
         preSessionQueueModalAuthorized = preSessionQueueModalAuthorized,
         preSessionUiClassificationAuthorized = preSessionUiClassificationAuthorized,
+        preSessionStartupObservationAuthorized = preSessionStartupObservationAuthorized,
         currentGameProcessId = currentGameProcessId,
         targetWindowVisibleBefore = targetWindowVisibleBefore,
         targetWindowVisibleAfter = targetWindowVisibleAfter,
     )
 
-    private fun recoveryEvidence(capturedPixelsVerified: Boolean) = ScreenRecoveryAuthorityEvidence(
+    private fun recoveryEvidence(
+        capturedPixelsVerified: Boolean,
+        currentSessionReady: Boolean = true,
+    ) = ScreenRecoveryAuthorityEvidence(
         processAlive = true,
         windowPresent = true,
         windowVerified = true,
         foregroundConfirmed = true,
         sameWindow = true,
         capturedPixelsVerified = capturedPixelsVerified,
+        currentSessionReady = currentSessionReady,
     )
 }
