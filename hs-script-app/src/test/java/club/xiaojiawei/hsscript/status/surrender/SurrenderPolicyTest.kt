@@ -670,10 +670,14 @@ class SurrenderPolicyTest {
         val expectedBadge = CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(
             screen.width, screen.height, "DECK_SELECTION",
         )
+        val expectedDigit = CurrentRankDetector.rankDigitBoundsForScreenPhaseForTest(
+            screen.width, screen.height, "DECK_SELECTION",
+        )
         val originalSettingsProvider = OcrRuntime.settingsProvider
         val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
         val originalProviderModeProvider = OcrRuntime.providerModeProvider
-        var recognizedBounds: Pair<Int, Int>? = null
+        val recognizedRois = mutableListOf<String?>()
+        var recognizedBadgeBounds: Pair<Int, Int>? = null
         try {
             OcrRuntime.providerModeProvider = { OcrProviderMode.PADDLEX_ONLY }
             OcrRuntime.settingsProvider = {
@@ -681,17 +685,30 @@ class SurrenderPolicyTest {
             }
             OcrRuntime.paddleXBridgeFactory = {
                 object : OcrTextBridge {
-                    override fun recognize(image: BufferedImage, desc: String): String = "4"
-                    override fun recognizeWithConfidence(image: BufferedImage, desc: String, roi: String?): OcrRecognition {
-                        recognizedBounds = image.width to image.height
+                    override fun recognize(image: BufferedImage, desc: String): String = ""
+                    override fun recognizeWithConfidence(
+                        image: BufferedImage,
+                        desc: String,
+                        roi: String?,
+                        timeoutMs: Long?,
+                    ): OcrRecognition {
+                        recognizedRois += roi
+                        if (roi == "rank-badge-small") {
+                            // The captured live case had no readable pixels in
+                            // the tight numeric crop, requiring the full badge.
+                            assertTrue(image.width >= expectedDigit.width && image.height >= expectedDigit.height)
+                            return OcrRecognition("", confidence = 0.99)
+                        }
+                        assertEquals("rank-badge", roi)
+                        recognizedBadgeBounds = image.width to image.height
                         val expected = screen.getSubimage(expectedBadge.x, expectedBadge.y, expectedBadge.width, expectedBadge.height)
                         for (y in 0 until expected.height) for (x in 0 until expected.width) {
                             assertEquals(
                                 expected.getRGB(x, y), image.getRGB(x, y),
-                                "deck phase crop must exactly match screenshot badge at ($x,$y)",
+                                "deck phase full-badge crop must match screenshot at ($x,$y)",
                             )
                         }
-                        return OcrRecognition("4", confidence = 0.99)
+                        return OcrRecognition("4x5", confidence = 0.99)
                     }
                     override fun healthCheck() = OcrHealth(true, OcrProviderKind.PADDLEX, "fixture")
                 }
@@ -701,7 +718,8 @@ class SurrenderPolicyTest {
                 screen, saveEvidence = false, evidencePhase = "DECK_SELECTION",
             )
             assertEquals(4, detection?.rank)
-            assertEquals(expectedBadge.width to expectedBadge.height, recognizedBounds)
+            assertEquals(listOf<String?>("rank-badge-small", "rank-badge"), recognizedRois)
+            assertEquals(expectedBadge.width to expectedBadge.height, recognizedBadgeBounds)
             val gate = PreMatchRankGate.evaluate(
                 working = true,
                 paused = false,
