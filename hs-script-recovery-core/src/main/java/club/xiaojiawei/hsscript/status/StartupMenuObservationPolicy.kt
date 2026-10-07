@@ -6,7 +6,10 @@ package club.xiaojiawei.hsscript.status
  * matchmaking callers must continue to require CurrentGameScreenReadinessPolicy.
  */
 object StartupMenuObservationPolicy {
-    const val CAPTURE_COOLDOWN_MS = 120_000L
+    // Startup progression requires a fresh frame after the bounded overlay
+    // dispatch; keep observation retries bounded but don't delay that proof
+    // for two minutes.
+    const val CAPTURE_COOLDOWN_MS = 1_200L
     private val allowedModes = setOf("NONE", "STARTUP", "LOGIN", "HUB", "GAME_MODE")
     private val observableMenuScreens = setOf("HOME", "HOME_TASK_OVERLAY", "TOURNAMENT", "GAME_MODE", "LOGIN", "COLLECTION")
     const val MIN_MENU_CONFIDENCE = 85

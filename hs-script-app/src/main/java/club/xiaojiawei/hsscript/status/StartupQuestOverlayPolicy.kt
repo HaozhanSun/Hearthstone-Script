@@ -2,7 +2,7 @@ package club.xiaojiawei.hsscript.status
 
 /** A click is only a dispatch attempt; HUB is entered only after a fresh trusted frame. */
 internal object StartupQuestOverlayPolicy {
-    const val MAX_DISMISS_DISPATCHES = 2
+    const val MAX_DISMISS_DISPATCHES = 1
 
     enum class Observation { QUEST_OVERLAY, HUB, UNKNOWN }
     enum class Action { DISMISS_OVERLAY, ENTER_HUB, WAIT_FOR_TRUSTED_CAPTURE, BLOCK_UNTRUSTED, EXHAUSTED }

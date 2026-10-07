@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.nio.file.Path
+import javax.imageio.ImageIO
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Replay the v4.16.586 log sequence without a game process or UI input. */
@@ -21,6 +22,60 @@ class OfflineStartupReadinessRecoveryE2ETest {
         val events: List<String>,
         val expected: String,
     )
+
+    @Test
+    fun `startup empty-log home flow only hands off on no-match and never queues from menu proof`() {
+        // This checked-in screenshot is only an available harness fixture; the affected 21:53 run had no persisted pixels.
+        val screenshot = javaClass.classLoader.getResourceAsStream(
+            "offline-ocr/screen-recovery/deck-selection-screen.png",
+        )?.use(ImageIO::read) ?: error("Missing checked-in Home screenshot fixture")
+        assertTrue(screenshot.width > 400 && screenshot.height > 300)
+
+        val emptyLog = PowerLogActiveMatchProbe.assess(emptySequence())
+        val dispatches = AtomicInteger()
+        fun decide(active: PowerLogActiveMatchProbe.State, lineage: Boolean = false) =
+            VerifiedStartupMenuProgression.decide(
+                VerifiedStartupMenuProgression.Evidence(
+                    screen = VerifiedStartupMenuProgression.Screen.HOME,
+                    confidence = 95,
+                    pid = 97212L,
+                    currentPid = 97212L,
+                    windowPid = 97212L,
+                    foregroundAndPixelsVerified = true,
+                    configuredTournament = true,
+                    working = true,
+                    manuallyPaused = false,
+                    currentSessionPowerLogReady = false,
+                    activeMatch = active,
+                    priorAuthoritativeLineage = lineage,
+                ),
+            )
+
+        assertEquals(PowerLogActiveMatchProbe.State.NO_MATCH, emptyLog.state)
+        assertEquals(VerifiedStartupMenuProgression.Action.ENTER_HUB, decide(emptyLog.state))
+        // The action adapter here counts only queue/gameplay dispatch; HOME->HUB is not one.
+        assertEquals(0, dispatches.get())
+        assertEquals(VerifiedStartupMenuProgression.Action.WAIT, decide(PowerLogActiveMatchProbe.State.ACTIVE_MATCH))
+        assertEquals(VerifiedStartupMenuProgression.Action.WAIT, decide(PowerLogActiveMatchProbe.State.TERMINAL))
+        assertEquals(VerifiedStartupMenuProgression.Action.WAIT, decide(PowerLogActiveMatchProbe.State.UNREADABLE))
+        assertEquals(VerifiedStartupMenuProgression.Action.WAIT, decide(PowerLogActiveMatchProbe.State.NO_MATCH, lineage = true))
+        assertEquals(
+            PowerLogActiveMatchProbe.State.ACTIVE_MATCH,
+            PowerLogActiveMatchProbe.assess(sequenceOf("CREATE_GAME", "tag=MULLIGAN_STATE value=INPUT")).state,
+        )
+        assertEquals(
+            PowerLogActiveMatchProbe.State.TERMINAL,
+            PowerLogActiveMatchProbe.assess(sequenceOf("CREATE_GAME", "tag=PLAYSTATE value=LOST")).state,
+        )
+        assertEquals(
+            PowerLogActiveMatchProbe.State.UNREADABLE,
+            PowerLogActiveMatchProbe.assess(sequenceOf("CREATE_GAME", "tag=STEP value=BEGIN_MULLIGAN")).state,
+        )
+
+        // No matchmaking capability exists in this policy. Queue input remains behind
+        // the separate current-session + fresh-rank authorization boundary.
+        assertEquals(0, dispatches.get())
+    }
 
     @Test
     fun `empty Power log and stale startup state yield bounded menu observation without input`() {

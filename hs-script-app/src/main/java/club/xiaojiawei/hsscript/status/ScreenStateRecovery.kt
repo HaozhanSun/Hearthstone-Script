@@ -375,16 +375,80 @@ object ScreenStateRecovery {
         }
 
         if (capture.startupMenuObservationOnly) {
+            val initialPid = GameUtil.findGameProcessIdForDiagnostics()
+                ?: return InspectionResult.NO_ACTION
+            val processStartedAt = GameUtil.findProcessStartedAtForDiagnostics(initialPid)
             val observedMenu = StartupMenuObservationPolicy.isObservedMenu(
                 detection?.kind?.code,
                 detection?.confidence ?: 0,
             )
+            val activeEvidence = PowerLogActiveMatchProbe.inspect(
+                GameUtil.getLatestLogDir()?.resolve(club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME),
+                processStartedAt,
+            )
+            val configuredTournament = DeckStrategyManager.currentDeckStrategy != null &&
+                DeckStrategyManager.currentRunMode?.let { it.modeEnum == ModeEnum.TOURNAMENT && it.isEnable } == true
+            val startupAction = VerifiedStartupMenuProgression.decide(
+                VerifiedStartupMenuProgression.Evidence(
+                    screen = when (detection?.kind) {
+                        ScreenKind.HOME -> VerifiedStartupMenuProgression.Screen.HOME
+                        ScreenKind.HOME_TASK_OVERLAY -> VerifiedStartupMenuProgression.Screen.HOME_TASK_OVERLAY
+                        else -> VerifiedStartupMenuProgression.Screen.OTHER
+                    },
+                    confidence = detection?.confidence ?: 0,
+                    pid = initialPid,
+                    currentPid = GameUtil.findGameProcessIdForDiagnostics(),
+                    windowPid = initialPid,
+                    foregroundAndPixelsVerified = captureResult.foregroundConfirmed &&
+                        capture.file != null && GameUtil.isVerifiedCurrentGameWindow(gameWindow),
+                    configuredTournament = configuredTournament,
+                    working = WorkTimeListener.working,
+                    manuallyPaused = PauseStatus.pauseOrigin == PauseStatus.Origin.MANUAL || PauseStatus.isPause,
+                    currentSessionPowerLogReady = capture.currentSessionReady,
+                    activeMatch = activeEvidence.state,
+                    priorAuthoritativeLineage = (PowerLogListener.logFile?.length() ?: 0L) > 0L,
+                    processLineageVerified = processStartedAt != null,
+                ),
+            )
             log.info {
-                "SCREEN_RECOVERY_STARTUP_MENU_OBSERVATION " +
-                    "screen=${detection?.kind?.code ?: "UNKNOWN"} confidence=${detection?.confidence ?: 0} " +
-                    "accepted=$observedMenu action=NO_INPUT reason=power-log-not-ready"
+                "SCREEN_RECOVERY_STARTUP_MENU_OBSERVATION screen=${detection?.kind?.code ?: "UNKNOWN"} " +
+                    "confidence=${detection?.confidence ?: 0} accepted=$observedMenu action=$startupAction " +
+                    "activeMatch=${activeEvidence.state} activeReason=${activeEvidence.reason} " +
+                    "lineage=${(PowerLogListener.logFile?.length() ?: 0L) > 0L} reason=power-log-not-ready"
             }
-            return if (observedMenu) InspectionResult.OBSERVED_STARTUP_MENU else InspectionResult.NO_ACTION
+            if (!observedMenu) return InspectionResult.NO_ACTION
+            when (startupAction) {
+                VerifiedStartupMenuProgression.Action.ENTER_HUB -> {
+                    if (!stateStillCurrent() || !ScreenRecoveryRuntime.isCurrent(recoveryToken)) {
+                        return InspectionResult.NO_ACTION
+                    }
+                    val latestProcessId = GameUtil.findGameProcessIdForDiagnostics()
+                    val latestActiveEvidence = PowerLogActiveMatchProbe.inspect(
+                        GameUtil.getLatestLogDir()?.resolve(club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME),
+                        latestProcessId?.let(GameUtil::findProcessStartedAtForDiagnostics),
+                    )
+                    if (latestProcessId != initialPid || latestActiveEvidence.state != PowerLogActiveMatchProbe.State.NO_MATCH ||
+                        (PowerLogListener.logFile?.length() ?: 0L) > 0L || !GameUtil.isVerifiedCurrentGameWindow(gameWindow)
+                    ) {
+                        log.info {
+                            "SCREEN_RECOVERY_STARTUP_MENU_HANDOFF_BLOCKED reason=authority-changed " +
+                                "activeMatch=${latestActiveEvidence.state} activeReason=${latestActiveEvidence.reason} " +
+                                "pid=$latestProcessId expectedPid=$initialPid action=NO_INPUT"
+                        }
+                        return InspectionResult.OBSERVED_STARTUP_MENU
+                    }
+                    Mode.recover(ModeEnum.HUB, "verified-pre-session-home", enterStrategy = true)
+                    log.warn { "SCREEN_RECOVERY_STARTUP_MENU_HANDOFF screen=HOME target=HUB strategyStarted=true" }
+                    return InspectionResult.APPLIED
+                }
+                VerifiedStartupMenuProgression.Action.DISMISS_OVERLAY -> {
+                    Mode.recover(ModeEnum.HUB, "verified-pre-session-home-overlay", enterStrategy = false)
+                    scheduleHomeTaskOverlayRecovery(recoveryToken, 0, 0, 1_300L)
+                    return InspectionResult.APPLIED
+                }
+                VerifiedStartupMenuProgression.Action.WAIT -> return InspectionResult.OBSERVED_STARTUP_MENU
+                VerifiedStartupMenuProgression.Action.BLOCK -> return InspectionResult.NO_ACTION
+            }
         }
 
         // Keep one durable, categorized copy for every 30-second recovery
@@ -1668,10 +1732,22 @@ object ScreenStateRecovery {
             }
 
             val freshCapture = requireNotNull(capture)
-            if (freshCapture.startupMenuObservationOnly) {
+            val startupOnly = freshCapture.startupMenuObservationOnly
+            val activeEvidence = if (startupOnly) PowerLogActiveMatchProbe.inspect(
+                GameUtil.getLatestLogDir()?.resolve(club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME),
+                GameUtil.findProcessStartedAtForDiagnostics(sourcePid),
+            ) else null
+            if (startupOnly && (activeEvidence?.state != PowerLogActiveMatchProbe.State.NO_MATCH ||
+                    (PowerLogListener.logFile?.length() ?: 0L) > 0L ||
+                    DeckStrategyManager.currentDeckStrategy == null ||
+                    DeckStrategyManager.currentRunMode?.let { it.modeEnum == ModeEnum.TOURNAMENT && it.isEnable } != true
+                )
+            ) {
                 log.info {
-                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_WAIT reason=power-log-not-ready " +
-                        "action=NO_INPUT pid=$sourcePid hwnd=$hwnd"
+                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_WAIT action=NO_INPUT " +
+                        "activeMatch=${activeEvidence?.state ?: "unknown"} " +
+                        "lineage=${(PowerLogListener.logFile?.length() ?: 0L) > 0L} configuredTournament=" +
+                        "${DeckStrategyManager.currentRunMode?.modeEnum == ModeEnum.TOURNAMENT} pid=$sourcePid hwnd=$hwnd"
                 }
                 return@schedule
             }
@@ -1679,6 +1755,70 @@ object ScreenStateRecovery {
             val captureStillTrusted = GameUtil.findGameProcessIdForDiagnostics() == sourcePid &&
                 GameUtil.isVerifiedCurrentGameWindow(hwnd)
             val detection = if (captureStillTrusted) detect(evidence, freshCapture.visual) else null
+            if (startupOnly) {
+                val active = activeEvidence ?: PowerLogActiveMatchProbe.Evidence(
+                    PowerLogActiveMatchProbe.State.UNREADABLE,
+                    "active-match-probe-missing",
+                )
+                val progression = VerifiedStartupMenuProgression.decide(
+                    VerifiedStartupMenuProgression.Evidence(
+                        screen = when (detection?.kind) {
+                            ScreenKind.HOME -> VerifiedStartupMenuProgression.Screen.HOME
+                            ScreenKind.HOME_TASK_OVERLAY -> VerifiedStartupMenuProgression.Screen.HOME_TASK_OVERLAY
+                            else -> VerifiedStartupMenuProgression.Screen.OTHER
+                        },
+                        confidence = detection?.confidence ?: 0,
+                        pid = sourcePid,
+                        currentPid = GameUtil.findGameProcessIdForDiagnostics(),
+                        windowPid = sourcePid,
+                        foregroundAndPixelsVerified = captureStillTrusted && frameResult.foregroundConfirmed,
+                        configuredTournament = DeckStrategyManager.currentDeckStrategy != null &&
+                            DeckStrategyManager.currentRunMode?.let {
+                                it.modeEnum == ModeEnum.TOURNAMENT && it.isEnable
+                            } == true,
+                        working = WorkTimeListener.working,
+                        manuallyPaused = PauseStatus.isPause || PauseStatus.pauseOrigin == PauseStatus.Origin.MANUAL,
+                        currentSessionPowerLogReady = freshCapture.currentSessionReady,
+                        activeMatch = active.state,
+                        priorAuthoritativeLineage = (PowerLogListener.logFile?.length() ?: 0L) > 0L,
+                        overlayDismissals = dismissDispatches,
+                        processLineageVerified = GameUtil.findProcessStartedAtForDiagnostics(sourcePid) != null,
+                    ),
+                )
+                log.info {
+                    "SCREEN_RECOVERY_STARTUP_MENU_REVALIDATED screen=${detection?.kind?.code ?: "UNKNOWN"} " +
+                        "confidence=${detection?.confidence ?: 0} action=$progression " +
+                        "activeMatch=${active.state} reason=${active.reason} pid=$sourcePid hwnd=$hwnd"
+                }
+                when (progression) {
+                    VerifiedStartupMenuProgression.Action.ENTER_HUB -> {
+                        Mode.recover(ModeEnum.HUB, "verified-hub-after-quest-overlay", enterStrategy = true)
+                        log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_CONFIRMED state=HUB strategyStarted=true" }
+                    }
+                    VerifiedStartupMenuProgression.Action.DISMISS_OVERLAY -> {
+                        val accepted = MouseUtil.leftButtonClickForRecovery(
+                            HubModeStrategy.HIDE_TASK_RECT.getCenterClickPos(),
+                        )
+                        log.warn {
+                            "SCREEN_RECOVERY_HOME_TASK_OVERLAY_DISMISS dispatched=$accepted " +
+                                "uiAccepted=awaiting-fresh-capture attempt=1"
+                        }
+                        scheduleHomeTaskOverlayRecovery(
+                            recoveryToken,
+                            1,
+                            probeAttempts + 1,
+                            1_300L,
+                        )
+                    }
+                    VerifiedStartupMenuProgression.Action.WAIT -> {
+                        log.info { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_WAIT reason=active-or-lineage-evidence action=NO_INPUT" }
+                    }
+                    VerifiedStartupMenuProgression.Action.BLOCK -> {
+                        log.info { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=untrusted-menu-evidence action=NO_INPUT" }
+                    }
+                }
+                return@schedule
+            }
             val observation = when (detection?.kind) {
                 ScreenKind.HOME_TASK_OVERLAY -> StartupQuestOverlayPolicy.Observation.QUEST_OVERLAY
                 ScreenKind.HOME -> StartupQuestOverlayPolicy.Observation.HUB
