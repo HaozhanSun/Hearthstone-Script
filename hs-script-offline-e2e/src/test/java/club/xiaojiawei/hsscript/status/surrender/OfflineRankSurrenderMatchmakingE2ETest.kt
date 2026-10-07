@@ -116,7 +116,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
             nowMs = now,
         )
         assertFalse(rankDecision.eligible)
-        assertEquals("rank-not-5-or-10", rankDecision.reason)
+        assertEquals("rank-not-5-or-10-or-legendary-20-plus", rankDecision.reason)
 
         val gameTicket = barrier.beginCurrentGame()
         assertNotNull(barrier.requireSurrender(gameTicket), "rank 4 must latch mandatory surrender")
@@ -178,7 +178,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
     }
 
     @Test
-    fun `historical rank four deck selection is now denied before any queue input`() {
+    fun `rank four queues then triggers mandatory surrender only after active game evidence`() {
         val fixture = readFixture()
         val priorTicket = barrier.beginCurrentGame()
         assertNotNull(barrier.requireSurrender(priorTicket))
@@ -202,22 +202,13 @@ class OfflineRankSurrenderMatchmakingE2ETest {
             ),
         )
 
-        // This real historical deck-selection screenshot shows rank 4. The
-        // production pre-queue boundary must now reject it before any input.
-        val preQueueRank = RankEligibilityCorePolicy.evaluate(
-            evidence = detection(fixture.deckSelectionRankBadge, System.currentTimeMillis()),
-            expectedMode = "TOURNAMENT",
-            actualMode = "TOURNAMENT",
-            expectedInWar = false,
-            inWar = false,
-            nowMs = System.currentTimeMillis(),
-        )
-        val preQueue = MatchmakingGuardPolicy.authorizeQueueInput(true, false, false, preQueueRank)
-        assertFalse(preQueue.allowed, "rank 4 must not enter matchmaking")
+        // Current rank 4 badge is not consulted at deck selection. Verify the
+        // actual input callback can run; the policy is evaluated in active game.
+        val preQueue = MatchmakingGuardPolicy.authorizeQueueInput(true, false, false)
         var queueInputSent = false
-        assertFalse(MatchmakingGuardPolicy.dispatchIfAuthorized(preQueue) { queueInputSent = true })
-        assertFalse(queueInputSent, "deny must produce no matchmaking input")
-        assertFalse(queueAllowed(rank = fixture.deckSelectionRankBadge))
+        assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(preQueue) { queueInputSent = true })
+        assertTrue(queueInputSent, "the rank-4 deck-selection badge must not block queue input")
+        assertTrue(queueAllowed(), "rank is deferred until a current game is active")
 
         // After the next game is authoritative in Power.log, run the actual
         // eligibility policy on rank 4 and arm only the mandatory surrender.
@@ -238,7 +229,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
             inWar = true,
             nowMs = now,
         )
-        assertEquals("rank-not-5-or-10", denied.reason)
+        assertEquals("rank-not-5-or-10-or-legendary-20-plus", denied.reason)
         val surrenderCapability = barrier.requireSurrender(ticket)
         assertNotNull(surrenderCapability)
         assertTrue(
@@ -305,9 +296,9 @@ class OfflineRankSurrenderMatchmakingE2ETest {
     }
 
     @Test
-    fun `exact ranks five and ten remain eligible while rank four unknown and OCR failure require surrender`() {
+    fun `exact five ten and legendary above twenty continue while resolved other ranks surrender and OCR holds`() {
         val now = System.currentTimeMillis()
-        for (rank in listOf(5, 10)) {
+        for (rank in listOf(5, 10, 21, 233, 5220)) {
             val decision = RankEligibilityCorePolicy.evaluate(
                 evidence = detection(rank, now),
                 expectedMode = "GAMEPLAY",
@@ -325,27 +316,43 @@ class OfflineRankSurrenderMatchmakingE2ETest {
             barrier.resetForTest()
         }
 
-        val denied = listOf(
-            detection(4, now),
-            null, // unresolved/unknown OCR and provider exception are both fail-closed evidence
+        val nonTarget = RankEligibilityCorePolicy.evaluate(
+            evidence = detection(4, now),
+            expectedMode = "GAMEPLAY",
+            actualMode = "GAMEPLAY",
+            expectedInWar = true,
+            inWar = true,
+            nowMs = now,
         )
-        denied.forEach { evidence ->
-            val decision = RankEligibilityCorePolicy.evaluate(
-                evidence = evidence,
-                expectedMode = "GAMEPLAY",
-                actualMode = "GAMEPLAY",
-                expectedInWar = true,
-                inWar = true,
-                nowMs = now,
-            )
-            assertFalse(decision.eligible)
-            val ticket = barrier.beginCurrentGame()
-            assertNotNull(barrier.requireSurrender(ticket))
-            guard.begin()
-            assertFalse(queueAllowed(), "denied evidence must not continue or start ordinary queue input")
-            guard.resetForTest()
-            barrier.resetForTest()
-        }
+        assertFalse(nonTarget.eligible)
+        val ticket = barrier.beginCurrentGame()
+        assertNotNull(barrier.requireSurrender(ticket), "resolved in-game rank 4 must trigger surrender")
+        guard.begin()
+        assertFalse(queueAllowed(), "ordinary actions stay blocked for mandatory surrender")
+        guard.resetForTest()
+        barrier.resetForTest()
+
+        val unresolved = RankEligibilityCorePolicy.evaluate(
+            evidence = null,
+            expectedMode = "GAMEPLAY",
+            actualMode = "GAMEPLAY",
+            expectedInWar = true,
+            inWar = true,
+            nowMs = now,
+        )
+        assertFalse(unresolved.eligible)
+        assertEquals("rank-evidence-missing", unresolved.reason)
+        // The app preflight retries this boundedly and then pauses while the
+        // rank barrier stays pending; it must not authorize turns or surrender.
+        val unresolvedTicket = barrier.beginCurrentGame()
+        assertEquals(MulliganRankDispatchBarrier.State.PENDING, barrier.currentState())
+        assertTrue(queueAllowed(), "rank remains deferred for any subsequent queue request")
+        assertEquals(
+            MulliganRankDispatchBarrier.State.PENDING,
+            barrier.currentState(),
+            "pending in-game rank evidence must remain a dispatch barrier for ordinary turn actions",
+        )
+        assertTrue(unresolvedTicket > 0L)
     }
 
     @Test
@@ -398,21 +405,11 @@ class OfflineRankSurrenderMatchmakingE2ETest {
         assertEquals(111, dimensions.second)
     }
 
-    private fun queueAllowed(rank: Int = 5): Boolean {
-        val now = System.currentTimeMillis()
-        val rankAuthorization = RankEligibilityCorePolicy.evaluate(
-            evidence = detection(rank, now),
-            expectedMode = "TOURNAMENT",
-            actualMode = "TOURNAMENT",
-            expectedInWar = false,
-            inWar = false,
-            nowMs = now,
-        )
+    private fun queueAllowed(): Boolean {
         return MatchmakingGuardPolicy.authorizeQueueInput(
             working = true,
             paused = false,
             mandatoryRankSurrenderPending = guard.isPending(),
-            rankAuthorization = rankAuthorization,
         ).allowed
     }
 

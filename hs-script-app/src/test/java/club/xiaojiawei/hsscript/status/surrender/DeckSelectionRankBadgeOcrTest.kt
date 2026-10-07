@@ -31,7 +31,7 @@ class DeckSelectionRankBadgeOcrTest {
     }
 
     @Test
-    fun `live 4x5 badge output and separator variants resolve rank four and never dispatch`() {
+    fun `live 4x5 badge resolves correctly and pre-match queue remains rank neutral`() {
         val screenshot = loadDeckSelectionScreenshot()
         for (rawBadgeText in listOf("4x5", "4 x 5", "4×5")) {
             val requestedRois = mutableListOf<String?>()
@@ -55,22 +55,12 @@ class DeckSelectionRankBadgeOcrTest {
             assertEquals(4, detection.rank ?: error("raw=$rawBadgeText must resolve rank 4 or remain unknown"))
             assertFalse(detection.rank == 5, "the star count must never become rank 5: raw=$rawBadgeText")
 
-            val gate = PreMatchRankGate.evaluate(
-                working = true,
-                paused = false,
-                mandatoryRankSurrenderPending = false,
-                expectedMode = "TOURNAMENT",
-                actualMode = "TOURNAMENT",
-                expectedInWar = false,
-                inWar = false,
-                nowMs = System::currentTimeMillis,
-                detectFreshRank = { detection },
-            )
+            assertEquals(4, detection.rank)
+            val gate = PreMatchRankGate.evaluate(true, false, false)
             var inputDispatches = 0
-            assertFalse(gate.rankDecision.eligible, "rank 4 must remain ineligible")
-            assertFalse(gate.queueAuthorization.allowed)
-            assertFalse(MatchmakingGuardPolicy.dispatchIfAuthorized(gate.queueAuthorization) { inputDispatches++ })
-            assertEquals(0, inputDispatches, "rank 4 / $rawBadgeText must not dispatch matchmaking")
+            assertTrue(gate.queueAuthorization.allowed)
+            assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(gate.queueAuthorization) { inputDispatches++ })
+            assertEquals(1, inputDispatches, "rank 4 / $rawBadgeText is judged only after match start")
         }
     }
 
@@ -96,17 +86,7 @@ class DeckSelectionRankBadgeOcrTest {
                 ),
             )
             assertEquals(rank, detection.rank ?: error("positive control rank=$rank must resolve"))
-            val gate = PreMatchRankGate.evaluate(
-                working = true,
-                paused = false,
-                mandatoryRankSurrenderPending = false,
-                expectedMode = "TOURNAMENT",
-                actualMode = "TOURNAMENT",
-                expectedInWar = false,
-                inWar = false,
-                nowMs = System::currentTimeMillis,
-                detectFreshRank = { detection },
-            )
+            val gate = PreMatchRankGate.evaluate(true, false, false)
             assertTrue(gate.queueAuthorization.allowed, "positive control rank=$rank")
             assertEquals(listOf<String?>("rank-badge-small"), requestedRois)
         }

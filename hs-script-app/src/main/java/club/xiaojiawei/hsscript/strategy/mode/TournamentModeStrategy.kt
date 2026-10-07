@@ -14,7 +14,6 @@ import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
 import club.xiaojiawei.hsscript.status.TournamentStartupActionPolicy
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
-import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
@@ -290,45 +289,17 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         log.info { "开始匹配 trace=$traceId" }
         val mandatoryRankSurrenderPending =
             club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending()
-        // Capture a new badge read for this queue attempt. Never use rank from
-        // a prior game or the mulligan cache as pre-match authorization.
+        // Rank is evaluated only after the new game is authoritative. A
+        // pre-match badge is not a reason to suppress matchmaking.
         val rankGate = PreMatchRankGate.evaluate(
             working = WorkTimeListener.working,
             paused = PauseStatus.isPause,
             mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
-            expectedMode = ModeEnum.TOURNAMENT.name,
-            actualMode = Mode.currMode?.name,
-            expectedInWar = false,
-            inWar = WarEx.inWar,
-            nowMs = { System.currentTimeMillis() },
-            detectFreshRank = {
-                CurrentRankDetector.detect(
-                    trigger = "pre-match-deck-selection",
-                    phase = "DECK_SELECTION",
-                )
-            },
         )
-        val rankDetection = rankGate.detection
-        val rankAuthorization = rankGate.rankDecision
         val queueAuthorization = rankGate.queueAuthorization
-        rankGate.captureFailure?.let { error ->
-            log.warn(error) {
-                "PRE_MATCH_RANK_CAPTURE_FAILED provider=OCR action=NO_QUEUE_INPUT " +
-                    "reason=${error.javaClass.simpleName}"
-            }
-        }
         val dispatchMatchmaking = queueAuthorization.allowed
         log.info {
-            "RANK_ELIGIBILITY_CHECK stage=PRE_MATCH provider=${rankDetection?.provider ?: "NONE"} " +
-                "rank=${rankDetection?.rank ?: "UNKNOWN"} tier=${rankDetection?.tier?.name ?: "UNKNOWN"} " +
-                "confidence=${rankDetection?.confidence ?: "unavailable"} agreement=${rankDetection?.agreementCount ?: 0} " +
-                "mode=${Mode.currMode?.name ?: "NONE"} inWar=${WarEx.inWar} " +
-                "decision=${if (rankAuthorization.eligible) "ALLOW" else "DENY"} " +
-                "reason=${rankAuthorization.reason}"
-        }
-        log.info {
-            "MATCHMAKING_GATE stage=PRE_MATCH rankPolicy=FRESH_EXACT_5_OR_10 " +
-                "mode=${Mode.currMode?.name ?: "NONE"} inWar=${WarEx.inWar} " +
+            "MATCHMAKING_GATE stage=PRE_MATCH rankPolicy=DEFER_UNTIL_ACTIVE_MATCH " +
                 "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} " +
                 "decision=${if (dispatchMatchmaking) "ALLOW" else "DENY"} " +
                 "reason=${queueAuthorization.reason}"
@@ -338,19 +309,6 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                 "MATCHMAKING_BLOCKED trace=$traceId " +
                     "reason=${queueAuthorization.reason} " +
                     "action=NO_QUEUE_INPUT"
-            }
-            if (PreMatchRankHoldPolicy.shouldEnterHold(
-                    rankAuthorized = rankAuthorization.eligible,
-                    working = WorkTimeListener.working,
-                    paused = PauseStatus.isPause,
-                    mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
-                )
-            ) {
-                PauseStatus.setAutomaticPause(true)
-                log.warn {
-                    "PRE_MATCH_RANK_HOLD reason=${rankAuthorization.reason} " +
-                        "action=AUTOMATIC_PAUSE inputDispatch=false bounded=true"
-                }
             }
             return
         }

@@ -442,12 +442,13 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
         val capability = MandatoryRankSurrenderGuard.begin()
         assertTrue(
             ActionDispatchGate.allowForState(
-                action = "surrender.retry.confirm",
+                action = "surrender.retry.confirm.accept-now",
                 paused = false,
                 working = true,
                 mandatoryRankSurrenderPending = true,
                 recoveryCapabilityValid = MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(capability),
             ),
+            "the production ACCEPT_NOW action must pass only with the live recovery capability",
         )
         assertFalse(
             ActionDispatchGate.allowForState(

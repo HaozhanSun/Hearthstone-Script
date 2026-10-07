@@ -2,8 +2,6 @@ package club.xiaojiawei.hsscript.strategy.mode
 
 import club.xiaojiawei.hsscript.status.PowerLogActiveMatchProbe
 import club.xiaojiawei.hsscript.status.VerifiedStartupMenuProgression
-import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
-import java.awt.Rectangle
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -48,47 +46,23 @@ class StartupHomeToMatchmakingIntegrationTest {
         )
 
         var queueDispatches = 0
-        var rankReads = 0
         // Mode.recover(HUB, enterStrategy=true) is a menu/state handoff only;
         // the following strategy must wait for the current-session log before rank capture.
         var currentSessionReady = false
-        if (home == VerifiedStartupMenuProgression.Action.ENTER_HUB && currentSessionReady) {
-            rankReads++
-        }
-        assertEquals(0, rankReads)
         assertEquals(0, queueDispatches)
         currentSessionReady = true
-
-        fun rankDetection(rank: Int) = CurrentRankDetector.Detection(
-            rank = rank,
-            tier = CurrentRankDetector.RankTier.UNKNOWN,
-            ocrText = rank.toString(),
-            confidence = 0.99,
-            captureBounds = Rectangle(5, 10, 20, 30),
-            provider = "PADDLEX",
-            capturedAtMs = 100_000L,
-            agreementCount = 1,
-        )
-        // Once session readiness exists, queue input still goes through the production authorization boundary.
-        for (rank in listOf(7, 5, 10)) {
+        // Queue authorization is rank-neutral for any fresh active session;
+        // rank capture belongs to the in-game Mulligan barrier.
+        for (rank in listOf(4, 5, 10, 21)) {
             if (!currentSessionReady) continue
             val result = PreMatchRankGate.evaluate(
                 working = true,
                 paused = false,
                 mandatoryRankSurrenderPending = false,
-                expectedMode = "TOURNAMENT",
-                actualMode = "TOURNAMENT",
-                expectedInWar = false,
-                inWar = false,
-                nowMs = { 100_000L },
-                detectFreshRank = { rankReads++; rankDetection(rank) },
             )
-            assertEquals(rank != 5 && rank != 10, !result.queueAuthorization.allowed)
-            if (MatchmakingGuardPolicy.dispatchIfAuthorized(result.queueAuthorization) { queueDispatches++ }) {
-                assertTrue(rank == 5 || rank == 10)
-            }
+            assertTrue(result.queueAuthorization.allowed, "rank=$rank is deferred")
+            assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(result.queueAuthorization) { queueDispatches++ })
         }
-        assertEquals(3, rankReads)
-        assertEquals(2, queueDispatches, "only exact fresh rank 5/10 is dispatched")
+        assertEquals(4, queueDispatches, "queue dispatches are independent of rank")
     }
 }

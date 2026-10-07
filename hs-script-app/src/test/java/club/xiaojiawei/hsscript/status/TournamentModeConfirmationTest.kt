@@ -217,34 +217,7 @@ class TournamentModeConfirmationTest {
             assertEquals(3, observations)
             assertTrue(PauseStatus.isAutomaticPause)
 
-            val now = System.currentTimeMillis()
-            val rankFour = CurrentRankDetector.Detection(
-                rank = 4,
-                tier = CurrentRankDetector.RankTier.UNKNOWN,
-                ocrText = "4",
-                confidence = 0.99,
-                captureBounds = Rectangle(0, 0, 1920, 1080),
-                provider = "PADDLEX",
-                capturedAtMs = now,
-                agreementCount = 1,
-            )
-            val rankGate = PreMatchRankGate.evaluate(
-                working = true,
-                paused = false,
-                mandatoryRankSurrenderPending = false,
-                expectedMode = "TOURNAMENT",
-                actualMode = "TOURNAMENT",
-                expectedInWar = false,
-                inWar = false,
-                nowMs = { now },
-                detectFreshRank = { rankFour },
-            )
-            var matchmakingInputs = 0
-            assertFalse(rankGate.queueAuthorization.allowed)
-            assertFalse(MatchmakingGuardPolicy.dispatchIfAuthorized(rankGate.queueAuthorization) {
-                matchmakingInputs++
-            }, "unknown mode OCR must stop before deck selection and matchmaking")
-            assertEquals(0, matchmakingInputs)
+            assertTrue(PauseStatus.isAutomaticPause, "unknown mode still holds before startMatching is reached")
         } finally {
             PauseStatus.setAutomaticPause(false)
         }

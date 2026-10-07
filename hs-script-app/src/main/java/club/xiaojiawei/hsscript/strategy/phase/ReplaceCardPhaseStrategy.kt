@@ -16,6 +16,7 @@ import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.MulliganScreenshot
+import javafx.beans.value.ChangeListener
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.enums.StepEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
@@ -50,6 +51,9 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
     private var rankPreflight: MulliganRankPreflight? = null
 
     @Volatile
+    private var rankHoldResumeListener: ChangeListener<Boolean>? = null
+
+    @Volatile
     private var latestMyMulliganState: MulliganStateEnum? = null
 
     /**
@@ -77,6 +81,8 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
      * INPUT line.
      */
     fun resetForNewGame() {
+        rankHoldResumeListener?.let { PauseStatus.removeChangeListener(it) }
+        rankHoldResumeListener = null
         cancelRankSurrenderRetry(resetBudget = true)
         cancelRankPreflight("new-game")
         // Keep the rank gate scoped to the same game lifecycle as the
@@ -190,7 +196,7 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         rankBarrierTicket = barrierTicket
         log.info {
             "MULLIGAN_RANK_DISPATCH_BARRIER state=PENDING ticket=$barrierTicket " +
-                "action=BLOCK_ORDINARY_INPUT_UNTIL_FRESH_RANK_5_OR_10"
+                "action=BLOCK_ORDINARY_INPUT_UNTIL_FRESH_ALLOWED_RANK"
         }
         mulliganInputConfirmed.set(true)
         rankSurrenderRequested.set(false)
@@ -339,7 +345,41 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
                 }
                 scheduleMulliganAction()
             },
+            onHold = { result -> holdForUnresolvedRank(barrierTicket, result) },
         ).also { it.start() }
+    }
+
+    private fun holdForUnresolvedRank(ticket: Long, result: SurrenderRuleResult) {
+        rankHoldResumeListener?.let(PauseStatus::removeChangeListener)
+        val listener = ChangeListener<Boolean> { _, _, paused ->
+            if (!paused && rankBarrierTicket == ticket &&
+                MulliganRankDispatchBarrier.currentState() == MulliganRankDispatchBarrier.State.PENDING
+            ) {
+                if (isRankPreflightEligible()) {
+                    rankHoldResumeListener?.let { PauseStatus.removeChangeListener(it) }
+                    rankHoldResumeListener = null
+                    SurrenderPolicy.retryRankInspectionAfterHold()
+                    log.warn {
+                        "MULLIGAN_RANK_HOLD_RESUMED ticket=$ticket action=RETRY_FRESH_RANK " +
+                            "ordinaryInput=false reason=explicit-resume"
+                    }
+                    startRankPreflight(ticket)
+                } else {
+                    log.warn {
+                        "MULLIGAN_RANK_HOLD_RESUME_BLOCKED ticket=$ticket " +
+                            "reason=active-mulligan-not-confirmed action=REPAUSE ordinaryInput=false"
+                    }
+                    PauseStatus.setAutomaticPause(true)
+                }
+            }
+        }
+        rankHoldResumeListener = listener
+        PauseStatus.addChangeListener(listener)
+        PauseStatus.setAutomaticPause(true)
+        log.warn {
+            "MULLIGAN_RANK_FAIL_CLOSED_HOLD ticket=$ticket rule=${result.ruleId} " +
+                "action=AUTOMATIC_PAUSE ordinaryInput=false surrender=false resume=F1_OR_EXPLICIT"
+        }
     }
 
     private fun isRankPreflightEligible(): Boolean =
@@ -350,6 +390,8 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             !rankSurrenderRequested.get()
 
     internal fun cancelRankPreflight(reason: String) {
+        rankHoldResumeListener?.let { PauseStatus.removeChangeListener(it) }
+        rankHoldResumeListener = null
         rankPreflight?.cancel(reason)
         rankPreflight = null
     }
@@ -455,46 +497,17 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             return
         }
         if (barrierState == MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED) return
-        if (PauseStatus.isPause || !rankSurrenderRequested.compareAndSet(false, true)) return
-        val capability = requireUnresolvedRankSurrenderCapability()
-        if (capability == null) {
-            rankSurrenderRequested.set(false)
-            return
-        }
+        if (PauseStatus.isPause) return
         val attempts = rankPreflight?.snapshot()?.attempts ?: 0
         val result = SurrenderPolicy.blockForUnresolvedRank(attempts)
+        val ticket = rankBarrierTicket ?: MulliganRankDispatchBarrier.beginCurrentGame().also { rankBarrierTicket = it }
         log.warn {
             "MULLIGAN_RANK_PREFLIGHT_WINDOW_ENDED ticket=${rankBarrierTicket ?: "none"} reason=$reason " +
-                "attempts=$attempts action=SURRENDER_UNRESOLVED_RANK"
+                "attempts=$attempts action=HOLD_UNRESOLVED_RANK"
         }
         cancelRankPreflight("rank-window-ended-$reason")
         cancelAllTask()
-        val dispatched = dispatchSurrenderDecision(
-            result,
-            "mulligan-rank-preflight",
-            rankSurrenderCapability = capability,
-        )
-        if (dispatched) {
-            cancelRankSurrenderRetry(resetBudget = true)
-        } else {
-            val ticket = rankBarrierTicket ?: return
-            scheduleRankSurrenderRetry(result, "mulligan-rank-preflight", capability, ticket)
-        }
-    }
-
-    /**
-     * A phase can leave Mulligan without a recognized local INPUT event.
-     * Create the pending barrier in that case, then require the same
-     * one-shot mandatory surrender used after exhausted rank OCR.
-     */
-    internal fun requireUnresolvedRankSurrenderCapability(): MulliganRankDispatchBarrier.SurrenderCapability? {
-        val ticket = when (MulliganRankDispatchBarrier.currentState()) {
-            MulliganRankDispatchBarrier.State.IDLE ->
-                MulliganRankDispatchBarrier.beginCurrentGame().also { rankBarrierTicket = it }
-            MulliganRankDispatchBarrier.State.PENDING -> rankBarrierTicket ?: return null
-            else -> return null
-        }
-        return MulliganRankDispatchBarrier.requireSurrender(ticket)
+        holdForUnresolvedRank(ticket, result)
     }
 
     /** Guard every mulligan click against a late rank decision or phase exit. */

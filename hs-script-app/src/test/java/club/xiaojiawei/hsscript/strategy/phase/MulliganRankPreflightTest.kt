@@ -53,7 +53,7 @@ class MulliganRankPreflightTest {
     }
 
     @Test
-    fun `only verified rank five and ten continue through policy guards after grace`() {
+    fun `verified five ten and legendary numeric ranks continue through policy guards after grace`() {
         val now = System.currentTimeMillis()
         val winningStreakDecision = SurrenderPolicy.persistentStreakDecision(
             PersistentStreakSnapshot(consecutiveSurrenders = 0, consecutiveWins = 5),
@@ -68,7 +68,7 @@ class MulliganRankPreflightTest {
         assertTrue(surrenderStreakDecision.blocksAutomaticSurrender)
         assertTrue(winRateDecision.shouldSurrender)
 
-        for (rank in listOf(5, 10)) {
+        for (rank in listOf(5, 10, 21, 233)) {
             for (tier in listOf(CurrentRankDetector.RankTier.GOLD, CurrentRankDetector.RankTier.UNKNOWN)) {
                 for (streakDecision in listOf(winningStreakDecision, surrenderStreakDecision)) {
                     SurrenderPolicy.resetForNewGame()
@@ -147,7 +147,7 @@ class MulliganRankPreflightTest {
     fun `rank policy surrenders verified non-target and fails closed for unknown evidence`() {
         val now = System.currentTimeMillis()
         val nonTarget = CurrentRankDetector.Detection(
-            rank = 7,
+            rank = 4,
             tier = CurrentRankDetector.RankTier.UNKNOWN,
             ocrText = "7",
             confidence = 1.0,
@@ -167,7 +167,7 @@ class MulliganRankPreflightTest {
                 PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
             ),
         )
-        assertEquals("current-rank-not-5-or-10", denied?.ruleId)
+        assertEquals("current-rank-not-5-or-10-or-legendary-20-plus", denied?.ruleId)
         assertTrue(denied?.shouldSurrender == true)
         assertFalse(denied!!.blocksAutomaticSurrender)
         assertTrue(NeverSurrenderPolicy.isMandatoryRankDispatch("mulligan-rank-preflight", denied.ruleId))
@@ -184,7 +184,8 @@ class MulliganRankPreflightTest {
             persistentStreakDecision = null,
         )
         assertEquals("rank-ocr-unresolved", unresolved?.ruleId)
-        assertTrue(unresolved?.shouldSurrender == true)
+        assertFalse(unresolved?.shouldSurrender == true)
+        assertTrue(unresolved?.blocksAutomaticSurrender == true)
         assertFalse(SurrenderPolicy.currentRankContinueAuthorized())
     }
 
@@ -211,7 +212,7 @@ class MulliganRankPreflightTest {
     @Test
     fun `resolved callback without explicit rank authorization still fails closed`() {
         val scheduler = ManualScheduler()
-        var surrenderCount = 0
+        var holdCount = 0
         var continueCount = 0
         val preflight = MulliganRankPreflight(
             config = MulliganRankPreflightConfig(initialDelayMs = 7_000, maxAttempts = 1),
@@ -220,9 +221,12 @@ class MulliganRankPreflightTest {
             inspect = { null },
             isResolved = { true },
             provider = { "PADDLEX" },
-            onSurrender = { result ->
+            onSurrender = { error("unresolved result must not surrender") },
+            onHold = { result ->
                 assertEquals("rank-ocr-unresolved", result.ruleId)
-                surrenderCount++
+                assertFalse(result.shouldSurrender)
+                holdCount++
+                PauseStatus.setAutomaticPause(true)
             },
             onContinue = { continueCount++ },
         )
@@ -231,16 +235,17 @@ class MulliganRankPreflightTest {
         scheduler.runScheduledAfter(7_000)
         scheduler.runWorker()
 
-        assertEquals(1, surrenderCount)
+        assertEquals(1, holdCount)
         assertEquals(0, continueCount)
-        assertEquals(MulliganRankPreflightState.SURRENDER_REQUESTED, preflight.snapshot().state)
+        assertEquals(MulliganRankPreflightState.EXHAUSTED, preflight.snapshot().state)
+        assertTrue(PauseStatus.isAutomaticPause)
     }
 
     @Test
     fun `retries after seven second grace without another Power log line`() {
         val scheduler = ManualScheduler()
         val attempts = mutableListOf<Long>()
-        var surrenderCount = 0
+        var holdCount = 0
         var logLines = listOf("MULLIGAN_STATE=INPUT", "MULLIGAN_STATE=INPUT")
         val gate = MulliganActionGate()
         MulliganRankDispatchBarrier.beginCurrentGame()
@@ -265,10 +270,12 @@ class MulliganRankPreflightTest {
                 null
             },
             provider = { "PADDLEX" },
-            onSurrender = { result ->
+            onSurrender = { error("unresolved result must not surrender") },
+            onHold = { result ->
                 assertEquals("rank-ocr-unresolved", result.ruleId)
-                assertTrue(result.shouldSurrender)
-                surrenderCount++
+                assertFalse(result.shouldSurrender)
+                holdCount++
+                PauseStatus.setAutomaticPause(true)
             },
             onContinue = { error("unresolved rank must not continue") },
         )
@@ -282,17 +289,17 @@ class MulliganRankPreflightTest {
         scheduler.runWorker()
 
         assertEquals(listOf(7_000L, 14_000L, 21_000L), attempts)
-        assertEquals(1, surrenderCount)
-        assertEquals(MulliganRankPreflightState.SURRENDER_REQUESTED, preflight.snapshot().state)
-        assertFalse(PauseStatus.isPause)
+        assertEquals(1, holdCount)
+        assertEquals(MulliganRankPreflightState.EXHAUSTED, preflight.snapshot().state)
+        assertTrue(PauseStatus.isAutomaticPause)
         logLines = emptyList()
         assertTrue(logLines.isEmpty(), "the retry schedule must not depend on a new log line")
     }
 
     @Test
-    fun `timeout is bounded and fails closed without pausing`() {
+    fun `timeout is bounded and falls into non-surrender hold`() {
         val scheduler = ManualScheduler()
-        var surrenderCount = 0
+        var holdCount = 0
         val preflight = MulliganRankPreflight(
             config = MulliganRankPreflightConfig(
                 initialDelayMs = 7_000,
@@ -305,10 +312,12 @@ class MulliganRankPreflightTest {
             isEligible = { true },
             inspect = { error("slow OCR should be cancelled before returning") },
             provider = { "PADDLEX" },
-            onSurrender = { result ->
+            onSurrender = { error("unresolved result must not surrender") },
+            onHold = { result ->
                 assertEquals("rank-ocr-unresolved", result.ruleId)
-                assertTrue(result.shouldSurrender)
-                surrenderCount++
+                assertFalse(result.shouldSurrender)
+                holdCount++
+                PauseStatus.setAutomaticPause(true)
             },
             onContinue = { error("timeout must not continue mulligan") },
         )
@@ -317,9 +326,9 @@ class MulliganRankPreflightTest {
         scheduler.runScheduledAfter(7_000)
         scheduler.runTimeout()
 
-        assertEquals(1, surrenderCount)
-        assertEquals(MulliganRankPreflightState.SURRENDER_REQUESTED, preflight.snapshot().state)
-        assertFalse(PauseStatus.isPause)
+        assertEquals(1, holdCount)
+        assertEquals(MulliganRankPreflightState.EXHAUSTED, preflight.snapshot().state)
+        assertTrue(PauseStatus.isAutomaticPause)
     }
 
     @Test
@@ -470,12 +479,12 @@ class MulliganRankPreflightTest {
     }
 
     @Test
-    fun `empty unknown and exception reads exhaust into surrender`() {
+    fun `empty unknown and exception reads exhaust into hold not surrender`() {
         val outcomes = listOf("empty", "UNKNOWN", "PaddleOCR exception")
         outcomes.forEach { outcome ->
             val scheduler = ManualScheduler()
             var attempts = 0
-            var surrenderCount = 0
+            var holdCount = 0
             val preflight = MulliganRankPreflight(
                 config = MulliganRankPreflightConfig(
                     initialDelayMs = 7_000,
@@ -492,10 +501,12 @@ class MulliganRankPreflightTest {
                     null
                 },
                 provider = { "PADDLEX" },
-                onSurrender = { result ->
+                onSurrender = { error("unresolved result must not surrender: $outcome") },
+                onHold = { result ->
                     assertEquals("rank-ocr-unresolved", result.ruleId, outcome)
-                    assertTrue(result.shouldSurrender, outcome)
-                    surrenderCount++
+                    assertFalse(result.shouldSurrender, outcome)
+                    holdCount++
+                    PauseStatus.setAutomaticPause(true)
                 },
                 onContinue = { error("$outcome must not continue mulligan") },
             )
@@ -507,26 +518,29 @@ class MulliganRankPreflightTest {
             }
 
             assertEquals(3, attempts, outcome)
-            assertEquals(1, surrenderCount, outcome)
-            assertEquals(MulliganRankPreflightState.SURRENDER_REQUESTED, preflight.snapshot().state, outcome)
-            assertFalse(PauseStatus.isPause, outcome)
+            assertEquals(1, holdCount, outcome)
+            assertEquals(MulliganRankPreflightState.EXHAUSTED, preflight.snapshot().state, outcome)
+            assertTrue(PauseStatus.isAutomaticPause, outcome)
         }
     }
 
     @Test
-    fun `cancelled OCR exhausts into rank surrender and cannot release ordinary input`() {
+    fun `cancelled OCR exhausts into hold and cannot release ordinary input`() {
         val scheduler = ManualScheduler()
-        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
-        var surrenderCapability: MulliganRankDispatchBarrier.SurrenderCapability? = null
+        MulliganRankDispatchBarrier.beginCurrentGame()
+        var holdCount = 0
         val preflight = MulliganRankPreflight(
             config = MulliganRankPreflightConfig(initialDelayMs = 0, maxAttempts = 1),
             scheduler = scheduler,
             isEligible = { true },
             inspect = { throw club.xiaojiawei.hsscript.ocr.PaddleXOcrCancelledException("test cancellation") },
             provider = { "PADDLEX" },
-            onSurrender = { result ->
+            onSurrender = { error("cancelled OCR must not surrender") },
+            onHold = { result ->
                 assertEquals("rank-ocr-unresolved", result.ruleId)
-                surrenderCapability = MulliganRankDispatchBarrier.requireSurrender(ticket)
+                assertFalse(result.shouldSurrender)
+                holdCount++
+                PauseStatus.setAutomaticPause(true)
             },
             onContinue = { error("cancelled OCR must never continue") },
         )
@@ -535,9 +549,10 @@ class MulliganRankPreflightTest {
         scheduler.runScheduledAfter(0)
         scheduler.runWorker()
 
-        assertNotNull(surrenderCapability)
+        assertEquals(1, holdCount)
+        assertTrue(PauseStatus.isAutomaticPause)
         assertEquals(
-            MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+            MulliganRankDispatchBarrier.State.PENDING,
             MulliganRankDispatchBarrier.currentState(),
         )
         assertFalse(
@@ -556,14 +571,13 @@ class MulliganRankPreflightTest {
                 rankBarrierState = MulliganRankDispatchBarrier.currentState(),
             ),
         )
-        assertTrue(
+        assertFalse(
             club.xiaojiawei.hsscript.status.ActionDispatchGate.allowForState(
                 action = "surrender.request",
                 paused = false,
                 working = true,
                 rankBarrierState = MulliganRankDispatchBarrier.currentState(),
-                rankSurrenderRequestCapabilityValid =
-                    MulliganRankDispatchBarrier.isSurrenderCapabilityValid(surrenderCapability),
+                rankSurrenderRequestCapabilityValid = false,
             ),
         )
     }
@@ -572,11 +586,9 @@ class MulliganRankPreflightTest {
     fun `main ready without a recognized local Mulligan input creates unresolved-rank barrier`() {
         ReplaceCardPhaseStrategy.resetForNewGame()
 
-        val capability = ReplaceCardPhaseStrategy.requireUnresolvedRankSurrenderCapability()
-
-        assertNotNull(capability)
+        MulliganRankDispatchBarrier.beginCurrentGame()
         assertEquals(
-            MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+            MulliganRankDispatchBarrier.State.PENDING,
             MulliganRankDispatchBarrier.currentState(),
         )
         assertFalse(
@@ -630,10 +642,10 @@ class MulliganRankPreflightTest {
     }
 
     @Test
-    fun `continue-shaped result without exact numeric rank retries and then fails closed`() {
+    fun `continue-shaped result without exact allowed numeric rank retries and then holds`() {
         val scheduler = ManualScheduler()
         var inspections = 0
-        var surrenderCount = 0
+        var holdCount = 0
         var continueCount = 0
         val preflight = MulliganRankPreflight(
             config = MulliganRankPreflightConfig(initialDelayMs = 0, retryIntervalMs = 0, maxAttempts = 2),
@@ -649,7 +661,12 @@ class MulliganRankPreflightTest {
                 )
             },
             provider = { "PADDLEX" },
-            onSurrender = { assertEquals("rank-ocr-unresolved", it.ruleId); surrenderCount++ },
+            onSurrender = { error("continue-shaped invalid result must not surrender") },
+            onHold = {
+                assertEquals("rank-ocr-unresolved", it.ruleId)
+                holdCount++
+                PauseStatus.setAutomaticPause(true)
+            },
             onContinue = { continueCount++ },
         )
 
@@ -660,9 +677,10 @@ class MulliganRankPreflightTest {
         }
 
         assertEquals(2, inspections)
-        assertEquals(1, surrenderCount)
+        assertEquals(1, holdCount)
+        assertTrue(PauseStatus.isAutomaticPause)
         assertEquals(0, continueCount)
-        assertEquals(MulliganRankPreflightState.SURRENDER_REQUESTED, preflight.snapshot().state)
+        assertEquals(MulliganRankPreflightState.EXHAUSTED, preflight.snapshot().state)
     }
 
     @Test

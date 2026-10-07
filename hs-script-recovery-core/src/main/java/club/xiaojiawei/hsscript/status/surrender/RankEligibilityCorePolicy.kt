@@ -35,7 +35,7 @@ object RankEligibilityCorePolicy {
         }
         val rank = evidence.rank ?: return Decision(false, "rank-unresolved")
         if (evidence.agreementCount < 1) return Decision(false, "rank-number-not-read-by-ocr")
-        val eligibleRank = rank == 5 || rank == 10
+        val eligibleRank = rank == 5 || rank == 10 || rank > 20
         when (evidence.provider.uppercase()) {
             "PADDLEX" -> {
                 val confidence = evidence.confidence
@@ -46,7 +46,7 @@ object RankEligibilityCorePolicy {
             "LEGACY" -> if (evidence.agreementCount < 2) return Decision(false, "legacy-rank-not-repeated")
             else -> return Decision(false, "rank-provider-unverified")
         }
-        if (!eligibleRank) return Decision(false, "rank-not-5-or-10")
-        return Decision(true, "verified-exact-rank-$rank")
+        if (!eligibleRank) return Decision(false, "rank-not-5-or-10-or-legendary-20-plus")
+        return Decision(true, if (rank > 20) "verified-legendary-rating-$rank" else "verified-exact-rank-$rank")
     }
 }

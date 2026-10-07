@@ -93,6 +93,7 @@ internal class MulliganRankPreflight(
     private val provider: () -> String,
     private val onSurrender: (SurrenderRuleResult) -> Unit,
     private val onContinue: () -> Unit,
+    private val onHold: (SurrenderRuleResult) -> Unit = {},
 ) {
     private val lock = Any()
     private var generation = 0L
@@ -234,7 +235,9 @@ internal class MulliganRankPreflight(
                 }
             }
 
-            if (!timeout && result?.ruleId == "rank-continue-authorized" && result.currentRank in setOf(5, 10)) {
+            if (!timeout && result?.ruleId == "rank-continue-authorized" &&
+                result.currentRank?.let { it == 5 || it == 10 || it > 20 } == true
+            ) {
                 if (authorizeContinue(result)) {
                     state = MulliganRankPreflightState.RESOLVED
                     log.info {
@@ -279,21 +282,21 @@ internal class MulliganRankPreflight(
                 scheduleNextLocked(context.expectedGeneration, config.retryIntervalMs)
             } else {
                 state = MulliganRankPreflightState.EXHAUSTED
-                val failClosed = SurrenderRuleResult(
+                val hold = SurrenderRuleResult(
                     ruleId = "rank-ocr-unresolved",
                     matched = false,
-                    shouldSurrender = true,
+                    shouldSurrender = false,
                     reason = "rank-ocr-unresolved attempts=${context.attemptNumber}",
-                    blocksAutomaticSurrender = false,
+                    blocksAutomaticSurrender = true,
                 )
                 log.warn {
                     "MULLIGAN_RANK_PREFLIGHT_EXHAUSTED attempt=${context.attemptNumber} " +
                         "maxAttempts=${config.maxAttempts} provider=${provider()} " +
-                        "action=SURRENDER pause=false surrender=true rule=${failClosed.ruleId} " +
-                        "reason=${failClosed.reason}"
+                        "action=HOLD pause=true surrender=false ordinaryInput=false rule=${hold.ruleId} " +
+                        "reason=${hold.reason}"
                 }
-                state = MulliganRankPreflightState.SURRENDER_REQUESTED
-                onSurrender(failClosed)
+                state = MulliganRankPreflightState.EXHAUSTED
+                onHold(hold)
             }
         }
     }

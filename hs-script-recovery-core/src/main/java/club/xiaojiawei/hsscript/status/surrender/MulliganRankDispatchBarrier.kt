@@ -20,7 +20,7 @@ object MulliganRankDispatchBarrier {
     }
 
     fun authorizeEligibleRank(ticket: Long, rank: Int): Boolean = synchronized(lock) {
-        if (ticket != generation || state != State.PENDING || rank !in ELIGIBLE_RANKS) return false
+        if (ticket != generation || state != State.PENDING || !isEligibleRank(rank)) return false
         state = State.ELIGIBLE
         true
     }
@@ -75,5 +75,5 @@ object MulliganRankDispatchBarrier {
         surrenderCapabilityConsumed = false
     }
 
-    private val ELIGIBLE_RANKS = setOf(5, 10)
+    private fun isEligibleRank(rank: Int): Boolean = rank == 5 || rank == 10 || rank > 20
 }

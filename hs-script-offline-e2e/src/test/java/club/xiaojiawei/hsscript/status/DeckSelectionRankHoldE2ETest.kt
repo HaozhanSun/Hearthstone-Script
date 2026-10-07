@@ -4,7 +4,6 @@ import club.xiaojiawei.hsscript.status.surrender.RankEligibilityCorePolicy
 import club.xiaojiawei.hsscript.status.surrender.RankEvidence
 import club.xiaojiawei.hsscript.status.DeckSelectionRecoveryPolicy
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
-import club.xiaojiawei.hsscript.strategy.mode.PreMatchRankHoldPolicy
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -13,7 +12,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.nio.file.Path
 
-/** Headless replay of the live rank-4 deck-selection recovery loop. */
+/** Headless regression: rank-neutral queue, in-game numeric policy. */
 class DeckSelectionRankHoldE2ETest {
     @Serializable
     private data class Fixture(
@@ -33,7 +32,7 @@ class DeckSelectionRankHoldE2ETest {
     )
 
     @Test
-    fun `rank four badge remains queue denied and unchanged recovery reaches bounded hold`() {
+    fun `rank four badge does not block queue and is denied only after match starts`() {
         val fixture = readFixture()
         assertEquals("unchanged-constructed-deck-selection-rank4-badge-rejected-before-queue", fixture.scenario)
         assertEquals("", fixture.rankBadgeSmallRoiRaw, "the captured tight numeral ROI was empty")
@@ -42,7 +41,16 @@ class DeckSelectionRankHoldE2ETest {
         assertTrue(fixture.rankEvidenceFresh)
 
         val now = 1_000_000L
-        val rank = RankEligibilityCorePolicy.evaluate(
+        val preMatchQueue = MatchmakingGuardPolicy.authorizeQueueInput(
+            working = true,
+            paused = false,
+            mandatoryRankSurrenderPending = false,
+        )
+        var queueInputs = 0
+        assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(preMatchQueue) { queueInputs++ })
+        assertEquals(1, queueInputs, "the visible rank-4 badge is not evaluated before queue dispatch")
+
+        val inGameRank = RankEligibilityCorePolicy.evaluate(
             evidence = RankEvidence(
                 rank = fixture.rank,
                 confidence = fixture.confidence,
@@ -54,31 +62,12 @@ class DeckSelectionRankHoldE2ETest {
             ),
             expectedMode = fixture.mode,
             actualMode = fixture.mode,
-            expectedInWar = false,
-            inWar = false,
+            expectedInWar = true,
+            inWar = true,
             nowMs = now,
         )
-        assertFalse(rank.eligible)
-        assertEquals("rank-not-5-or-10", rank.reason)
-
-        val queue = MatchmakingGuardPolicy.authorizeQueueInput(
-            working = true,
-            paused = false,
-            mandatoryRankSurrenderPending = false,
-            rankAuthorization = rank,
-        )
-        var queueInputs = 0
-        assertFalse(MatchmakingGuardPolicy.dispatchIfAuthorized(queue) { queueInputs++ })
-        assertEquals(0, queueInputs)
-        assertTrue(
-            PreMatchRankHoldPolicy.shouldEnterHold(
-                rankAuthorized = rank.eligible,
-                working = true,
-                paused = false,
-                mandatoryRankSurrenderPending = false,
-            ),
-            "ineligible rank stops repeated pre-match recovery without dispatching input",
-        )
+        assertFalse(inGameRank.eligible)
+        assertEquals("rank-not-5-or-10-or-legendary-20-plus", inGameRank.reason)
 
         assertFalse(DeckSelectionRecoveryPolicy.shouldApply(fixture.screenKind, fixture.mode, fixture.phase))
         assertTrue(fixture.unresolvedAttemptsBeforeAutomaticPause >= 1)

@@ -9,7 +9,6 @@ import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Test
 
 class ReplaceCardRankSurrenderPhaseTest {
@@ -21,7 +20,7 @@ class ReplaceCardRankSurrenderPhaseTest {
     }
 
     @Test
-    fun `DONE and MAIN_READY do not advance Mulligan while mandatory surrender is unresolved`() {
+    fun `DONE and MAIN_READY do not advance Mulligan while rank evidence is unresolved`() {
         val war = WarEx.war
         val oldPhase = war.currentPhase
         val oldTurnStep = war.currentTurnStep
@@ -37,9 +36,9 @@ class ReplaceCardRankSurrenderPhaseTest {
             war.won = ""
             war.lost = ""
             war.conceded = ""
-            assertNotNull(ReplaceCardPhaseStrategy.requireUnresolvedRankSurrenderCapability())
+            MulliganRankDispatchBarrier.beginCurrentGame()
             assertEquals(
-                MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+                MulliganRankDispatchBarrier.State.PENDING,
                 MulliganRankDispatchBarrier.currentState(),
             )
 
@@ -54,9 +53,9 @@ class ReplaceCardRankSurrenderPhaseTest {
             assertFalse(invokePhaseHandler(mainReady))
             assertEquals(WarPhaseEnum.REPLACE_CARD, war.currentPhase)
             assertEquals(
-                MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+                MulliganRankDispatchBarrier.State.PENDING,
                 MulliganRankDispatchBarrier.currentState(),
-                "the phase remains closed until surrender or authoritative terminal evidence",
+                "the phase remains closed until fresh rank evidence or authoritative terminal evidence",
             )
         } finally {
             ReplaceCardPhaseStrategy.resetForNewGame()

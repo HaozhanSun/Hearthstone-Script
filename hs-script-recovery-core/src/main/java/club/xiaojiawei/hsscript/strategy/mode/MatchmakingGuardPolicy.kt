@@ -1,6 +1,5 @@
 package club.xiaojiawei.hsscript.strategy.mode
 
-import club.xiaojiawei.hsscript.status.surrender.RankEligibilityCorePolicy
 
 /** Authoritative game-start gate shared by matchmaking scheduled tasks. */
 object MatchmakingGuardPolicy {
@@ -16,22 +15,15 @@ object MatchmakingGuardPolicy {
         mandatoryRankSurrenderPending: Boolean = false,
     ): Boolean = working && !paused && !mandatoryRankSurrenderPending
 
-    /**
-     * Authorize constructed matchmaking only from fresh, current-mode rank
-     * evidence. This is deliberately separate from the later mulligan check:
-     * the queue must not be entered before rank eligibility is established.
-     */
     fun authorizeQueueInput(
         working: Boolean,
         paused: Boolean,
         mandatoryRankSurrenderPending: Boolean,
-        rankAuthorization: RankEligibilityCorePolicy.Decision,
     ): QueueAuthorization {
         if (!working) return QueueAuthorization(false, "runtime-not-working")
         if (paused) return QueueAuthorization(false, "paused")
         if (mandatoryRankSurrenderPending) return QueueAuthorization(false, "mandatory-rank-surrender-pending")
-        if (!rankAuthorization.eligible) return QueueAuthorization(false, rankAuthorization.reason)
-        return QueueAuthorization(true, rankAuthorization.reason)
+        return QueueAuthorization(true, "runtime-authorized-rank-deferred-until-active-match")
     }
 
     /** Testable dispatch boundary: denied authorization never invokes input. */

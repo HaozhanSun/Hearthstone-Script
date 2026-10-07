@@ -955,7 +955,7 @@ object SurrenderPolicy {
             }
             return null
         }
-        if (authorization.reason == "rank-not-5-or-10") {
+        if (authorization.reason == "rank-not-5-or-10-or-legendary-20-plus") {
             rankCheckCompleted = true
             setRankInspectionState(RankInspectionState.RESOLVED)
             val result = evaluateCurrentRank(detection?.rank ?: 0, detection?.tier ?: CurrentRankDetector.RankTier.UNKNOWN)
@@ -985,12 +985,12 @@ object SurrenderPolicy {
             return null
         }
         rankCheckCompleted = true
-        setRankInspectionState(RankInspectionState.RESOLVED)
+        setRankInspectionState(RankInspectionState.BLOCKED)
         val result = unresolvedRankDecision(rankInspectionAttempts)
         log.warn {
             "RANK_POLICY_TRIGGERED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
                 "rank=${detection?.rank ?: "UNKNOWN"} tier=${detection?.tier?.name ?: "UNKNOWN"} " +
-                "action=SURRENDER reason=${authorization.reason} final=${result.reason}"
+                "action=HOLD reason=${authorization.reason} final=${result.reason}"
         }
         return result
     }
@@ -1001,12 +1001,12 @@ object SurrenderPolicy {
     ): SurrenderRuleResult? {
         // Exact numeric targets are authoritative even if the independent
         // tier classifier mistakes their badge artwork for Legendary.
-        if (rank == 5 || rank == 10) return null
+        if (rank == 5 || rank == 10 || rank > 20) return null
         return SurrenderRuleResult(
-            ruleId = "current-rank-not-5-or-10",
+            ruleId = "current-rank-not-5-or-10-or-legendary-20-plus",
             matched = false,
             shouldSurrender = true,
-            reason = "current-rank=$rank tier=${tier.name} target-ranks=5,10",
+            reason = "current-rank=$rank tier=${tier.name} allowed=5,10,legendary-rating>20",
         )
     }
 
@@ -1038,7 +1038,7 @@ object SurrenderPolicy {
         }
     }
 
-    /** Classification helper only; Legendary remains outside the allowed 5/10 ranks. */
+    /** Classification helper for the independent visual Legendary label. */
     internal fun isLegendaryDetection(detection: CurrentRankDetector.Detection?): Boolean =
         detection?.rank?.let { it > 20 } == true
 
@@ -1046,15 +1046,15 @@ object SurrenderPolicy {
         SurrenderRuleResult(
             ruleId = "rank-ocr-unresolved",
             matched = false,
-            shouldSurrender = true,
+            shouldSurrender = false,
             reason = "rank-ocr-unresolved attempts=$attempts",
-            blocksAutomaticSurrender = false,
+            blocksAutomaticSurrender = true,
         )
 
     /**
      * An active rank frame with no valid number is retried while bounded, then
-     * becomes an explicit fail-closed surrender decision. Unknown is never a
-     * playable continuation.
+     * remains on an explicit fail-closed hold. Unknown is never a playable
+     * continuation or evidence for automatic surrender.
      */
     internal fun classifyRankInspection(
         rank: Int?,
@@ -1081,7 +1081,7 @@ object SurrenderPolicy {
         return RankInspectionReadDecision(
             state = RankInspectionState.BLOCKED,
             wait = false,
-            pause = false,
+            pause = true,
             reason = if (detectionAvailable) "empty-or-unmapped" else "provider-failure-or-capture-failure",
         )
     }
@@ -1100,17 +1100,28 @@ object SurrenderPolicy {
 
     internal fun blockForUnresolvedRank(attempts: Int): SurrenderRuleResult {
         val result = unresolvedRankDecision(attempts)
-        setRankInspectionState(RankInspectionState.RESOLVED)
+        rankCheckCompleted = true
+        setRankInspectionState(RankInspectionState.BLOCKED)
         log.warn {
             "RANK_POLICY_BLOCKED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                "rule=${result.ruleId} reason=${result.reason} action=SURRENDER " +
-                "surrender=true pause=false ocrFailure=true"
+                "rule=${result.ruleId} reason=${result.reason} action=HOLD " +
+                "surrender=false pause=true ocrFailure=true"
         }
         return result
     }
 
     /** True when a rank read already produced a final safe or unsafe result. */
     internal fun currentRankCheckCompleted(): Boolean = rankCheckCompleted
+
+    /** Explicit resume from the fail-closed OCR hold starts a fresh bounded inspection batch. */
+    internal fun retryRankInspectionAfterHold() {
+        rankCheckCompleted = false
+        rankContinueAuthorized = false
+        rankContinueAuthorizedNumber = null
+        rankInspectionAttempts = 0
+        lastRankInspectionAt = 0L
+        setRankInspectionState(RankInspectionState.WAITING_FOR_RANK)
+    }
 
     /** True only after this game's numeric rank was positively authorized. */
     internal fun currentRankContinueAuthorized(): Boolean = rankContinueAuthorized
