@@ -311,6 +311,19 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                     "reason=${queueAuthorization.reason} " +
                     "action=NO_QUEUE_INPUT"
             }
+            if (PreMatchRankHoldPolicy.shouldEnterHold(
+                    rankAuthorized = rankAuthorization.eligible,
+                    working = WorkTimeListener.working,
+                    paused = PauseStatus.isPause,
+                    mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
+                )
+            ) {
+                PauseStatus.setAutomaticPause(true)
+                log.warn {
+                    "PRE_MATCH_RANK_HOLD reason=${rankAuthorization.reason} " +
+                        "action=AUTOMATIC_PAUSE inputDispatch=false bounded=true"
+                }
+            }
             return
         }
         logMatchmakingCheckpoint(traceId, "before-start")

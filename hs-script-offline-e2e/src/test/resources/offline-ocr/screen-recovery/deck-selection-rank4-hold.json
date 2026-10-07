@@ -1,0 +1,15 @@
+{
+  "scenario": "unchanged-constructed-deck-selection-rank4-badge-rejected-before-queue",
+  "screenKind": "DECK_SELECTION",
+  "mode": "TOURNAMENT",
+  "phase": "FILL_DECK",
+  "rankBadgeSmallRoiRaw": "",
+  "rankBadgeBigRoiRaw": "4x5",
+  "rank": 4,
+  "confidence": 0.99,
+  "provider": "PADDLEX",
+  "rankEvidenceFresh": true,
+  "unchangedFingerprint": "DECK_SELECTION|TOURNAMENT|FILL_DECK|rank-denied",
+  "unresolvedAttemptsBeforeAutomaticPause": 2,
+  "recoveryPauseBoundMs": 60000
+}

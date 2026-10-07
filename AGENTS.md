@@ -142,6 +142,12 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
   it; otherwise leave the conversation with the original task either resumed,
   completed with evidence, or explicitly blocked.
 - Workers report to the current secretary session; only that session deploys.
+- Before coordinating work, inspect and reuse the existing worker roster. Prefer
+  continuing or resuming a suitable existing worker with `send_input`/resume;
+  do not spawn a replacement agent when a suitable worker is already available.
+  Create a new worker only when no suitable existing worker can be reused and
+  the user has explicitly authorized creating one. A restart of an existing
+  worker must resume that worker's task and preserve its worktree/checkpoint.
 - Secretary implementation boundary: the current secretary only performs read-only
   investigation, evidence collection, worker routing, review, and deployment
   coordination. It must not implement code, strategy, or configuration fixes

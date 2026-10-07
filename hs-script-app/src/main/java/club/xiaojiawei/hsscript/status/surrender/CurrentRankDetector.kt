@@ -340,19 +340,16 @@ object CurrentRankDetector {
         if (!OcrRuntime.isLegacySelected()) {
             val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
                 looksLikeTwoDigitRank(numericRegion)
-            val bigProbe = runPaddleXRankProbe(
-                image = badgeRegion,
-                bounds = badgeRegionBounds,
-                roi = "bigRoi",
-                scale = 1,
-                trigger = evidenceTrigger,
-                visualTenHint = false,
-            )
-            // The tight numeric ROI is deliberately enlarged before the
-            // fallback request. It is only sent when the complete badge did
-            // not yield a usable 1..10 rank or >50 Legendary rating.
-            val smallProbe = if (bigProbe.rank == null) {
-                runPaddleXRankProbe(
+            val deckSelection = evidencePhase.equals("DECK_SELECTION", ignoreCase = true)
+            // The deck-selection badge includes the season-star count above the
+            // rank numeral. Read the tight numeral window first so OCR cannot
+            // combine e.g. rank 4 and five stars into the ambiguous token "4x5".
+            // The full badge remains a conservative fallback for clients where
+            // the small crop is unreadable.
+            val smallProbe: RankProbeResult
+            val bigProbe: RankProbeResult
+            if (deckSelection) {
+                smallProbe = runPaddleXRankProbe(
                     image = digitRegion,
                     bounds = numericRegionBounds,
                     roi = "smallRoi",
@@ -360,12 +357,43 @@ object CurrentRankDetector {
                     trigger = evidenceTrigger,
                     visualTenHint = visualTenHint,
                 )
+                bigProbe = if (smallProbe.rank == null) {
+                    runPaddleXRankProbe(
+                        image = badgeRegion,
+                        bounds = badgeRegionBounds,
+                        roi = "bigRoi",
+                        scale = 1,
+                        trigger = evidenceTrigger,
+                        visualTenHint = false,
+                        deckSelectionBadge = true,
+                    )
+                } else {
+                    skippedRankProbe("bigRoi", badgeRegionBounds, scale = 1)
+                }
             } else {
-                skippedRankProbe(
-                    roi = "smallRoi",
-                    bounds = numericRegionBounds,
-                    scale = RANK_SMALL_ROI_SCALE,
+                bigProbe = runPaddleXRankProbe(
+                    image = badgeRegion,
+                    bounds = badgeRegionBounds,
+                    roi = "bigRoi",
+                    scale = 1,
+                    trigger = evidenceTrigger,
+                    visualTenHint = false,
                 )
+                // The tight numeric ROI is deliberately enlarged before the
+                // fallback request. It is only sent when the complete badge did
+                // not yield a usable 1..10 rank or >50 Legendary rating.
+                smallProbe = if (bigProbe.rank == null) {
+                    runPaddleXRankProbe(
+                        image = digitRegion,
+                        bounds = numericRegionBounds,
+                        roi = "smallRoi",
+                        scale = RANK_SMALL_ROI_SCALE,
+                        trigger = evidenceTrigger,
+                        visualTenHint = visualTenHint,
+                    )
+                } else {
+                    skippedRankProbe("smallRoi", numericRegionBounds, RANK_SMALL_ROI_SCALE)
+                }
             }
             val selection = selectRankProbeResults(bigProbe, smallProbe)
             val rank = selection.rank
@@ -521,6 +549,7 @@ object CurrentRankDetector {
         scale: Int,
         trigger: String,
         visualTenHint: Boolean,
+        deckSelectionBadge: Boolean = false,
     ): RankProbeResult {
         val input = if (scale == 1) image else scaleForOcr(image, scale)
         val providerRoi = if (roi == "bigRoi") "rank-badge" else "rank-badge-small"
@@ -533,11 +562,15 @@ object CurrentRankDetector {
             roi = providerRoi,
         )
         val normalized = normalizeOcrText(recognition.text)
-        val candidate = resolveRankCandidate(
-            listOf(normalized),
-            visualTenHint = visualTenHint,
-            nativeConfidence = recognition.confidence,
-        )
+        val candidate = if (deckSelectionBadge) {
+            resolveDeckSelectionBadgeCandidate(normalized, recognition.confidence)
+        } else {
+            resolveRankCandidate(
+                listOf(normalized),
+                visualTenHint = visualTenHint,
+                nativeConfidence = recognition.confidence,
+            )
+        }
         return RankProbeResult(
             roi = roi,
             bounds = bounds,
@@ -547,6 +580,23 @@ object CurrentRankDetector {
             candidate = candidate,
             confidence = recognition.confidence,
         )
+    }
+
+    /**
+     * A complete pre-match badge crop can contain both the rank and season
+     * stars. Only accept OCR's explicit rank-by-star form here; arbitrary
+     * multi-number text remains unresolved. Prefer the number-only ROI first.
+     */
+    internal fun resolveDeckSelectionBadgeCandidate(
+        rawText: String,
+        confidence: Double?,
+    ): RankCandidate? {
+        val normalized = normalizeOcrText(rawText)
+        val match = Regex("^\\s*(10|[1-9])\\s*[xX×*]\\s*([0-9]{1,2})\\s*$")
+            .matchEntire(normalized)
+            ?: return null
+        val rank = match.groupValues[1].toIntOrNull() ?: return null
+        return RankCandidate(rank = rank, confidence = confidence, agreementCount = 1)
     }
 
     private fun rankProviderUsed(): String =

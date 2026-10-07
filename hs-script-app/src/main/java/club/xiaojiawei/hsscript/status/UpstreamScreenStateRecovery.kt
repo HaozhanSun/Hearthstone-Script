@@ -6,6 +6,7 @@ import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
+import club.xiaojiawei.hsscript.status.DeckSelectionRecoveryPolicy
 import club.xiaojiawei.hsscript.strategy.mode.LoginModeStrategy
 import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil
@@ -896,6 +897,7 @@ object UpstreamScreenStateRecovery {
         if (detection.kind != ScreenKind.LOADING) {
             slowReconnectWarningObservedAt.set(0L)
         }
+        var stateProgressApplied = true
 
         when (detection.kind) {
             ScreenKind.DECK_SELECTION -> {
@@ -933,16 +935,31 @@ object UpstreamScreenStateRecovery {
                             "queueMayResume=true"
                     }
                 }
-                Mode.recover(ModeEnum.TOURNAMENT, "visible-deck-selection", enterStrategy = false)
-                log.warn {
-                    "SCREEN_RECOVERY_APPLIED screen=DECK_SELECTION next=START_MATCHING " +
-                        "deck=${DeckStrategyManager.currentDeckStrategy?.name()}"
+                val sameStateNeedsRankPreflight = !DeckSelectionRecoveryPolicy.shouldApply(
+                        screenKind = detection.kind.code,
+                        currentMode = Mode.currMode?.name,
+                        currentPhase = WarEx.war.currentPhase.name,
+                    )
+                if (sameStateNeedsRankPreflight) {
+                    stateProgressApplied = false
+                    log.warn {
+                        "SCREEN_RECOVERY_NO_PROGRESS screen=DECK_SELECTION " +
+                            "action=PRE_MATCH_RANK_PREFLIGHT retryTracked=true " +
+                            "mode=${Mode.currMode?.name ?: "NONE"} phase=${WarEx.war.currentPhase.name}"
+                    }
+                } else {
+                    Mode.recover(ModeEnum.TOURNAMENT, "visible-deck-selection", enterStrategy = false)
+                    log.warn {
+                        "SCREEN_RECOVERY_APPLIED screen=DECK_SELECTION next=START_MATCHING " +
+                            "deck=${DeckStrategyManager.currentDeckStrategy?.name()}"
+                    }
                 }
                 EXTRA_THREAD_POOL.schedule({
                     if (WorkTimeListener.working && !PauseStatus.isPause && !WarEx.inWar) {
                         TournamentModeStrategy.startMatching()
                     }
                 }, 300, TimeUnit.MILLISECONDS)
+                if (sameStateNeedsRankPreflight) return false
             }
 
             ScreenKind.RESULT -> {
@@ -1093,7 +1110,7 @@ object UpstreamScreenStateRecovery {
                 }
             }
         }
-        return true
+        return stateProgressApplied
     }
 }
 

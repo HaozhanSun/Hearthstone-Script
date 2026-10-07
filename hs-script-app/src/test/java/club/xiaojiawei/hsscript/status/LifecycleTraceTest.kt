@@ -7,6 +7,7 @@ import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class LifecycleTraceTest {
@@ -92,6 +93,32 @@ class LifecycleTraceTest {
     fun unresolvedRecoveryPauseBudgetIncludingMonitorPollingIsAtMostOneMinute() {
         assertEquals(60_000L, LifecycleTrace.unresolvedRecoveryPauseBoundMsForTest())
         assertTrue(LifecycleTrace.unresolvedRecoveryPauseBoundMsForTest() <= 60_000L)
+    }
+
+    @Test
+    fun sameDeckSelectionRankDeniedRecoveryIsTrackedAsNoProgressAndBounded() {
+        val tracker = ScreenRecoveryAttemptTracker(maxUnresolvedAttempts = 2)
+        val screenKind = "DECK_SELECTION"
+        val mode = "TOURNAMENT"
+        val phase = "FILL_DECK"
+        val fingerprint = "$screenKind|$mode|$phase|rank-denied"
+        val recovered = DeckSelectionRecoveryPolicy.shouldApply(screenKind, mode, phase)
+
+        assertFalse(recovered, "identical deck-selection state must not claim recovery progress")
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            tracker.record(fingerprint, recovered),
+        )
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 2, shouldPause = true),
+            tracker.record(fingerprint, recovered),
+            "the unchanged rank-denied fingerprint reaches the existing bounded pause threshold",
+        )
+        assertTrue(LifecycleTrace.unresolvedRecoveryPauseBoundMsForTest() <= 60_000L)
+        assertTrue(
+            DeckSelectionRecoveryPolicy.shouldApply("HUB", mode, phase),
+            "a genuinely changed screen remains eligible for the normal recovery action",
+        )
     }
 
     @Test
