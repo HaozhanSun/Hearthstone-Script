@@ -12,6 +12,7 @@ import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
+import club.xiaojiawei.hsscript.status.TournamentStartupActionPolicy
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
 import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
@@ -121,6 +122,26 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                     return
                 }
                 if (!PowerLogListener.checkPowerLogSize()) {
+                    return
+                }
+                val startupScreen = ScreenStateRecovery.observeFreshTournamentStartupScreen()
+                val startupActionAllowed = TournamentStartupActionPolicy.mayStartModeSelection(
+                    screen = startupScreen?.screen,
+                    confidence = startupScreen?.confidence ?: 0,
+                    currentPid = GameUtil.findGameProcessIdForDiagnostics(),
+                    observedPid = startupScreen?.pid,
+                    working = WorkTimeListener.canWork(),
+                    paused = PauseStatus.isPause,
+                )
+                if (!startupActionAllowed) {
+                    PauseStatus.setAutomaticPause(true)
+                    log.warn {
+                        "TOURNAMENT_STARTUP_ACTION_BLOCKED reason=fresh-trusted-tournament-screen-required " +
+                            "screen=${startupScreen?.screen ?: "UNKNOWN"} " +
+                            "confidence=${startupScreen?.confidence ?: 0} " +
+                            "pid=${startupScreen?.pid ?: "n/a"} " +
+                            "action=NO_MODE_DECK_OR_MATCHMAKING_INPUT"
+                    }
                     return
                 }
                 SystemUtil.delayShort()

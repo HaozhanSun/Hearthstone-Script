@@ -122,6 +122,9 @@ class TournamentModeConfirmationTest {
         )))
 
         assertTrue(tournament.contains("confirmBeforeDeckSelection"))
+        assertTrue(tournament.contains("observeFreshTournamentStartupScreen"))
+        assertTrue(tournament.indexOf("observeFreshTournamentStartupScreen") < tournament.indexOf("clickModeChangeButton()"))
+        assertTrue(tournament.contains("TOURNAMENT_STARTUP_ACTION_BLOCKED"))
         assertTrue(tournament.indexOf("confirmBeforeDeckSelection") < tournament.indexOf("selectDeck(deckStrategy, expectedDeckSlot)"))
         assertTrue(tournament.contains("DECK_SLOT_RESOLVED"))
         assertTrue(tournament.contains("recoverDeckSelectionAndStart"))
@@ -136,6 +139,7 @@ class TournamentModeConfirmationTest {
         assertTrue(tournament.contains("MatchmakingDialogRecoveryPolicy.dispatchConfirm(decision)"))
         assertTrue(confirmation.contains("title-roi-ocr"))
         assertTrue(confirmation.contains("TOURNAMENT_MODE_CONFIRMATION_OCR provider=LEGACY_FAST"))
+        assertFalse(confirmation.contains("CONTINUE_DETERMINISTIC_MODE"))
         assertFalse(confirmation.contains("tournament-mode-fullscreen"))
         assertTrue(confirmation.contains("image.width * 0.30"))
         assertTrue(confirmation.contains("image.width * 0.40"))
@@ -178,7 +182,7 @@ class TournamentModeConfirmationTest {
     }
 
     @Test
-    fun `three unknown mode observations fall back to deterministic selection`() {
+    fun `three unknown mode observations pause before deck selection`() {
         var observations = 0
         try {
             PauseStatus.setAutomaticPause(false)
@@ -203,9 +207,9 @@ class TournamentModeConfirmationTest {
                 shouldContinue = { true },
             )
 
-            assertTrue(result)
+            assertFalse(result)
             assertEquals(3, observations)
-            assertFalse(PauseStatus.isAutomaticPause)
+            assertTrue(PauseStatus.isAutomaticPause)
 
             val now = System.currentTimeMillis()
             val rankFour = CurrentRankDetector.Detection(
@@ -233,7 +237,7 @@ class TournamentModeConfirmationTest {
             assertFalse(rankGate.queueAuthorization.allowed)
             assertFalse(MatchmakingGuardPolicy.dispatchIfAuthorized(rankGate.queueAuthorization) {
                 matchmakingInputs++
-            }, "unknown mode-title fallback must not bypass the independent rank gate")
+            }, "unknown mode OCR must stop before deck selection and matchmaking")
             assertEquals(0, matchmakingInputs)
         } finally {
             PauseStatus.setAutomaticPause(false)

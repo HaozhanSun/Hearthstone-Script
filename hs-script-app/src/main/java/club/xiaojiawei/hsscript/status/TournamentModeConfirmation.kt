@@ -170,24 +170,6 @@ object TournamentModeConfirmation {
                 -> sleeper(450)
             }
         }
-        // The mode click immediately before this check is deterministic, and
-        // the upstream entry path does not put OCR on the critical path.  A
-        // narrow ornate title can still produce an unusable OCR string even
-        // when the selected mode is correct.  Do not turn that recognition
-        // miss into an automatic pause: retain the evidence, continue with
-        // the already-selected mode, and let the normal deck-selection and
-        // screen-recovery guards validate the next state.  A positive
-        // mismatch or an actively-open mode selector remains fail-safe.
-        if (lastResult?.state == TournamentModeConfirmationState.UNRECOGNIZED) {
-            log.warn {
-                "TOURNAMENT_MODE_CONFIRMATION_FALLBACK action=CONTINUE_DETERMINISTIC_MODE " +
-                    "expectedMode=${lastResult?.expectedMode?.name ?: "n/a"} " +
-                    "strategy=${lastResult?.strategyId ?: "n/a"} deckSlot=${lastResult?.deckSlot ?: "n/a"} " +
-                    "reason=${lastResult?.reason ?: "mode-title-unrecognized"} " +
-                    "ocr=${lastResult?.ocrText?.ifBlank { "<empty>" }?.take(160) ?: "<empty>"}"
-            }
-            return true
-        }
         if (shouldContinue()) pauseForUnsafeMode(lastResult) else logStateChanged(lastResult)
         return false
     }

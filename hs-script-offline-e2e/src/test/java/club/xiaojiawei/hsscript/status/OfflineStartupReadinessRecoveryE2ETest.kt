@@ -35,6 +35,38 @@ class OfflineStartupReadinessRecoveryE2ETest {
         val screenshot = ImageIO.read(bytes.inputStream()) ?: error("Incident screenshot is not decodable")
         assertTrue(screenshot.width >= 1280 && screenshot.height >= 720)
 
+        // The exact loading frame accompanied an empty/missing mode OCR
+        // observation in the incident. Neither outcome authorizes the
+        // tournament strategy's mode/deck/start action chain.
+        val modeOrDeckInputs = AtomicInteger()
+        val queueInputs = AtomicInteger()
+        for (modeOcr in listOf("", "ESss")) {
+            val screen = if (modeOcr.isBlank()) "UNKNOWN" else "LOADING"
+            val authorized = TournamentStartupActionPolicy.mayStartModeSelection(
+                screen = screen,
+                confidence = if (modeOcr.isBlank()) 0 else 95,
+                currentPid = 97212L,
+                observedPid = 97212L,
+                working = true,
+                paused = false,
+            )
+            if (authorized) modeOrDeckInputs.incrementAndGet()
+        }
+        assertEquals(0, modeOrDeckInputs.get(), "loading and empty/garbage OCR must not dispatch mode/deck/start")
+        assertEquals(0, queueInputs.get(), "a startup observation never authorizes queue input")
+
+        // Only a later fresh, trusted TOURNAMENT observation on that same
+        // current process reaches the first mode-selection boundary.
+        assertTrue(TournamentStartupActionPolicy.mayStartModeSelection(
+            screen = "TOURNAMENT",
+            confidence = 95,
+            currentPid = 97212L,
+            observedPid = 97212L,
+            working = true,
+            paused = false,
+        ))
+        assertEquals(0, queueInputs.get(), "trusted screen proof still cannot queue on its own")
+
         val max = StartupMenuObservationPolicy.MAX_PASSIVE_REOBSERVATIONS
         val queueDispatches = AtomicInteger()
         val gameplayDispatches = AtomicInteger()

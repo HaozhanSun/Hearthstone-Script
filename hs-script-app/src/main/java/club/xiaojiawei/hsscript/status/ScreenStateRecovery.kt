@@ -213,8 +213,15 @@ object ScreenStateRecovery {
     }
 
     /** Read-only, fresh screenshot observation for the Beta no-progress guard. */
-    internal fun observeFreshScreenForWatchdog(): FreshScreenObservation? {
-        val recoveryToken = ScreenRecoveryRuntime.tokenOrNull() ?: return null
+    internal fun observeFreshScreenForWatchdog(): FreshScreenObservation? =
+        observeFreshCurrentGameScreen(requireRecoveryRuntime = true)
+
+    /** Read-only pre-session tournament proof; uses the same current-window capture authority. */
+    internal fun observeFreshTournamentStartupScreen(): FreshScreenObservation? =
+        observeFreshCurrentGameScreen(requireRecoveryRuntime = false)
+
+    private fun observeFreshCurrentGameScreen(requireRecoveryRuntime: Boolean): FreshScreenObservation? {
+        val recoveryToken = if (requireRecoveryRuntime) ScreenRecoveryRuntime.tokenOrNull() ?: return null else null
         val initialPid = GameUtil.findGameProcessIdForDiagnostics() ?: return null
         val gameWindow = resolveLiveGameWindow() ?: return null
         val captureResult = MouseUtil.withRecoveryForeground(gameWindow) {
@@ -235,7 +242,9 @@ object ScreenStateRecovery {
                 )
             }
         }
-        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken) || !captureResult.foregroundConfirmed) return null
+        if ((requireRecoveryRuntime && !ScreenRecoveryRuntime.isCurrent(recoveryToken)) ||
+            !captureResult.foregroundConfirmed
+        ) return null
         val capture = captureResult.value ?: return null
         if (GameUtil.findGameProcessIdForDiagnostics() != initialPid ||
             !GameUtil.isVerifiedCurrentGameWindow(gameWindow)
