@@ -84,8 +84,7 @@ class PostResultRankProgressPolicyTest {
                 ),
             )
             assertEquals(
-                if (attempt == 0) PostResultRankProgressPolicy.Input.CENTER_CLICK
-                else PostResultRankProgressPolicy.Input.KEYBOARD_ENTER,
+                PostResultRankProgressPolicy.Input.CENTER_CLICK,
                 PostResultRankProgressPolicy.inputForAttempt(attempt + 1),
             )
             assertNotNull(coordinator.reserveRankProgressInput(ticket, PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS))

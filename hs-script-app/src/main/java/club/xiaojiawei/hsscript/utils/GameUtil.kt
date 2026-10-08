@@ -152,6 +152,13 @@ object GameUtil {
             WAR.conceded.isNotBlank() ||
             gameEndTasks.hasTerminalPageTask()
 
+    /** Lifecycle recovery must not race the bounded, proof-authorized result-page worker. */
+    internal fun hasActiveTerminalPageCleanupCapability(): Boolean =
+        terminalPageCleanupCoordinator.snapshot().state == TerminalPageCleanupCoordinator.State.RUNNING &&
+            MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(
+                MandatoryRankSurrenderGuard.existingTerminalCleanupCapability(),
+            )
+
     /**
      * A new CREATE_GAME/TURN=1 boundary supersedes any result-page cleanup
      * task left by the previous game. Without this reset, a stale task makes

@@ -38,7 +38,7 @@ class GoldFourRankProgressFixtureTest {
     }
 
     @Test
-    fun `rank page allows bounded click then enter and completes only after a fresh destination observation`() {
+    fun `rank page allows bounded target clicks and completes only after a fresh destination observation`() {
         val rankPage = loadImage(GOLD_FOUR)
         val coordinator = TerminalPageCleanupCoordinator()
         val ticket = assertNotNull(coordinator.begin().ticket)
@@ -53,8 +53,7 @@ class GoldFourRankProgressFixtureTest {
             )
             assertEquals(PostResultRankProgressPolicy.Action.CONTINUE, decision)
             assertEquals(
-                if (index == 0) PostResultRankProgressPolicy.Input.CENTER_CLICK
-                else PostResultRankProgressPolicy.Input.KEYBOARD_ENTER,
+                PostResultRankProgressPolicy.Input.CENTER_CLICK,
                 PostResultRankProgressPolicy.inputForAttempt(index + 1),
             )
             assertNotNull(coordinator.reserveRankProgressInput(ticket, PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS))
@@ -93,8 +92,62 @@ class GoldFourRankProgressFixtureTest {
         assertEquals(TerminalPageCleanupCoordinator.State.COMPLETED, coordinator.snapshot().state)
     }
 
+    @Test
+    fun `v597 post-Enter capture remains rank reward and permits only the remaining bounded click`() {
+        val postEnter = loadImage(V597_POST_ENTER)
+        assertEquals(V597_POST_ENTER_SHA256, sha256(fixtureBytes(V597_POST_ENTER)))
+        assertEquals(1920, postEnter.width)
+        assertEquals(1080, postEnter.height)
+        val evidence = ScreenStateRecovery.resultVisualEvidenceForFixture(postEnter)
+        assertMetricNear(evidence, "continue", 0.046)
+        assertMetricNear(evidence, "banner", 0.096)
+        assertMetricNear(evidence, "centerDark", 0.269)
+        assertMetricNear(evidence, "bannerWarm", 0.598)
+        assertEquals("RANK_PROGRESS_CONTINUATION", ScreenStateRecovery.classifyImageForResultFixture(postEnter), evidence)
+        assertEquals("RANK_PROGRESS_CONTINUATION", UpstreamScreenStateRecovery.classifyImageForResultFixture(postEnter))
+
+        val coordinator = TerminalPageCleanupCoordinator()
+        val ticket = assertNotNull(coordinator.begin().ticket)
+        val afterPriorEnter = requireNotNull(coordinator.nextProbe(ticket))
+        // The fixture is the authorized current-client capture after the old
+        // KEYBOARD_ENTER dispatch. The unchanged reward page is not success.
+        assertEquals(
+            PostResultRankProgressPolicy.Action.CONTINUE,
+            PostResultRankProgressPolicy.decide(true, true, true, coordinator.snapshot().rankProgressInputs),
+        )
+        assertEquals(PostResultRankProgressPolicy.Input.CENTER_CLICK, PostResultRankProgressPolicy.inputForAttempt(1))
+        assertNotNull(coordinator.reserveRankProgressInput(ticket, PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS))
+        assertEquals(TerminalPageCleanupCoordinator.State.RUNNING, coordinator.snapshot().state)
+        assertTrue(afterPriorEnter > 0)
+
+        // Even if the next authorized capture still shows the same page, the
+        // second rank-specific input is the final allowed dispatch; it cannot
+        // mark cleanup complete or create an unbounded retry loop.
+        val afterRetry = requireNotNull(coordinator.nextProbe(ticket))
+        assertEquals("RANK_PROGRESS_CONTINUATION", ScreenStateRecovery.classifyImageForResultFixture(postEnter))
+        assertEquals(
+            PostResultRankProgressPolicy.Action.CONTINUE,
+            PostResultRankProgressPolicy.decide(true, true, true, coordinator.snapshot().rankProgressInputs),
+        )
+        assertEquals(PostResultRankProgressPolicy.Input.CENTER_CLICK, PostResultRankProgressPolicy.inputForAttempt(2))
+        assertNotNull(coordinator.reserveRankProgressInput(ticket, PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS))
+        assertEquals(
+            PostResultRankProgressPolicy.Action.INPUT_BUDGET_EXHAUSTED,
+            PostResultRankProgressPolicy.decide(true, true, true, coordinator.snapshot().rankProgressInputs),
+        )
+        assertTrue(coordinator.fail(ticket, "rank-progress-input-budget-exhausted"))
+        assertEquals(TerminalPageCleanupCoordinator.State.FAILED, coordinator.snapshot().state)
+        assertTrue(afterRetry > afterPriorEnter)
+    }
+
     private fun fixtureBytes(path: String): ByteArray =
         requireNotNull(javaClass.getResourceAsStream(path)) { "Missing screenshot fixture $path" }.use { it.readBytes() }
+
+    private fun assertMetricNear(evidence: String, name: String, expected: Double) {
+        val value = Regex("(?:^|\\s)${Regex.escape(name)}=([0-9]+\\.[0-9]+)")
+            .find(evidence)?.groupValues?.get(1)?.toDouble()
+        assertTrue(value != null && kotlin.math.abs(value - expected) < 0.001, "$name expected=$expected evidence=$evidence")
+    }
 
     private fun loadImage(path: String) = requireNotNull(ImageIO.read(ByteArrayInputStream(fixtureBytes(path))))
 
@@ -110,5 +163,9 @@ class GoldFourRankProgressFixtureTest {
             "/club/xiaojiawei/hsscript/status/surrender/v577-rank-up-gold3-20261005-221531-323.png"
         private const val DEFEAT =
             "/club/xiaojiawei/hsscript/status/surrender/v579-terminal-proof-unknown-postcheck-20261005-232525-573.png"
+        private const val V597_POST_ENTER =
+            "/club/xiaojiawei/hsscript/status/surrender/v597-post-enter-same-rank-reward-20261007-205000-098.png"
+        private const val V597_POST_ENTER_SHA256 =
+            "BF175A7B2F9CCF4E14D082D5968F21F490F9B61A0206FE70462304E53BA422FE"
     }
 }

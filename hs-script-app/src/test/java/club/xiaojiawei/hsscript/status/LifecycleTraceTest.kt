@@ -64,6 +64,29 @@ class LifecycleTraceTest {
     }
 
     @Test
+    fun terminalCleanupDefersAndResetsGenericUnresolvedPauseBudget() {
+        val tracker = ScreenRecoveryAttemptTracker(maxUnresolvedAttempts = 2)
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            tracker.record("GAMEPLAY|FILL_DECK|war-1", recovered = false),
+        )
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldPause = false),
+            tracker.deferForTerminalCleanup("GAMEPLAY|FILL_DECK|war-1"),
+        )
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            tracker.record("GAMEPLAY|FILL_DECK|war-1", recovered = false),
+            "after terminal cleanup ends, generic recovery starts a fresh bounded observation window",
+        )
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 2, shouldPause = true),
+            tracker.record("GAMEPLAY|FILL_DECK|war-1", recovered = false),
+            "ordinary unresolved screens still trigger the existing safety pause threshold",
+        )
+    }
+
+    @Test
     fun recoveryAndStateChangeResetTheUnresolvedAttemptStreak() {
         val tracker = ScreenRecoveryAttemptTracker(maxUnresolvedAttempts = 2)
         tracker.record("HUB|TOURNAMENT", recovered = false)

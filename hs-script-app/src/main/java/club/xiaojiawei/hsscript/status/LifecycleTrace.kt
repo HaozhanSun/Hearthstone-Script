@@ -36,6 +36,12 @@ internal class ScreenRecoveryAttemptTracker(private val maxUnresolvedAttempts: I
         fingerprint = null
         unresolvedAttempts = 0
     }
+
+    fun deferForTerminalCleanup(fingerprint: String): Decision {
+        this.fingerprint = fingerprint
+        unresolvedAttempts = 0
+        return Decision(unresolvedAttempts = 0, shouldPause = false)
+    }
 }
 
 /**
@@ -177,6 +183,17 @@ object LifecycleTrace {
 
         val fingerprint = stateFingerprint()
         val now = System.currentTimeMillis()
+        if (GameUtil.hasActiveTerminalPageCleanupCapability()) {
+            stateRecoveryFingerprint = fingerprint
+            stateRecoverySince = now
+            stateRecoveryAttemptAt = now
+            stateRecoveryAttemptTracker.deferForTerminalCleanup(fingerprint)
+            log.info {
+                "SCREEN_RECOVERY_DEFERRED reason=terminal-result-cleanup-active " +
+                    "state=$fingerprint pause=false inputDispatch=false"
+            }
+            return
+        }
         if (fingerprint != stateRecoveryFingerprint) {
             stateRecoveryFingerprint = fingerprint
             stateRecoverySince = now
@@ -206,6 +223,7 @@ object LifecycleTrace {
                     stateFingerprint() == fingerprint &&
                         WorkTimeListener.working &&
                         !PauseStatus.isPause &&
+                        !GameUtil.hasActiveTerminalPageCleanupCapability() &&
                         !WarEx.inWar
                 }
             } catch (error: Throwable) {
@@ -224,12 +242,24 @@ object LifecycleTrace {
                 }
             } finally {
                 if (stateFingerprint() == fingerprint && !PauseStatus.isPause) {
-                    val decision = stateRecoveryAttemptTracker.record(fingerprint, recovered)
+                    val cleanupActive = GameUtil.hasActiveTerminalPageCleanupCapability()
+                    val decision = if (cleanupActive) {
+                        stateRecoverySince = System.currentTimeMillis()
+                        stateRecoveryAttemptAt = stateRecoverySince
+                        stateRecoveryAttemptTracker.deferForTerminalCleanup(fingerprint)
+                    } else {
+                        stateRecoveryAttemptTracker.record(fingerprint, recovered)
+                    }
                     if (decision.shouldPause) {
                         PauseStatus.setAutomaticPause(true)
                         log.warn {
                             "SCREEN_RECOVERY_PAUSED reason=unresolved-attempt-limit " +
                                 "attempts=${decision.unresolvedAttempts} state=$fingerprint inputDispatch=false"
+                        }
+                    } else if (cleanupActive) {
+                        log.info {
+                            "SCREEN_RECOVERY_DEFERRED reason=terminal-result-cleanup-active " +
+                                "state=$fingerprint pause=false inputDispatch=false"
                         }
                     }
                 }

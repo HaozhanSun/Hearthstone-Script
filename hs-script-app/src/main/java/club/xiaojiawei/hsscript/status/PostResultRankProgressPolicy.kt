@@ -6,12 +6,9 @@ internal object PostResultRankProgressPolicy {
     enum class Action { NOT_APPLICABLE, CONTINUE, WAIT_FOR_AUTHORIZED_CAPTURE, INPUT_BUDGET_EXHAUSTED }
     enum class Input { CENTER_CLICK, KEYBOARD_ENTER }
 
-    /** Match the observed, bounded Unity dismissal sequence: center click, then Enter. */
-    fun inputForAttempt(attempt: Int): Input? = when (attempt) {
-        1 -> Input.CENTER_CLICK
-        2 -> Input.KEYBOARD_ENTER
-        else -> null
-    }
+    /** Retry the visible Continue target; the prior live Enter dispatch left this screen unchanged. */
+    fun inputForAttempt(attempt: Int): Input? =
+        Input.CENTER_CLICK.takeIf { attempt in 1..MAX_CONTINUE_INPUTS }
 
     fun decide(
         rankProgressVisible: Boolean,

@@ -118,8 +118,18 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.075..0.11 &&
             centerDarkRatio in 0.18..0.21 &&
             bannerWarmRatio in 0.38..0.43
+        // The v4.16.597 post-Enter capture still showed the same Gold 4
+        // reward, now with a warmer board sample: continue=.046, banner=.096,
+        // centerDark=.269, warm=.598. This narrow signature keeps that
+        // explicitly observed progression frame out of UNKNOWN without
+        // broadening the defeat-result classifier.
+        val postEnterGoldRewardSignature = continueGrayLightRatio in 0.04..0.055 &&
+            bannerLowSaturationRatio in 0.085..0.11 &&
+            centerDarkRatio in 0.25..0.285 &&
+            bannerWarmRatio in 0.58..0.62
         return capturedRankProgressSignature || establishedRankProgressSignature ||
-            coolBoardGoldRewardSignature || largeGoldMedalRewardSignature || compactGoldRewardSignature
+            coolBoardGoldRewardSignature || largeGoldMedalRewardSignature || compactGoldRewardSignature ||
+            postEnterGoldRewardSignature
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */

@@ -190,7 +190,7 @@ class TerminalCleanupIncidentFixtureTest {
         assertEquals("RESULT", ScreenStateRecovery.classifyImageForResultFixture(loss))
         assertEquals("RESULT", UpstreamScreenStateRecovery.classifyImageForResultFixture(loss))
         assertEquals(PostResultRankProgressPolicy.Input.CENTER_CLICK, PostResultRankProgressPolicy.inputForAttempt(1))
-        assertEquals(PostResultRankProgressPolicy.Input.KEYBOARD_ENTER, PostResultRankProgressPolicy.inputForAttempt(2))
+        assertEquals(PostResultRankProgressPolicy.Input.CENTER_CLICK, PostResultRankProgressPolicy.inputForAttempt(2))
         assertEquals(null, PostResultRankProgressPolicy.inputForAttempt(3))
 
         val incident = requireNotNull(javaClass.getResourceAsStream(V575_RANK_INCIDENT)).bufferedReader().use { it.readText() }
@@ -307,7 +307,7 @@ class TerminalCleanupIncidentFixtureTest {
             ),
         )
         assertEquals(PostResultRankProgressPolicy.Input.CENTER_CLICK, PostResultRankProgressPolicy.inputForAttempt(1))
-        assertEquals(PostResultRankProgressPolicy.Input.KEYBOARD_ENTER, PostResultRankProgressPolicy.inputForAttempt(2))
+        assertEquals(PostResultRankProgressPolicy.Input.CENTER_CLICK, PostResultRankProgressPolicy.inputForAttempt(2))
         assertEquals(null, PostResultRankProgressPolicy.inputForAttempt(3))
         assertEquals(
             PostResultRankProgressPolicy.Action.WAIT_FOR_AUTHORIZED_CAPTURE,
