@@ -1,0 +1,6 @@
+2026-10-08 16:13:22.001 INFO Power.log own laz#12793 PLAYSTATE CONCEDED, LOST; opponent WON; GameEntity FINAL_GAMEOVER STATE COMPLETE
+2026-10-08 16:13:27.000 INFO RANK_SURRENDER_TERMINAL_PROOF result=ACCEPTED
+2026-10-08 16:13:27.100 INFO RESULT_PAGE_CLEANUP_COORDINATOR state=started generation=4 maxInputs=16 maxProbes=20
+2026-10-08 16:14:37.000 WARN RESULT_PAGE_CLEANUP_FAILED reason=unknown-result-fallback-input-budget-exhausted attempt=3 inputs=2 probes=3 visible=UNKNOWN confirmed=false dispatch=false
+2026-10-08 16:15:25.000 WARN SCREEN_RECOVERY_TRIGGER stuckForMs=50550 state=GAMEPLAY|GAMEPLAY|FILL_DECK|NONE|2 visual=continue=0.047 banner=0.088 centerDark=0.349 bannerWarm=0.581
+2026-10-08 16:15:40.000 WARN SCREEN_RECOVERY_OBSERVATION provider=LEGACY detected=UNKNOWN confidence=0 evidence=none

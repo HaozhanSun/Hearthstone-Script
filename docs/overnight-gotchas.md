@@ -56,6 +56,17 @@ must hold rather than click or release the terminal fence. Keep the
 matchmaking-stage rule above unchanged: deck-selection rank never gates queue
 input.
 
+**Gold 4 follow-up (2026-10-08 PDT, deployed Beta v4.16.606):** a later loss
+produced a visually confirmed Gold 4 `点击继续` overlay with a substantially
+larger/darker center than the earlier Gold 4 samples. It was incorrectly
+`UNKNOWN`, so the generic two-input fallback was exhausted and recovery then
+mislabelled the stable overlay as gameplay. The fix is a separate four-region
+Gold 4 signature in the shared result-evidence policy; both the extension and
+the Beta-off upstream recovery must classify it as
+`RANK_PROGRESS_CONTINUATION`. The response remains the same proof- and
+fresh-capture-gated, at-most-two Continue sequence—never generic fallback
+clicks, matchmaking, or assumed completion.
+
 ## Active-game rank surrender: first safe recovery inspection must not inherit the generic stuck timeout
 
 **Observed failure (2026-10-08 PDT, deployed Beta v4.16.604):** queue input

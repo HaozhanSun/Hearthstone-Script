@@ -147,9 +147,22 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.065..0.10 &&
             centerDarkRatio in 0.13..0.18 &&
             bannerWarmRatio in 0.38..0.46
+        // v4.16.606's Gold 4 post-match continuation retained the visible
+        // Continue band and muted blue rank ribbon, but the larger rank-four
+        // medal/board composition measured continue=.047, banner=.088,
+        // center-dark=.349, warm=.581. This is deliberately a separate
+        // four-region contract: a rank continuation is actionable only after
+        // same-game terminal proof and a fresh capture authorize the bounded
+        // Continue control; it must not turn an unknown screen into a generic
+        // board or result-page click.
+        val largeGoldFourRankProgressSignature = continueGrayLightRatio in 0.035..0.055 &&
+            bannerLowSaturationRatio in 0.075..0.115 &&
+            centerDarkRatio in 0.33..0.38 &&
+            bannerWarmRatio in 0.50..0.62
         return capturedRankProgressSignature || establishedRankProgressSignature ||
             coolBoardGoldRewardSignature || largeGoldMedalRewardSignature || compactGoldRewardSignature ||
-            postEnterGoldRewardSignature || coolPostSurrenderGoldRewardSignature || largeGoldFiveRewardSignature
+            postEnterGoldRewardSignature || coolPostSurrenderGoldRewardSignature || largeGoldFiveRewardSignature ||
+            largeGoldFourRankProgressSignature
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */
