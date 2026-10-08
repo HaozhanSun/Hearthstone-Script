@@ -84,6 +84,7 @@ object ScreenWatchdog {
         maxRetries: Int = ConfigUtil.getInt(ConfigEnum.SCREEN_WATCHDOG_MAX_RETRIES),
         cooldownMs: Long = ConfigUtil.getLong(ConfigEnum.SCREEN_WATCHDOG_COOLDOWN_MS),
         bypassCooldownForMandatorySurrenderPostClick: Boolean = false,
+        bypassInitialDelayForMandatorySurrender: Boolean = false,
     ): TimingDecision {
         if (!ConfigUtil.getBoolean(ConfigEnum.SCREEN_WATCHDOG_ENABLED)) {
             return TimingDecision(false, "disabled")
@@ -91,11 +92,12 @@ object ScreenWatchdog {
         val stuckFor = now - startedAt
         val retryExceeded = attempts >= maxRetries.coerceAtLeast(1)
         val stuckExceeded = stuckFor >= stuckMs.coerceAtLeast(0L)
-        if (!retryExceeded && !stuckExceeded) {
+        if (!bypassInitialDelayForMandatorySurrender && !retryExceeded && !stuckExceeded) {
             return TimingDecision(false, "below-threshold stuckForMs=$stuckFor attempts=$attempts")
         }
         val previous = lastCaptureAt.get()
-        if (!bypassCooldownForMandatorySurrenderPostClick && previous > 0L &&
+        if (!bypassInitialDelayForMandatorySurrender &&
+            !bypassCooldownForMandatorySurrenderPostClick && previous > 0L &&
             now - previous < cooldownMs.coerceAtLeast(0L)
         ) {
             return TimingDecision(false, "cooldown remainingMs=${cooldownMs - (now - previous)}")
@@ -103,7 +105,9 @@ object ScreenWatchdog {
         if (!lastCaptureAt.compareAndSet(previous, now)) {
             return TimingDecision(false, "in-flight")
         }
-        val reason = if (bypassCooldownForMandatorySurrenderPostClick) {
+        val reason = if (bypassInitialDelayForMandatorySurrender) {
+            "mandatory-surrender-initial-dispatch stuckForMs=$stuckFor attempts=$attempts"
+        } else if (bypassCooldownForMandatorySurrenderPostClick) {
             "mandatory-surrender-post-click stuckForMs=$stuckFor attempts=$attempts"
         } else {
             "threshold stuckForMs=$stuckFor attempts=$attempts"

@@ -28,6 +28,36 @@ surrender confirmation maps only to the affirmative action. A
 `MATCHMAKING_BLOCKED` record whose reason begins `pre-match-rank-` is a
 regression.
 
+## Active-game rank surrender: first safe recovery inspection must not inherit the generic stuck timeout
+
+**Observed failure (2026-10-08 PDT, deployed Beta v4.16.604):** queue input
+was correctly allowed at 11:13:08 and the game reached Mulligan at 11:13:46.
+Fresh PaddleX OCR resolved rank `3` at 11:14:05; the rank barrier correctly
+denied ordinary play and logged `SURRENDER_ACTION_REQUESTED` at 11:14:06.
+However, the mandatory-surrender worker repeatedly logged
+`RANK_SURRENDER_RECOVERY_WAIT reason=below-threshold` and did not capture the
+current Mulligan screen until 11:19:52. It then correctly clicked Settings,
+Surrender, and the confirmation dialog, with terminal proof at 11:20:01. The
+five-minute delay violated the one-minute no-progress limit even though the
+eventual target and confirmation path were correct.
+
+**Root cause:** the mandatory recovery branch returned whenever the shared
+screen watchdog had not reached its generic retry/stuck threshold. Because an
+inspection is what increments the mandatory attempt count, the first recovery
+pass could never reach the retry threshold; a large configured stuck timeout
+therefore suppressed the first safe Mulligan capture. This is distinct from a
+post-click verification cooldown.
+
+**Guardrail:** immediately after a fresh active-game rank denial, bypass only
+the watchdog's initial threshold/cooldown to take one authoritative current
+game capture. It may dispatch only the screen-specific next action (Mulligan
+or gameplay -> Settings; Settings -> Surrender; confirmation -> affirmative
+button); it must still require fresh visual/Power.log evidence and preserve all
+later cooldowns and manual/ordinary-surrender behavior. Offline coverage must
+prove the rank-denial path reaches the verified `CLICK_SETTINGS` action within
+the configured short scheduler delay rather than waiting for the generic
+stuck timeout.
+
 ## Empty current-session `Power.log` can deadlock startup screen recovery
 
 **Observed facts (2026-10-06 PDT, Beta v4.16.586):**

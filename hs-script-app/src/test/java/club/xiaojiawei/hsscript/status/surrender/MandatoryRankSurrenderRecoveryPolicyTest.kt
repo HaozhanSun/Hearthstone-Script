@@ -72,6 +72,38 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
     }
 
     @Test
+    fun `fresh rank denial dispatches the verified settings step without waiting for the generic stuck threshold`() {
+        ScreenWatchdog.resetTimingForTest()
+        val rankResolvedAt = 500_000L
+        val timing = ScreenWatchdog.shouldInspect(
+            startedAt = rankResolvedAt,
+            attempts = 1,
+            now = rankResolvedAt + 500L,
+            stuckMs = 300_000L,
+            maxRetries = 3,
+            cooldownMs = 15_000L,
+            bypassInitialDelayForMandatorySurrender =
+                MandatoryRankSurrenderRecoveryPolicy.shouldInspectImmediatelyAfterRankResolution(0),
+        )
+        val mulligan = readFixture("rank6-live-mulligan-unknown-ocr.png")
+        val observation = ScreenWatchdog.inspectForSurrender(
+            state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true",
+            attempts = 1,
+            mandatoryRankSurrender = true,
+            captureProvider = { mulligan },
+            ocrProvider = { error("a verified Mulligan visual must dispatch its safe Settings step without OCR") },
+        )
+
+        assertTrue(timing.shouldInspect, timing.reason)
+        assertTrue(timing.reason.startsWith("mandatory-surrender-initial-dispatch"))
+        assertEquals(ScreenWatchdogKind.MULLIGAN, observation.kind, observation.reason)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS,
+            MandatoryRankSurrenderRecoveryPolicy.decide(observation.kind).action,
+        )
+    }
+
+    @Test
     fun `settings overlay at surrender target permits only the settings surrender step`() {
         val screen = ScreenWatchdog.classifyForTest("设置 选项 投降 退出游戏")
 

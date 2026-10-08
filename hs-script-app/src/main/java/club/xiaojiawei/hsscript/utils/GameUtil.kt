@@ -1051,10 +1051,15 @@ object GameUtil {
                             return@scheduleWithFixedDelay
                         }
                         val postClickProbe = mandatoryPostClickProbe.shouldBypassCooldown()
+                        val initialMandatoryRankInspection =
+                            MandatoryRankSurrenderRecoveryPolicy.shouldInspectImmediatelyAfterRankResolution(
+                                surrenderAttempts,
+                            )
                         val watchdogTiming = ScreenWatchdog.shouldInspect(
                             startedAt = surrenderStartedAt,
                             attempts = surrenderAttempts + 1,
                             bypassCooldownForMandatorySurrenderPostClick = postClickProbe,
+                            bypassInitialDelayForMandatorySurrender = initialMandatoryRankInspection,
                         )
                         if (!watchdogTiming.shouldInspect) {
                             log.info {

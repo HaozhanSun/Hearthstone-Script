@@ -237,6 +237,34 @@ class ScreenWatchdogTest {
     }
 
     @Test
+    fun `fresh mandatory rank surrender inspection bypasses only the initial watchdog wait`() {
+        ScreenWatchdog.resetTimingForTest()
+        val now = 500_000L
+
+        val ordinary = ScreenWatchdog.shouldInspect(
+            startedAt = now,
+            attempts = 1,
+            now = now + 500L,
+            stuckMs = 300_000L,
+            maxRetries = 3,
+            cooldownMs = 15_000L,
+        )
+        val rankSurrender = ScreenWatchdog.shouldInspect(
+            startedAt = now,
+            attempts = 1,
+            now = now + 500L,
+            stuckMs = 300_000L,
+            maxRetries = 3,
+            cooldownMs = 15_000L,
+            bypassInitialDelayForMandatorySurrender = true,
+        )
+
+        assertFalse(ordinary.shouldInspect, ordinary.reason)
+        assertTrue(rankSurrender.shouldInspect, rankSurrender.reason)
+        assertTrue(rankSurrender.reason.startsWith("mandatory-surrender-initial-dispatch"))
+    }
+
+    @Test
     fun `screen probes remain cooldown bounded after retry threshold`() {
         ScreenWatchdog.resetTimingForTest()
         val first = ScreenWatchdog.shouldInspect(

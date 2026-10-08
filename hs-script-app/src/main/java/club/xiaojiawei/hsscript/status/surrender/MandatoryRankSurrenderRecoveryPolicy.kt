@@ -35,6 +35,16 @@ internal object MandatoryRankSurrenderRecoveryPolicy {
     internal fun hasRetryBudget(attemptsAlreadyStarted: Int): Boolean =
         attemptsAlreadyStarted < MAX_RETRY_ATTEMPTS
 
+    /**
+     * A fresh active-game rank denial is already authoritative evidence that
+     * ordinary input is forbidden. Its first recovery pass must capture and
+     * classify the current game immediately; waiting for the generic
+     * no-progress watchdog threshold can leave the Mulligan blocked for
+     * minutes without ever attempting the Settings path.
+     */
+    internal fun shouldInspectImmediatelyAfterRankResolution(attemptsAlreadyStarted: Int): Boolean =
+        attemptsAlreadyStarted == 0
+
     /** Cooldown/in-flight scheduler ticks do not consume an inspection retry. */
     internal fun attemptsAfterInspectionStart(attemptsAlreadyStarted: Int, inspectionStarted: Boolean): Int =
         if (inspectionStarted && hasRetryBudget(attemptsAlreadyStarted)) attemptsAlreadyStarted + 1
