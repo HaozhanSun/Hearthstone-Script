@@ -49,7 +49,8 @@ class MatchmakingQueueLifecycle {
             }
             ScreenEvidence.QUEUE_TERMINAL -> {
                 if (confidence >= MIN_MATCHMAKING_CONFIDENCE &&
-                    current.phase == Phase.QUEUE_PENDING && current.processId == observedPid
+                    current.phase in setOf(Phase.QUEUE_PENDING, Phase.QUEUE_EXPIRED) &&
+                    current.processId == observedPid
                 ) {
                     Snapshot(Phase.QUEUE_TERMINAL, observedPid, current.startedAtNanos, nowNanos).also { current = it }
                 } else current

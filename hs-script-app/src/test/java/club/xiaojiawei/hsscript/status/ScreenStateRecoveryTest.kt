@@ -119,6 +119,44 @@ class ScreenStateRecoveryTest {
     }
 
     @Test
+    fun `v599 rank five deck capture after queue exit remains actionable safe menu evidence`() {
+        val image = loadFixture("v599-rank-five-deck-selection.png")
+        assertEquals(1920, image.width)
+        assertEquals(1080, image.height)
+        val transition = ScreenStateRecovery.recoveryTransitionForImageForTest(
+            image = image,
+            ocrText = "选择套牌 狂野对战 元素法",
+            targeted = mapOf(ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI to "选择套牌"),
+        )
+        assertEquals("DECK_SELECTION", transition?.screen)
+        assertEquals("START_MATCHING", transition?.action)
+        assertEquals(ModeEnum.TOURNAMENT, transition?.mode)
+        assertFalse(transition?.enterStrategy ?: true)
+        assertTrue(
+            ScreenRecoveryAuthorityGate.isSafeObservedMenuTransition(
+                expectedScreen = transition!!.screen,
+                observedScreen = "DECK_SELECTION",
+                confidence = 100,
+                freshCurrentWindowCapture = true,
+            ),
+            "a second fresh same-HWND deck observation confirms the safe recovery transition",
+        )
+        assertFalse(
+            ScreenRecoveryAuthorityGate.isSafeObservedMenuTransition(
+                expectedScreen = "DECK_SELECTION",
+                observedScreen = "UNKNOWN",
+                confidence = 0,
+                freshCurrentWindowCapture = false,
+            ),
+        )
+        assertEquals(
+            false,
+            ScreenStateRecovery.resultVisibilityForTest("DECK_SELECTION", 100),
+            "a verified deck screen is not mistaken for a terminal result page",
+        )
+    }
+
+    @Test
     fun `exact matchmaking error dialog is not confused with generic reconnect or loading`() {
         val probe = club.xiaojiawei.hsscript.strategy.mode.StartGameErrorDialogClassifier.classify(
             title = "发生错误",

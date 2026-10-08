@@ -15,6 +15,7 @@ internal class ScreenRecoveryAttemptTracker(private val maxUnresolvedAttempts: I
 
     private var fingerprint: String? = null
     private var unresolvedAttempts = 0
+    private var lastQueueExitKey: String? = null
 
     fun record(fingerprint: String, recovered: Boolean): Decision {
         if (this.fingerprint != fingerprint) {
@@ -35,6 +36,15 @@ internal class ScreenRecoveryAttemptTracker(private val maxUnresolvedAttempts: I
     fun reset() {
         fingerprint = null
         unresolvedAttempts = 0
+        lastQueueExitKey = null
+    }
+
+    fun observeQueueExit(fingerprint: String, queueExitKey: String): Decision? {
+        if (lastQueueExitKey == queueExitKey) return null
+        lastQueueExitKey = queueExitKey
+        this.fingerprint = fingerprint
+        unresolvedAttempts = 0
+        return Decision(unresolvedAttempts = 0, shouldPause = false)
     }
 
     fun deferForTerminalCleanup(fingerprint: String): Decision {
@@ -199,7 +209,8 @@ object LifecycleTrace {
             return
         }
         val gamePid = GameUtil.findGameProcessIdForDiagnostics()
-        if (gamePid != null && StartupMatchmakingQueueState.isPendingFor(gamePid, processAlive = true)) {
+        val queueSnapshot = StartupMatchmakingQueueState.snapshotFor(gamePid, processAlive = gamePid != null)
+        if (queueSnapshot.isPending) {
             stateRecoveryFingerprint = fingerprint
             stateRecoverySince = now
             stateRecoveryAttemptAt = now
@@ -209,6 +220,20 @@ object LifecycleTrace {
                     "state=$fingerprint pid=$gamePid pause=false inputDispatch=false"
             }
             return
+        }
+        if (queueSnapshot.phase == MatchmakingQueueLifecycle.Phase.QUEUE_TERMINAL ||
+            queueSnapshot.phase == MatchmakingQueueLifecycle.Phase.QUEUE_EXPIRED
+        ) {
+            val phaseKey = "${queueSnapshot.processId}:${queueSnapshot.startedAtNanos}:${queueSnapshot.phase}"
+            if (stateRecoveryAttemptTracker.observeQueueExit(fingerprint, phaseKey) != null) {
+                stateRecoveryFingerprint = fingerprint
+                stateRecoverySince = now
+                stateRecoveryAttemptAt = 0L
+                log.info {
+                    "SCREEN_RECOVERY_QUEUE_EXIT phase=${queueSnapshot.phase} pid=${queueSnapshot.processId} " +
+                        "state=$fingerprint unresolvedAttempts=0 inputDispatch=false"
+                }
+            }
         }
         if (fingerprint != stateRecoveryFingerprint) {
             stateRecoveryFingerprint = fingerprint

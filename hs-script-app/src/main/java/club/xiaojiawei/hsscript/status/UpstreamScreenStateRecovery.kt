@@ -355,6 +355,22 @@ object UpstreamScreenStateRecovery {
         var authorityRejected = false
         val foregroundResult = MouseUtil.withRecoveryForeground(currentWindow) {
             val freshWindow = resolveVerifiedGameWindow()
+            val currentSessionReady = freshWindow?.let(::hasCurrentSessionPowerLog) == true
+            val safeMenuReconfirmed = if (freshWindow != null && !currentSessionReady &&
+                detection.kind.code in setOf("HOME", "TOURNAMENT", "DECK_SELECTION")
+            ) {
+                val freshCapture = captureScreen(freshWindow)
+                val freshDetection = freshCapture?.takeIf { !it.startupMenuObservationOnly }
+                    ?.let { detect(runOCR(it), it.visual) }
+                ScreenRecoveryAuthorityGate.isSafeObservedMenuTransition(
+                    expectedScreen = detection.kind.code,
+                    observedScreen = freshDetection?.kind?.code,
+                    confidence = freshDetection?.confidence ?: 0,
+                    freshCurrentWindowCapture = freshCapture != null,
+                )
+            } else {
+                false
+            }
             val evidence = ScreenRecoveryAuthorityEvidence(
                 processAlive = GameUtil.isAliveOfGame(),
                 windowPresent = freshWindow != null,
@@ -362,16 +378,25 @@ object UpstreamScreenStateRecovery {
                 foregroundConfirmed = true,
                 sameWindow = freshWindow?.toString() == capturedWindow.toString(),
                 capturedPixelsVerified = true,
-                currentSessionReady = freshWindow?.let(::hasCurrentSessionPowerLog) == true,
+                currentSessionReady = currentSessionReady,
+                safeObservedMenuTransition = safeMenuReconfirmed,
             )
             if (!ScreenRecoveryAuthorityGate.isAuthorized(evidence)) {
                 authorityRejected = true
                 log.warn {
                     "SCREEN_RECOVERY_BLOCKED reason=authority-lost-before-apply " +
-                        "capturedWindow=$capturedWindow currentWindow=$freshWindow"
+                        "capturedWindow=$capturedWindow currentWindow=$freshWindow " +
+                        "currentSessionReady=${evidence.currentSessionReady} " +
+                        "safeObservedMenuTransition=${evidence.safeObservedMenuTransition}"
                 }
                 false
             } else {
+                if (!evidence.currentSessionReady) {
+                    log.info {
+                        "SCREEN_RECOVERY_AUTHORITY_ADAPTED screen=${detection.kind.code} " +
+                            "basis=verified-current-pid-menu-capture powerLogReady=false inputDispatch=true"
+                    }
+                }
                 ScreenRecoveryAuthorityGate.dispatchIfAuthorized(evidence) { apply(detection) }
             }
         }

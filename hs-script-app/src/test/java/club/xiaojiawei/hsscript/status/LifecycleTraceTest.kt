@@ -8,6 +8,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class LifecycleTraceTest {
@@ -116,6 +117,55 @@ class LifecycleTraceTest {
             ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
             tracker.record("TOURNAMENT|FILL_DECK|war-1", recovered = false),
             "after queue evidence expires or terminates, ordinary recovery gets a fresh bounded budget",
+        )
+    }
+
+    @Test
+    fun verifiedQueueExitResetsOldFailuresAndDeckScreenCountsAsRecovery() {
+        val tracker = ScreenRecoveryAttemptTracker(maxUnresolvedAttempts = 2)
+        val queue = MatchmakingQueueLifecycle()
+        val pid = 102492L
+        assertTrue(
+            queue.observeScreen(
+                observedPid = pid,
+                currentPid = pid,
+                evidence = MatchmakingQueueLifecycle.ScreenEvidence.MATCHMAKING,
+                confidence = 95,
+                captureAuthorized = true,
+                processAlive = true,
+                nowNanos = 1_000_000L,
+            ).isPending,
+        )
+        assertEquals(
+            MatchmakingQueueLifecycle.Phase.QUEUE_TERMINAL,
+            queue.observeScreen(
+                observedPid = pid,
+                currentPid = pid,
+                evidence = MatchmakingQueueLifecycle.ScreenEvidence.QUEUE_TERMINAL,
+                confidence = 100,
+                captureAuthorized = true,
+                processAlive = true,
+                nowNanos = 2_000_000L,
+            ).phase,
+        )
+
+        tracker.record("TOURNAMENT|FILL_DECK|NONE|0", recovered = false)
+        val queueExitKey = "${pid}:${queue.snapshotFor(pid, true, 3_000_000L).startedAtNanos}:${queue.snapshotFor(pid, true, 3_000_000L).phase}"
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldPause = false),
+            tracker.observeQueueExit("TOURNAMENT|FILL_DECK|NONE|0", queueExitKey),
+            "LifecycleTrace performs a one-time unresolved-budget reset on queue exit",
+        )
+        assertNull(tracker.observeQueueExit("TOURNAMENT|FILL_DECK|NONE|0", queueExitKey))
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldPause = false),
+            tracker.record("TOURNAMENT|FILL_DECK|NONE|0", recovered = true),
+            "the fresh, classified rank-five deck screen is successful recovery evidence, not another unresolved attempt",
+        )
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            tracker.record("TOURNAMENT|FILL_DECK|NONE|0", recovered = false),
+            "a later distinct unresolved capture still starts a bounded attempt count",
         )
     }
 

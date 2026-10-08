@@ -148,4 +148,33 @@ class MatchmakingQueueLifecycleTest {
             "a later process reusing the PID must not inherit the stale queue lease",
         )
     }
+
+    @Test
+    fun `fresh same pid home observation converts expired queue to terminal instead of stale pending`() {
+        val queue = MatchmakingQueueLifecycle()
+        queue.observeScreen(45L, 45L, MatchmakingQueueLifecycle.ScreenEvidence.MATCHMAKING, 95, true, true, 1_000L)
+        val expired = queue.snapshotFor(
+            45L,
+            processAlive = true,
+            nowNanos = MatchmakingQueueLifecycle.MAX_EVIDENCE_AGE_NANOS + 1_001L,
+        )
+        assertEquals(MatchmakingQueueLifecycle.Phase.QUEUE_EXPIRED, expired.phase)
+        assertEquals(
+            MatchmakingQueueLifecycle.Phase.QUEUE_TERMINAL,
+            queue.observeScreen(
+                observedPid = 45L,
+                currentPid = 45L,
+                evidence = MatchmakingQueueLifecycle.ScreenEvidence.QUEUE_TERMINAL,
+                confidence = 100,
+                captureAuthorized = true,
+                processAlive = true,
+                nowNanos = MatchmakingQueueLifecycle.MAX_EVIDENCE_AGE_NANOS + 2_000L,
+            ).phase,
+            "a fresh same-session HOME/deck screen is stronger exit evidence than elapsed queue age",
+        )
+        assertEquals(
+            MatchmakingQueueLifecycle.TimeoutDisposition.STOP,
+            queue.timeoutDisposition(45L, true, MatchmakingQueueLifecycle.MAX_EVIDENCE_AGE_NANOS + 3_000L),
+        )
+    }
 }

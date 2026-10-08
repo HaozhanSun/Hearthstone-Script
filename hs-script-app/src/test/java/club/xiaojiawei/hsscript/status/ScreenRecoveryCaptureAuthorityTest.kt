@@ -369,6 +369,45 @@ class ScreenRecoveryCaptureAuthorityTest {
     }
 
     @Test
+    fun `fresh verified safe menu observation may recover when session log is no longer ready`() {
+        val actionCalls = AtomicInteger()
+        val noLogWithoutKnownMenu = recoveryEvidence(
+            capturedPixelsVerified = true,
+            currentSessionReady = false,
+        )
+        assertFalse(ScreenRecoveryAuthorityGate.isAuthorized(noLogWithoutKnownMenu))
+        assertFalse(
+            ScreenRecoveryAuthorityGate.dispatchIfAuthorized(noLogWithoutKnownMenu) {
+                actionCalls.incrementAndGet()
+                true
+            },
+        )
+        assertEquals(0, actionCalls.get())
+
+        val verifiedDeckObservation = noLogWithoutKnownMenu.copy(safeObservedMenuTransition = true)
+        assertTrue(ScreenRecoveryAuthorityGate.isAuthorized(verifiedDeckObservation))
+        assertTrue(
+            ScreenRecoveryAuthorityGate.dispatchIfAuthorized(verifiedDeckObservation) {
+                actionCalls.incrementAndGet()
+                true
+            },
+            "the adapter permits a classified safe menu transition only after current-client pixels and HWND were verified",
+        )
+        assertEquals(1, actionCalls.get())
+
+        assertFalse(
+            ScreenRecoveryAuthorityGate.isAuthorized(
+                verifiedDeckObservation.copy(
+                    processAlive = false,
+                    windowVerified = false,
+                    capturedPixelsVerified = false,
+                ),
+            ),
+            "the menu adapter never substitutes for live process/window/pixel authority",
+        )
+    }
+
+    @Test
     fun `pre-session exception is limited to non-game tournament queue context`() {
         fun allows(
             purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG,
