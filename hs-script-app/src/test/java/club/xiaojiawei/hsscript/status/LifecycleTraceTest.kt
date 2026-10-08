@@ -87,6 +87,39 @@ class LifecycleTraceTest {
     }
 
     @Test
+    fun verifiedLiveQueueDefersGenericPauseWithoutDispatchingInput() {
+        val tracker = ScreenRecoveryAttemptTracker(maxUnresolvedAttempts = 2)
+        val queue = MatchmakingQueueLifecycle()
+        val pid = 95400L
+        val observed = queue.observeScreen(
+            observedPid = pid,
+            currentPid = pid,
+            evidence = MatchmakingQueueLifecycle.ScreenEvidence.MATCHMAKING,
+            confidence = 95,
+            captureAuthorized = true,
+            processAlive = true,
+            nowNanos = 1_000_000L,
+        )
+        assertTrue(observed.isPending)
+        assertEquals(
+            MatchmakingQueueLifecycle.TimeoutDisposition.DEFER_WITHOUT_INPUT,
+            queue.timeoutDisposition(pid, processAlive = true, nowNanos = 2_000_000L),
+            "a fresh, PID-bound queue is progress to wait for, not a reason to click or pause",
+        )
+
+        tracker.record("TOURNAMENT|FILL_DECK|war-1", recovered = false)
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldPause = false),
+            tracker.deferForExpectedProgress("TOURNAMENT|FILL_DECK|war-1"),
+        )
+        assertEquals(
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            tracker.record("TOURNAMENT|FILL_DECK|war-1", recovered = false),
+            "after queue evidence expires or terminates, ordinary recovery gets a fresh bounded budget",
+        )
+    }
+
+    @Test
     fun recoveryAndStateChangeResetTheUnresolvedAttemptStreak() {
         val tracker = ScreenRecoveryAttemptTracker(maxUnresolvedAttempts = 2)
         tracker.record("HUB|TOURNAMENT", recovered = false)

@@ -38,6 +38,10 @@ internal class ScreenRecoveryAttemptTracker(private val maxUnresolvedAttempts: I
     }
 
     fun deferForTerminalCleanup(fingerprint: String): Decision {
+        return deferForExpectedProgress(fingerprint)
+    }
+
+    fun deferForExpectedProgress(fingerprint: String): Decision {
         this.fingerprint = fingerprint
         unresolvedAttempts = 0
         return Decision(unresolvedAttempts = 0, shouldPause = false)
@@ -191,6 +195,18 @@ object LifecycleTrace {
             log.info {
                 "SCREEN_RECOVERY_DEFERRED reason=terminal-result-cleanup-active " +
                     "state=$fingerprint pause=false inputDispatch=false"
+            }
+            return
+        }
+        val gamePid = GameUtil.findGameProcessIdForDiagnostics()
+        if (gamePid != null && StartupMatchmakingQueueState.isPendingFor(gamePid, processAlive = true)) {
+            stateRecoveryFingerprint = fingerprint
+            stateRecoverySince = now
+            stateRecoveryAttemptAt = now
+            stateRecoveryAttemptTracker.deferForExpectedProgress(fingerprint)
+            log.info {
+                "SCREEN_RECOVERY_DEFERRED reason=verified-matchmaking-queue-active " +
+                    "state=$fingerprint pid=$gamePid pause=false inputDispatch=false"
             }
             return
         }
