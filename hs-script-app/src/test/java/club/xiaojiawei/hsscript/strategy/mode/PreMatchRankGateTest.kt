@@ -7,29 +7,38 @@ import kotlin.test.assertTrue
 
 class PreMatchRankGateTest {
     @Test
-    fun `queue dispatch is independent of rank and deferred to active match`() {
-        // The old pre-match detector rejected rank 4 (and UNKNOWN) before the
-        // game could start. Rank policy now runs behind the live Mulligan gate.
+    fun `only a fresh exact rank five or ten dispatches queue input`() {
         var dispatches = 0
-        for (observedRank in listOf(4, 5, 7, 10, 21, null)) {
+        for (observedRank in listOf(4, 5, 6, 9, 10, 11, 21, null)) {
             val result = PreMatchRankGate.evaluate(
                 working = true,
                 paused = false,
                 mandatoryRankSurrenderPending = false,
+                tournamentMode = true,
+                inWar = false,
+                observedRank = observedRank,
+                freshRankObservation = true,
+                ocrFailure = false,
             )
-            assertTrue(result.queueAuthorization.allowed, "rank=$observedRank")
-            assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(result.queueAuthorization) { dispatches++ })
+            val allowed = observedRank == 5 || observedRank == 10
+            assertEquals(allowed, result.queueAuthorization.allowed, "rank=$observedRank")
+            assertEquals(allowed, MatchmakingGuardPolicy.dispatchIfAuthorized(result.queueAuthorization) { dispatches++ })
         }
-        assertEquals(6, dispatches, "each authorized queue request reaches the actual dispatch callback")
+        assertEquals(2, dispatches, "only rank 5 and rank 10 reach the actual dispatch callback")
     }
 
     @Test
-    fun `runtime pause and pending mandatory surrender still block queue input`() {
+    fun `unknown OCR stale mode mismatch active game and runtime guards block queue input`() {
         var dispatches = 0
         val denied = listOf(
-            PreMatchRankGate.evaluate(false, false, false),
-            PreMatchRankGate.evaluate(true, true, false),
-            PreMatchRankGate.evaluate(true, false, true),
+            PreMatchRankGate.evaluate(false, false, false, true, false, 5, true, false),
+            PreMatchRankGate.evaluate(true, true, false, true, false, 5, true, false),
+            PreMatchRankGate.evaluate(true, false, true, true, false, 5, true, false),
+            PreMatchRankGate.evaluate(true, false, false, true, false, null, true, false),
+            PreMatchRankGate.evaluate(true, false, false, true, false, 5, false, false),
+            PreMatchRankGate.evaluate(true, false, false, true, false, null, false, true),
+            PreMatchRankGate.evaluate(true, false, false, false, false, 5, true, false),
+            PreMatchRankGate.evaluate(true, false, false, true, true, 5, true, false),
         )
         denied.forEach {
             assertFalse(it.queueAuthorization.allowed)

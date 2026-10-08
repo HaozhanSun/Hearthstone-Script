@@ -9,7 +9,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/** Offline capability chain: verified HOME can hand off to HUB, but only the existing fresh-rank gate can queue. */
+/** Offline capability chain: verified HOME can hand off to HUB, but a fresh eligible rank owns queue dispatch. */
 class StartupHomeToMatchmakingIntegrationTest {
     @Test
     fun `home handoff itself never queues and current-session fresh rank gate owns dispatch`() {
@@ -51,18 +51,24 @@ class StartupHomeToMatchmakingIntegrationTest {
         var currentSessionReady = false
         assertEquals(0, queueDispatches)
         currentSessionReady = true
-        // Queue authorization is rank-neutral for any fresh active session;
-        // rank capture belongs to the in-game Mulligan barrier.
+        // Queue authorization requires the rank read captured immediately on
+        // the deck-selection page, before any matchmaking input.
         for (rank in listOf(4, 5, 10, 21)) {
             if (!currentSessionReady) continue
             val result = PreMatchRankGate.evaluate(
                 working = true,
                 paused = false,
                 mandatoryRankSurrenderPending = false,
+                tournamentMode = true,
+                inWar = false,
+                observedRank = rank,
+                freshRankObservation = true,
+                ocrFailure = false,
             )
-            assertTrue(result.queueAuthorization.allowed, "rank=$rank is deferred")
-            assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(result.queueAuthorization) { queueDispatches++ })
+            val expectedAllowed = rank == 5 || rank == 10
+            assertEquals(expectedAllowed, result.queueAuthorization.allowed, "rank=$rank")
+            assertEquals(expectedAllowed, MatchmakingGuardPolicy.dispatchIfAuthorized(result.queueAuthorization) { queueDispatches++ })
         }
-        assertEquals(4, queueDispatches, "queue dispatches are independent of rank")
+        assertEquals(2, queueDispatches, "only exact rank 5 and rank 10 dispatch queue input")
     }
 }

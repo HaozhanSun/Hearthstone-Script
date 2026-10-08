@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
 
 class MatchmakingGuardPolicyTest {
     @Test
-    fun `queue authorization requires active runtime but defers rank`() {
+    fun `runtime authorization remains a lower-level runtime-only guard`() {
         assertEquals(true, MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = false))
         assertEquals(false, MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = true))
         assertEquals(false, MatchmakingGuardPolicy.runtimeAllowsInput(working = false, paused = false))
@@ -22,7 +22,7 @@ class MatchmakingGuardPolicyTest {
     }
 
     @Test
-    fun `rank OCR is absent from the pre match queue path`() {
+    fun `fresh rank OCR gates all pre match queue input`() {
         val relative = Path.of(
             "src", "main", "java", "club", "xiaojiawei", "hsscript", "strategy", "mode", "TournamentModeStrategy.kt",
         )
@@ -38,15 +38,15 @@ class MatchmakingGuardPolicyTest {
             "paused runtime exits before rank OCR, trace allocation, and blocked-matchmaking spam")
         assertTrue(startMatching.contains("PauseStatus.isPause || !WorkTimeListener.working"))
         assertTrue(startMatching.contains("PreMatchRankGate.evaluate"))
-        assertFalse(startMatching.contains("CurrentRankDetector.detect"))
-        assertFalse(startMatching.contains("pre-match-deck-selection"))
+        assertTrue(startMatching.contains("CurrentRankDetector.detect"))
+        assertTrue(startMatching.contains("pre-match-deck-selection-rank-gate"))
         assertTrue(startMatching.contains("MatchmakingGuardPolicy.dispatchIfAuthorized(queueAuthorization)"))
         val authorizationIndex = startMatching.indexOf("PreMatchRankGate.evaluate")
         val denialIndex = startMatching.indexOf("if (!dispatchMatchmaking)")
         val firstQueueClickIndex = startMatching.indexOf("clickMatchmakingControl(START_RECT)")
         assertTrue(authorizationIndex >= 0 && denialIndex > authorizationIndex)
         assertTrue(firstQueueClickIndex > denialIndex, "all matchmaking input must follow the fail-closed gate")
-        assertTrue(startMatching.contains("rankPolicy=DEFER_UNTIL_ACTIVE_MATCH"))
+        assertTrue(startMatching.contains("rankPolicy=FRESH_EXACT_5_OR_10"))
         assertFalse(startMatching.contains("POST_MULLIGAN"))
     }
 

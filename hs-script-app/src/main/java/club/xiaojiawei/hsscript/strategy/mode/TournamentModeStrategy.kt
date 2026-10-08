@@ -16,6 +16,7 @@ import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
 import club.xiaojiawei.hsscript.status.TournamentStartupActionPolicy
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
+import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
@@ -313,22 +314,33 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
             }
             return
         }
+        // This capture happens immediately before the first matchmaking input;
+        // it is never satisfied from a cached rank from an earlier game.
+        val rankDetection = CurrentRankDetector.detect(
+            trigger = "pre-match-deck-selection-rank-gate",
+            phase = "DECK_SELECTION",
+        )
         val traceId = matchmakingTraceSequence.incrementAndGet()
         log.info { "开始匹配 trace=$traceId" }
         val mandatoryRankSurrenderPending =
             club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending()
-        // Rank is evaluated only after the new game is authoritative. A
-        // pre-match badge is not a reason to suppress matchmaking.
         val rankGate = PreMatchRankGate.evaluate(
             working = WorkTimeListener.working,
             paused = PauseStatus.isPause,
             mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
+            tournamentMode = Mode.currMode === ModeEnum.TOURNAMENT,
+            inWar = WarEx.inWar,
+            observedRank = rankDetection?.rank,
+            freshRankObservation = rankDetection != null,
+            ocrFailure = rankDetection == null,
         )
         val queueAuthorization = rankGate.queueAuthorization
         val dispatchMatchmaking = queueAuthorization.allowed
         log.info {
-            "MATCHMAKING_GATE stage=PRE_MATCH rankPolicy=DEFER_UNTIL_ACTIVE_MATCH " +
+            "MATCHMAKING_GATE stage=PRE_MATCH rankPolicy=FRESH_EXACT_5_OR_10 " +
                 "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} " +
+                "mode=${Mode.currMode} inWar=${WarEx.inWar} rank=${rankDetection?.rank ?: "UNKNOWN"} " +
+                "rankProvider=${rankDetection?.provider ?: "UNAVAILABLE"} " +
                 "decision=${if (dispatchMatchmaking) "ALLOW" else "DENY"} " +
                 "reason=${queueAuthorization.reason}"
         }

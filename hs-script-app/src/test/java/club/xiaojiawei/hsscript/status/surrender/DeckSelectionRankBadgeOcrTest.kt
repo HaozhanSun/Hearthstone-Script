@@ -31,7 +31,7 @@ class DeckSelectionRankBadgeOcrTest {
     }
 
     @Test
-    fun `live 4x5 badge resolves correctly and pre-match queue remains rank neutral`() {
+    fun `live 4x5 badge resolves correctly and blocks pre-match queue`() {
         val screenshot = loadDeckSelectionScreenshot()
         for (rawBadgeText in listOf("4x5", "4 x 5", "4×5")) {
             val requestedRois = mutableListOf<String?>()
@@ -56,11 +56,20 @@ class DeckSelectionRankBadgeOcrTest {
             assertFalse(detection.rank == 5, "the star count must never become rank 5: raw=$rawBadgeText")
 
             assertEquals(4, detection.rank)
-            val gate = PreMatchRankGate.evaluate(true, false, false)
+            val gate = PreMatchRankGate.evaluate(
+                working = true,
+                paused = false,
+                mandatoryRankSurrenderPending = false,
+                tournamentMode = true,
+                inWar = false,
+                observedRank = detection.rank,
+                freshRankObservation = true,
+                ocrFailure = false,
+            )
             var inputDispatches = 0
-            assertTrue(gate.queueAuthorization.allowed)
-            assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(gate.queueAuthorization) { inputDispatches++ })
-            assertEquals(1, inputDispatches, "rank 4 / $rawBadgeText is judged only after match start")
+            assertFalse(gate.queueAuthorization.allowed)
+            assertFalse(MatchmakingGuardPolicy.dispatchIfAuthorized(gate.queueAuthorization) { inputDispatches++ })
+            assertEquals(0, inputDispatches, "rank 4 / $rawBadgeText must never enter queue")
         }
     }
 
@@ -86,7 +95,16 @@ class DeckSelectionRankBadgeOcrTest {
                 ),
             )
             assertEquals(rank, detection.rank ?: error("positive control rank=$rank must resolve"))
-            val gate = PreMatchRankGate.evaluate(true, false, false)
+            val gate = PreMatchRankGate.evaluate(
+                working = true,
+                paused = false,
+                mandatoryRankSurrenderPending = false,
+                tournamentMode = true,
+                inWar = false,
+                observedRank = detection.rank,
+                freshRankObservation = true,
+                ocrFailure = false,
+            )
             assertTrue(gate.queueAuthorization.allowed, "positive control rank=$rank")
             assertEquals(listOf<String?>("rank-badge-small"), requestedRois)
         }

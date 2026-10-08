@@ -720,11 +720,20 @@ class SurrenderPolicyTest {
             assertEquals(4, detection?.rank)
             assertEquals(listOf<String?>("rank-badge-small", "rank-badge"), recognizedRois)
             assertEquals(expectedBadge.width to expectedBadge.height, recognizedBadgeBounds)
-            val gate = PreMatchRankGate.evaluate(true, false, false)
+            val gate = PreMatchRankGate.evaluate(
+                working = true,
+                paused = false,
+                mandatoryRankSurrenderPending = false,
+                tournamentMode = true,
+                inWar = false,
+                observedRank = detection?.rank,
+                freshRankObservation = true,
+                ocrFailure = false,
+            )
             var dispatches = 0
-            assertTrue(gate.queueAuthorization.allowed)
-            assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(gate.queueAuthorization) { dispatches++ })
-            assertEquals(1, dispatches, "rank 4 is judged after game start, not on deck selection")
+            assertFalse(gate.queueAuthorization.allowed)
+            assertFalse(MatchmakingGuardPolicy.dispatchIfAuthorized(gate.queueAuthorization) { dispatches++ })
+            assertEquals(0, dispatches, "rank 4 must not dispatch matchmaking input")
         } finally {
             OcrRuntime.settingsProvider = originalSettingsProvider
             OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
