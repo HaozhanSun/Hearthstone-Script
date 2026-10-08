@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
+import club.xiaojiawei.hsscriptbase.config.log
 import javafx.beans.property.ReadOnlyBooleanWrapper
 import javafx.beans.value.ChangeListener
 import java.util.concurrent.atomic.AtomicBoolean
@@ -29,9 +30,20 @@ object PauseStatus {
             return pauseState.get()
         }
         set(value) {
-            if (value && origin != Origin.MANUAL) {
-                origin = Origin.AUTOMATIC
-            } else if (!value) {
+            if (value) {
+                // Legacy callers historically assigned this property from
+                // recovery and timeout paths. A running script must now only
+                // enter Pause through setManualPause (F2 or the UI), never as
+                // a side effect of an uncertain observation.
+                if (!pauseState.get()) {
+                    log.warn {
+                        "AUTOMATION_PAUSE_SUPPRESSED source=legacy-direct-setter " +
+                            "reason=manual-pause-required pause=false"
+                    }
+                }
+                return
+            }
+            if (!value) {
                 origin = Origin.NONE
             }
             pauseState.set(value)
@@ -51,11 +63,26 @@ object PauseStatus {
         isPauseProperty.set(paused)
     }
 
-    /** Safety stops may be recovered by the screen watchdog after a known UI repair. */
-    fun setAutomaticPause(paused: Boolean) {
+    /**
+     * Record an automation safety condition without stopping an active run.
+     *
+     * F2/the UI call [setManualPause] and remain the only paths that may
+     * transition an active script to Pause. A condition observed before a
+     * user starts is already paused and therefore stays inert.
+     */
+    fun setAutomaticPause(paused: Boolean): Boolean {
+        if (paused && !pauseState.get()) {
+            log.warn {
+                "AUTOMATION_PAUSE_SUPPRESSED source=automatic-request " +
+                    "reason=manual-pause-required pause=false"
+            }
+            return false
+        }
+        if (paused && origin == Origin.MANUAL) return false
         origin = if (paused) Origin.AUTOMATIC else Origin.NONE
         pauseState.set(paused)
         isPauseProperty.set(paused)
+        return true
     }
 
     fun canRunAutomaticRecovery(): Boolean = !isPause || isAutomaticPause
@@ -76,7 +103,7 @@ object PauseStatus {
 
     fun asyncSetPause(isPaused: Boolean) {
         EXTRA_THREAD_POOL.submit {
-            this.isPause = isPaused
+            setAutomaticPause(isPaused)
         }
     }
 

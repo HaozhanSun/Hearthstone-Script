@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -45,45 +46,45 @@ class LifecycleTraceTest {
     }
 
     @Test
-    fun unresolvedScreenRecoveryTripsOnTheExactSecondFailureForTheSameState() {
+    fun unresolvedScreenRecoveryRequestsBackoffOnTheExactSecondFailureForTheSameState() {
         val tracker = ScreenRecoveryAttemptTracker(maxUnresolvedAttempts = 2)
 
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldBackoff = false),
             tracker.record("HUB|TOURNAMENT", recovered = false),
         )
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 2, shouldPause = true),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 2, shouldBackoff = true),
             tracker.record("HUB|TOURNAMENT", recovered = false),
-            "the configured threshold trips on, not after, the second unresolved attempt",
+            "the configured threshold requests backoff on, not after, the second unresolved attempt",
         )
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 3, shouldPause = true),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 3, shouldBackoff = true),
             tracker.record("HUB|TOURNAMENT", recovered = false),
-            "the tracker reports the actual attempt count used by the pause log",
+            "the tracker reports the actual attempt count used by the backoff log",
         )
     }
 
     @Test
-    fun terminalCleanupDefersAndResetsGenericUnresolvedPauseBudget() {
+    fun terminalCleanupDefersAndResetsGenericUnresolvedRecoveryBudget() {
         val tracker = ScreenRecoveryAttemptTracker(maxUnresolvedAttempts = 2)
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldBackoff = false),
             tracker.record("GAMEPLAY|FILL_DECK|war-1", recovered = false),
         )
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldPause = false),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldBackoff = false),
             tracker.deferForTerminalCleanup("GAMEPLAY|FILL_DECK|war-1"),
         )
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldBackoff = false),
             tracker.record("GAMEPLAY|FILL_DECK|war-1", recovered = false),
             "after terminal cleanup ends, generic recovery starts a fresh bounded observation window",
         )
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 2, shouldPause = true),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 2, shouldBackoff = true),
             tracker.record("GAMEPLAY|FILL_DECK|war-1", recovered = false),
-            "ordinary unresolved screens still trigger the existing safety pause threshold",
+            "ordinary unresolved screens trigger bounded retry backoff without pausing",
         )
     }
 
@@ -110,11 +111,11 @@ class LifecycleTraceTest {
 
         tracker.record("TOURNAMENT|FILL_DECK|war-1", recovered = false)
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldPause = false),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldBackoff = false),
             tracker.deferForExpectedProgress("TOURNAMENT|FILL_DECK|war-1"),
         )
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldBackoff = false),
             tracker.record("TOURNAMENT|FILL_DECK|war-1", recovered = false),
             "after queue evidence expires or terminates, ordinary recovery gets a fresh bounded budget",
         )
@@ -152,18 +153,18 @@ class LifecycleTraceTest {
         tracker.record("TOURNAMENT|FILL_DECK|NONE|0", recovered = false)
         val queueExitKey = "${pid}:${queue.snapshotFor(pid, true, 3_000_000L).startedAtNanos}:${queue.snapshotFor(pid, true, 3_000_000L).phase}"
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldPause = false),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldBackoff = false),
             tracker.observeQueueExit("TOURNAMENT|FILL_DECK|NONE|0", queueExitKey),
             "LifecycleTrace performs a one-time unresolved-budget reset on queue exit",
         )
         assertNull(tracker.observeQueueExit("TOURNAMENT|FILL_DECK|NONE|0", queueExitKey))
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldPause = false),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldBackoff = false),
             tracker.record("TOURNAMENT|FILL_DECK|NONE|0", recovered = true),
             "the fresh, classified rank-five deck screen is successful recovery evidence, not another unresolved attempt",
         )
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldBackoff = false),
             tracker.record("TOURNAMENT|FILL_DECK|NONE|0", recovered = false),
             "a later distinct unresolved capture still starts a bounded attempt count",
         )
@@ -174,35 +175,35 @@ class LifecycleTraceTest {
         val tracker = ScreenRecoveryAttemptTracker(maxUnresolvedAttempts = 2)
         tracker.record("HUB|TOURNAMENT", recovered = false)
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldPause = false),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 0, shouldBackoff = false),
             tracker.record("HUB|TOURNAMENT", recovered = true),
             "a recovered screen clears the failure streak",
         )
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldBackoff = false),
             tracker.record("HUB|TOURNAMENT", recovered = false),
         )
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldBackoff = false),
             tracker.record("HOME|TOURNAMENT", recovered = false),
             "a changed state gets a fresh bounded budget",
         )
         tracker.reset()
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldBackoff = false),
             tracker.record("HOME|TOURNAMENT", recovered = false),
             "an explicit lifecycle reset clears both fingerprint and count",
         )
     }
 
     @Test
-    fun unresolvedRecoveryPauseBudgetIncludingMonitorPollingIsAtMostOneMinute() {
+    fun unresolvedRecoveryBackoffBudgetIncludingMonitorPollingIsAtMostOneMinute() {
         assertEquals(60_000L, LifecycleTrace.unresolvedRecoveryPauseBoundMsForTest())
         assertTrue(LifecycleTrace.unresolvedRecoveryPauseBoundMsForTest() <= 60_000L)
     }
 
     @Test
-    fun sameDeckSelectionRankDeniedRecoveryIsTrackedAsNoProgressAndBounded() {
+    fun sameDeckSelectionRankDeniedRecoveryIsTrackedAsNoProgressAndBackedOff() {
         val tracker = ScreenRecoveryAttemptTracker(maxUnresolvedAttempts = 2)
         val screenKind = "DECK_SELECTION"
         val mode = "TOURNAMENT"
@@ -212,13 +213,13 @@ class LifecycleTraceTest {
 
         assertFalse(recovered, "identical deck-selection state must not claim recovery progress")
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldPause = false),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 1, shouldBackoff = false),
             tracker.record(fingerprint, recovered),
         )
         assertEquals(
-            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 2, shouldPause = true),
+            ScreenRecoveryAttemptTracker.Decision(unresolvedAttempts = 2, shouldBackoff = true),
             tracker.record(fingerprint, recovered),
-            "the unchanged rank-denied fingerprint reaches the existing bounded pause threshold",
+            "the unchanged rank-denied fingerprint reaches the bounded backoff threshold",
         )
         assertTrue(LifecycleTrace.unresolvedRecoveryPauseBoundMsForTest() <= 60_000L)
         assertTrue(
@@ -241,7 +242,10 @@ class LifecycleTraceTest {
 
     @Test
     fun lifecycleStartSchedulesTheAlwaysOnBetaFailureMonitorWithOptionalExtensionsDisabled() {
-        assertTrue(BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL))
+        // The monitor is deliberately Beta-only. Local developer artifacts do
+        // not carry a Beta channel, so this is a channel-specific integration
+        // assertion rather than a failure of the local unit-test environment.
+        assumeTrue(BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL))
         ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
         BetaScreenRecoveryService.onFeatureChanged(false)
         LifecycleTrace.stop("offline-test-setup")

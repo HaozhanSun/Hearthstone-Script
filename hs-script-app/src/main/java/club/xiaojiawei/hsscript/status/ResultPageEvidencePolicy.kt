@@ -127,9 +127,19 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.085..0.11 &&
             centerDarkRatio in 0.25..0.285 &&
             bannerWarmRatio in 0.58..0.62
+        // v4.16.601's post-surrender Gold 4 continuation had the same
+        // stable lower-center Continue band and blue rank ribbon as the
+        // prior Gold captures, but a cooler blurred board: continue=.043,
+        // banner=.099, centerDark=.263, warm=.400. Keep this four-signal
+        // contract narrow so it remains distinct from the defeat plaque
+        // (whose banner saturation is materially higher) and normal board.
+        val coolPostSurrenderGoldRewardSignature = continueGrayLightRatio in 0.04..0.05 &&
+            bannerLowSaturationRatio in 0.085..0.11 &&
+            centerDarkRatio in 0.25..0.28 &&
+            bannerWarmRatio in 0.38..0.43
         return capturedRankProgressSignature || establishedRankProgressSignature ||
             coolBoardGoldRewardSignature || largeGoldMedalRewardSignature || compactGoldRewardSignature ||
-            postEnterGoldRewardSignature
+            postEnterGoldRewardSignature || coolPostSurrenderGoldRewardSignature
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */

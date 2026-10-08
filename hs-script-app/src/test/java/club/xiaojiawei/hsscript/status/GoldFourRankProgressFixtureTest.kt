@@ -140,6 +140,36 @@ class GoldFourRankProgressFixtureTest {
         assertTrue(afterRetry > afterPriorEnter)
     }
 
+    @Test
+    fun `v601 Gold 4 post-surrender reward is a safe rank-progress continuation despite garbled OCR`() {
+        val bytes = fixtureBytes(V601_POST_SURRENDER)
+        assertEquals(V601_POST_SURRENDER_SHA256, sha256(bytes))
+        val image = requireNotNull(ImageIO.read(ByteArrayInputStream(bytes)))
+        assertEquals(1920, image.width)
+        assertEquals(1080, image.height)
+
+        val evidence = ScreenStateRecovery.resultVisualEvidenceForFixture(image)
+        assertMetricNear(evidence, "continue", 0.043)
+        assertMetricNear(evidence, "banner", 0.099)
+        assertMetricNear(evidence, "centerDark", 0.263)
+        assertMetricNear(evidence, "bannerWarm", 0.400)
+        assertFalse(ResultPageEvidencePolicy.looksLikeResultVisual(0.043, 0.099, 0.263, 0.400))
+        assertTrue(ResultPageEvidencePolicy.looksLikeRankProgressContinuationVisual(0.043, 0.099, 0.263, 0.400))
+
+        assertEquals("RANK_PROGRESS_CONTINUATION", ScreenStateRecovery.classifyImageForResultFixture(image), evidence)
+        assertEquals("RANK_PROGRESS_CONTINUATION", UpstreamScreenStateRecovery.classifyImageForResultFixture(image))
+        val transition = requireNotNull(
+            ScreenStateRecovery.recoveryTransitionForImageForTest(
+                image = image,
+                ocrText = "人人国人2W让(SEEAs入ss1本此击继续",
+                targeted = emptyMap(),
+            ),
+        )
+        assertEquals("RANK_PROGRESS_CONTINUATION", transition.screen)
+        assertEquals("CONTINUE_WITH_TERMINAL_CAPABILITY", transition.action)
+        assertFalse(transition.enterStrategy, "rank progress must wait for terminal cleanup rather than start ordinary play")
+    }
+
     private fun fixtureBytes(path: String): ByteArray =
         requireNotNull(javaClass.getResourceAsStream(path)) { "Missing screenshot fixture $path" }.use { it.readBytes() }
 
@@ -167,5 +197,9 @@ class GoldFourRankProgressFixtureTest {
             "/club/xiaojiawei/hsscript/status/surrender/v597-post-enter-same-rank-reward-20261007-205000-098.png"
         private const val V597_POST_ENTER_SHA256 =
             "BF175A7B2F9CCF4E14D082D5968F21F490F9B61A0206FE70462304E53BA422FE"
+        private const val V601_POST_SURRENDER =
+            "/club/xiaojiawei/hsscript/status/surrender/v601-gold4-rank-progress-20261007-232005-283.png"
+        private const val V601_POST_SURRENDER_SHA256 =
+            "73E37ECD7DA30E984444B036D858B3833AC09E66C942C6958A81F3BDE917BD8D"
     }
 }

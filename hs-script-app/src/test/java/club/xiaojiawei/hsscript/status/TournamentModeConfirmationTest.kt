@@ -191,7 +191,7 @@ class TournamentModeConfirmationTest {
     }
 
     @Test
-    fun `three unknown mode observations pause before deck selection`() {
+    fun `three unknown mode observations preserve running state before deck selection`() {
         var observations = 0
         try {
             PauseStatus.setAutomaticPause(false)
@@ -218,9 +218,7 @@ class TournamentModeConfirmationTest {
 
             assertFalse(result)
             assertEquals(3, observations)
-            assertTrue(PauseStatus.isAutomaticPause)
-
-            assertTrue(PauseStatus.isAutomaticPause, "unknown mode still holds before startMatching is reached")
+            assertFalse(PauseStatus.isPause, "unknown mode must remain a no-input retry, not an automatic pause")
         } finally {
             PauseStatus.setAutomaticPause(false)
         }

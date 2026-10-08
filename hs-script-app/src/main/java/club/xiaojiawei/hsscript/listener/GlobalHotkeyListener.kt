@@ -244,6 +244,9 @@ object GlobalHotkeyListener : HotkeyListener {
         }
     }
 
+    /** Deterministic seam proving that the explicit F2 path remains authoritative. */
+    internal fun pressF2ForTest() = setPauseState(true, "F2/test")
+
     internal class FixedHotkeyEdgeDetector {
         private var f1Down = false
         private var f2Down = false

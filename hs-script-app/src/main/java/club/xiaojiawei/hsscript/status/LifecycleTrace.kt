@@ -11,7 +11,7 @@ import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class ScreenRecoveryAttemptTracker(private val maxUnresolvedAttempts: Int = 2) {
-    data class Decision(val unresolvedAttempts: Int, val shouldPause: Boolean)
+    data class Decision(val unresolvedAttempts: Int, val shouldBackoff: Boolean)
 
     private var fingerprint: String? = null
     private var unresolvedAttempts = 0
@@ -24,12 +24,12 @@ internal class ScreenRecoveryAttemptTracker(private val maxUnresolvedAttempts: I
         }
         if (recovered) {
             unresolvedAttempts = 0
-            return Decision(unresolvedAttempts, shouldPause = false)
+            return Decision(unresolvedAttempts, shouldBackoff = false)
         }
         unresolvedAttempts++
         return Decision(
             unresolvedAttempts = unresolvedAttempts,
-            shouldPause = unresolvedAttempts >= maxUnresolvedAttempts.coerceAtLeast(1),
+            shouldBackoff = unresolvedAttempts >= maxUnresolvedAttempts.coerceAtLeast(1),
         )
     }
 
@@ -44,7 +44,7 @@ internal class ScreenRecoveryAttemptTracker(private val maxUnresolvedAttempts: I
         lastQueueExitKey = queueExitKey
         this.fingerprint = fingerprint
         unresolvedAttempts = 0
-        return Decision(unresolvedAttempts = 0, shouldPause = false)
+        return Decision(unresolvedAttempts = 0, shouldBackoff = false)
     }
 
     fun deferForTerminalCleanup(fingerprint: String): Decision {
@@ -54,7 +54,7 @@ internal class ScreenRecoveryAttemptTracker(private val maxUnresolvedAttempts: I
     fun deferForExpectedProgress(fingerprint: String): Decision {
         this.fingerprint = fingerprint
         unresolvedAttempts = 0
-        return Decision(unresolvedAttempts = 0, shouldPause = false)
+        return Decision(unresolvedAttempts = 0, shouldBackoff = false)
     }
 }
 
@@ -291,11 +291,18 @@ object LifecycleTrace {
                     } else {
                         stateRecoveryAttemptTracker.record(fingerprint, recovered)
                     }
-                    if (decision.shouldPause) {
-                        PauseStatus.setAutomaticPause(true)
+                    if (decision.shouldBackoff) {
+                        // An unresolved screenshot is diagnostic evidence,
+                        // not authority to stop a user-started run. Reset the
+                        // bounded observation budget and wait a full recovery
+                        // interval before a new no-input inspection.
+                        stateRecoverySince = System.currentTimeMillis()
+                        stateRecoveryAttemptAt = stateRecoverySince
+                        stateRecoveryAttemptTracker.deferForExpectedProgress(fingerprint)
                         log.warn {
-                            "SCREEN_RECOVERY_PAUSED reason=unresolved-attempt-limit " +
-                                "attempts=${decision.unresolvedAttempts} state=$fingerprint inputDispatch=false"
+                            "SCREEN_RECOVERY_RETRY_BACKOFF reason=unresolved-attempt-limit " +
+                                "attempts=${decision.unresolvedAttempts} state=$fingerprint " +
+                                "pause=false inputDispatch=false retryAfterMs=$STATE_RECOVERY_TIMEOUT_MS"
                         }
                     } else if (cleanupActive) {
                         log.info {

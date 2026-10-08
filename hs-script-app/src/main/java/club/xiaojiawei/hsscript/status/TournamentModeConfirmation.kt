@@ -269,15 +269,13 @@ object TournamentModeConfirmation {
             ocrText = result?.ocrText.orEmpty(),
             visual = result?.reason.orEmpty(),
         )
-        PauseStatus.setAutomaticPause(true)
         log.warn {
-            // Unknown mode text is not a user/manual pause. It is a bounded,
-            // recoverable safety stop: ScreenStateRecovery is allowed to
-            // inspect the active window and either re-enter the mode strategy
-            // or restart a genuinely stale client. Keep the selected strategy
-            // and slot in the evidence so recovery cannot silently switch
-            // decks after an OCR miss.
-            "TOURNAMENT_MODE_CONFIRMATION_FAILED action=PAUSE_FOR_AUTOMATIC_RECOVERY " +
+            // Preserve the bounded, no-input failure record without turning
+            // an OCR miss into an automatic user-visible pause. The normal
+            // lifecycle recovery cadence will re-observe the current window;
+            // it still cannot select a deck or enter matchmaking without a
+            // fresh trusted mode confirmation.
+            "TOURNAMENT_MODE_CONFIRMATION_FAILED action=RETRY_SAFE_NO_INPUT pause=false " +
                 "expectedMode=${result?.expectedMode?.name ?: "n/a"} " +
                 "observedMode=${result?.observedMode?.name ?: "UNKNOWN"} " +
                 "strategy=${result?.strategyId ?: "n/a"} strategyName=${result?.strategyName ?: "n/a"} " +
