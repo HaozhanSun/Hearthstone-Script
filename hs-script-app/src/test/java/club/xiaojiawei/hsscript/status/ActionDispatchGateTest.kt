@@ -129,6 +129,43 @@ class ActionDispatchGateTest {
     }
 
     @Test
+    fun `authoritative terminal cleanup may pass automatic pause but never manual F2 or ordinary actions`() {
+        assertTrue(
+            ActionDispatchGate.allowForState(
+                action = "terminal-result.dismiss",
+                paused = true,
+                working = false,
+                terminalCleanupPending = true,
+                terminalCleanupCapabilityValid = true,
+                automaticPause = true,
+            ),
+            "same-game terminal capability permits only the cleanup action through a watchdog safety pause",
+        )
+        assertFalse(
+            ActionDispatchGate.allowForState(
+                action = "terminal-result.dismiss",
+                paused = true,
+                working = false,
+                terminalCleanupPending = true,
+                terminalCleanupCapabilityValid = true,
+                automaticPause = false,
+            ),
+            "manual/F2 pause remains absolute even when terminal cleanup is pending",
+        )
+        assertFalse(
+            ActionDispatchGate.allowForState(
+                action = "matchmaking.start",
+                paused = true,
+                working = false,
+                terminalCleanupPending = true,
+                terminalCleanupCapabilityValid = true,
+                automaticPause = true,
+            ),
+            "terminal capability cannot authorize queueing or any ordinary action",
+        )
+    }
+
+    @Test
     fun `mandatory rank surrender blocks ordinary game-changing dispatch without pausing`() {
         assertFalse(
             ActionDispatchGate.allowForState(

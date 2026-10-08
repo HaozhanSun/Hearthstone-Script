@@ -108,8 +108,18 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.075..0.10 &&
             centerDarkRatio in 0.30..0.34 &&
             bannerWarmRatio in 0.48..0.53
+        // v4.16.596's authorized post-surrender Gold 4 reward capture used a
+        // narrower/dimmer medal composition: continue=.046, low-saturation=.091,
+        // center-dark=.195, warm=.404. Keep this separate from the defeat
+        // plaque range above; the low-saturation and dark-center bounds are
+        // deliberately tight, while the continue strip and warm medal remain
+        // independent required evidence.
+        val compactGoldRewardSignature = continueGrayLightRatio in 0.04..0.06 &&
+            bannerLowSaturationRatio in 0.075..0.11 &&
+            centerDarkRatio in 0.18..0.21 &&
+            bannerWarmRatio in 0.38..0.43
         return capturedRankProgressSignature || establishedRankProgressSignature ||
-            coolBoardGoldRewardSignature || largeGoldMedalRewardSignature
+            coolBoardGoldRewardSignature || largeGoldMedalRewardSignature || compactGoldRewardSignature
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */

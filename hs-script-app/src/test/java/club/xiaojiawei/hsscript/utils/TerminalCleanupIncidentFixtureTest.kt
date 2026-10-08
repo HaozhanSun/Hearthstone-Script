@@ -4,8 +4,12 @@ import club.xiaojiawei.hsscript.status.ResultPageEvidencePolicy
 import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
 import club.xiaojiawei.hsscript.status.ResultScreenObservation
 import club.xiaojiawei.hsscript.status.PostResultRankProgressPolicy
+import club.xiaojiawei.hsscript.status.ActionDispatchGate
+import club.xiaojiawei.hsscript.status.FreshPostResultDestinationPolicy
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.UpstreamScreenStateRecovery
+import club.xiaojiawei.hsscript.status.surrender.CurrentGamePowerLogTerminalTracker
+import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
 import java.security.MessageDigest
@@ -14,8 +18,12 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.AfterEach
 
 class TerminalCleanupIncidentFixtureTest {
+    @AfterEach
+    fun resetTerminalGuard() = MandatoryRankSurrenderGuard.resetForTest()
+
     @Test
     fun `v570 pre-overlay board is rejected but fresh defeat panel dispatches once after same-game proof`() {
         val preOverlayBytes = requireNotNull(javaClass.getResourceAsStream(V570_PRE_OVERLAY)).use { it.readBytes() }
@@ -323,9 +331,159 @@ class TerminalCleanupIncidentFixtureTest {
         assertTrue(incident.contains("Current rank is 3"), "the current rank remains ineligible; cleanup does not authorize play")
     }
 
+    @Test
+    fun `v597 Gold 4 reward is recognized and terminal cleanup exits to safe hub through automatic pause only`() {
+        val bytes = requireNotNull(javaClass.getResourceAsStream(V597_RANK_PROGRESS)).use { it.readBytes() }
+        assertEquals(V597_RANK_PROGRESS_SHA256, sha256(bytes))
+        val rankReward = requireNotNull(ImageIO.read(ByteArrayInputStream(bytes)))
+        assertEquals(1920, rankReward.width)
+        assertEquals(1080, rankReward.height)
+        val rankKind = ScreenStateRecovery.classifyImageForResultFixture(rankReward)
+        assertEquals("RANK_PROGRESS_CONTINUATION", rankKind)
+        assertEquals(rankKind, UpstreamScreenStateRecovery.classifyImageForResultFixture(rankReward))
+        val visual = ScreenStateRecovery.resultVisualEvidenceForFixture(rankReward)
+        assertMetricNear(visual, "continue", 0.04609066017645269)
+        assertMetricNear(visual, "banner", 0.09054834054834054)
+        assertMetricNear(visual, "centerDark", 0.19529744636653415)
+        assertMetricNear(visual, "bannerWarm", 0.4039201539201539)
+        assertFalse(ResultPageEvidencePolicy.looksLikeResultVisual(0.046, 0.091, 0.195, 0.404))
+
+        // Recreate proof from the same-game authoritative terminal sequence.
+        val tracker = CurrentGamePowerLogTerminalTracker()
+        tracker.observeLine("CREATE_GAME gameId=gold4-rank-reward")
+        val identity = requireNotNull(tracker.currentGameIdentity("laz#12793"))
+        MandatoryRankSurrenderGuard.begin(identity)
+        tracker.observeLine("TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=CONCEDED")
+        tracker.observeLine("TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=LOST")
+        tracker.observeLine("TAG_CHANGE Entity=xXTHUGXx#1184 tag=PLAYSTATE value=WON")
+        tracker.observeLine("TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER")
+        tracker.observeLine("TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE")
+        val proof = requireNotNull(tracker.currentGameSurrenderEvidence("laz#12793", "xXTHUGXx#1184"))
+        assertEquals("LOST", proof.ownPlayState)
+        val cleanupCapability = requireNotNull(MandatoryRankSurrenderGuard.authorizeTerminalCleanup(proof))
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", cleanupCapability))
+
+        // The recognized reward is the only state allowed to keep terminal UI
+        // cleanup running through an automatic unresolved-screen pause.
+        val coordinator = TerminalPageCleanupCoordinator()
+        val ticket = requireNotNull(coordinator.begin().ticket)
+        assertEquals(
+            PostResultRankProgressPolicy.Action.CONTINUE,
+            PostResultRankProgressPolicy.decide(
+                rankProgressVisible = rankKind == "RANK_PROGRESS_CONTINUATION",
+                terminalCleanupAuthorized = MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(cleanupCapability),
+                captureAuthorized = true,
+                rankProgressInputAttempts = coordinator.snapshot().rankProgressInputs,
+            ),
+        )
+        val terminalDispatchAllowed = ActionDispatchGate.allowForState(
+            action = "terminal-result.dismiss",
+            paused = true,
+            working = false,
+            terminalCleanupPending = true,
+            terminalCleanupCapabilityValid = MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(cleanupCapability),
+            automaticPause = true,
+        )
+        assertTrue(terminalDispatchAllowed)
+        var mockClientScreen = rankKind
+        var targetAcceptedInputs = 0
+        val reservedRankInput = if (terminalDispatchAllowed) {
+            coordinator.reserveRankProgressInput(ticket, PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS)
+        } else null
+        val rankInput = reservedRankInput?.let(PostResultRankProgressPolicy::inputForAttempt)
+        if (rankInput == PostResultRankProgressPolicy.Input.CENTER_CLICK) {
+            // Offline target adapter accepts the input and models the visible transition.
+            targetAcceptedInputs++
+            mockClientScreen = "HOME"
+        }
+        assertEquals(1, targetAcceptedInputs, "the simulated client accepts one rank-reward Continue input")
+        assertEquals(PostResultRankProgressPolicy.Input.CENTER_CLICK, rankInput)
+        assertFalse(
+            ResultPageDismissalPolicy.shouldStopWorker(
+                paused = true,
+                gameplayMode = false,
+                terminalCleanupCapabilityValid = true,
+                automaticPause = true,
+            ),
+            "the valid terminal worker must continue through the automatic unresolved-screen pause",
+        )
+        assertTrue(
+            ResultPageDismissalPolicy.shouldStopWorker(
+                paused = true,
+                gameplayMode = false,
+                terminalCleanupCapabilityValid = true,
+                automaticPause = false,
+            ),
+            "manual pause still stops cleanup dispatch",
+        )
+        assertFalse(
+            ActionDispatchGate.allowForState(
+                action = "terminal-result.dismiss",
+                paused = true,
+                working = false,
+                terminalCleanupPending = true,
+                terminalCleanupCapabilityValid = true,
+                automaticPause = false,
+            ),
+            "F2/manual pause must still block the same UI input",
+        )
+        assertFalse(
+            ActionDispatchGate.allowForState(
+                action = "matchmaking.start",
+                paused = true,
+                working = false,
+                terminalCleanupPending = true,
+                terminalCleanupCapabilityValid = true,
+                automaticPause = true,
+            ),
+            "cleanup proof cannot turn into matchmaking authorization",
+        )
+
+        val homeDestination = FreshPostResultDestinationPolicy.isConfirmed(
+            mockClientScreen,
+            95,
+            freshCaptureAuthorized = true,
+        )
+        assertTrue(homeDestination, "fresh recognized HOME is a safe post-result destination")
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = false,
+                attempt = 2,
+                maxAttempts = TerminalPageCleanupCoordinator.DEFAULT_MAX_INPUTS,
+                clickAttempts = 1,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = true,
+                destinationTransitionConfirmed = homeDestination,
+            ),
+        )
+        assertTrue(coordinator.confirmDestination(ticket), "fresh HOME confirmation completes the cleanup episode")
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED", cleanupCapability))
+        assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+        assertFalse(
+            ActionDispatchGate.allowForState(
+                action = "matchmaking.start",
+                paused = true,
+                working = false,
+                automaticPause = true,
+            ),
+            "the script remains paused at HOME and cannot start a queue after terminal cleanup",
+        )
+    }
+
     private fun loadImage(resource: String): BufferedImage {
         val bytes = requireNotNull(javaClass.getResourceAsStream(resource)).use { it.readBytes() }
         return requireNotNull(ImageIO.read(ByteArrayInputStream(bytes)))
+    }
+
+    private fun assertMetricNear(evidence: String, name: String, expected: Double) {
+        val value = Regex("(?:^|\\s)${Regex.escape(name)}=([0-9]+\\.[0-9]+)")
+            .find(evidence)
+            ?.groupValues
+            ?.get(1)
+            ?.toDouble()
+        assertTrue(value != null && kotlin.math.abs(value - expected) < 0.000001, "$name expected=$expected evidence=$evidence")
     }
 
     @Test
@@ -457,5 +615,7 @@ class TerminalCleanupIncidentFixtureTest {
         private const val V577_RANK_PROGRESS = "/club/xiaojiawei/hsscript/status/surrender/v577-rank-up-gold3-20261005-221531-323.png"
         private const val V577_RANK_INCIDENT = "/club/xiaojiawei/hsscript/status/surrender/v577-rank-up-cleanup-incident.txt"
         private const val V577_RANK_PROGRESS_SHA256 = "383BA353BCA5459CAA12C41EA4522284DE369AECC32A294209A0F523ED288837"
+        private const val V597_RANK_PROGRESS = "/club/xiaojiawei/hsscript/status/surrender/v597-gold4-rank-progress-unrecognized-20261007-125248-573.png"
+        private const val V597_RANK_PROGRESS_SHA256 = "A670A8A140D48037D11C9B2805DD9641594F2E82F487D5D4CCA4B65B9EF76794"
     }
 }

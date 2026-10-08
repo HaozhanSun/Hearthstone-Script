@@ -79,6 +79,7 @@ class TerminalResultDismissalFixtureTest {
                 clickAttempts = dispatchedInputs,
                 terminalCleanupAuthorized = true,
                 captureAuthorized = true,
+                destinationTransitionConfirmed = true,
             ),
         )
     }
@@ -157,6 +158,7 @@ class TerminalResultDismissalFixtureTest {
                 clickAttempts = coordinator.snapshot().inputs,
                 terminalCleanupAuthorized = true,
                 captureAuthorized = true,
+                destinationTransitionConfirmed = true,
             ),
         )
         assertTrue(coordinator.confirmDestination(ticket))

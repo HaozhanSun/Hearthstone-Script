@@ -26,6 +26,7 @@ object ActionDispatchGate {
             action = action,
             paused = paused,
             working = working,
+            automaticPause = PauseStatus.isAutomaticPause,
             mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
             recoveryCapabilityValid = MandatoryRankSurrenderGuard.isRecoveryCapabilityValid(recoveryCapability),
             terminalCleanupCapabilityValid =
@@ -57,15 +58,17 @@ object ActionDispatchGate {
         terminalCleanupPending: Boolean = false,
         rankBarrierState: MulliganRankDispatchBarrier.State = MulliganRankDispatchBarrier.State.IDLE,
         rankSurrenderRequestCapabilityValid: Boolean = false,
+        automaticPause: Boolean = false,
     ): Boolean {
-        if (paused || !working) {
+        val terminalCleanupAllowed = action == "terminal-result.dismiss" && terminalCleanupCapabilityValid
+        val terminalCleanupThroughAutomaticPause = paused && automaticPause && terminalCleanupAllowed
+        if ((paused && !terminalCleanupThroughAutomaticPause) || (!paused && !working)) {
             log.warn {
                 "ACTION_BLOCKED action=$action reason=${if (paused) "paused" else "not-working"} " +
                     "pause=$paused working=$working dispatch=false"
             }
             return false
         }
-        val terminalCleanupAllowed = action == "terminal-result.dismiss" && terminalCleanupCapabilityValid
         if (terminalCleanupPending && !terminalCleanupAllowed) {
             log.warn {
                 "ACTION_BLOCKED action=$action reason=terminal-result-cleanup-pending " +

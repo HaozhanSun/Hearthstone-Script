@@ -31,18 +31,18 @@ internal object ResultPageDismissalPolicy {
         else -> Input.KEYBOARD_ENTER
     }
 
-    /**
-     * A mandatory-rank result cleanup may outlive the GAMEPLAY mode when the
-     * client has already advanced to tournament/deck selection. Only its
-     * one-purpose live capability may keep that worker alive; pause always
-     * cancels it.
+    /** A mandatory-rank cleanup may outlive gameplay or an automatic safety pause,
+     * but never a manual pause or a new game.
      */
     fun shouldStopWorker(
         paused: Boolean,
         gameplayMode: Boolean,
         terminalCleanupCapabilityValid: Boolean,
         newGameDetected: Boolean = false,
-    ): Boolean = paused || newGameDetected || (!gameplayMode && !terminalCleanupCapabilityValid)
+        automaticPause: Boolean = false,
+    ): Boolean =
+        (paused && !(automaticPause && terminalCleanupCapabilityValid)) ||
+            newGameDetected || (!gameplayMode && !terminalCleanupCapabilityValid)
 
     fun decide(
         inWar: Boolean,

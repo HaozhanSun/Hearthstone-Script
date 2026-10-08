@@ -322,7 +322,10 @@ class TerminalPageCleanupCoordinatorTest {
         assertEquals(TerminalPageCleanupCoordinator.BeginState.ALREADY_RUNNING, coordinator.begin().state)
         assertFalse(FreshPostResultDestinationPolicy.isConfirmed(null, 0, true))
         assertTrue(FreshPostResultDestinationPolicy.isConfirmed("DECK_SELECTION", 90, true))
-        assertTrue(coordinator.confirmDestination(retry), "caller releases only after fresh authorized deck/queue proof")
+        assertTrue(FreshPostResultDestinationPolicy.isConfirmed("HOME", 95, true))
+        assertFalse(FreshPostResultDestinationPolicy.isConfirmed("HOME", 84, true))
+        assertFalse(FreshPostResultDestinationPolicy.isConfirmed("HOME", 95, false))
+        assertTrue(coordinator.confirmDestination(retry), "caller releases only after fresh authorized safe-destination proof")
         assertEquals(TerminalPageCleanupCoordinator.State.COMPLETED, coordinator.snapshot().state)
     }
 }

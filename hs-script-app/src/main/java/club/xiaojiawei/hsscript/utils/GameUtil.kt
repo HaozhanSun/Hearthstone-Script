@@ -1466,6 +1466,7 @@ object GameUtil {
                 paused = PauseStatus.isPause,
                 gameplayMode = Mode.currMode === ModeEnum.GAMEPLAY,
                 terminalCleanupCapabilityValid = terminalCleanupAuthorized,
+                automaticPause = PauseStatus.isAutomaticPause,
             ) || (WarEx.inWar && !resultAlreadyObserved)
         ) {
             log.info {
@@ -1647,6 +1648,7 @@ object GameUtil {
                         gameplayMode = Mode.currMode === ModeEnum.GAMEPLAY,
                         terminalCleanupCapabilityValid = terminalCleanupStillAuthorized,
                         newGameDetected = newGameDetected,
+                        automaticPause = PauseStatus.isAutomaticPause,
                     )
                 ) {
                     if (cleanupTicket != null) {
