@@ -29,8 +29,8 @@ class RankEligibilityPolicyTest {
     }
 
     @Test
-    fun `all resolved numeric ranks other than five ten and legendary above twenty are denied`() {
-        for (rank in (1..4) + (6..9) + (11..20)) {
+    fun `all resolved numeric ranks other than five and ten are denied`() {
+        for (rank in (1..4) + (6..9) + (11..20) + listOf(21, 233, 5220)) {
             val decision = evaluate(detection(rank = rank))
             assertFalse(decision.eligible, "rank=$rank must fail closed")
         }
@@ -54,17 +54,17 @@ class RankEligibilityPolicyTest {
     fun `rank three progression reward never authorizes ordinary play`() {
         val decision = evaluate(detection(rank = 3, tier = CurrentRankDetector.RankTier.GOLD))
         assertFalse(decision.eligible, "post-surrender Gold 3 screen is cleanup evidence, not play authorization")
-        assertEquals("rank-not-5-or-10-or-legendary-20-plus", decision.reason)
+        assertEquals("rank-not-5-or-10", decision.reason)
     }
 
     @Test
-    fun `numeric legendary rating above twenty is allowed independent of tier label`() {
+    fun `numeric legendary rating above twenty is denied independent of tier label`() {
         for (tier in CurrentRankDetector.RankTier.values()) {
             val decision = evaluate(detection(rank = 21, tier = tier))
-            assertTrue(decision.eligible, "rank=21 tier=$tier reason=${decision.reason}")
+            assertFalse(decision.eligible, "rank=21 tier=$tier reason=${decision.reason}")
         }
-        assertTrue(evaluate(detection(rank = 233, tier = CurrentRankDetector.RankTier.UNKNOWN)).eligible)
-        assertTrue(evaluate(detection(rank = 5220, tier = CurrentRankDetector.RankTier.LEGEND)).eligible)
+        assertFalse(evaluate(detection(rank = 233, tier = CurrentRankDetector.RankTier.UNKNOWN)).eligible)
+        assertFalse(evaluate(detection(rank = 5220, tier = CurrentRankDetector.RankTier.LEGEND)).eligible)
         assertFalse(evaluate(detection(rank = null, tier = CurrentRankDetector.RankTier.LEGEND)).eligible)
     }
 
@@ -142,7 +142,7 @@ class RankEligibilityPolicyTest {
         assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = true))
         assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(working = false, paused = false))
         val numericLegend = evaluate(detection(rank = 233, tier = CurrentRankDetector.RankTier.UNKNOWN))
-        assertTrue(numericLegend.eligible, "numeric Legendary rating above 20 is allowed")
+        assertFalse(numericLegend.eligible, "numeric Legendary rating above 20 is not exact rank 5 or 10")
     }
 
     private fun evaluate(

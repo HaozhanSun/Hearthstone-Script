@@ -51,24 +51,18 @@ class StartupHomeToMatchmakingIntegrationTest {
         var currentSessionReady = false
         assertEquals(0, queueDispatches)
         currentSessionReady = true
-        // Queue authorization requires the rank read captured immediately on
-        // the deck-selection page, before any matchmaking input.
+        // A deck-selection badge cannot decide this game. The queue is sent
+        // first; the active game's Mulligan preflight owns rank eligibility.
         for (rank in listOf(4, 5, 10, 21)) {
             if (!currentSessionReady) continue
             val result = PreMatchRankGate.evaluate(
                 working = true,
                 paused = false,
                 mandatoryRankSurrenderPending = false,
-                tournamentMode = true,
-                inWar = false,
-                observedRank = rank,
-                freshRankObservation = true,
-                ocrFailure = false,
             )
-            val expectedAllowed = rank == 5 || rank == 10
-            assertEquals(expectedAllowed, result.queueAuthorization.allowed, "rank=$rank")
-            assertEquals(expectedAllowed, MatchmakingGuardPolicy.dispatchIfAuthorized(result.queueAuthorization) { queueDispatches++ })
+            assertTrue(result.queueAuthorization.allowed, "rank=$rank is deferred to the active game")
+            assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(result.queueAuthorization) { queueDispatches++ })
         }
-        assertEquals(2, queueDispatches, "only exact rank 5 and rank 10 dispatch queue input")
+        assertEquals(4, queueDispatches, "queue dispatches are independent of deck-selection rank")
     }
 }

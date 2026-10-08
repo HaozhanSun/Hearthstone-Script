@@ -3,8 +3,8 @@
 `hs-script-offline-e2e` is a standalone headless Maven module. It depends on `hs-script-recovery-core`, the same production rank/queue/surrender state logic used by the app, and does not depend on the GUI app, Hearthstone process, input device, or OCR provider. It replays the regression boundary without launching Hearthstone or sending input:
 
 1. The prior game's Power.log must contain a real `CREATE_GAME`/mulligan start and terminal `CONCEDED`, `LOST`, opponent `WON`, and `FINAL_GAMEOVER` markers.
-2. Before any queue click, a fresh deck-selection rank capture must authorize exactly rank 5 or 10 in the expected constructed mode. Rank 4, every other numeric rank (including Legendary ratings), unknown/failed OCR, stale or low-confidence evidence, invalid bounds, and mode mismatch must dispatch no matchmaking input.
-3. The later Power.log game-start/mulligan event still enters the independent current-game rank preflight. Exact 5 and 10 may continue; ineligible/unknown ranks stay on the mandatory-surrender path.
+2. Queue dispatch uses runtime/pause/surrender guards only; deck-selection rank OCR must never block it. Rank evidence is meaningful only after a current game exists.
+3. The Power.log game-start/mulligan event enters the independent current-game rank preflight. Exact 5 and 10 may continue; every other numeric rank (including Legendary ratings) takes the mandatory-surrender path. Unknown/failed OCR does not block queue, but holds ordinary in-game input pending a bounded fresh resolution.
 4. A surrender request is not acceptance. The fixture must contain the authoritative terminal Power.log transition before cleanup capability is issued. A fresh current deck-selection screen is then required to release the next-queue lock.
 
 Run only this module and its headless production-core dependency with:

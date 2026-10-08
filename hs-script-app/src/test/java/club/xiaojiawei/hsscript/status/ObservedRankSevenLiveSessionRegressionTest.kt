@@ -89,7 +89,7 @@ class ObservedRankSevenLiveSessionRegressionTest {
             nowMs = localTime("2026-10-02T21:45:29"),
         )
         assertFalse(rankDecision.eligible)
-        assertEquals("rank-not-5-or-10-or-legendary-20-plus", rankDecision.reason)
+        assertEquals("rank-not-5-or-10", rankDecision.reason)
 
         MulliganRankDispatchBarrier.resetForTest()
         try {

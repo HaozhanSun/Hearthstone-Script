@@ -955,7 +955,7 @@ object SurrenderPolicy {
             }
             return null
         }
-        if (authorization.reason == "rank-not-5-or-10-or-legendary-20-plus") {
+        if (authorization.reason == "rank-not-5-or-10") {
             rankCheckCompleted = true
             setRankInspectionState(RankInspectionState.RESOLVED)
             val result = evaluateCurrentRank(detection?.rank ?: 0, detection?.tier ?: CurrentRankDetector.RankTier.UNKNOWN)
@@ -1001,12 +1001,12 @@ object SurrenderPolicy {
     ): SurrenderRuleResult? {
         // Exact numeric targets are authoritative even if the independent
         // tier classifier mistakes their badge artwork for Legendary.
-        if (rank == 5 || rank == 10 || rank > 20) return null
+        if (rank == 5 || rank == 10) return null
         return SurrenderRuleResult(
-            ruleId = "current-rank-not-5-or-10-or-legendary-20-plus",
+            ruleId = "current-rank-not-5-or-10",
             matched = false,
             shouldSurrender = true,
-            reason = "current-rank=$rank tier=${tier.name} allowed=5,10,legendary-rating>20",
+            reason = "current-rank=$rank tier=${tier.name} allowed=5,10",
         )
     }
 

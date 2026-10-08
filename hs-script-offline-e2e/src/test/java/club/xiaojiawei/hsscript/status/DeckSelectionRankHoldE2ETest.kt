@@ -67,7 +67,7 @@ class DeckSelectionRankHoldE2ETest {
             nowMs = now,
         )
         assertFalse(inGameRank.eligible)
-        assertEquals("rank-not-5-or-10-or-legendary-20-plus", inGameRank.reason)
+        assertEquals("rank-not-5-or-10", inGameRank.reason)
 
         assertFalse(DeckSelectionRecoveryPolicy.shouldApply(fixture.screenKind, fixture.mode, fixture.phase))
         assertTrue(fixture.unresolvedAttemptsBeforeAutomaticPause >= 1)

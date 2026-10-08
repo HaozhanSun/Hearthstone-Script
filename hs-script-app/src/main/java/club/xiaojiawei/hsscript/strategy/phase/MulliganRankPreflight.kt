@@ -236,7 +236,7 @@ internal class MulliganRankPreflight(
             }
 
             if (!timeout && result?.ruleId == "rank-continue-authorized" &&
-                result.currentRank?.let { it == 5 || it == 10 || it > 20 } == true
+                result.currentRank?.let { it == 5 || it == 10 } == true
             ) {
                 if (authorizeContinue(result)) {
                     state = MulliganRankPreflightState.RESOLVED

@@ -160,7 +160,7 @@ class OfflineMatchmakingQueueLifecycleE2ETest {
             nowMs = now,
         )
         assertFalse(rankFour.eligible)
-        assertEquals("rank-not-5-or-10-or-legendary-20-plus", rankFour.reason)
+        assertEquals("rank-not-5-or-10", rankFour.reason)
         val rankTicket = MulliganRankDispatchBarrier.beginCurrentGame()
         assertNotNull(MulliganRankDispatchBarrier.requireSurrender(rankTicket))
         assertEquals(MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED, MulliganRankDispatchBarrier.currentState())

@@ -720,20 +720,11 @@ class SurrenderPolicyTest {
             assertEquals(4, detection?.rank)
             assertEquals(listOf<String?>("rank-badge-small", "rank-badge"), recognizedRois)
             assertEquals(expectedBadge.width to expectedBadge.height, recognizedBadgeBounds)
-            val gate = PreMatchRankGate.evaluate(
-                working = true,
-                paused = false,
-                mandatoryRankSurrenderPending = false,
-                tournamentMode = true,
-                inWar = false,
-                observedRank = detection?.rank,
-                freshRankObservation = true,
-                ocrFailure = false,
-            )
+            val gate = PreMatchRankGate.evaluate(true, false, false)
             var dispatches = 0
-            assertFalse(gate.queueAuthorization.allowed)
-            assertFalse(MatchmakingGuardPolicy.dispatchIfAuthorized(gate.queueAuthorization) { dispatches++ })
-            assertEquals(0, dispatches, "rank 4 must not dispatch matchmaking input")
+            assertTrue(gate.queueAuthorization.allowed)
+            assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(gate.queueAuthorization) { dispatches++ })
+            assertEquals(1, dispatches, "rank 4 is evaluated only after the active game starts")
         } finally {
             OcrRuntime.settingsProvider = originalSettingsProvider
             OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
@@ -1262,8 +1253,8 @@ class SurrenderPolicyTest {
         )
 
         val scenarios = listOf(
-            Scenario("legendary-233", "233", CurrentRankDetector.RankTier.LEGEND, true, false),
-            Scenario("legendary-257", "257", CurrentRankDetector.RankTier.LEGEND, true, false),
+            Scenario("legendary-233", "233", CurrentRankDetector.RankTier.LEGEND, true, true),
+            Scenario("legendary-257", "257", CurrentRankDetector.RankTier.LEGEND, true, true),
             Scenario("platinum-2", "2", CurrentRankDetector.RankTier.PLATINUM, false, true),
             Scenario("rank-5", "5", CurrentRankDetector.RankTier.SILVER, false, false),
             Scenario("rank-10", "10", CurrentRankDetector.RankTier.GOLD, false, false),
@@ -1291,18 +1282,18 @@ class SurrenderPolicyTest {
 
         assertTrue(result != null)
         assertTrue(result!!.shouldSurrender)
-        assertEquals("current-rank-not-5-or-10-or-legendary-20-plus", result.ruleId)
-        assertEquals("current-rank=9 tier=UNKNOWN allowed=5,10,legendary-rating>20", result.reason)
+        assertEquals("current-rank-not-5-or-10", result.ruleId)
+        assertEquals("current-rank=9 tier=UNKNOWN allowed=5,10", result.reason)
     }
 
     @Test
     fun everyOtherConfirmedRankRequestsSurrenderRegardlessOfTier() {
-        for (rank in listOf(1, 2, 3, 4, 6, 7, 8, 9)) {
+        for (rank in listOf(1, 2, 3, 4, 6, 7, 8, 9, 11, 21, 233)) {
             for (tier in CurrentRankDetector.RankTier.values()) {
                 val result = SurrenderPolicy.evaluateCurrentRank(rank = rank, tier = tier)
                 assertTrue(result != null)
                 assertTrue(result!!.shouldSurrender)
-                assertEquals("current-rank-not-5-or-10-or-legendary-20-plus", result.ruleId)
+                assertEquals("current-rank-not-5-or-10", result.ruleId)
             }
         }
     }
@@ -1312,7 +1303,7 @@ class SurrenderPolicyTest {
         for (tier in CurrentRankDetector.RankTier.values()) {
             val result = SurrenderPolicy.evaluateCurrentRank(rank = 7, tier = tier)
             assertTrue(result!!.shouldSurrender)
-            assertEquals("current-rank=7 tier=${tier.name} allowed=5,10,legendary-rating>20", result.reason)
+            assertEquals("current-rank=7 tier=${tier.name} allowed=5,10", result.reason)
         }
     }
 

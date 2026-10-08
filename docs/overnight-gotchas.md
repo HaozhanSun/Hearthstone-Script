@@ -1,5 +1,33 @@
 # Overnight Beta gotchas
 
+## Matchmaking stage: deck-selection rank must never block queue input
+
+**Observed failure (2026-10-08 PDT, Beta v4.16.603):** at 10:20:16 the
+deck-selection badge read `传奇3级`, then the app logged
+`MATCHMAKING_BLOCKED reason=pre-match-rank-not-5-or-10 action=NO_QUEUE_INPUT`.
+That prevented a match from starting, so there was no current-game identity or
+Mulligan phase in which the mandatory rank-surrender transaction could run.
+The later `PAUSE_REQUESTED source=F2/low-level-hook` at 10:20:32 was a manual
+F2 pause and is separate evidence, not the cause of the queue block.
+
+**Guardrail:** matchmaking uses only runtime/pause and pending-surrender
+guards. It must not OCR or evaluate the deck-selection rank badge. After
+`CREATE_GAME` and the local `MULLIGAN_STATE=INPUT`, the active-game Mulligan
+rank preflight reads fresh OCR: exactly rank 5 or 10 releases ordinary actions;
+every other numeric value triggers the mandatory surrender path, including the
+Settings and affirmative confirmation-dialog recovery steps. Unknown, failed,
+or cancelled OCR does not block queue, but keeps ordinary in-game actions
+behind the Mulligan rank barrier until a fresh retry authorizes or resolves the
+game safely.
+
+**Regression rule:** offline tests must prove rank 3 can dispatch the queue
+callback and subsequently arms mandatory surrender only after active-game
+evidence; ranks 5 and 10 dispatch and continue; unknown/PaddleX failure/cancel
+dispatch the queue but cannot release ordinary actions; and a verified
+surrender confirmation maps only to the affirmative action. A
+`MATCHMAKING_BLOCKED` record whose reason begins `pre-match-rank-` is a
+regression.
+
 ## Empty current-session `Power.log` can deadlock startup screen recovery
 
 **Observed facts (2026-10-06 PDT, Beta v4.16.586):**

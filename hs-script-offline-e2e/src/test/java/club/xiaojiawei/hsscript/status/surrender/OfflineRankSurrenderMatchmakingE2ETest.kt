@@ -116,7 +116,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
             nowMs = now,
         )
         assertFalse(rankDecision.eligible)
-        assertEquals("rank-not-5-or-10-or-legendary-20-plus", rankDecision.reason)
+        assertEquals("rank-not-5-or-10", rankDecision.reason)
 
         val gameTicket = barrier.beginCurrentGame()
         assertNotNull(barrier.requireSurrender(gameTicket), "rank 4 must latch mandatory surrender")
@@ -229,7 +229,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
             inWar = true,
             nowMs = now,
         )
-        assertEquals("rank-not-5-or-10-or-legendary-20-plus", denied.reason)
+        assertEquals("rank-not-5-or-10", denied.reason)
         val surrenderCapability = barrier.requireSurrender(ticket)
         assertNotNull(surrenderCapability)
         assertTrue(
@@ -296,9 +296,9 @@ class OfflineRankSurrenderMatchmakingE2ETest {
     }
 
     @Test
-    fun `exact five ten and legendary above twenty continue while resolved other ranks surrender and OCR holds`() {
+    fun `exact five and ten continue while every other numeric rank surrenders and OCR holds`() {
         val now = System.currentTimeMillis()
-        for (rank in listOf(5, 10, 21, 233, 5220)) {
+        for (rank in listOf(5, 10)) {
             val decision = RankEligibilityCorePolicy.evaluate(
                 evidence = detection(rank, now),
                 expectedMode = "GAMEPLAY",
@@ -331,6 +331,18 @@ class OfflineRankSurrenderMatchmakingE2ETest {
         assertFalse(queueAllowed(), "ordinary actions stay blocked for mandatory surrender")
         guard.resetForTest()
         barrier.resetForTest()
+
+        for (rank in listOf(3, 21, 233, 5220)) {
+            val denied = RankEligibilityCorePolicy.evaluate(
+                evidence = detection(rank, now),
+                expectedMode = "GAMEPLAY",
+                actualMode = "GAMEPLAY",
+                expectedInWar = true,
+                inWar = true,
+                nowMs = now,
+            )
+            assertFalse(denied.eligible, "rank=$rank must surrender rather than release gameplay")
+        }
 
         val unresolved = RankEligibilityCorePolicy.evaluate(
             evidence = null,

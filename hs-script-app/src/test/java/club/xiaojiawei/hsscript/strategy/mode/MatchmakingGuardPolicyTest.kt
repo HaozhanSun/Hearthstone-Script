@@ -22,7 +22,7 @@ class MatchmakingGuardPolicyTest {
     }
 
     @Test
-    fun `fresh rank OCR gates all pre match queue input`() {
+    fun `rank OCR is absent from pre match queue input and active game owns policy`() {
         val relative = Path.of(
             "src", "main", "java", "club", "xiaojiawei", "hsscript", "strategy", "mode", "TournamentModeStrategy.kt",
         )
@@ -38,15 +38,15 @@ class MatchmakingGuardPolicyTest {
             "paused runtime exits before rank OCR, trace allocation, and blocked-matchmaking spam")
         assertTrue(startMatching.contains("PauseStatus.isPause || !WorkTimeListener.working"))
         assertTrue(startMatching.contains("PreMatchRankGate.evaluate"))
-        assertTrue(startMatching.contains("CurrentRankDetector.detect"))
-        assertTrue(startMatching.contains("pre-match-deck-selection-rank-gate"))
+        assertFalse(startMatching.contains("CurrentRankDetector.detect"))
+        assertFalse(startMatching.contains("pre-match-deck-selection-rank-gate"))
         assertTrue(startMatching.contains("MatchmakingGuardPolicy.dispatchIfAuthorized(queueAuthorization)"))
         val authorizationIndex = startMatching.indexOf("PreMatchRankGate.evaluate")
         val denialIndex = startMatching.indexOf("if (!dispatchMatchmaking)")
         val firstQueueClickIndex = startMatching.indexOf("clickMatchmakingControl(START_RECT)")
         assertTrue(authorizationIndex >= 0 && denialIndex > authorizationIndex)
-        assertTrue(firstQueueClickIndex > denialIndex, "all matchmaking input must follow the fail-closed gate")
-        assertTrue(startMatching.contains("rankPolicy=FRESH_EXACT_5_OR_10"))
+        assertTrue(firstQueueClickIndex > denialIndex, "all matchmaking input must follow the runtime gate")
+        assertTrue(startMatching.contains("rankPolicy=ACTIVE_GAME_MULLIGAN_ONLY"))
         assertFalse(startMatching.contains("POST_MULLIGAN"))
     }
 

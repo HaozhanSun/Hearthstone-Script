@@ -15,8 +15,8 @@ class MulliganRankDispatchBarrierTest {
     fun reset() = MulliganRankDispatchBarrier.resetForTest()
 
     @Test
-    fun `exact targets and numeric Legendary release the current-game barrier`() {
-        for (rank in listOf(5, 10, 21, 233, 5220)) {
+    fun `only exact targets release the current-game barrier`() {
+        for (rank in listOf(5, 10)) {
             val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
             assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
             assertTrue(MulliganRankDispatchBarrier.authorizeEligibleRank(ticket, rank))
@@ -30,6 +30,7 @@ class MulliganRankDispatchBarrierTest {
         val currentTicket = MulliganRankDispatchBarrier.beginCurrentGame()
         assertFalse(MulliganRankDispatchBarrier.authorizeEligibleRank(oldTicket, 10))
         assertFalse(MulliganRankDispatchBarrier.authorizeEligibleRank(currentTicket, 8))
+        assertFalse(MulliganRankDispatchBarrier.authorizeEligibleRank(currentTicket, 233))
         assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
         assertNotNull(MulliganRankDispatchBarrier.requireSurrender(currentTicket))
         assertEquals(MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED, MulliganRankDispatchBarrier.currentState())

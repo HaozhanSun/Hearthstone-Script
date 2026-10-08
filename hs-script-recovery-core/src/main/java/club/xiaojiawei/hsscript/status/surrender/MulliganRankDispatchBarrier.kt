@@ -75,5 +75,5 @@ object MulliganRankDispatchBarrier {
         surrenderCapabilityConsumed = false
     }
 
-    private fun isEligibleRank(rank: Int): Boolean = rank == 5 || rank == 10 || rank > 20
+    private fun isEligibleRank(rank: Int): Boolean = rank == 5 || rank == 10
 }

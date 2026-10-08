@@ -68,7 +68,7 @@ class MulliganRankPreflightTest {
         assertTrue(surrenderStreakDecision.blocksAutomaticSurrender)
         assertTrue(winRateDecision.shouldSurrender)
 
-        for (rank in listOf(5, 10, 21, 233)) {
+        for (rank in listOf(5, 10)) {
             for (tier in listOf(CurrentRankDetector.RankTier.GOLD, CurrentRankDetector.RankTier.UNKNOWN)) {
                 for (streakDecision in listOf(winningStreakDecision, surrenderStreakDecision)) {
                     SurrenderPolicy.resetForNewGame()
@@ -167,7 +167,7 @@ class MulliganRankPreflightTest {
                 PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
             ),
         )
-        assertEquals("current-rank-not-5-or-10-or-legendary-20-plus", denied?.ruleId)
+        assertEquals("current-rank-not-5-or-10", denied?.ruleId)
         assertTrue(denied?.shouldSurrender == true)
         assertFalse(denied!!.blocksAutomaticSurrender)
         assertTrue(NeverSurrenderPolicy.isMandatoryRankDispatch("mulligan-rank-preflight", denied.ruleId))
