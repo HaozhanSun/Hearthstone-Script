@@ -125,7 +125,26 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                 if (!PowerLogListener.checkPowerLogSize()) {
                     return
                 }
+                val terminalCleanupWasPending = GameUtil.hasTerminalPageCleanupFence()
                 val startupScreen = ScreenStateRecovery.observeFreshTournamentStartupScreen()
+                if (terminalCleanupWasPending && !GameUtil.hasTerminalPageCleanupFence() &&
+                    startupScreen?.screen == "DECK_SELECTION"
+                ) {
+                    log.info {
+                        "TOURNAMENT_STARTUP_HANDOFF screen=DECK_SELECTION " +
+                            "action=RECOVER_DECK_SELECTION_WITHOUT_MODE_SWITCH"
+                    }
+                    recoverDeckSelectionAndStart()
+                    return
+                }
+                if (GameUtil.hasTerminalPageCleanupFence()) {
+                    log.info {
+                        "TOURNAMENT_STARTUP_ACTION_DEFERRED reason=terminal-result-cleanup-pending " +
+                            "screen=${startupScreen?.screen ?: "UNKNOWN"} " +
+                            "action=NO_MODE_DECK_OR_MATCHMAKING_INPUT"
+                    }
+                    return
+                }
                 val startupActionAllowed = TournamentStartupActionPolicy.mayStartModeSelection(
                     screen = startupScreen?.screen,
                     confidence = startupScreen?.confidence ?: 0,
@@ -284,6 +303,13 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
             log.info {
                 "MATCHMAKING_REQUEST_IGNORED reason=${if (PauseStatus.isPause) "paused" else "runtime-not-working"} " +
                     "action=NO_RANK_READ_NO_QUEUE_INPUT"
+            }
+            return
+        }
+        if (GameUtil.hasTerminalPageCleanupFence()) {
+            log.info {
+                "MATCHMAKING_DEFERRED reason=terminal-result-cleanup-pending " +
+                    "action=NO_QUEUE_INPUT"
             }
             return
         }

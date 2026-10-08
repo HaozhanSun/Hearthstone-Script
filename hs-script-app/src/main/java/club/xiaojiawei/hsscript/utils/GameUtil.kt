@@ -159,6 +159,55 @@ object GameUtil {
                 MandatoryRankSurrenderGuard.existingTerminalCleanupCapability(),
             )
 
+    /** The guard continues to reject ordinary menu input until fresh destination proof arrives. */
+    internal fun hasTerminalPageCleanupFence(): Boolean =
+        MandatoryRankSurrenderGuard.isTerminalCleanupPending()
+
+    /**
+     * A verified menu observer can see a safe post-result destination before
+     * the paced terminal worker reaches its next probe. Consume that fresh
+     * observation here so the terminal fence cannot keep ordinary menu input
+     * blocked behind an already-visible destination page.
+     */
+    @Synchronized
+    internal fun confirmTerminalCleanupFromFreshDestination(
+        screenKind: String?,
+        confidence: Int,
+        visualEvidence: String,
+        freshCaptureAuthorized: Boolean,
+        source: String,
+    ): Boolean {
+        val capability = MandatoryRankSurrenderGuard.existingTerminalCleanupCapability()
+        val terminalCleanupAuthorized =
+            MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(capability)
+        val completed = terminalPageCleanupCoordinator.confirmFreshDestination(
+            screenKind = screenKind,
+            confidence = confidence,
+            freshCaptureAuthorized = freshCaptureAuthorized,
+            terminalCleanupAuthorized = terminalCleanupAuthorized,
+            confirmTerminalCleanup = {
+                if (screenKind == "DECK_SELECTION") {
+                    MandatoryRankSurrenderGuard.confirmDeckSelectionCompleted(
+                        screenKind = screenKind,
+                        confidence = confidence,
+                        visualEvidence = visualEvidence,
+                        freshObservation = freshCaptureAuthorized,
+                    )
+                } else {
+                    MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED", capability)
+                }
+            },
+        )
+        if (completed) {
+            gameEndTasks.cancelKind(GameEndTaskRegistry.Kind.TERMINAL_PAGE)
+            log.info {
+                "RESULT_PAGE_CLEANUP_HANDOFF_CONFIRMED source=$source screen=$screenKind " +
+                    "confidence=$confidence evidence=$visualEvidence dispatch=false ordinaryMenuInput=unblocked"
+            }
+        }
+        return completed
+    }
+
     /**
      * A new CREATE_GAME/TURN=1 boundary supersedes any result-page cleanup
      * task left by the previous game. Without this reset, a stale task makes
@@ -1615,10 +1664,19 @@ object GameUtil {
         val attempt = AtomicInteger(0)
         val clickAttempts = AtomicInteger(0)
         val startingWarCount = WarEx.warCount
-        // Live v4.16.565 result handling took roughly 15-25 seconds per
-        // accepted input once capture/focus work was included. Keep retries
-        // serialized and deliberately spaced rather than issuing a burst.
-        val interval = if (terminalCleanupAuthorized) 25_000L else RandomUtil.getActionInterval(800).toLong()
+        // The terminal fence owns all normal menu input. Start its first
+        // post-result inspection promptly, then retain a paced fallback so a
+        // slow Unity transition cannot be mistaken for an accepted click.
+        val initialDelay = if (terminalCleanupAuthorized) {
+            TerminalPageCleanupCoordinator.DEFAULT_INITIAL_PROBE_DELAY_MILLIS
+        } else {
+            RandomUtil.getActionInterval(800).toLong()
+        }
+        val interval = if (terminalCleanupAuthorized) {
+            TerminalPageCleanupCoordinator.DEFAULT_PROBE_INTERVAL_MILLIS
+        } else {
+            RandomUtil.getActionInterval(800).toLong()
+        }
         lateinit var future: ScheduledFuture<*>
         future = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
             {
@@ -1948,7 +2006,7 @@ object GameUtil {
                     log.warn(error) { "E2E恢复：关闭旧结算页面尝试失败 #$number" }
                 }
             },
-            interval,
+            initialDelay,
             interval,
             TimeUnit.MILLISECONDS,
         )

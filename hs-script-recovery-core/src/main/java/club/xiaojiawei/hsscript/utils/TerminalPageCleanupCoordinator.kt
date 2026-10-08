@@ -1,5 +1,7 @@
 package club.xiaojiawei.hsscript.utils
 
+import club.xiaojiawei.hsscript.status.FreshPostResultDestinationPolicy
+
 /**
  * Owns one result-page cleanup episode across the normal game-over callback
  * and later screen-recovery callbacks. Input acceptance is deliberately not
@@ -107,6 +109,35 @@ class TerminalPageCleanupCoordinator(
         return true
     }
 
+    /**
+     * Complete the active terminal-cleanup flight from a fresh, recognized
+     * destination observation made by another recovery consumer. This is
+     * deliberately stricter than input acceptance: the caller must still
+     * provide both the current terminal capability and a foreground-authorized
+     * HOME/DECK_SELECTION/MATCHMAKING frame.
+     */
+    @Synchronized
+    fun confirmFreshDestination(
+        screenKind: String?,
+        confidence: Int,
+        freshCaptureAuthorized: Boolean,
+        terminalCleanupAuthorized: Boolean,
+        confirmTerminalCleanup: () -> Boolean,
+    ): Boolean {
+        if (!FreshPostResultDestinationPolicy.isConfirmed(
+                screenKind,
+                confidence,
+                freshCaptureAuthorized,
+            ) || !terminalCleanupAuthorized
+        ) return false
+        if (state == State.RUNNING) expireIfOverdue()
+        if (state !in setOf(State.RUNNING, State.HELD, State.FAILED)) return false
+        if (!confirmTerminalCleanup()) return false
+        activeTicket = null
+        state = State.COMPLETED
+        return true
+    }
+
     @Synchronized
     fun hold(ticket: Ticket): Boolean {
         if (!isActive(ticket)) return false
@@ -193,7 +224,12 @@ class TerminalPageCleanupCoordinator(
     companion object {
         const val DEFAULT_MAX_INPUTS = 16
         const val DEFAULT_MAX_PROBES = 20
-        const val DEFAULT_MAX_DURATION_MILLIS = 120_000L
+        /** Result artwork is normally present within the game-over screenshot delay. */
+        const val DEFAULT_INITIAL_PROBE_DELAY_MILLIS = 5_000L
+        /** Keep the bounded fallback responsive without sending a click burst. */
+        const val DEFAULT_PROBE_INTERVAL_MILLIS = 8_000L
+        /** A terminal cleanup may never defer all ordinary menu input for a minute. */
+        const val DEFAULT_MAX_DURATION_MILLIS = 55_000L
         const val MAX_FAILED_EPISODE_REARMS = 1
     }
 }

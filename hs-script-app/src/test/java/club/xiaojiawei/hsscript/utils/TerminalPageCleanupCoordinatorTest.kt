@@ -134,6 +134,74 @@ class TerminalPageCleanupCoordinatorTest {
     }
 
     @Test
+    fun `fresh authorized deck selection completes the active cleanup without waiting for next probe`() {
+        val coordinator = TerminalPageCleanupCoordinator()
+        requireNotNull(coordinator.begin().ticket)
+        var terminalCompletionCalls = 0
+
+        assertTrue(
+            coordinator.confirmFreshDestination(
+                screenKind = "DECK_SELECTION",
+                confidence = 100,
+                freshCaptureAuthorized = true,
+                terminalCleanupAuthorized = true,
+            ) {
+                terminalCompletionCalls += 1
+                true
+            },
+        )
+        assertEquals(1, terminalCompletionCalls)
+        assertEquals(TerminalPageCleanupCoordinator.State.COMPLETED, coordinator.snapshot().state)
+    }
+
+    @Test
+    fun `unverified or non-destination observation cannot release terminal cleanup`() {
+        val coordinator = TerminalPageCleanupCoordinator()
+        val ticket = requireNotNull(coordinator.begin().ticket)
+        var terminalCompletionCalls = 0
+
+        assertFalse(
+            coordinator.confirmFreshDestination(
+                screenKind = "DECK_SELECTION",
+                confidence = 100,
+                freshCaptureAuthorized = false,
+                terminalCleanupAuthorized = true,
+            ) { terminalCompletionCalls += 1; true },
+        )
+        assertFalse(
+            coordinator.confirmFreshDestination(
+                screenKind = "TOURNAMENT",
+                confidence = 100,
+                freshCaptureAuthorized = true,
+                terminalCleanupAuthorized = true,
+            ) { terminalCompletionCalls += 1; true },
+        )
+        assertEquals(0, terminalCompletionCalls)
+        assertEquals(TerminalPageCleanupCoordinator.State.RUNNING, coordinator.snapshot().state)
+        assertNotNull(coordinator.nextProbe(ticket))
+    }
+
+    @Test
+    fun `fresh destination can reconcile a failed cleanup episode without reopening input dispatch`() {
+        val coordinator = TerminalPageCleanupCoordinator(maxProbes = 1)
+        val ticket = requireNotNull(coordinator.begin().ticket)
+        assertNotNull(coordinator.nextProbe(ticket))
+        assertNull(coordinator.nextProbe(ticket))
+        assertEquals(TerminalPageCleanupCoordinator.State.FAILED, coordinator.snapshot().state)
+
+        assertTrue(
+            coordinator.confirmFreshDestination(
+                screenKind = "HOME",
+                confidence = 95,
+                freshCaptureAuthorized = true,
+                terminalCleanupAuthorized = true,
+            ) { true },
+        )
+        assertEquals(TerminalPageCleanupCoordinator.State.COMPLETED, coordinator.snapshot().state)
+        assertNull(coordinator.reserveInput(ticket), "destination proof completes rather than rearms dispatch")
+    }
+
+    @Test
     fun `pause can release the worker but cannot renew the shared input budget`() {
         val coordinator = TerminalPageCleanupCoordinator()
         val firstTicket = coordinator.begin().ticket!!

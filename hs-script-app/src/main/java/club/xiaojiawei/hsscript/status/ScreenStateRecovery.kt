@@ -53,6 +53,7 @@ object ScreenStateRecovery {
     internal data class FreshScreenObservation(
         val screen: String,
         val confidence: Int,
+        val evidence: String,
         val pid: Long,
         val hwnd: String,
         val screenshot: String?,
@@ -271,6 +272,7 @@ object ScreenStateRecovery {
         val observation = FreshScreenObservation(
             screen = detection.kind.code,
             confidence = detection.confidence,
+            evidence = detection.evidence,
             pid = initialPid,
             hwnd = gameWindow.toString(),
             screenshot = capture.file?.absolutePath,
@@ -282,6 +284,18 @@ object ScreenStateRecovery {
             currentPid = GameUtil.findGameProcessIdForDiagnostics(),
             captureAuthorized = captureResult.foregroundConfirmed && capture.file != null &&
                 GameUtil.isVerifiedCurrentGameWindow(gameWindow),
+        )
+        GameUtil.confirmTerminalCleanupFromFreshDestination(
+            screenKind = observation.screen,
+            confidence = observation.confidence,
+            visualEvidence = observation.evidence,
+            freshCaptureAuthorized = captureResult.foregroundConfirmed && capture.file != null &&
+                GameUtil.isVerifiedCurrentGameWindow(gameWindow),
+            source = if (requireRecoveryRuntime) {
+                "screen-recovery-fresh-observation"
+            } else {
+                "tournament-startup-fresh-observation"
+            },
         )
         log.info {
             "SCREEN_RECOVERY_FRESH_OBSERVATION detected=${observation.screen} " +

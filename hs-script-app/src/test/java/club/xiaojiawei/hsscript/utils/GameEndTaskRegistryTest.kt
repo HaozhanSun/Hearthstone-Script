@@ -56,4 +56,20 @@ class GameEndTaskRegistryTest {
         registry.cancelAll()
         assertFalse(registry.hasTerminalPageTask())
     }
+
+    @Test
+    fun `fresh destination handoff cancels only terminal page work`() {
+        val registry = GameEndTaskRegistry()
+        val terminalPage = executor.schedule({}, 1, TimeUnit.DAYS)
+        val surrenderRetry = executor.schedule({}, 1, TimeUnit.DAYS)
+        registry.add(terminalPage, GameEndTaskRegistry.Kind.TERMINAL_PAGE)
+        registry.add(surrenderRetry, GameEndTaskRegistry.Kind.SURRENDER_RECOVERY)
+
+        registry.cancelKind(GameEndTaskRegistry.Kind.TERMINAL_PAGE)
+
+        assertTrue(terminalPage.isCancelled)
+        assertFalse(registry.hasTerminalPageTask())
+        assertFalse(surrenderRetry.isCancelled)
+        assertTrue(registry.hasSurrenderRecoveryTask())
+    }
 }

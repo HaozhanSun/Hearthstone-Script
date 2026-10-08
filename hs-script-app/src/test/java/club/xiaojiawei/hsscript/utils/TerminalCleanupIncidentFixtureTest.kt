@@ -111,7 +111,7 @@ class TerminalCleanupIncidentFixtureTest {
         assertTrue(coordinator.confirmDestination(ticket))
         assertEquals(1, coordinator.snapshot().inputs)
         assertEquals(TerminalPageCleanupCoordinator.State.COMPLETED, coordinator.snapshot().state)
-        assertEquals(120_000L, TerminalPageCleanupCoordinator.DEFAULT_MAX_DURATION_MILLIS)
+        assertEquals(55_000L, TerminalPageCleanupCoordinator.DEFAULT_MAX_DURATION_MILLIS)
     }
 
     @Test

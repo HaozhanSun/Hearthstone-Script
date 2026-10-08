@@ -31,6 +31,14 @@ internal class GameEndTaskRegistry {
         }
     }
 
+    /** A recognized safe destination ends result cleanup without cancelling unrelated recovery work. */
+    fun cancelKind(kind: Kind) {
+        tasks.filter { it.kind == kind }.forEach { entry ->
+            if (!entry.task.isDone) entry.task.cancel(true)
+            tasks.remove(entry)
+        }
+    }
+
     fun isNotEmpty(): Boolean = tasks.isNotEmpty()
 
     /** Only result-page workers prove a terminal UI; an in-flight surrender retry does not. */
