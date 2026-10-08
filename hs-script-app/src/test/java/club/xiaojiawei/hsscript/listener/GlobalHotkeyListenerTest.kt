@@ -16,7 +16,7 @@ class GlobalHotkeyListenerTest {
     @AfterTest
     fun restorePauseState() {
         WorkTimeListener.working = originalWorking
-        PauseStatus.setManualPause(originalPaused)
+        PauseStatus.setManualPauseForTest(originalPaused)
     }
 
     @Test
@@ -34,15 +34,24 @@ class GlobalHotkeyListenerTest {
     }
 
     @Test
-    fun `automation cannot pause a running script but explicit F2 still can`() {
+    fun `only F2 can pause an active run`() {
         WorkTimeListener.working = true
-        PauseStatus.setManualPause(false)
+        PauseStatus.setManualPauseForTest(false)
 
         assertFalse(PauseStatus.setAutomaticPause(true))
         assertFalse(PauseStatus.isPause, "an uncertain recovery must not pause a user-started run")
 
         PauseStatus.isPause = true
         assertFalse(PauseStatus.isPause, "legacy direct pause assignments must also be suppressed during a user-started run")
+
+        assertFalse(PauseStatus.suppressNonF2Pause("main-ui/test"))
+        assertFalse(PauseStatus.isPause, "the main UI pause control must not pause a user-started run")
+
+        assertFalse(PauseStatus.suppressNonF2Pause("tray/test"))
+        assertFalse(PauseStatus.isPause, "the tray pause control must not pause a user-started run")
+
+        GlobalHotkeyListener.pressNonF2PauseForTest()
+        assertFalse(PauseStatus.isPause, "a configurable non-F2 hotkey must not pause a user-started run")
 
         GlobalHotkeyListener.pressF2ForTest()
         assertTrue(PauseStatus.isPause, "the explicit F2 path remains able to pause")

@@ -279,7 +279,7 @@ class BetaStartupFailureRecoveryPolicyTest {
             assertEquals(false, PauseStatus.isPause, "escalated retry must not pause the running script")
         } finally {
             if (previousOrigin == PauseStatus.Origin.MANUAL) {
-                PauseStatus.setManualPause(previousPause)
+                PauseStatus.setManualPauseForTest(previousPause)
             } else {
                 PauseStatus.setAutomaticPause(previousPause)
             }

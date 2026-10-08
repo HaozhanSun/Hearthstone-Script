@@ -56,11 +56,36 @@ object PauseStatus {
     val pauseOrigin: Origin
         get() = origin
 
-    /** User controls (F2, tray, or the main window) must remain authoritative. */
-    fun setManualPause(paused: Boolean) {
-        origin = if (paused) Origin.MANUAL else Origin.NONE
-        pauseState.set(paused)
-        isPauseProperty.set(paused)
+    /** The fixed F2 hotkey is the only production path that may pause an active run. */
+    internal fun pauseFromF2() {
+        origin = Origin.MANUAL
+        pauseState.set(true)
+        isPauseProperty.set(true)
+    }
+
+    /** Starting or resuming from F1, the main UI, or tray is allowed. */
+    internal fun resumeFromUserControl() {
+        origin = Origin.NONE
+        pauseState.set(false)
+        isPauseProperty.set(false)
+    }
+
+    /**
+     * Non-hotkey UI controls are intentionally unable to pause an active run.
+     * Keeping this decision at the state boundary prevents a future handler
+     * from reintroducing a second pause authority.
+     */
+    internal fun suppressNonF2Pause(source: String): Boolean {
+        log.warn {
+            "UI_PAUSE_SUPPRESSED source=$source reason=f2-only " +
+                "pause=${pauseState.get()} working-run-remains-active"
+        }
+        return false
+    }
+
+    /** Test-only state setup; production code must use F2 or a resume path. */
+    internal fun setManualPauseForTest(paused: Boolean) {
+        if (paused) pauseFromF2() else resumeFromUserControl()
     }
 
     /**
@@ -97,7 +122,7 @@ object PauseStatus {
         get() = !pauseState.get()
 
     fun setPauseReturn(isPaused: Boolean): Boolean {
-        setManualPause(isPaused)
+        if (isPaused) suppressNonF2Pause("legacy-setPauseReturn") else resumeFromUserControl()
         return isPause
     }
 
@@ -107,9 +132,9 @@ object PauseStatus {
         }
     }
 
-    fun asyncSetManualPause(isPaused: Boolean) {
+    internal fun asyncResumeFromUserControl() {
         EXTRA_THREAD_POOL.submit {
-            setManualPause(isPaused)
+            resumeFromUserControl()
         }
     }
 

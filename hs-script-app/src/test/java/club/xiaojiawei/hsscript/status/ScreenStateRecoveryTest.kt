@@ -60,21 +60,24 @@ class ScreenStateRecoveryTest {
     }
 
     @Test
-    fun `automatic safety pause can be recovered but manual pause remains blocked`() {
+    fun `automatic pause request is suppressed while F2 pause remains blocked from recovery`() {
         val wasPaused = PauseStatus.isPause
         try {
-            PauseStatus.setManualPause(true)
-            assertFalse(PauseStatus.canRunAutomaticRecovery())
-
-            PauseStatus.setAutomaticPause(true)
+            PauseStatus.setManualPauseForTest(false)
             assertTrue(PauseStatus.canRunAutomaticRecovery())
-            assertTrue(PauseStatus.isAutomaticPause)
-            assertFalse(ActionDispatchGate.allowedForState(paused = true, working = true))
-            assertTrue(PauseStatus.resumeAutomaticPause("offline-reconnect-test"))
+
+            assertFalse(PauseStatus.setAutomaticPause(true))
+            assertTrue(PauseStatus.canRunAutomaticRecovery())
             assertFalse(PauseStatus.isPause)
             assertTrue(ActionDispatchGate.allowedForState(paused = false, working = true))
+
+            PauseStatus.pauseFromF2()
+            assertFalse(PauseStatus.canRunAutomaticRecovery())
+            assertFalse(ActionDispatchGate.allowedForState(paused = true, working = true))
+            assertFalse(PauseStatus.resumeAutomaticPause("offline-reconnect-test"))
+            assertTrue(PauseStatus.isPause)
         } finally {
-            PauseStatus.setAutomaticPause(wasPaused)
+            PauseStatus.setManualPauseForTest(wasPaused)
         }
     }
 

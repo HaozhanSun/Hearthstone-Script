@@ -247,6 +247,9 @@ object GlobalHotkeyListener : HotkeyListener {
     /** Deterministic seam proving that the explicit F2 path remains authoritative. */
     internal fun pressF2ForTest() = setPauseState(true, "F2/test")
 
+    /** Non-F2 hotkeys must not silently become another pause authority. */
+    internal fun pressNonF2PauseForTest() = setPauseState(true, "configurable/test")
+
     internal class FixedHotkeyEdgeDetector {
         private var f1Down = false
         private var f2Down = false
@@ -272,6 +275,10 @@ object GlobalHotkeyListener : HotkeyListener {
     }
 
     private fun setPauseState(paused: Boolean, source: String) {
+        if (paused && !source.startsWith("F2/")) {
+            PauseStatus.suppressNonF2Pause("hotkey/$source")
+            return
+        }
         if (paused) {
             log.warn {
                 "PAUSE_REQUESTED source=$source pauseBefore=${PauseStatus.isPause} " +
@@ -283,8 +290,12 @@ object GlobalHotkeyListener : HotkeyListener {
                     "workingBefore=${WorkTimeListener.working}"
             }
         }
-        if (paused) WorkTimeListener.working = false
-        PauseStatus.setManualPause(paused)
+        if (paused) {
+            WorkTimeListener.working = false
+            PauseStatus.pauseFromF2()
+        } else {
+            PauseStatus.resumeFromUserControl()
+        }
         log.info {
             "捕捉到热键[$source]，${if (paused) "暂停脚本" else "开始脚本"}"
         }

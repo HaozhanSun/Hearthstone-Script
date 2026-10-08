@@ -765,23 +765,17 @@ class MainController : MainView() {
     protected fun start() {
         log.info { "手动开始" }
         submitExtra {
-            PauseStatus.setPauseReturn(false).isTrue {
-                runUI {
-                    pauseToggleGroup.selectToggle(pauseButton)
-                }
-            }
+            PauseStatus.resumeFromUserControl()
         }
     }
 
     @FXML
     protected fun pause() {
-        log.info { "手动暂停" }
-        submitExtra {
-            PauseStatus.setPauseReturn(true).isFalse {
-                runUI {
-                    pauseToggleGroup.selectToggle(startButton)
-                }
-            }
+        // The visible red state mirrors an F2 pause, but this mouse control
+        // must never become a second authority to stop a running script.
+        PauseStatus.suppressNonF2Pause("main-ui")
+        runUI {
+            pauseToggleGroup.selectToggle(if (PauseStatus.isPause) pauseButton else startButton)
         }
     }
 

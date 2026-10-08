@@ -52,7 +52,7 @@ class MandatoryRankSurrenderGuardTest {
         val oldPauseOrigin = PauseStatus.pauseOrigin
         try {
             WorkTimeListener.working = true
-            PauseStatus.setManualPause(false)
+            PauseStatus.setManualPauseForTest(false)
 
             val surrenderedGameTicket = MulliganRankDispatchBarrier.beginCurrentGame()
             assertTrue(MulliganRankDispatchBarrier.requireSurrender(surrenderedGameTicket) != null)
@@ -136,9 +136,9 @@ class MandatoryRankSurrenderGuardTest {
         } finally {
             WorkTimeListener.working = wasWorking
             when {
-                !wasPaused -> PauseStatus.setManualPause(false)
+                !wasPaused -> PauseStatus.setManualPauseForTest(false)
                 oldPauseOrigin == PauseStatus.Origin.AUTOMATIC -> PauseStatus.setAutomaticPause(true)
-                else -> PauseStatus.setManualPause(true)
+                else -> PauseStatus.setManualPauseForTest(true)
             }
         }
     }
@@ -153,7 +153,7 @@ class MandatoryRankSurrenderGuardTest {
 
     @Test
     fun `uncertain mandatory surrender retains retry state without auto-pausing`() {
-        PauseStatus.setManualPause(false)
+        PauseStatus.setManualPauseForTest(false)
         try {
             MandatoryRankSurrenderGuard.begin()
             MandatoryRankSurrenderGuard.markRecoveryUncertain()
@@ -168,7 +168,7 @@ class MandatoryRankSurrenderGuardTest {
                 ),
             )
         } finally {
-            PauseStatus.setManualPause(true)
+            PauseStatus.setManualPauseForTest(true)
         }
     }
 

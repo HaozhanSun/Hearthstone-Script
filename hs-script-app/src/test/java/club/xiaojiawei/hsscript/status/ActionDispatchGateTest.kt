@@ -259,7 +259,7 @@ class ActionDispatchGateTest {
         MulliganRankDispatchBarrier.resetForTest()
         try {
             WorkTimeListener.working = true
-            PauseStatus.setManualPause(false)
+            PauseStatus.setManualPauseForTest(false)
             MandatoryRankSurrenderGuard.begin()
             val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
             val capability = MulliganRankDispatchBarrier.requireSurrender(ticket)
@@ -299,9 +299,9 @@ class ActionDispatchGateTest {
             MulliganRankDispatchBarrier.resetForTest()
             WorkTimeListener.working = wasWorking
             when {
-                !wasPaused -> PauseStatus.setManualPause(false)
+                !wasPaused -> PauseStatus.setManualPauseForTest(false)
                 oldPauseOrigin == PauseStatus.Origin.AUTOMATIC -> PauseStatus.setAutomaticPause(true)
-                else -> PauseStatus.setManualPause(true)
+                else -> PauseStatus.setManualPauseForTest(true)
             }
         }
     }
@@ -387,7 +387,7 @@ class ActionDispatchGateTest {
         MulliganRankDispatchBarrier.resetForTest()
         try {
             WorkTimeListener.working = true
-            PauseStatus.setManualPause(false)
+            PauseStatus.setManualPauseForTest(false)
             val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
             assertTrue(MulliganRankDispatchBarrier.requireSurrender(ticket) != null)
             MandatoryRankSurrenderGuard.begin("test-game:self")
@@ -436,9 +436,9 @@ class ActionDispatchGateTest {
             MulliganRankDispatchBarrier.resetForTest()
             WorkTimeListener.working = wasWorking
             when {
-                !wasPaused -> PauseStatus.setManualPause(false)
+                !wasPaused -> PauseStatus.setManualPauseForTest(false)
                 oldPauseOrigin == PauseStatus.Origin.AUTOMATIC -> PauseStatus.setAutomaticPause(true)
-                else -> PauseStatus.setManualPause(true)
+                else -> PauseStatus.setManualPauseForTest(true)
             }
         }
     }

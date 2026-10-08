@@ -301,7 +301,7 @@ class MainApplication : Application() {
         isPauseItem.addActionListener(
             object : AbstractAction() {
                 override fun actionPerformed(e: ActionEvent?) {
-                    PauseStatus.asyncSetManualPause(!PauseStatus.isPause)
+                    PauseStatus.asyncResumeFromUserControl()
                 }
             },
         )
@@ -398,7 +398,7 @@ class MainApplication : Application() {
                 callback =
                     object : CSystemDll.TrayCallback {
                         override fun invoke() {
-                            PauseStatus.asyncSetManualPause(!PauseStatus.isPause)
+                            PauseStatus.asyncResumeFromUserControl()
                         }
                     }
             }

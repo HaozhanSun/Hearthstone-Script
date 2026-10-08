@@ -211,6 +211,7 @@ class MulliganRankPreflightTest {
 
     @Test
     fun `resolved callback without explicit rank authorization still fails closed`() {
+        PauseStatus.setManualPauseForTest(false)
         val scheduler = ManualScheduler()
         var holdCount = 0
         var continueCount = 0
@@ -226,7 +227,6 @@ class MulliganRankPreflightTest {
                 assertEquals("rank-ocr-unresolved", result.ruleId)
                 assertFalse(result.shouldSurrender)
                 holdCount++
-                PauseStatus.setAutomaticPause(true)
             },
             onContinue = { continueCount++ },
         )
@@ -238,11 +238,12 @@ class MulliganRankPreflightTest {
         assertEquals(1, holdCount)
         assertEquals(0, continueCount)
         assertEquals(MulliganRankPreflightState.EXHAUSTED, preflight.snapshot().state)
-        assertTrue(PauseStatus.isAutomaticPause)
+        assertFalse(PauseStatus.isPause, "unresolved rank holds the input gate without automatically pausing the run")
     }
 
     @Test
     fun `retries after seven second grace without another Power log line`() {
+        PauseStatus.setManualPauseForTest(false)
         val scheduler = ManualScheduler()
         val attempts = mutableListOf<Long>()
         var holdCount = 0
@@ -275,7 +276,6 @@ class MulliganRankPreflightTest {
                 assertEquals("rank-ocr-unresolved", result.ruleId)
                 assertFalse(result.shouldSurrender)
                 holdCount++
-                PauseStatus.setAutomaticPause(true)
             },
             onContinue = { error("unresolved rank must not continue") },
         )
@@ -291,13 +291,14 @@ class MulliganRankPreflightTest {
         assertEquals(listOf(7_000L, 14_000L, 21_000L), attempts)
         assertEquals(1, holdCount)
         assertEquals(MulliganRankPreflightState.EXHAUSTED, preflight.snapshot().state)
-        assertTrue(PauseStatus.isAutomaticPause)
+        assertFalse(PauseStatus.isPause, "retry exhaustion remains a no-input hold, not an automatic pause")
         logLines = emptyList()
         assertTrue(logLines.isEmpty(), "the retry schedule must not depend on a new log line")
     }
 
     @Test
     fun `timeout is bounded and falls into non-surrender hold`() {
+        PauseStatus.setManualPauseForTest(false)
         val scheduler = ManualScheduler()
         var holdCount = 0
         val preflight = MulliganRankPreflight(
@@ -317,7 +318,6 @@ class MulliganRankPreflightTest {
                 assertEquals("rank-ocr-unresolved", result.ruleId)
                 assertFalse(result.shouldSurrender)
                 holdCount++
-                PauseStatus.setAutomaticPause(true)
             },
             onContinue = { error("timeout must not continue mulligan") },
         )
@@ -328,7 +328,7 @@ class MulliganRankPreflightTest {
 
         assertEquals(1, holdCount)
         assertEquals(MulliganRankPreflightState.EXHAUSTED, preflight.snapshot().state)
-        assertTrue(PauseStatus.isAutomaticPause)
+        assertFalse(PauseStatus.isPause, "a timed-out OCR read must hold safely without pausing the run")
     }
 
     @Test
@@ -482,6 +482,7 @@ class MulliganRankPreflightTest {
     fun `empty unknown and exception reads exhaust into hold not surrender`() {
         val outcomes = listOf("empty", "UNKNOWN", "PaddleOCR exception")
         outcomes.forEach { outcome ->
+            PauseStatus.setManualPauseForTest(false)
             val scheduler = ManualScheduler()
             var attempts = 0
             var holdCount = 0
@@ -506,7 +507,6 @@ class MulliganRankPreflightTest {
                     assertEquals("rank-ocr-unresolved", result.ruleId, outcome)
                     assertFalse(result.shouldSurrender, outcome)
                     holdCount++
-                    PauseStatus.setAutomaticPause(true)
                 },
                 onContinue = { error("$outcome must not continue mulligan") },
             )
@@ -520,12 +520,13 @@ class MulliganRankPreflightTest {
             assertEquals(3, attempts, outcome)
             assertEquals(1, holdCount, outcome)
             assertEquals(MulliganRankPreflightState.EXHAUSTED, preflight.snapshot().state, outcome)
-            assertTrue(PauseStatus.isAutomaticPause, outcome)
+            assertFalse(PauseStatus.isPause, "$outcome must hold safely without an automatic pause")
         }
     }
 
     @Test
     fun `cancelled OCR exhausts into hold and cannot release ordinary input`() {
+        PauseStatus.setManualPauseForTest(false)
         val scheduler = ManualScheduler()
         MulliganRankDispatchBarrier.beginCurrentGame()
         var holdCount = 0
@@ -540,7 +541,6 @@ class MulliganRankPreflightTest {
                 assertEquals("rank-ocr-unresolved", result.ruleId)
                 assertFalse(result.shouldSurrender)
                 holdCount++
-                PauseStatus.setAutomaticPause(true)
             },
             onContinue = { error("cancelled OCR must never continue") },
         )
@@ -550,7 +550,7 @@ class MulliganRankPreflightTest {
         scheduler.runWorker()
 
         assertEquals(1, holdCount)
-        assertTrue(PauseStatus.isAutomaticPause)
+        assertFalse(PauseStatus.isPause, "a cancelled OCR read must hold the gate without automatically pausing")
         assertEquals(
             MulliganRankDispatchBarrier.State.PENDING,
             MulliganRankDispatchBarrier.currentState(),
@@ -643,6 +643,7 @@ class MulliganRankPreflightTest {
 
     @Test
     fun `continue-shaped result without exact allowed numeric rank retries and then holds`() {
+        PauseStatus.setManualPauseForTest(false)
         val scheduler = ManualScheduler()
         var inspections = 0
         var holdCount = 0
@@ -665,7 +666,6 @@ class MulliganRankPreflightTest {
             onHold = {
                 assertEquals("rank-ocr-unresolved", it.ruleId)
                 holdCount++
-                PauseStatus.setAutomaticPause(true)
             },
             onContinue = { continueCount++ },
         )
@@ -678,7 +678,7 @@ class MulliganRankPreflightTest {
 
         assertEquals(2, inspections)
         assertEquals(1, holdCount)
-        assertTrue(PauseStatus.isAutomaticPause)
+        assertFalse(PauseStatus.isPause, "incomplete rank evidence must hold the gate without automatically pausing")
         assertEquals(0, continueCount)
         assertEquals(MulliganRankPreflightState.EXHAUSTED, preflight.snapshot().state)
     }
