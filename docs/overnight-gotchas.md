@@ -28,6 +28,34 @@ surrender confirmation maps only to the affirmative action. A
 `MATCHMAKING_BLOCKED` record whose reason begins `pre-match-rank-` is a
 regression.
 
+## Post-surrender result cleanup: Gold-rank continuation must be recognized before its bounded Continue budget is spent
+
+**Observed failure (2026-10-08 PDT, deployed Beta v4.16.605):** matchmaking
+correctly allowed a pre-match rank-4 badge, then active-game PaddleX correctly
+read Gold 4 and completed mandatory surrender with
+`RANK_SURRENDER_TERMINAL_PROOF ACCEPTED` at 11:46:03. The next authorized
+screen capture visibly showed the Gold 5 rank-progression panel and Chinese
+`点击继续`, but its four-region visual signature was classified as `UNKNOWN`.
+The cleanup sent one center click at 11:46:22 and one Enter fallback at
+11:46:47, both awaiting a postcheck; it then failed at 11:47:11 with
+`unknown-result-fallback-input-budget-exhausted`. The terminal cleanup fence
+correctly deferred generic recovery, but the unresolved result panel remained
+visible until the external safety stop.
+
+**Root cause:** the large Gold 5 medal changes the centered-panel dark ratio
+enough to miss the previous Gold-reward signatures. The screenshot still has
+the distinctive blue rank ribbon, warm medal, and visible Continue label, so it
+is a bounded rank-progress continuation—not evidence that cleanup completed.
+
+**Guardrail:** recognize the Gold 5 composition only through a narrow,
+four-region visual signature. With same-game terminal proof and an authorized
+fresh capture, it may dispatch the existing bounded Continue action; only a
+subsequent fresh recognized destination screen completes the cleanup. The
+rank-progress input cap remains finite, and unknown or unauthorized captures
+must hold rather than click or release the terminal fence. Keep the
+matchmaking-stage rule above unchanged: deck-selection rank never gates queue
+input.
+
 ## Active-game rank surrender: first safe recovery inspection must not inherit the generic stuck timeout
 
 **Observed failure (2026-10-08 PDT, deployed Beta v4.16.604):** queue input

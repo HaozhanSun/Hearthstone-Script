@@ -137,9 +137,19 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.085..0.11 &&
             centerDarkRatio in 0.25..0.28 &&
             bannerWarmRatio in 0.38..0.43
+        // v4.16.605's authorized Gold 5 post-surrender screen renders a
+        // much larger central medal. That leaves less dark background in the
+        // center than the earlier Gold-reward variants, while the blue-ribbon
+        // / warm-medal composition remains distinct from ordinary gameplay and
+        // defeat plaques. Keep all four independent signals narrow: continue=.0434, banner=.0790,
+        // centerDark=.1571, warm=.4181 in the captured client frame.
+        val largeGoldFiveRewardSignature = continueGrayLightRatio in 0.035..0.055 &&
+            bannerLowSaturationRatio in 0.065..0.10 &&
+            centerDarkRatio in 0.13..0.18 &&
+            bannerWarmRatio in 0.38..0.46
         return capturedRankProgressSignature || establishedRankProgressSignature ||
             coolBoardGoldRewardSignature || largeGoldMedalRewardSignature || compactGoldRewardSignature ||
-            postEnterGoldRewardSignature || coolPostSurrenderGoldRewardSignature
+            postEnterGoldRewardSignature || coolPostSurrenderGoldRewardSignature || largeGoldFiveRewardSignature
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */

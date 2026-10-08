@@ -472,6 +472,88 @@ class TerminalCleanupIncidentFixtureTest {
         )
     }
 
+    @Test
+    fun `v605 Gold 5 reward screenshot drives bounded terminal continue lifecycle`() {
+        val bytes = requireNotNull(javaClass.getResourceAsStream(V605_GOLD5_RANK_PROGRESS)).use { it.readBytes() }
+        assertEquals(V605_GOLD5_RANK_PROGRESS_SHA256, sha256(bytes))
+        val rankReward = requireNotNull(ImageIO.read(ByteArrayInputStream(bytes)))
+        assertEquals(1920, rankReward.width)
+        assertEquals(1080, rankReward.height)
+
+        val rankKind = ScreenStateRecovery.classifyImageForResultFixture(rankReward)
+        assertEquals("RANK_PROGRESS_CONTINUATION", rankKind)
+        assertEquals(rankKind, UpstreamScreenStateRecovery.classifyImageForResultFixture(rankReward))
+        val visual = ScreenStateRecovery.resultVisualEvidenceForFixture(rankReward)
+        assertMetricNear(visual, "continue", 0.0457864313964101)
+        assertMetricNear(visual, "banner", 0.08445566778900113)
+        assertMetricNear(visual, "centerDark", 0.156677769420866)
+        assertMetricNear(visual, "bannerWarm", 0.4137806637806638)
+        assertFalse(ResultPageEvidencePolicy.looksLikeResultVisual(0.020, 0.079, 0.157, 0.418))
+
+        // This is the post-surrender branch: a same-game terminal proof plus
+        // a freshly recognized Gold 5 continuation screen authorizes only the
+        // bounded Continue control, never matchmaking or a guessed board click.
+        val tracker = CurrentGamePowerLogTerminalTracker()
+        tracker.observeLine("CREATE_GAME gameId=gold5-rank-reward")
+        val identity = requireNotNull(tracker.currentGameIdentity("laz#12793"))
+        MandatoryRankSurrenderGuard.begin(identity)
+        tracker.observeLine("TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=CONCEDED")
+        tracker.observeLine("TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=LOST")
+        tracker.observeLine("TAG_CHANGE Entity=opponent#1 tag=PLAYSTATE value=WON")
+        tracker.observeLine("TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER")
+        tracker.observeLine("TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE")
+        val terminalProof = requireNotNull(tracker.currentGameSurrenderEvidence("laz#12793", "opponent#1"))
+        val capability = requireNotNull(MandatoryRankSurrenderGuard.authorizeTerminalCleanup(terminalProof))
+        val coordinator = TerminalPageCleanupCoordinator()
+        val ticket = requireNotNull(coordinator.begin().ticket)
+
+        assertEquals(
+            PostResultRankProgressPolicy.Action.CONTINUE,
+            PostResultRankProgressPolicy.decide(
+                rankProgressVisible = rankKind == "RANK_PROGRESS_CONTINUATION",
+                terminalCleanupAuthorized = MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(capability),
+                captureAuthorized = true,
+                rankProgressInputAttempts = coordinator.snapshot().rankProgressInputs,
+            ),
+        )
+        assertEquals(
+            1,
+            coordinator.reserveRankProgressInput(ticket, PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS),
+            "the first authorized input is the visible 点击继续 control",
+        )
+        assertEquals(PostResultRankProgressPolicy.Input.CENTER_CLICK, PostResultRankProgressPolicy.inputForAttempt(1))
+
+        // Acceptance remains evidence-based: only the subsequent fresh HOME
+        // observation completes the episode. The coordinator's two-input cap
+        // prevents the fallback from becoming an endless action loop.
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = false,
+                attempt = 2,
+                maxAttempts = TerminalPageCleanupCoordinator.DEFAULT_MAX_INPUTS,
+                clickAttempts = 1,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = true,
+                destinationTransitionConfirmed = FreshPostResultDestinationPolicy.isConfirmed("HOME", 95, true),
+            ),
+        )
+        assertTrue(coordinator.confirmDestination(ticket))
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED", capability))
+        assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+
+        val boundedCoordinator = TerminalPageCleanupCoordinator()
+        val boundedTicket = requireNotNull(boundedCoordinator.begin().ticket)
+        assertEquals(1, boundedCoordinator.reserveRankProgressInput(boundedTicket, PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS))
+        assertEquals(2, boundedCoordinator.reserveRankProgressInput(boundedTicket, PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS))
+        assertEquals(
+            null,
+            boundedCoordinator.reserveRankProgressInput(boundedTicket, PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS),
+            "recognized rank progress still has a hard Continue-input limit",
+        )
+    }
+
     private fun loadImage(resource: String): BufferedImage {
         val bytes = requireNotNull(javaClass.getResourceAsStream(resource)).use { it.readBytes() }
         return requireNotNull(ImageIO.read(ByteArrayInputStream(bytes)))
@@ -617,5 +699,7 @@ class TerminalCleanupIncidentFixtureTest {
         private const val V577_RANK_PROGRESS_SHA256 = "383BA353BCA5459CAA12C41EA4522284DE369AECC32A294209A0F523ED288837"
         private const val V597_RANK_PROGRESS = "/club/xiaojiawei/hsscript/status/surrender/v597-gold4-rank-progress-unrecognized-20261007-125248-573.png"
         private const val V597_RANK_PROGRESS_SHA256 = "A670A8A140D48037D11C9B2805DD9641594F2E82F487D5D4CCA4B65B9EF76794"
+        private const val V605_GOLD5_RANK_PROGRESS = "/club/xiaojiawei/hsscript/status/surrender/v605-gold5-rank-progress-20261008-115133-388.png"
+        private const val V605_GOLD5_RANK_PROGRESS_SHA256 = "494CB85E60676189350B5C7A85EF4803A6B263D037671F7F45F5F27188312C8B"
     }
 }
