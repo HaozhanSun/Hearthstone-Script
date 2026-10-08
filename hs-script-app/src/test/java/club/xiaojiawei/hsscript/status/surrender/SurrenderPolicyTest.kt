@@ -100,19 +100,20 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun `rank policy accepts five ten and numeric Legendary while unresolved evidence holds`() {
+    fun `rank policy accepts only five and ten while other numeric and unresolved evidence stay blocked`() {
         val streakBlock = SurrenderPolicy.persistentStreakDecision(
             PersistentStreakSnapshot(consecutiveSurrenders = 7, consecutiveWins = 0),
         )!!
         assertTrue(streakBlock.blocksAutomaticSurrender)
 
-        val eligibleLegend = SurrenderPolicy.evaluateCurrentRank(
+        val rejectedLegend = SurrenderPolicy.evaluateCurrentRank(
             rank = 5220,
             tier = CurrentRankDetector.RankTier.UNKNOWN,
         )
         val unresolved = SurrenderPolicy.unresolvedRankDecision(attempts = 3)
 
-        assertNull(eligibleLegend)
+        assertTrue(rejectedLegend!!.shouldSurrender)
+        assertEquals("current-rank-not-5-or-10", rejectedLegend.ruleId)
         assertTrue(NeverSurrenderPolicy.isMandatoryRankRule(unresolved.ruleId))
         assertFalse(unresolved.shouldSurrender)
         assertTrue(unresolved.blocksAutomaticSurrender)
@@ -1069,10 +1070,10 @@ class SurrenderPolicyTest {
     }
 
     @Test
-    fun numericRatingsAboveTwentyAreEligibleRegardlessOfTierLabel() {
+    fun numericRatingsAboveTwentyRequestMandatorySurrenderRegardlessOfTierLabel() {
         for (tier in CurrentRankDetector.RankTier.values()) {
-            assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 21, tier = tier))
-            assertNull(SurrenderPolicy.evaluateCurrentRank(rank = 233, tier = tier))
+            assertTrue(SurrenderPolicy.evaluateCurrentRank(rank = 21, tier = tier)!!.shouldSurrender)
+            assertTrue(SurrenderPolicy.evaluateCurrentRank(rank = 233, tier = tier)!!.shouldSurrender)
         }
     }
 

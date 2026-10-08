@@ -53,7 +53,7 @@ class MulliganRankPreflightTest {
     }
 
     @Test
-    fun `verified five ten and legendary numeric ranks continue through policy guards after grace`() {
+    fun `verified five and ten continue through policy guards after grace`() {
         val now = System.currentTimeMillis()
         val winningStreakDecision = SurrenderPolicy.persistentStreakDecision(
             PersistentStreakSnapshot(consecutiveSurrenders = 0, consecutiveWins = 5),
