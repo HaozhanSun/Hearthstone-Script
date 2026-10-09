@@ -1,5 +1,5 @@
 {
-  "scenario": "unchanged-constructed-deck-selection-rank4-badge-rejected-before-queue",
+  "scenario": "fresh-constructed-deck-selection-rank4-badge-blocked-before-queue",
   "screenKind": "DECK_SELECTION",
   "mode": "TOURNAMENT",
   "phase": "FILL_DECK",
@@ -10,6 +10,8 @@
   "provider": "PADDLEX",
   "rankEvidenceFresh": true,
   "unchangedFingerprint": "DECK_SELECTION|TOURNAMENT|FILL_DECK|rank-denied",
+  "screenshot": "deck-selection-screen.png",
+  "decisionTrace": "rank4-prequeue-deny.scriptlog.txt",
   "unresolvedAttemptsBeforeAutomaticPause": 2,
   "recoveryPauseBoundMs": 60000
 }

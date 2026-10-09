@@ -1,6 +1,5 @@
 package club.xiaojiawei.hsscript.status.surrender
 
-import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.AfterEach
@@ -121,7 +120,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
         val gameTicket = barrier.beginCurrentGame()
         assertNotNull(barrier.requireSurrender(gameTicket), "rank 4 must latch mandatory surrender")
         guard.begin("${fixture.priorGameId}:self")
-        assertFalse(queueAllowed(), "do not queue while this game's mandatory surrender is unconfirmed")
+        assertFalse(postGameRecoveryUnlocked(), "do not evaluate the next pre-match permit while mandatory surrender is unconfirmed")
 
         val powerLog = resourceText(fixtureDirectory.resolve(fixture.powerLog))
         assertTrue(powerLog.contains("CREATE_GAME"))
@@ -152,7 +151,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
                 freshObservation = false,
             ),
         )
-        assertFalse(queueAllowed())
+        assertFalse(postGameRecoveryUnlocked())
 
         val completion = MandatoryRankSurrenderDeckSelectionRecovery.completeIfRequired(
             screenKind = detectedScreen,
@@ -163,7 +162,11 @@ class OfflineRankSurrenderMatchmakingE2ETest {
         assertEquals(MandatoryRankSurrenderDeckSelectionRecovery.Result.COMPLETED, completion)
         assertFalse(guard.isPending())
         assertEquals(MulliganRankDispatchBarrier.State.IDLE, barrier.currentState())
-        assertTrue(queueAllowed(), "the existing queue gate may resume after terminal + fresh deck evidence")
+        assertTrue(postGameRecoveryUnlocked(), "terminal recovery may permit a new fresh deck-selection rank read")
+        assertFalse(
+            preMatchPermit(fixture.deckSelectionRankBadge, now).allowed,
+            "rank four still cannot create the next queue input after recovery",
+        )
 
         assertEquals(
             MandatoryRankSurrenderDeckSelectionRecovery.Result.NOT_REQUIRED,
@@ -178,7 +181,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
     }
 
     @Test
-    fun `rank four queues then triggers mandatory surrender only after active game evidence`() {
+    fun `rank four deck-selection evidence prevents the next queue input after recovery`() {
         val fixture = readFixture()
         val priorTicket = barrier.beginCurrentGame()
         assertNotNull(barrier.requireSurrender(priorTicket))
@@ -202,73 +205,13 @@ class OfflineRankSurrenderMatchmakingE2ETest {
             ),
         )
 
-        // Current rank 4 badge is not consulted at deck selection. Verify the
-        // actual input callback can run; the policy is evaluated in active game.
-        val preQueue = MatchmakingGuardPolicy.authorizeQueueInput(true, false, false)
-        var queueInputSent = false
-        assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(preQueue) { queueInputSent = true })
-        assertTrue(queueInputSent, "the rank-4 deck-selection badge must not block queue input")
-        assertTrue(queueAllowed(), "rank is deferred until a current game is active")
-
-        // After the next game is authoritative in Power.log, run the actual
-        // eligibility policy on rank 4 and arm only the mandatory surrender.
-        val nextGame = resourceText(fixtureDirectory.resolve(fixture.nextGamePowerLog))
-        assertTrue(nextGame.contains("CREATE_GAME gameId=${fixture.nextGameId}"))
-        assertTrue(nextGame.contains("MULLIGAN_STATE value=INPUT"))
-        assertFalse(
-            hasAcceptedSurrenderTerminal(nextGame, fixture.nextGameId),
-            "the tracked startup Power.log contains no terminal acceptance proof",
-        )
-        val ticket = barrier.beginCurrentGame()
         val now = System.currentTimeMillis()
-        val denied = RankEligibilityCorePolicy.evaluate(
-            evidence = detection(4, now),
-            expectedMode = "GAMEPLAY",
-            actualMode = "GAMEPLAY",
-            expectedInWar = true,
-            inWar = true,
-            nowMs = now,
-        )
-        assertEquals("rank-not-5-or-10", denied.reason)
-        val surrenderCapability = barrier.requireSurrender(ticket)
-        assertNotNull(surrenderCapability)
-        assertTrue(
-            barrier.isSurrenderCapabilityValid(surrenderCapability),
-            "the current game's mandatory surrender must retain a valid one-shot dispatch capability",
-        )
-        guard.begin("${fixture.nextGameId}:self")
-        assertFalse(queueAllowed(), "ordinary actions stay blocked while the current game must be surrendered")
-
-        // The next game's terminal must be scoped to that game's unique marker.
-        // A stale terminal from the prior game cannot release this new guard.
-        assertTrue(guard.isPending())
-        assertFalse(hasAcceptedSurrenderTerminal(priorTerminal, fixture.nextGameId))
-        assertFalse(hasAcceptedSurrenderTerminal(nextGame, fixture.nextGameId))
-        assertEquals(
-            MandatoryRankSurrenderDeckSelectionRecovery.Result.BLOCKED,
-            MandatoryRankSurrenderDeckSelectionRecovery.completeIfRequired(
-                screenKind = deckScreen,
-                confidence = fixture.deckSelection.confidence,
-                visualEvidence = fixture.deckSelection.evidence,
-                freshObservation = true,
-            ),
-            "the previous game's terminal cannot release the new game's guard",
-        )
-        assertTrue(guard.isPending())
-
-        val terminal = resourceText(fixtureDirectory.resolve(fixture.nextGameTerminalPowerLog))
-        assertTrue(hasAcceptedSurrenderTerminal(terminal, fixture.nextGameId))
-        assertNotNull(guard.authorizeTerminalCleanup(terminalEvidence(fixture.nextGameId)))
-        assertEquals(
-            MandatoryRankSurrenderDeckSelectionRecovery.Result.COMPLETED,
-            MandatoryRankSurrenderDeckSelectionRecovery.completeIfRequired(
-                screenKind = deckScreen,
-                confidence = fixture.deckSelection.confidence,
-                visualEvidence = fixture.deckSelection.evidence,
-                freshObservation = true,
-            ),
-        )
-        assertTrue(queueAllowed(), "the next cycle is unblocked only after authoritative surrender and fresh screen evidence")
+        val denied = preMatchPermit(fixture.deckSelectionRankBadge, now)
+        var queueInputs = 0
+        denied.permit?.dispatch(OfflinePreMatchRankQueuePermit.allowedRuntime(), now) { queueInputs++ }
+        assertFalse(denied.allowed)
+        assertEquals("rank-not-exact-5-or-10", denied.reason)
+        assertEquals(0, queueInputs, "rank four must never create a second game or mandatory-surrender cycle")
     }
 
     @Test
@@ -299,6 +242,10 @@ class OfflineRankSurrenderMatchmakingE2ETest {
     fun `exact five and ten continue while every other numeric rank surrenders and OCR holds`() {
         val now = System.currentTimeMillis()
         for (rank in listOf(5, 10)) {
+            val preMatch = preMatchPermit(rank, now)
+            var queueInputs = 0
+            assertTrue(requireNotNull(preMatch.permit).dispatch(OfflinePreMatchRankQueuePermit.allowedRuntime(), now) { queueInputs++ })
+            assertEquals(1, queueInputs, "rank=$rank must authorize exactly one first queue input")
             val decision = RankEligibilityCorePolicy.evaluate(
                 evidence = detection(rank, now),
                 expectedMode = "GAMEPLAY",
@@ -311,7 +258,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
             val ticket = barrier.beginCurrentGame()
             assertTrue(barrier.authorizeEligibleRank(ticket, rank))
             assertFalse(guard.isPending(), "eligible rank=$rank must not arm mandatory surrender")
-            assertTrue(queueAllowed())
+            assertTrue(postGameRecoveryUnlocked())
             assertEquals(MulliganRankDispatchBarrier.State.ELIGIBLE, barrier.currentState())
             barrier.resetForTest()
         }
@@ -325,10 +272,11 @@ class OfflineRankSurrenderMatchmakingE2ETest {
             nowMs = now,
         )
         assertFalse(nonTarget.eligible)
+        assertFalse(preMatchPermit(4, now).allowed, "rank four must be rejected before this in-game defense runs")
         val ticket = barrier.beginCurrentGame()
         assertNotNull(barrier.requireSurrender(ticket), "resolved in-game rank 4 must trigger surrender")
         guard.begin()
-        assertFalse(queueAllowed(), "ordinary actions stay blocked for mandatory surrender")
+        assertFalse(postGameRecoveryUnlocked(), "ordinary actions stay blocked for mandatory surrender")
         guard.resetForTest()
         barrier.resetForTest()
 
@@ -358,7 +306,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
         // rank barrier stays pending; it must not authorize turns or surrender.
         val unresolvedTicket = barrier.beginCurrentGame()
         assertEquals(MulliganRankDispatchBarrier.State.PENDING, barrier.currentState())
-        assertTrue(queueAllowed(), "rank remains deferred for any subsequent queue request")
+        assertTrue(postGameRecoveryUnlocked(), "missing in-game rank alone does not mint a next-queue permit")
         assertEquals(
             MulliganRankDispatchBarrier.State.PENDING,
             barrier.currentState(),
@@ -417,15 +365,19 @@ class OfflineRankSurrenderMatchmakingE2ETest {
         assertEquals(111, dimensions.second)
     }
 
-    private fun queueAllowed(): Boolean {
-        return MatchmakingGuardPolicy.authorizeQueueInput(
-            working = true,
-            paused = false,
-            mandatoryRankSurrenderPending = guard.isPending(),
-        ).allowed
-    }
+    private fun postGameRecoveryUnlocked(): Boolean = !guard.isPending()
 
-    private fun queueBlocked(): Boolean = !queueAllowed()
+    private fun queueBlocked(): Boolean = !postGameRecoveryUnlocked()
+
+    private fun preMatchPermit(rank: Int?, now: Long) = OfflinePreMatchRankQueuePermit.evaluate(
+        OfflinePreMatchRankQueuePermit.Evidence(
+            rank = rank,
+            confidence = if (rank == null) null else 0.99,
+            capturedAtMs = now,
+            outcome = if (rank == null) OfflinePreMatchRankQueuePermit.OcrOutcome.UNKNOWN else OfflinePreMatchRankQueuePermit.OcrOutcome.SUCCESS,
+        ),
+        now,
+    )
 
     private fun terminalEvidence(gameId: String) = CurrentGameSurrenderTerminalEvidence(
         gameIdentity = "$gameId:self",

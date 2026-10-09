@@ -1,0 +1,4 @@
+# Synthetic offline decision trace bound to deck-selection-rank4-hold.json.
+# It documents the required log contract; it is not a live client claim.
+MATCHMAKING_GATE stage=PRE_MATCH rankPolicy=FRESH_EXACT_DECK_SELECTION_RANK rank=4 confidence=0.99 ocr=SUCCESS decision=DENY reason=rank-not-exact-5-or-10
+MATCHMAKING_BLOCKED reason=rank-not-exact-5-or-10 action=NO_QUEUE_INPUT

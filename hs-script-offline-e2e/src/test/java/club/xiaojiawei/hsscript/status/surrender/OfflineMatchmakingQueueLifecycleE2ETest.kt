@@ -3,7 +3,6 @@ package club.xiaojiawei.hsscript.status.surrender
 import club.xiaojiawei.hsscript.status.MatchmakingQueueLifecycle
 import club.xiaojiawei.hsscript.status.MatchmakingQueueModalVisualClassifier
 import club.xiaojiawei.hsscript.status.PowerLogActiveMatchProbe
-import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -51,7 +50,18 @@ class OfflineMatchmakingQueueLifecycleE2ETest {
 
         val queue = MatchmakingQueueLifecycle()
         val currentPid = 104_164L
-        val queueInputs = 1 // The one already-authorized queue click from the run ledger.
+        var queueInputs = 0
+        val preQueue = OfflinePreMatchRankQueuePermit.evaluate(
+            OfflinePreMatchRankQueuePermit.Evidence(
+                rank = 5,
+                confidence = 0.99,
+                capturedAtMs = 1_000L,
+                outcome = OfflinePreMatchRankQueuePermit.OcrOutcome.SUCCESS,
+            ),
+            nowMs = 1_000L,
+        )
+        assertTrue(requireNotNull(preQueue.permit).dispatch(OfflinePreMatchRankQueuePermit.allowedRuntime(), 1_000L) { queueInputs++ })
+        assertEquals(1, queueInputs, "only the fresh exact-rank permit may start queue tracking")
         val emptyPowerLog = PowerLogActiveMatchProbe.assess(emptySequence())
         assertFalse(emptyPowerLog.gameCreated)
 
@@ -109,61 +119,22 @@ class OfflineMatchmakingQueueLifecycleE2ETest {
     }
 
     @Test
-    fun `queue OCR with empty Power log waits without another input then rank four arms active-game surrender`() {
-        val queue = MatchmakingQueueLifecycle()
-        val currentPid = 97_212L
-        var queueInputs = 0
-        val authorization = MatchmakingGuardPolicy.authorizeQueueInput(
-            working = true,
-            paused = false,
-            mandatoryRankSurrenderPending = false,
-        )
-        assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(authorization) { queueInputs++ })
-        assertEquals(1, queueInputs, "the normal queue callback is sent once")
-
-        val emptyLog = PowerLogActiveMatchProbe.assess(emptySequence())
-        assertFalse(emptyLog.gameCreated)
-        assertEquals(
-            MatchmakingQueueLifecycle.Phase.QUEUE_PENDING,
-            queue.observeScreen(
-                observedPid = currentPid,
-                currentPid = currentPid,
-                evidence = MatchmakingQueueLifecycle.ScreenEvidence.MATCHMAKING,
-                confidence = 95,
-                captureAuthorized = true,
-                processAlive = true,
-                nowNanos = 1_000L,
-            ).phase,
-        )
-        repeat(49) { attempt ->
-            assertEquals(
-                MatchmakingQueueLifecycle.TimeoutDisposition.DEFER_WITHOUT_INPUT,
-                queue.timeoutDisposition(currentPid, processAlive = true, nowNanos = 2_000L + attempt),
-                "passive probe $attempt must not timeout or issue cancellation/retry input",
-            )
-        }
-        assertEquals(1, queueInputs, "screen observations cannot synthesize extra queue clicks")
-
-        val createGame = PowerLogActiveMatchProbe.assess(sequenceOf("CREATE_GAME"))
-        assertTrue(createGame.gameCreated)
-        queue.observeGameCreated(currentPid)
-        assertEquals(MatchmakingQueueLifecycle.Phase.GAME_CREATED, queue.snapshotFor(currentPid, true, 3_000L).phase)
-        assertEquals(MatchmakingQueueLifecycle.TimeoutDisposition.STOP, queue.timeoutDisposition(currentPid, true, 3_000L))
-
+    fun `rank four deck-selection evidence prevents matchmaking before any queue state exists`() {
         val now = 10_000L
-        val rankFour = RankEligibilityCorePolicy.evaluate(
-            evidence = RankEvidence(4, 0.99, 104, 108, "PADDLEX", now, 1),
-            expectedMode = "GAMEPLAY",
-            actualMode = "GAMEPLAY",
-            expectedInWar = true,
-            inWar = true,
-            nowMs = now,
+        var queueInputs = 0
+        val authorization = OfflinePreMatchRankQueuePermit.evaluate(
+            OfflinePreMatchRankQueuePermit.Evidence(
+                rank = 4,
+                confidence = 0.99,
+                capturedAtMs = now,
+                outcome = OfflinePreMatchRankQueuePermit.OcrOutcome.SUCCESS,
+            ),
+            now,
         )
-        assertFalse(rankFour.eligible)
-        assertEquals("rank-not-5-or-10", rankFour.reason)
-        val rankTicket = MulliganRankDispatchBarrier.beginCurrentGame()
-        assertNotNull(MulliganRankDispatchBarrier.requireSurrender(rankTicket))
-        assertEquals(MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED, MulliganRankDispatchBarrier.currentState())
+        authorization.permit?.dispatch(OfflinePreMatchRankQueuePermit.allowedRuntime(), now) { queueInputs++ }
+        assertFalse(authorization.allowed)
+        assertEquals("rank-not-exact-5-or-10", authorization.reason)
+        assertEquals(0, queueInputs, "rank four must not create a queue callback or an active-game lifecycle")
     }
 
     @Test

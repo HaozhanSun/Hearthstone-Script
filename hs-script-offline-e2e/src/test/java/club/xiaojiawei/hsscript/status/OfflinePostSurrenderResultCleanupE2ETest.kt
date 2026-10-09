@@ -73,13 +73,12 @@ class OfflinePostSurrenderResultCleanupE2ETest {
 
         // Unsafe or stale observations reject renewal without consuming a new
         // ticket, probe, or input: pause, stale game, foreground/occlusion /
-        // authority loss, non-result, or UNKNOWN.
+        // authority loss, missing terminal continuation, or UNKNOWN.
         val failedTicket = requireNotNull(deadline.ticket)
-        assertNull(coordinator.rearmAfterDeadline(failedTicket, paused = false, terminalCleanupAuthorized = false, freshCaptureAuthorized = true, resultPageVisible = true), "stale game/terminal capability")
-        assertNull(coordinator.rearmAfterDeadline(failedTicket, paused = false, terminalCleanupAuthorized = true, freshCaptureAuthorized = false, resultPageVisible = true), "foreground, occlusion, or capture authority lost")
-        assertNull(coordinator.rearmAfterDeadline(failedTicket, paused = false, terminalCleanupAuthorized = true, freshCaptureAuthorized = true, resultPageVisible = false), "fresh non-result observation")
-        assertNull(coordinator.rearmAfterDeadline(failedTicket, paused = false, terminalCleanupAuthorized = true, freshCaptureAuthorized = true, resultPageVisible = null), "missing/UNKNOWN result proof")
-        assertNull(coordinator.rearmAfterDeadline(failedTicket, paused = true, terminalCleanupAuthorized = true, freshCaptureAuthorized = true, resultPageVisible = true), "pause blocks cleanup")
+        assertNull(coordinator.rearmAfterDeadline(failedTicket, paused = false, terminalCleanupAuthorized = false, freshCaptureAuthorized = true, terminalContinuationVisible = true), "stale game/terminal capability")
+        assertNull(coordinator.rearmAfterDeadline(failedTicket, paused = false, terminalCleanupAuthorized = true, freshCaptureAuthorized = false, terminalContinuationVisible = true), "foreground, occlusion, or capture authority lost")
+        assertNull(coordinator.rearmAfterDeadline(failedTicket, paused = false, terminalCleanupAuthorized = true, freshCaptureAuthorized = true, terminalContinuationVisible = false), "fresh non-terminal observation")
+        assertNull(coordinator.rearmAfterDeadline(failedTicket, paused = true, terminalCleanupAuthorized = true, freshCaptureAuthorized = true, terminalContinuationVisible = true), "pause blocks cleanup")
 
         val retry = requireNotNull(
             coordinator.rearmAfterDeadline(
@@ -87,7 +86,7 @@ class OfflinePostSurrenderResultCleanupE2ETest {
                 paused = false,
                 terminalCleanupAuthorized = fixture.retryTerminalCapabilityValid,
                 freshCaptureAuthorized = fixture.freshRetryCaptureAuthorized,
-                resultPageVisible = fixture.freshRetryResultVisible,
+                terminalContinuationVisible = fixture.freshRetryResultVisible,
             ),
         )
         assertEquals(fixture.cleanupInputsBeforeDeadline, coordinator.snapshot().inputs, "prior/rejected sends are not refunded")
@@ -116,9 +115,10 @@ class OfflinePostSurrenderResultCleanupE2ETest {
         assertEquals(TerminalPageCleanupCoordinator.State.COMPLETED, coordinator.snapshot().state)
         assertEquals(3, coordinator.snapshot().inputs)
 
-        // Wrong destination, stale frame, low confidence, or unauthorized
-        // capture is not transition proof and cannot release the episode.
-        assertFalse(FreshPostResultDestinationPolicy.isConfirmed("HOME", 92, true))
+        // HOME is an intentional safe terminal destination. A stale frame,
+        // low confidence, unauthorized capture, or still-visible result page
+        // is not transition proof and cannot release the episode.
+        assertTrue(FreshPostResultDestinationPolicy.isConfirmed("HOME", 92, true))
         assertFalse(FreshPostResultDestinationPolicy.isConfirmed("DECK_SELECTION", 84, true))
         assertFalse(FreshPostResultDestinationPolicy.isConfirmed("DECK_SELECTION", 92, false))
         assertFalse(FreshPostResultDestinationPolicy.isConfirmed("RESULT", 99, true))
