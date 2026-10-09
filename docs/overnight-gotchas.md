@@ -108,6 +108,31 @@ prove the rank-denial path reaches the verified `CLICK_SETTINGS` action within
 the configured short scheduler delay rather than waiting for the generic
 stuck timeout.
 
+## Active-game rank surrender: the Settings transition has its own bounded settle and must not reuse the stuck watchdog
+
+**Observed failure (2026-10-08 PDT, deployed Beta v4.16.608):** after a
+verified Mulligan rank denial, the bot dispatched the bottom-right Settings
+gear at 19:13:32.728. It then logged `below-threshold` recovery waits until a
+second capture at 19:14:02.345 finally saw Settings and clicked Surrender at
+19:14:02.968—30.240 seconds after the gear click. The deployment manifest
+selected `hs-script_v4.16.608-local-20261008-173002PDT.jar`; bytecode showed
+only the generic post-click cooldown probe, not a Settings-settle state.
+
+**Root cause:** a generic post-click probe skipped only the watchdog cooldown;
+it still required the 30-second stuck threshold before it could observe the
+screen changed by the Settings input. The intended five-second Settings state
+machine was not in the deployed artifact.
+
+**Guardrail:** a mandatory Settings click schedules exactly one fresh overlay
+probe after a five-second settle, with a 5.6-second maximum including one
+recovery-scheduler tick. Only a newly confirmed Settings overlay may dispatch
+the surrender coordinate. An uncertain capture stays observe-only and
+rechecks after two seconds; it never falls back to a blind click or another
+30-second watchdog wait. Logs must contain both
+`RANK_SURRENDER_SETTINGS_SETTLE` and the subsequent
+`mandatory-surrender-settings-overlay-probe` reason before the Settings
+surrender input can be expected.
+
 ## Empty current-session `Power.log` can deadlock startup screen recovery
 
 **Observed facts (2026-10-06 PDT, Beta v4.16.586):**

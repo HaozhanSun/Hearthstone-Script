@@ -343,6 +343,62 @@ class ScreenWatchdogTest {
     }
 
     @Test
+    fun `mandatory settings click settles for five seconds then rechecks without the stuck watchdog delay`() {
+        val probe = ScreenWatchdog.MandatorySurrenderPostClickProbe()
+        val gearInputAt = 1_000_000L
+        probe.markSettingsClickDispatched(gearInputAt)
+
+        val beforeSettle = probe.settingsOverlayProbeTiming(
+            gearInputAt + ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_SETTLE_MS - 1,
+        )
+        val afterSettle = probe.settingsOverlayProbeTiming(
+            gearInputAt + ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_SETTLE_MS,
+        )
+
+        assertFalse(requireNotNull(beforeSettle).shouldInspect)
+        assertTrue(beforeSettle.reason.startsWith("mandatory-surrender-settings-settle"))
+        assertTrue(requireNotNull(afterSettle).shouldInspect, afterSettle.reason)
+        assertTrue(afterSettle.reason.startsWith("mandatory-surrender-settings-overlay-probe"))
+        assertTrue(
+            ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_MAX_PROBE_LATENCY_MS < 30_000L,
+            "the settings transition must not inherit the 30-second stuck watchdog",
+        )
+
+        // GameUtil schedules its recovery worker at a randomized 500 ms
+        // cadence (400..600 ms). A missed exact boundary must still inspect
+        // within one maximum scheduler interval, rather than at 30 seconds.
+        val latestProbe = ScreenWatchdog.MandatorySurrenderPostClickProbe()
+        latestProbe.markSettingsClickDispatched(gearInputAt)
+        val latestDue = latestProbe.settingsOverlayProbeTiming(
+            gearInputAt + ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_MAX_PROBE_LATENCY_MS,
+        )
+        assertTrue(requireNotNull(latestDue).shouldInspect, latestDue.reason)
+    }
+
+    @Test
+    fun `uncertain mandatory settings probe rechecks shortly and never creates a generic click authorization`() {
+        val probe = ScreenWatchdog.MandatorySurrenderPostClickProbe()
+        val gearInputAt = 2_000_000L
+        val settledAt = gearInputAt + ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_SETTLE_MS
+        probe.markSettingsClickDispatched(gearInputAt)
+        assertTrue(requireNotNull(probe.settingsOverlayProbeTiming(settledAt)).shouldInspect)
+
+        // The caller must keep an uncertain Settings frame observe-only and
+        // re-arm only a fresh visual probe. It never becomes a surrender
+        // coordinate click merely because the gear button was pressed.
+        probe.finishSettingsOverlayProbe(settingsConfirmed = false, now = settledAt)
+        val beforeRecheck = probe.settingsOverlayProbeTiming(
+            settledAt + ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_UNCERTAIN_RECHECK_MS - 1,
+        )
+        val recheck = probe.settingsOverlayProbeTiming(
+            settledAt + ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_UNCERTAIN_RECHECK_MS,
+        )
+        assertFalse(requireNotNull(beforeRecheck).shouldInspect)
+        assertTrue(requireNotNull(recheck).shouldInspect, recheck.reason)
+        assertFalse(probe.shouldBypassCooldown(), "a settings probe does not grant an unverified generic click")
+    }
+
+    @Test
     fun `watchdog uses local OCR even when PaddleX is selected`() {
         OcrRuntime.providerModeProvider = { OcrProviderMode.PADDLEX_ONLY }
 

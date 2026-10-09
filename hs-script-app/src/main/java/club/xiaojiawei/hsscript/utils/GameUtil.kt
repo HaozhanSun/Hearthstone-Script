@@ -1051,6 +1051,15 @@ object GameUtil {
                             return@scheduleWithFixedDelay
                         }
                         val postClickProbe = mandatoryPostClickProbe.shouldBypassCooldown()
+                        val settingsOverlayProbe = mandatoryPostClickProbe.settingsOverlayProbeTiming()
+                        if (settingsOverlayProbe != null && !settingsOverlayProbe.shouldInspect) {
+                            log.info {
+                                "RANK_SURRENDER_RECOVERY_WAIT reason=${settingsOverlayProbe.reason} " +
+                                    "ordinaryInput=false requeue=false pause=false"
+                            }
+                            return@scheduleWithFixedDelay
+                        }
+                        val settingsOverlayProbeDue = settingsOverlayProbe?.shouldInspect == true
                         val initialMandatoryRankInspection =
                             MandatoryRankSurrenderRecoveryPolicy.shouldInspectImmediatelyAfterRankResolution(
                                 surrenderAttempts,
@@ -1059,7 +1068,8 @@ object GameUtil {
                             startedAt = surrenderStartedAt,
                             attempts = surrenderAttempts + 1,
                             bypassCooldownForMandatorySurrenderPostClick = postClickProbe,
-                            bypassInitialDelayForMandatorySurrender = initialMandatoryRankInspection,
+                            bypassInitialDelayForMandatorySurrender =
+                                initialMandatoryRankInspection || settingsOverlayProbeDue,
                         )
                         if (!watchdogTiming.shouldInspect) {
                             log.info {
@@ -1094,6 +1104,11 @@ object GameUtil {
                             return@scheduleWithFixedDelay
                         }
                         val decision = MandatoryRankSurrenderRecoveryPolicy.decide(observation.kind)
+                        if (settingsOverlayProbeDue) {
+                            mandatoryPostClickProbe.finishSettingsOverlayProbe(
+                                settingsConfirmed = observation.kind == ScreenWatchdogKind.SETTINGS,
+                            )
+                        }
                         val unknownObservationOrdinal = if (
                             decision.action == MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY
                         ) {
@@ -1122,7 +1137,14 @@ object GameUtil {
                             MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS -> {
                                 if (ActionDispatchGate.allow("surrender.retry.open-settings", recoveryCapability)) {
                                     lClickSettingsForMandatoryRankSurrender(recoveryCapability)
-                                    mandatoryPostClickProbe.markClickDispatched()
+                                    mandatoryPostClickProbe.markSettingsClickDispatched()
+                                    log.info {
+                                        "RANK_SURRENDER_SETTINGS_SETTLE scheduledMs=" +
+                                            "${ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_SETTLE_MS} " +
+                                            "maxProbeLatencyMs=" +
+                                            "${ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_MAX_PROBE_LATENCY_MS} " +
+                                            "nextAction=fresh-settings-overlay-probe dispatch=requested"
+                                    }
                                 }
                             }
                             MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SURRENDER -> {

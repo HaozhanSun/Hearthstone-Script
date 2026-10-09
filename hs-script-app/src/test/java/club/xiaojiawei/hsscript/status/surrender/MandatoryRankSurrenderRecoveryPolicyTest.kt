@@ -115,6 +115,46 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
     }
 
     @Test
+    fun `settings settle probe dispatches surrender only after fresh overlay evidence and quickly rechecks uncertainty`() {
+        val probe = ScreenWatchdog.MandatorySurrenderPostClickProbe()
+        val gearInputAt = 3_000_000L
+        val settledAt = gearInputAt + ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_MAX_PROBE_LATENCY_MS
+        probe.markSettingsClickDispatched(gearInputAt)
+        assertTrue(requireNotNull(probe.settingsOverlayProbeTiming(settledAt)).shouldInspect)
+
+        val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
+        val uncertain = ScreenWatchdog.classifyForSurrenderForTest(
+            "unreadable labels",
+            state,
+            BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB),
+        )
+        assertEquals(ScreenWatchdogKind.UNKNOWN, uncertain)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY,
+            MandatoryRankSurrenderRecoveryPolicy.decide(uncertain).action,
+            "an uncertain post-gear frame cannot click surrender",
+        )
+        probe.finishSettingsOverlayProbe(settingsConfirmed = false, now = settledAt)
+        val recheckAt = settledAt + ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_UNCERTAIN_RECHECK_MS
+        assertTrue(requireNotNull(probe.settingsOverlayProbeTiming(recheckAt)).shouldInspect)
+
+        val settings = readFixture("rank6-live-mulligan-settings-overlay.png")
+        val confirmed = ScreenWatchdog.classifyForSurrenderForTest("unreadable labels", state, settings)
+        assertEquals(ScreenWatchdogKind.SETTINGS, confirmed)
+        assertEquals(
+            MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SURRENDER,
+            MandatoryRankSurrenderRecoveryPolicy.decide(confirmed).action,
+        )
+        assertTrue(
+            settledAt - gearInputAt <=
+                ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_MAX_PROBE_LATENCY_MS,
+            "fresh Settings evidence reaches the only surrender dispatch action within the post-gear latency bound",
+        )
+        probe.finishSettingsOverlayProbe(settingsConfirmed = true, now = recheckAt)
+        assertEquals(null, probe.settingsOverlayProbeTiming(recheckAt + 1))
+    }
+
+    @Test
     fun `fresh settings overlay visual overrides mulligan background only when all menu buttons are present`() {
         val settings = readFixture("rank6-live-mulligan-settings-overlay.png")
         val preSettingsFrames = listOf(

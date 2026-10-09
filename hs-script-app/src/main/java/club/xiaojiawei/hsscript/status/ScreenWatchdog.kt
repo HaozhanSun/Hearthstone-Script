@@ -121,16 +121,76 @@ object ScreenWatchdog {
      * watchdog cooldown; ordinary watchdog probes remain globally throttled.
      */
     internal class MandatorySurrenderPostClickProbe {
-        private val pending = AtomicBoolean(false)
+        companion object {
+            /**
+             * The in-game Settings menu needs time to finish its transition
+             * before its surrender button can be confirmed from fresh pixels.
+             * This is intentionally separate from the global stuck-screen
+             * watchdog: rank recovery must not sleep for that watchdog's
+             * 30-second threshold after an intentional Settings click.
+             */
+            const val SETTINGS_OVERLAY_SETTLE_MS = 5_000L
+            const val SETTINGS_OVERLAY_UNCERTAIN_RECHECK_MS = 2_000L
+            /** scheduleWithFixedDelay uses the randomized 500 ms interval (400..600 ms). */
+            const val SETTINGS_OVERLAY_MAX_PROBE_LATENCY_MS = SETTINGS_OVERLAY_SETTLE_MS + 600L
 
-        fun markClickDispatched() {
-            pending.set(true)
+            private const val NO_SETTINGS_PROBE = 0L
+            private const val SETTINGS_PROBE_IN_FLIGHT = -1L
         }
 
-        fun shouldBypassCooldown(): Boolean = pending.get()
+        private val genericPending = AtomicBoolean(false)
+        private val settingsProbeDueAt = AtomicLong(NO_SETTINGS_PROBE)
+
+        fun markClickDispatched() {
+            genericPending.set(true)
+        }
+
+        fun shouldBypassCooldown(): Boolean = genericPending.get()
 
         fun markProbeStarted() {
-            pending.set(false)
+            genericPending.set(false)
+        }
+
+        /** Starts the five-second Settings-overlay settle after the gear input is dispatched. */
+        fun markSettingsClickDispatched(now: Long = System.currentTimeMillis()) {
+            settingsProbeDueAt.set(now + SETTINGS_OVERLAY_SETTLE_MS)
+        }
+
+        /**
+         * Returns a single bounded, fresh observation once the Settings
+         * settle has elapsed. An uncertain image is explicitly re-armed by
+         * [finishSettingsOverlayProbe] on the short safe cadence below.
+         */
+        fun settingsOverlayProbeTiming(now: Long = System.currentTimeMillis()): TimingDecision? {
+            val dueAt = settingsProbeDueAt.get()
+            when (dueAt) {
+                NO_SETTINGS_PROBE -> return null
+                SETTINGS_PROBE_IN_FLIGHT -> return TimingDecision(false, "mandatory-surrender-settings-probe-in-flight")
+            }
+            if (now < dueAt) {
+                return TimingDecision(
+                    false,
+                    "mandatory-surrender-settings-settle remainingMs=${dueAt - now}",
+                )
+            }
+            if (!settingsProbeDueAt.compareAndSet(dueAt, SETTINGS_PROBE_IN_FLIGHT)) {
+                return TimingDecision(false, "mandatory-surrender-settings-probe-in-flight")
+            }
+            return TimingDecision(
+                true,
+                "mandatory-surrender-settings-overlay-probe settledMs=${now - (dueAt - SETTINGS_OVERLAY_SETTLE_MS)}",
+            )
+        }
+
+        /**
+         * A fresh Settings overlay clears the staged probe. Any uncertain
+         * capture remains observe-only and schedules a short recheck instead
+         * of falling back to the generic 30-second stuck threshold.
+         */
+        fun finishSettingsOverlayProbe(settingsConfirmed: Boolean, now: Long = System.currentTimeMillis()) {
+            settingsProbeDueAt.set(
+                if (settingsConfirmed) NO_SETTINGS_PROBE else now + SETTINGS_OVERLAY_UNCERTAIN_RECHECK_MS,
+            )
         }
     }
 
