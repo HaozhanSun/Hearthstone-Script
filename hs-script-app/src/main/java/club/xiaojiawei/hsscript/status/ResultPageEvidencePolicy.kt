@@ -159,10 +159,20 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.075..0.115 &&
             centerDarkRatio in 0.33..0.38 &&
             bannerWarmRatio in 0.50..0.62
+        // v4.16.607 exposed a second Gold 4 presentation after an authorized
+        // surrender. This star/progression arrangement measured continue=.043,
+        // banner=.147, center-dark=.159, warm=.468: it is visually distinct
+        // from the large/dark Gold 4 composition above. Keep it independent
+        // and narrow so only the existing proof- and fresh-capture-gated rank
+        // Continue path—not a generic fallback—can act on it.
+        val goldFourStarProgressSignature = continueGrayLightRatio in 0.035..0.055 &&
+            bannerLowSaturationRatio in 0.13..0.16 &&
+            centerDarkRatio in 0.13..0.18 &&
+            bannerWarmRatio in 0.43..0.50
         return capturedRankProgressSignature || establishedRankProgressSignature ||
             coolBoardGoldRewardSignature || largeGoldMedalRewardSignature || compactGoldRewardSignature ||
             postEnterGoldRewardSignature || coolPostSurrenderGoldRewardSignature || largeGoldFiveRewardSignature ||
-            largeGoldFourRankProgressSignature
+            largeGoldFourRankProgressSignature || goldFourStarProgressSignature
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */

@@ -633,6 +633,82 @@ class TerminalCleanupIncidentFixtureTest {
         )
     }
 
+    @Test
+    fun `v607 Gold 4 star progression variant stays inside the proof-gated bounded continue path`() {
+        val bytes = requireNotNull(javaClass.getResourceAsStream(V607_GOLD4_STAR_PROGRESS)).use { it.readBytes() }
+        assertEquals(V607_GOLD4_STAR_PROGRESS_SHA256, sha256(bytes))
+        val rankReward = requireNotNull(ImageIO.read(ByteArrayInputStream(bytes)))
+        assertEquals(1920, rankReward.width)
+        assertEquals(1080, rankReward.height)
+
+        // This is a distinct Gold 4 art composition from v606. Both deployed
+        // recovery classifiers must recognize it before generic UNKNOWN
+        // fallback can consume its input budget.
+        val rankKind = ScreenStateRecovery.classifyImageForResultFixture(rankReward)
+        assertEquals("RANK_PROGRESS_CONTINUATION", rankKind)
+        assertEquals(rankKind, UpstreamScreenStateRecovery.classifyImageForResultFixture(rankReward))
+        val visual = ScreenStateRecovery.resultVisualEvidenceForFixture(rankReward)
+        assertMetricNear(visual, "continue", 0.04335260115606936)
+        assertMetricNear(visual, "banner", 0.14742664742664743)
+        assertMetricNear(visual, "centerDark", 0.15929228895813188)
+        assertMetricNear(visual, "bannerWarm", 0.46761263427930094)
+        assertFalse(ResultPageEvidencePolicy.looksLikeResultVisual(0.043, 0.147, 0.159, 0.468))
+
+        val incident = requireNotNull(javaClass.getResourceAsStream(V607_GOLD4_STAR_INCIDENT)).bufferedReader().use { it.readText() }
+        val rankDenied = incident.indexOf("rank=4_numericRank=4_tier=GOLD")
+        val terminalProof = incident.indexOf("RANK_SURRENDER_TERMINAL_PROOF result=ACCEPTED")
+        val cleanupStarted = incident.indexOf("RESULT_PAGE_CLEANUP_COORDINATOR state=started")
+        val fallbackFailed = incident.indexOf("unknown-result-fallback-input-budget-exhausted")
+        val recoveryTriggered = incident.indexOf("SCREEN_RECOVERY_TRIGGER")
+        val unknown = incident.indexOf("detected=UNKNOWN")
+        assertTrue(rankDenied >= 0 && terminalProof > rankDenied && cleanupStarted > terminalProof && fallbackFailed > cleanupStarted && recoveryTriggered > fallbackFailed && unknown > recoveryTriggered)
+
+        // Recognition alone is insufficient. The ordinary result policy still
+        // waits; only a same-game terminal capability can open the rank
+        // continuation's capped input route.
+        assertEquals(
+            ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION,
+            ResultPageDismissalPolicy.decide(
+                inWar = false,
+                resultPageVisible = null,
+                attempt = 1,
+                maxAttempts = TerminalPageCleanupCoordinator.DEFAULT_MAX_INPUTS,
+                clickAttempts = 0,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = true,
+                visualOnlyResultEvidence = false,
+            ),
+        )
+
+        val tracker = CurrentGamePowerLogTerminalTracker()
+        tracker.observeLine("CREATE_GAME gameId=gold4-star-progress-v607")
+        val identity = requireNotNull(tracker.currentGameIdentity("laz#12793"))
+        MandatoryRankSurrenderGuard.begin(identity)
+        tracker.observeLine("TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=CONCEDED")
+        tracker.observeLine("TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=LOST")
+        tracker.observeLine("TAG_CHANGE Entity=opponent#1 tag=PLAYSTATE value=WON")
+        tracker.observeLine("TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER")
+        tracker.observeLine("TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE")
+        val proof = requireNotNull(tracker.currentGameSurrenderEvidence("laz#12793", "opponent#1"))
+        val capability = requireNotNull(MandatoryRankSurrenderGuard.authorizeTerminalCleanup(proof))
+        val coordinator = TerminalPageCleanupCoordinator()
+        val ticket = requireNotNull(coordinator.begin().ticket)
+
+        assertEquals(
+            PostResultRankProgressPolicy.Action.CONTINUE,
+            PostResultRankProgressPolicy.decide(
+                rankProgressVisible = rankKind == "RANK_PROGRESS_CONTINUATION",
+                terminalCleanupAuthorized = MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(capability),
+                captureAuthorized = true,
+                rankProgressInputAttempts = coordinator.snapshot().rankProgressInputs,
+            ),
+        )
+        assertEquals(1, coordinator.reserveRankProgressInput(ticket, PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS))
+        assertEquals(PostResultRankProgressPolicy.Input.CENTER_CLICK, PostResultRankProgressPolicy.inputForAttempt(1))
+        assertEquals(2, coordinator.reserveRankProgressInput(ticket, PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS))
+        assertEquals(null, coordinator.reserveRankProgressInput(ticket, PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS))
+    }
+
     private fun loadImage(resource: String): BufferedImage {
         val bytes = requireNotNull(javaClass.getResourceAsStream(resource)).use { it.readBytes() }
         return requireNotNull(ImageIO.read(ByteArrayInputStream(bytes)))
@@ -783,5 +859,8 @@ class TerminalCleanupIncidentFixtureTest {
         private const val V606_GOLD4_RANK_PROGRESS = "/club/xiaojiawei/hsscript/status/surrender/v606-gold4-rank-progress-20261008-161524-980.png"
         private const val V606_GOLD4_RANK_PROGRESS_SHA256 = "7965FAC21112CD844B08DEE3267788D27110174B053BE5B121B129E51718974F"
         private const val V606_GOLD4_RANK_INCIDENT = "/club/xiaojiawei/hsscript/status/surrender/v606-gold4-rank-progress-cleanup-incident.txt"
+        private const val V607_GOLD4_STAR_PROGRESS = "/club/xiaojiawei/hsscript/status/surrender/v607-gold4-star-progress-20261008-170408-850.png"
+        private const val V607_GOLD4_STAR_PROGRESS_SHA256 = "C9396BBF0BF2A19D86F63A7DCD845363B034F9EE4EEFCAA71A1797CE3C7964AF"
+        private const val V607_GOLD4_STAR_INCIDENT = "/club/xiaojiawei/hsscript/status/surrender/v607-gold4-star-progress-cleanup-incident.txt"
     }
 }

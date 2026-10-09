@@ -67,6 +67,17 @@ the Beta-off upstream recovery must classify it as
 fresh-capture-gated, at-most-two Continue sequence—never generic fallback
 clicks, matchmaking, or assumed completion.
 
+**Coverage correction (2026-10-08 PDT, deployed Beta v4.16.607):** the first
+Gold 4 repair was incomplete. A mandatory surrender produced another genuine
+Gold 4 `点击继续` screen with a star/progression composition: its muted-ribbon
+and Continue signals remained, but its center was much brighter and its ribbon
+sample was more desaturated than the v4.16.606 frame. It again fell through to
+the generic two-input fallback. Preserve both Gold 4 signatures as separate,
+narrow four-region contracts and pin each exact screenshot and incident trace
+in offline tests. Neither signature authorizes a blind input: each continues
+only through the existing same-game-terminal-proof plus fresh-capture gate and
+the finite rank-progress input budget.
+
 ## Active-game rank surrender: first safe recovery inspection must not inherit the generic stuck timeout
 
 **Observed failure (2026-10-08 PDT, deployed Beta v4.16.604):** queue input
