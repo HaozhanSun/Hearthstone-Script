@@ -48,7 +48,7 @@ class StandardCannonWarriorStrategyTest {
     fun `all maintained MCTS descriptors expose the discover-policy revision`() {
         assertTrue(HsMCTSDeckStrategy().name().endsWith("V1.1"))
         assertTrue(HsOnlyFaceDeckStrategy().name().endsWith("V1.1"))
-        assertTrue(HsElementalMageMctsDeckStrategy().name().startsWith("元素法 V1.4 · build "))
+        assertTrue(HsElementalMageMctsDeckStrategy().name().startsWith("元素法 V1.5 · build "))
         assertTrue(HsPirateDemonHunterMctsGlobalPlanDeckStrategy().name().startsWith("海盗瞎 V2.9 · build "))
         assertTrue(HsPirateWarriorMctsDeckStrategy().name().startsWith("海盗战 V2.9 · build "))
         assertTrue(HsStandardCannonWarriorMctsDeckStrategy().description().contains("发现选择规则 V1.1"))
