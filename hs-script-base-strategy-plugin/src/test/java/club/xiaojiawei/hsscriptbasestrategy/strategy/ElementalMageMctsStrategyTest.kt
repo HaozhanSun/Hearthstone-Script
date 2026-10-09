@@ -23,8 +23,8 @@ class ElementalMageMctsStrategyTest {
     fun `elemental mage is visible only as a wild strategy`() {
         val strategy = HsElementalMageMctsDeckStrategy()
 
-        assertEquals("元素法 V1.4", strategy.name().substringBefore(" ·"))
-        assertTrue(strategy.name().startsWith("元素法 V1.4 · build "))
+        assertEquals("元素法 V1.5", strategy.name().substringBefore(" ·"))
+        assertTrue(strategy.name().startsWith("元素法 V1.5 · build "))
         assertEquals(listOf(RunModeEnum.WILD), strategy.runModes.toList())
         assertFalse(strategy.runModes.contains(RunModeEnum.STANDARD))
         assertTrue(strategy.id().contains("elemental-mage-mcts-v1-2"))
@@ -62,6 +62,34 @@ class ElementalMageMctsStrategyTest {
         assertTrue(ElementalMageMctsModel.isActionLegal(PlayAction({}, {}, sunfire), war))
         assertTrue(ElementalMageMctsModel.actionPrior(PlayAction({}, {}, sunfire), war) <
             ElementalMageMctsModel.actionPrior(PlayAction({}, {}, elemental), war))
+    }
+
+    @Test
+    fun `TTN095 wins the historical turn-three priority race when legal`() {
+        val war = testWar(turn = 3, mana = 2)
+        val archiveAdministrator = testCard("TTN_095", "流水档案管理员", 2, CardRaceEnum.ELEMENTAL)
+        val chainAlternative = testCard("TTN_479", "元素链备选", 2, CardRaceEnum.ELEMENTAL)
+        war.addCard(archiveAdministrator, war.me.handArea)
+        war.addCard(chainAlternative, war.me.handArea)
+
+        val archiveAction = PlayAction({}, {}, archiveAdministrator)
+        val alternativeAction = PlayAction({}, {}, chainAlternative)
+
+        assertTrue(ElementalMageMctsModel.isArchiveAdministrator(archiveAdministrator))
+        assertTrue(ElementalMageMctsModel.isActionLegal(archiveAction, war))
+        assertTrue(ElementalMageMctsModel.isMandatoryAction(archiveAction, war))
+        assertTrue(ElementalMageMctsModel.actionPrior(archiveAction, war) >
+            ElementalMageMctsModel.actionPrior(alternativeAction, war))
+    }
+
+    @Test
+    fun `TTN095 remains unavailable when actual mana is one`() {
+        val war = testWar(turn = 3, mana = 1)
+        val archiveAdministrator = testCard("TTN_095", "流水档案管理员", 2, CardRaceEnum.ELEMENTAL)
+        war.addCard(archiveAdministrator, war.me.handArea)
+
+        assertFalse(ElementalMageMctsModel.isPlayable(archiveAdministrator, war))
+        assertFalse(ElementalMageMctsModel.elementalAvailable(war))
     }
 
     @Test

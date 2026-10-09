@@ -27,6 +27,7 @@ import club.xiaojiawei.hsscriptstrategysdk.deck.MctsDiscoverCandidateOverride
 object ElementalMageMctsModel : MctsDecisionModel {
     const val MIN_ELEMENTAL_CHAIN_TURN = 3
     const val OVERFLOWING_LAVA_ID = "WW_424"
+    const val ARCHIVE_ADMINISTRATOR_ID = "TTN_095"
 
     private val sunfireNames = setOf("阳炎耀斑", "阳炎药班", "阳炎药斑")
     private val chainDependentNames = setOf("烈炎珠", "玄炎虫", "异流熔岩", "溢流熔岩", "焰登元素", "破链角斗士")
@@ -61,6 +62,10 @@ object ElementalMageMctsModel : MctsDecisionModel {
             card.entityName.contains("溢流熔岩") ||
             card.entityName.contains("异流熔岩") ||
             card.entityName.contains("亦留容颜")
+
+    /** Elemental Mage-only priority card: it discounts the next Elemental by 2. */
+    fun isArchiveAdministrator(card: Card): Boolean =
+        card.cardId == ARCHIVE_ADMINISTRATOR_ID || card.entityName.contains("流水档案管理员")
 
     data class OverflowingLavaCopyPlan(
         val consecutiveElementalTurns: Int,
@@ -228,6 +233,7 @@ object ElementalMageMctsModel : MctsDecisionModel {
 
     override fun actionPrior(action: Action, war: War): Double {
         val card = action.creator ?: return 0.0
+        if (isArchiveAdministrator(card)) return 1_000.0
         if (isOverflowingLava(card)) {
             val plan = overflowingLavaCopyPlan(
                 currentConsecutiveElementalTurns(war),

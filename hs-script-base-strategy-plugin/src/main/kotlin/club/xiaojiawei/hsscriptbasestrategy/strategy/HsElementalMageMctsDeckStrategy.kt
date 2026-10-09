@@ -13,7 +13,7 @@ class HsElementalMageMctsDeckStrategy : MCTSDeckStrategy() {
     override fun name(): String = ElementalMageMctsStrategyVersion.displayName()
 
     override fun description(): String =
-        "元素法 MCTS V${ElementalMageMctsStrategyVersion.REVISION}：三费起每回合优先保持元素链，阳炎耀斑费用≤2且最后使用"
+        "元素法 MCTS V${ElementalMageMctsStrategyVersion.REVISION}：三费起保持元素链，优先流水档案管理员，阳炎耀斑费用≤2且最后使用"
 
     override fun getRunMode(): Array<RunModeEnum> =
         arrayOf(RunModeEnum.WILD)
