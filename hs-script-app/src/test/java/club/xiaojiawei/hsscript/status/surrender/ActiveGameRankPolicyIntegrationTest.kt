@@ -2,7 +2,6 @@ package club.xiaojiawei.hsscript.status.surrender
 
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
-import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
 import club.xiaojiawei.hsscript.strategy.mode.PreMatchRankGate
 import java.awt.Rectangle
 import org.junit.jupiter.api.AfterEach
@@ -12,9 +11,9 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * Consumer-level contract for queue orchestration plus the current game's
- * Mulligan barrier. Queue eligibility is intentionally rank-neutral; only a
- * current-game read controls ordinary gameplay or mandatory surrender.
+ * Consumer-level contract for the pre-match queue permit plus the current
+ * game's Mulligan barrier. Both layers fail closed on missing or ineligible
+ * rank evidence; the latter remains as defense in depth after game creation.
  */
 class ActiveGameRankPolicyIntegrationTest {
     private val now = 80_000L
@@ -26,8 +25,8 @@ class ActiveGameRankPolicyIntegrationTest {
     }
 
     @Test
-    fun `rank three dispatches queue then arms mandatory surrender and affirmative confirmation`() {
-        assertEquals(1, dispatchQueue(), "rank must not be read before queue dispatch")
+    fun `rank three is denied before queue and would still arm mandatory surrender if a game already existed`() {
+        assertEquals(0, dispatchQueue(rank = 3), "rank three must not enter queue")
 
         val decision = activeRankDecision(3)
         assertFalse(decision.eligible)
@@ -68,7 +67,7 @@ class ActiveGameRankPolicyIntegrationTest {
     @Test
     fun `rank five and ten queue then release ordinary active-game actions`() {
         for (rank in listOf(5, 10)) {
-            assertEquals(1, dispatchQueue(), "rank=$rank must not change queue dispatch")
+            assertEquals(1, dispatchQueue(rank), "rank=$rank must issue exactly one queue input")
             assertTrue(activeRankDecision(rank).eligible, "rank=$rank must authorize active gameplay")
 
             val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
@@ -87,9 +86,9 @@ class ActiveGameRankPolicyIntegrationTest {
     }
 
     @Test
-    fun `unknown PaddleX failure and cancellation queue but keep active game blocked`() {
+    fun `unknown PaddleX failure and cancellation deny queue and keep active game blocked`() {
         for (failure in listOf("unknown", "PaddleX failure", "PaddleX cancellation")) {
-            assertEquals(1, dispatchQueue(), "$failure must not block queue")
+            assertEquals(0, dispatchQueue(null), "$failure must block queue")
             val decision = RankEligibilityPolicy.evaluate(
                 detection = null,
                 expectedMode = "GAMEPLAY",
@@ -115,15 +114,23 @@ class ActiveGameRankPolicyIntegrationTest {
         }
     }
 
-    private fun dispatchQueue(): Int {
-        val queue = PreMatchRankGate.evaluate(
+    private fun dispatchQueue(rank: Int?): Int {
+        val queue = PreMatchRankGate.evaluate(PreMatchRankGate.Evidence(
             working = true,
             paused = false,
             mandatoryRankSurrenderPending = false,
-        )
+            tournamentMode = true,
+            inWar = false,
+            phase = PreMatchRankGate.REQUIRED_PHASE,
+            ocrOutcome = if (rank == null) PreMatchRankGate.OcrOutcome.UNKNOWN else PreMatchRankGate.OcrOutcome.SUCCESS,
+            observedRank = rank,
+            confidence = if (rank == null) null else 0.99,
+            capturedAtMs = now,
+        ), now)
         var dispatches = 0
-        assertTrue(queue.queueAuthorization.allowed)
-        assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(queue.queueAuthorization) { dispatches++ })
+        queue.permit?.dispatchIfCurrent(
+            PreMatchRankGate.RuntimeEvidence(true, false, false, true, false), now,
+        ) { dispatches++ }
         return dispatches
     }
 

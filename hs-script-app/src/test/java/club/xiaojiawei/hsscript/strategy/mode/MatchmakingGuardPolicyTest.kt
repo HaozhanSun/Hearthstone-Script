@@ -22,7 +22,7 @@ class MatchmakingGuardPolicyTest {
     }
 
     @Test
-    fun `rank OCR is absent from pre match queue input and active game owns policy`() {
+    fun `fresh pre-match rank permit owns first queue input`() {
         val relative = Path.of(
             "src", "main", "java", "club", "xiaojiawei", "hsscript", "strategy", "mode", "TournamentModeStrategy.kt",
         )
@@ -38,15 +38,16 @@ class MatchmakingGuardPolicyTest {
             "paused runtime exits before rank OCR, trace allocation, and blocked-matchmaking spam")
         assertTrue(startMatching.contains("PauseStatus.isPause || !WorkTimeListener.working"))
         assertTrue(startMatching.contains("PreMatchRankGate.evaluate"))
-        assertFalse(startMatching.contains("CurrentRankDetector.detect"))
-        assertFalse(startMatching.contains("pre-match-deck-selection-rank-gate"))
-        assertTrue(startMatching.contains("MatchmakingGuardPolicy.dispatchIfAuthorized(queueAuthorization)"))
+        assertTrue(startMatching.contains("capturePreMatchRankEvidence"))
+        assertTrue(startMatching.contains("CurrentRankDetector.detect"))
+        assertTrue(startMatching.contains("pre-match-deck-selection-rank-gate"))
+        assertTrue(startMatching.contains("rankPermit.dispatchIfCurrent"))
         val authorizationIndex = startMatching.indexOf("PreMatchRankGate.evaluate")
-        val denialIndex = startMatching.indexOf("if (!dispatchMatchmaking)")
+        val denialIndex = startMatching.indexOf("if (!dispatchMatchmaking || rankPermit == null)")
         val firstQueueClickIndex = startMatching.indexOf("clickMatchmakingControl(START_RECT)")
         assertTrue(authorizationIndex >= 0 && denialIndex > authorizationIndex)
-        assertTrue(firstQueueClickIndex > denialIndex, "all matchmaking input must follow the runtime gate")
-        assertTrue(startMatching.contains("rankPolicy=ACTIVE_GAME_MULLIGAN_ONLY"))
+        assertTrue(firstQueueClickIndex > denialIndex, "all matchmaking input must follow the fresh rank permit")
+        assertTrue(startMatching.contains("rankPolicy=FRESH_EXACT_DECK_SELECTION_RANK"))
         assertFalse(startMatching.contains("POST_MULLIGAN"))
     }
 

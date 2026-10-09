@@ -16,6 +16,8 @@ import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
 import club.xiaojiawei.hsscript.status.TournamentStartupActionPolicy
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
+import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
+import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
@@ -317,20 +319,21 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         log.info { "开始匹配 trace=$traceId" }
         val mandatoryRankSurrenderPending =
             club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending()
-        val rankGate = PreMatchRankGate.evaluate(
-            working = WorkTimeListener.working,
-            paused = PauseStatus.isPause,
-            mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
-        )
+        val capturedRankEvidence = capturePreMatchRankEvidence(mandatoryRankSurrenderPending)
+        val rankGate = PreMatchRankGate.evaluate(capturedRankEvidence)
         val queueAuthorization = rankGate.queueAuthorization
         val dispatchMatchmaking = queueAuthorization.allowed
         log.info {
-            "MATCHMAKING_GATE stage=PRE_MATCH rankPolicy=ACTIVE_GAME_MULLIGAN_ONLY " +
+            "MATCHMAKING_GATE stage=PRE_MATCH rankPolicy=FRESH_EXACT_DECK_SELECTION_RANK " +
                 "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} " +
+                "rank=${capturedRankEvidence.observedRank ?: "UNKNOWN"} " +
+                "confidence=${capturedRankEvidence.confidence ?: "UNKNOWN"} " +
+                "ocr=${capturedRankEvidence.ocrOutcome} " +
                 "decision=${if (dispatchMatchmaking) "ALLOW" else "DENY"} " +
                 "reason=${queueAuthorization.reason}"
         }
-        if (!dispatchMatchmaking) {
+        val rankPermit = rankGate.permit
+        if (!dispatchMatchmaking || rankPermit == null) {
             log.warn {
                 "MATCHMAKING_BLOCKED trace=$traceId " +
                     "reason=${queueAuthorization.reason} " +
@@ -344,13 +347,13 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         // automatic deck-completion dialog.  A single start click can leave
         // the client on the deck-selection page while the script has already
         // logged START_MATCHING, which is not a real state transition.
-        if (!MatchmakingGuardPolicy.dispatchIfAuthorized(queueAuthorization) {
+        if (!rankPermit.dispatchIfCurrent(currentPreMatchRuntimeEvidence(), System.currentTimeMillis()) {
                 clickMatchmakingControl(START_RECT)
             }
         ) {
             log.warn {
-                "MATCHMAKING_BLOCKED trace=$traceId reason=${queueAuthorization.reason} " +
-                    "action=NO_QUEUE_INPUT"
+                "MATCHMAKING_BLOCKED trace=$traceId reason=${rankPermit.reasonIfInvalid(currentPreMatchRuntimeEvidence(), System.currentTimeMillis())} " +
+                "action=NO_QUEUE_INPUT"
             }
             return
         }
@@ -378,6 +381,61 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         generateTimer(traceId)
         scheduleMatchmakingDialogRecovery(traceId)
     }
+
+    private fun capturePreMatchRankEvidence(
+        mandatoryRankSurrenderPending: Boolean,
+    ): PreMatchRankGate.Evidence {
+        val baseline = {
+            PreMatchRankGate.Evidence(
+                working = WorkTimeListener.working,
+                paused = PauseStatus.isPause,
+                mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
+                tournamentMode = Mode.currMode == ModeEnum.TOURNAMENT,
+                inWar = WarEx.inWar,
+                phase = PreMatchRankGate.REQUIRED_PHASE,
+                ocrOutcome = PreMatchRankGate.OcrOutcome.UNKNOWN,
+                observedRank = null,
+                confidence = null,
+                capturedAtMs = 0L,
+            )
+        }
+        return try {
+            val detection = CurrentRankDetector.detect(
+                trigger = "pre-match-deck-selection-rank-gate",
+                phase = PreMatchRankGate.REQUIRED_PHASE,
+            ) ?: return baseline()
+            baseline().copy(
+                ocrOutcome = if (detection.rank == null) {
+                    PreMatchRankGate.OcrOutcome.UNKNOWN
+                } else {
+                    PreMatchRankGate.OcrOutcome.SUCCESS
+                },
+                observedRank = detection.rank,
+                confidence = detection.confidence,
+                capturedAtMs = detection.capturedAtMs,
+            )
+        } catch (error: Throwable) {
+            val outcome = if (OcrRuntime.isCancellation(error)) {
+                PreMatchRankGate.OcrOutcome.CANCELLED
+            } else {
+                PreMatchRankGate.OcrOutcome.FAILURE
+            }
+            log.warn(error) {
+                "PRE_MATCH_RANK_OCR_DENIED outcome=$outcome " +
+                    "reason=${error.javaClass.simpleName}:${error.message ?: "no-message"} action=NO_QUEUE_INPUT"
+            }
+            baseline().copy(ocrOutcome = outcome)
+        }
+    }
+
+    private fun currentPreMatchRuntimeEvidence(): PreMatchRankGate.RuntimeEvidence =
+        PreMatchRankGate.RuntimeEvidence(
+            working = WorkTimeListener.working,
+            paused = PauseStatus.isPause,
+            mandatoryRankSurrenderPending = club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending(),
+            tournamentMode = Mode.currMode == ModeEnum.TOURNAMENT,
+            inWar = WarEx.inWar,
+        )
 
     private fun abortMatchmakingIfGameStarted(traceId: Long, stage: String): Boolean {
         val evidence = liveGameEvidence()

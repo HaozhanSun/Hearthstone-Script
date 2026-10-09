@@ -7,7 +7,6 @@ import club.xiaojiawei.hsscript.ocr.OcrRecognition
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.ocr.OcrTextBridge
 import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
-import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
 import club.xiaojiawei.hsscript.strategy.mode.PreMatchRankGate
 import java.awt.image.BufferedImage
 import java.nio.file.Path
@@ -31,7 +30,7 @@ class DeckSelectionRankBadgeOcrTest {
     }
 
     @Test
-    fun `live 4x5 badge resolves correctly without blocking pre-match queue`() {
+    fun `live 4x5 badge resolves correctly and blocks pre-match queue`() {
         val screenshot = loadDeckSelectionScreenshot()
         for (rawBadgeText in listOf("4x5", "4 x 5", "4×5")) {
             val requestedRois = mutableListOf<String?>()
@@ -56,11 +55,9 @@ class DeckSelectionRankBadgeOcrTest {
             assertFalse(detection.rank == 5, "the star count must never become rank 5: raw=$rawBadgeText")
 
             assertEquals(4, detection.rank)
-            val gate = PreMatchRankGate.evaluate(true, false, false)
-            var inputDispatches = 0
-            assertTrue(gate.queueAuthorization.allowed)
-            assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(gate.queueAuthorization) { inputDispatches++ })
-            assertEquals(1, inputDispatches, "rank 4 / $rawBadgeText must enter queue before active-game policy")
+            val gate = PreMatchRankGate.evaluate(preMatchEvidence(detection), nowMs = detection.capturedAtMs)
+            assertFalse(gate.queueAuthorization.allowed, "rank 4 / $rawBadgeText must not enter queue")
+            assertEquals(null, gate.permit)
         }
     }
 
@@ -86,11 +83,25 @@ class DeckSelectionRankBadgeOcrTest {
                 ),
             )
             assertEquals(rank, detection.rank ?: error("positive control rank=$rank must resolve"))
-            val gate = PreMatchRankGate.evaluate(true, false, false)
+            val gate = PreMatchRankGate.evaluate(preMatchEvidence(detection), nowMs = detection.capturedAtMs)
             assertTrue(gate.queueAuthorization.allowed, "positive control rank=$rank")
+            assertTrue(gate.permit != null, "positive control rank=$rank must issue permit")
             assertEquals(listOf<String?>("rank-badge-small"), requestedRois)
         }
     }
+
+    private fun preMatchEvidence(detection: CurrentRankDetector.Detection) = PreMatchRankGate.Evidence(
+        working = true,
+        paused = false,
+        mandatoryRankSurrenderPending = false,
+        tournamentMode = true,
+        inWar = false,
+        phase = PreMatchRankGate.REQUIRED_PHASE,
+        ocrOutcome = if (detection.rank == null) PreMatchRankGate.OcrOutcome.UNKNOWN else PreMatchRankGate.OcrOutcome.SUCCESS,
+        observedRank = detection.rank,
+        confidence = detection.confidence,
+        capturedAtMs = detection.capturedAtMs,
+    )
 
     private fun configurePaddleX(
         recognize: (BufferedImage, String, String?, Long?) -> OcrRecognition,

@@ -14,7 +14,6 @@ import club.xiaojiawei.hsscript.ocr.PaddleXOcrSettings
 import club.xiaojiawei.hsscript.status.DebugScreenshotRing
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.PauseStatus
-import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
 import club.xiaojiawei.hsscript.strategy.mode.PreMatchRankGate
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
@@ -721,11 +720,25 @@ class SurrenderPolicyTest {
             assertEquals(4, detection?.rank)
             assertEquals(listOf<String?>("rank-badge-small", "rank-badge"), recognizedRois)
             assertEquals(expectedBadge.width to expectedBadge.height, recognizedBadgeBounds)
-            val gate = PreMatchRankGate.evaluate(true, false, false)
+            val gate = PreMatchRankGate.evaluate(PreMatchRankGate.Evidence(
+                working = true,
+                paused = false,
+                mandatoryRankSurrenderPending = false,
+                tournamentMode = true,
+                inWar = false,
+                phase = PreMatchRankGate.REQUIRED_PHASE,
+                ocrOutcome = PreMatchRankGate.OcrOutcome.SUCCESS,
+                observedRank = detection?.rank,
+                confidence = detection?.confidence,
+                capturedAtMs = detection?.capturedAtMs ?: 0L,
+            ), nowMs = detection?.capturedAtMs ?: 0L)
             var dispatches = 0
-            assertTrue(gate.queueAuthorization.allowed)
-            assertTrue(MatchmakingGuardPolicy.dispatchIfAuthorized(gate.queueAuthorization) { dispatches++ })
-            assertEquals(1, dispatches, "rank 4 is evaluated only after the active game starts")
+            gate.permit?.dispatchIfCurrent(
+                PreMatchRankGate.RuntimeEvidence(true, false, false, true, false),
+                detection?.capturedAtMs ?: 0L,
+            ) { dispatches++ }
+            assertFalse(gate.queueAuthorization.allowed)
+            assertEquals(0, dispatches, "rank 4 must be denied before the game starts")
         } finally {
             OcrRuntime.settingsProvider = originalSettingsProvider
             OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
