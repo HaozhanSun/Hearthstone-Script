@@ -69,6 +69,7 @@ object UiLogFormatter {
         if (raw.isEmpty()) return ""
 
         return when {
+            raw.startsWith("MCTS_LETHAL_SCAN") -> raw
             raw.startsWith("MULLIGAN_SCREENSHOT_FAILED") ->
                 "换牌截图保存失败 · ${gameAndStage(raw)}"
             raw.startsWith("MULLIGAN_SCREENSHOT") ->

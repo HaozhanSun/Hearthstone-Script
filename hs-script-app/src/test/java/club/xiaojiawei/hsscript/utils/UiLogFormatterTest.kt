@@ -83,6 +83,25 @@ class UiLogFormatterTest {
     }
 
     @Test
+    fun `lethal scan table is preserved for the visible Logger panel`() {
+        val table = """MCTS_LETHAL_SCAN game=laz#12793 turn=7 warTurn=13
+            Friendly attack: raw=30 | legal-face minions=24 | hero=0
+            Enemy: health=3 armor=0 effective=3 immune=false taunts=0
+            Hero power: cost=2 available=false damage=0
+            Known/unknown hand damage:
+              TTN_475/破链角斗士 cost=4 available knownDamage=0
+              OPAQUE/未知法术 cost=1 unknown:missing-damage-parser-or-interceptor
+            Damage range: guaranteed=24 upper=unknown | verdict=GUARANTEED_LETHAL""".trimIndent()
+
+        val displayed = UiLogFormatter.format(table)
+
+        assertEquals(table, displayed)
+        assertTrue(displayed.contains("legal-face minions=24"))
+        assertTrue(displayed.contains("unknown:missing-damage-parser-or-interceptor"))
+        assertTrue(displayed.contains("verdict=GUARANTEED_LETHAL"))
+    }
+
+    @Test
     fun `ordinary Chinese messages remain readable`() {
         val message = UiLogFormatter.format("当前处于：特殊效果触发阶段")
 

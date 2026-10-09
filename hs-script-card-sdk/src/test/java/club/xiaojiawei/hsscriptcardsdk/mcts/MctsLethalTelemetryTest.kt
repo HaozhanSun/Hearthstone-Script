@@ -260,8 +260,80 @@ class MctsLethalTelemetryTest {
 
         val assessment = MctsLethalTelemetry.assess(war)
 
-        assertTrue(assessment.unknownDamageEffects.contains("unknown-damage"))
+        assertTrue(assessment.unknownDamageEffects.any { it.contains("unknown-damage") })
         assertFalse(assessment.canLethal)
+        assertEquals("UNRESOLVED", assessment.verdict)
+        assertTrue(assessment.lethalScanSummary.contains("unknown-damage"))
+    }
+
+    @Test
+    fun `known face attacks prove lethal even when an optional hand effect is unknown`() {
+        val war = war(enemyHealth = 3)
+        listOf(4, 4, 2, 3, 9, 2).forEachIndexed { index, attack ->
+            war.addCard(faceAttacker("attacker-$index", attack), war.me.playArea)
+        }
+        // Historical turn 7: seven mana, six face attackers for 24, enemy at
+        // 3 effective health, no Taunt, unknown TOY_370 in hand and a legal
+        // but non-damage TTN_475 (4 mana). The old all-or-nothing gate denied
+        // the known lethal because of TOY_370 and selected TTN_475 first.
+        val unknown = card("TOY_370", CardTypeEnum.SPELL, 0).apply {
+            entityName = "三芯诡烛"
+            cost = 4
+        }
+        val prematureMinion = card("TTN_475", CardTypeEnum.MINION, 0).apply { cost = 4 }
+        war.me.resources = 7
+        war.addCard(unknown, war.me.handArea)
+        war.addCard(prematureMinion, war.me.handArea)
+
+        val assessment = MctsLethalTelemetry.assess(war)
+
+        assertEquals(24, assessment.totalAttack)
+        assertEquals(24, assessment.rawFriendlyAttack)
+        assertTrue(assessment.unknownDamageEffects.any { it.contains("TOY_370") })
+        assertTrue(assessment.canLethal)
+        assertEquals("GUARANTEED_LETHAL", assessment.verdict)
+        assertTrue(assessment.lethalScanSummary.contains("raw=24"))
+        assertTrue(assessment.lethalScanSummary.contains("legal-face minions=24"))
+        assertTrue(assessment.lethalScanSummary.contains("TOY_370/三芯诡烛 cost=4"))
+    }
+
+    @Test
+    fun `known face attacks plus unknown effects remain unresolved below lethal threshold`() {
+        val war = war(enemyHealth = 30)
+        war.addCard(faceAttacker("attacker", 4), war.me.playArea)
+        val unknown = card("opaque-spell-2", CardTypeEnum.SPELL, 0).apply {
+            cost = 1
+            isUncertain = true
+        }
+        war.me.resources = 1
+        war.addCard(unknown, war.me.handArea)
+
+        val assessment = MctsLethalTelemetry.assess(war)
+
+        assertFalse(assessment.canLethal)
+        assertEquals("UNRESOLVED", assessment.verdict)
+        assertEquals("unknown", assessment.possibleDamageUpperBound)
+    }
+
+    @Test
+    fun `telemetry separates raw attack from legal face attack and reports immune hero`() {
+        val war = war(enemyHealth = 3)
+        val asleep = faceAttacker("asleep", 9).apply { isExhausted = true }
+        val ready = faceAttacker("ready", 2)
+        war.addCard(asleep, war.me.playArea)
+        war.addCard(ready, war.me.playArea)
+
+        val assessment = MctsLethalTelemetry.assess(war)
+
+        assertEquals(11, assessment.rawFriendlyAttack)
+        assertEquals(2, assessment.totalAttack)
+        assertTrue(assessment.attackerEvidence.any { it.contains("asleep") && it.contains("reason=exhausted") })
+        assertTrue(assessment.lethalScanSummary.contains("effective=3"))
+
+        war.rival.playArea.hero?.isImmune = true
+        val immune = MctsLethalTelemetry.assess(war)
+        assertFalse(immune.canLethal)
+        assertEquals("NOT_LETHAL_IMMUNE", immune.verdict)
     }
 
     private fun war(gameId: String = "lethal-game", enemyHealth: Int = 30): War = War(false).apply {

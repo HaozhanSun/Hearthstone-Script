@@ -68,7 +68,7 @@ class ExtraLogAppender : UnsynchronizedAppenderBase<ILoggingEvent>() {
             "当前处于", "当前模式", "开始匹配", "匹配失败", "已完成第", "已完成总第", "已重置游戏状态",
             "GAME_RESULT_SCREENSHOT", "MULLIGAN_SCREENSHOT", "E2E_", "RANK_POLICY", "RANK_OCR", "收到换牌输入", "换牌选择",
             "自动换牌动作已提交", "自动换牌线程结束", "换牌阶段确认完成", "脚本",
-            "触发投降", "策略请求投降", "投降", "执行出牌策略", "阶段转换已确认"
+            "触发投降", "策略请求投降", "投降", "执行出牌策略", "阶段转换已确认", "MCTS_LETHAL_SCAN"
         )
         val noisyMarkers = arrayOf(
             "E2E_INPUT", "点击", "鼠标", "Area", "行为类-解析卡牌", "等待", "水晶数",
