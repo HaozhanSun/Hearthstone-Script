@@ -110,7 +110,7 @@ class ScreenRecoveryGateTest {
     }
 
     @Test
-    fun `upstream fallback OCR consumes the current deck selection anchor instead of missing center ROI`() {
+    fun `upstream fallback OCR consumes the current deck selection anchor and rejects standalone continue text`() {
         val roiNames = UpstreamScreenStateRecovery.screenRecoveryOcrRoiNamesForTest()
 
         assertTrue(roiNames.contains(ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI))
@@ -119,7 +119,10 @@ class ScreenRecoveryGateTest {
         assertTrue(roiNames.contains(ScreenStateRoiSelector.RESULT_CONTINUE_ROI))
         assertFalse(roiNames.contains("screen-state-center"))
         assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyForTest("选择套牌 狂野对战"))
-        assertEquals("RESULT", UpstreamScreenStateRecovery.classifyForTest("点击继续"))
+        assertNull(
+            UpstreamScreenStateRecovery.classifyForTest("点击继续"),
+            "a standalone Continue OCR hit is not terminal authority without outcome text or the fixed visual contract",
+        )
         assertEquals(
             false,
             UpstreamScreenStateRecovery.resultVisibilityForTest("DECK_SELECTION", 100),

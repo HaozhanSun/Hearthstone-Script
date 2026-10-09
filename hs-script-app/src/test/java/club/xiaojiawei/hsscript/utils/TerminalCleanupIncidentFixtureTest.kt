@@ -709,6 +709,80 @@ class TerminalCleanupIncidentFixtureTest {
         assertEquals(null, coordinator.reserveRankProgressInput(ticket, PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS))
     }
 
+    @Test
+    fun `v609 Platinum 8 continuation reclaims one bounded terminal recovery without conflating page and stuck latency`() {
+        val bytes = requireNotNull(javaClass.getResourceAsStream(V609_PLATINUM8_RANK_PROGRESS)).use { it.readBytes() }
+        assertEquals(V609_PLATINUM8_RANK_PROGRESS_SHA256, sha256(bytes))
+        val rankProgress = requireNotNull(ImageIO.read(ByteArrayInputStream(bytes)))
+        assertEquals(1920, rankProgress.width)
+        assertEquals(1080, rankProgress.height)
+
+        val rankKind = ScreenStateRecovery.classifyImageForResultFixture(rankProgress)
+        assertEquals("RANK_PROGRESS_CONTINUATION", rankKind)
+        assertEquals(rankKind, UpstreamScreenStateRecovery.classifyImageForResultFixture(rankProgress))
+        val visual = ScreenStateRecovery.resultVisualEvidenceForFixture(rankProgress)
+        assertMetricNear(visual, "continue", 0.04015819896562215)
+        assertMetricNear(visual, "banner", 0.281024531024531)
+        assertMetricNear(visual, "centerDark", 0.26987930231725227)
+        assertMetricNear(visual, "bannerWarm", 0.43614718614718617)
+        assertFalse(ResultPageEvidencePolicy.looksLikeResultVisual(0.040, 0.281, 0.270, 0.436))
+
+        val incident = requireNotNull(javaClass.getResourceAsStream(V609_PLATINUM8_INCIDENT)).bufferedReader().use { it.readText() }
+        val proof = incident.indexOf("RANK_SURRENDER_TERMINAL_PROOF result=ACCEPTED")
+        val cleanupStarted = incident.indexOf("RESULT_PAGE_CLEANUP_COORDINATOR state=started")
+        val firstInput = incident.indexOf("RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=true")
+        val deadline = incident.indexOf("RESULT_PAGE_CLEANUP_FAILED reason=episode-deadline-exceeded")
+        val firstRecovery = incident.indexOf("SCREEN_RECOVERY_SCHEDULED stuckForMs=30465")
+        val laterRecovery = incident.indexOf("SCREEN_RECOVERY_SCHEDULED stuckForMs=61109")
+        val unresolved = incident.indexOf("detected=UNKNOWN confidence=0")
+        assertTrue(proof >= 0 && cleanupStarted > proof && firstInput > cleanupStarted && deadline > firstInput)
+        assertTrue(firstRecovery > deadline && unresolved > firstRecovery && laterRecovery > unresolved)
+        assertTrue(
+            incident.contains("RESULT_PAGE_TOTAL_LATENCY_MS=132714") &&
+                incident.contains("SCREEN_RECOVERY_STUCK_LATENCY_MS=61109"),
+            "wall-clock result-page latency and lifecycle stuck duration are separate evidence dimensions",
+        )
+
+        var now = 1_000L
+        val coordinator = TerminalPageCleanupCoordinator(maxDurationMillis = 100L, monotonicTimeMillis = { now })
+        val firstTicket = requireNotNull(coordinator.begin().ticket)
+        assertEquals(1, coordinator.reserveInput(firstTicket), "the accepted Robot dispatch consumes a shared slot but proves nothing")
+        now += 100L
+        val failed = coordinator.begin()
+        assertEquals(TerminalPageCleanupCoordinator.BeginState.FAILED, failed.state)
+        assertEquals("episode-deadline-exceeded", coordinator.snapshot().failureReason)
+
+        val rearmed = requireNotNull(
+            coordinator.rearmAfterDeadline(
+                failedTicket = requireNotNull(failed.ticket),
+                paused = false,
+                terminalCleanupAuthorized = true,
+                freshCaptureAuthorized = true,
+                terminalContinuationVisible = rankKind == "RANK_PROGRESS_CONTINUATION",
+            ),
+        ) { "a fresh proof-gated Platinum continuation may use the one existing bounded rearm" }
+        assertEquals(1, coordinator.snapshot().inputs, "the deadline rearm must not refund the accepted-but-unconfirmed click")
+        assertEquals(2, coordinator.reserveRankProgressInput(rearmed, PostResultRankProgressPolicy.MAX_CONTINUE_INPUTS))
+        assertEquals(
+            PostResultRankProgressPolicy.Input.CENTER_CLICK,
+            PostResultRankProgressPolicy.inputForAttempt(coordinator.snapshot().rankProgressInputs),
+            "rank-progress input choice uses the rank-specific ordinal, not shared input #2",
+        )
+        assertEquals(TerminalPageCleanupCoordinator.State.RUNNING, coordinator.snapshot().state)
+        assertFalse(
+            ActionDispatchGate.allowForState(
+                action = "matchmaking.start",
+                paused = false,
+                working = true,
+                terminalCleanupPending = true,
+                terminalCleanupCapabilityValid = true,
+                automaticPause = false,
+            ),
+            "a recognized terminal continuation cannot authorize matchmaking",
+        )
+        assertTrue(coordinator.confirmDestination(rearmed), "only a later destination observation may complete cleanup")
+    }
+
     private fun loadImage(resource: String): BufferedImage {
         val bytes = requireNotNull(javaClass.getResourceAsStream(resource)).use { it.readBytes() }
         return requireNotNull(ImageIO.read(ByteArrayInputStream(bytes)))
@@ -862,5 +936,8 @@ class TerminalCleanupIncidentFixtureTest {
         private const val V607_GOLD4_STAR_PROGRESS = "/club/xiaojiawei/hsscript/status/surrender/v607-gold4-star-progress-20261008-170408-850.png"
         private const val V607_GOLD4_STAR_PROGRESS_SHA256 = "C9396BBF0BF2A19D86F63A7DCD845363B034F9EE4EEFCAA71A1797CE3C7964AF"
         private const val V607_GOLD4_STAR_INCIDENT = "/club/xiaojiawei/hsscript/status/surrender/v607-gold4-star-progress-cleanup-incident.txt"
+        private const val V609_PLATINUM8_RANK_PROGRESS = "/club/xiaojiawei/hsscript/status/surrender/v609-platinum8-rank-progress-20261008-195125-513.png"
+        private const val V609_PLATINUM8_RANK_PROGRESS_SHA256 = "1B8A7A6A9CBF0A4E637B561E26415D60770C8093DF59BE0210AED300EEF26EB7"
+        private const val V609_PLATINUM8_INCIDENT = "/club/xiaojiawei/hsscript/status/surrender/v609-platinum8-result-cleanup-incident.txt"
     }
 }

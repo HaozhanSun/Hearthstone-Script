@@ -175,7 +175,9 @@ class TerminalPageCleanupCoordinator(
 
     /**
      * A deadline may be renewed once only when the same terminal capability
-     * and a fresh authorized frame still prove that the result page is shown.
+     * and a fresh authorized frame still proves that the same terminal
+     * continuation is shown. This includes the result page and its
+     * proof-gated rank-progress Continue screen; neither grants matchmaking.
      * Global input/probe budgets remain cumulative, including already queued
      * or rejected inputs; the click result itself is never acceptance proof.
      */
@@ -185,9 +187,9 @@ class TerminalPageCleanupCoordinator(
         paused: Boolean,
         terminalCleanupAuthorized: Boolean,
         freshCaptureAuthorized: Boolean,
-        resultPageVisible: Boolean?,
+        terminalContinuationVisible: Boolean,
     ): Ticket? {
-        if (paused || !terminalCleanupAuthorized || !freshCaptureAuthorized || resultPageVisible != true) return null
+        if (paused || !terminalCleanupAuthorized || !freshCaptureAuthorized || !terminalContinuationVisible) return null
         if (failedTicket.generation != generation || state != State.FAILED) return null
         if (failureReason != "episode-deadline-exceeded") return null
         if (failedEpisodeRearms >= MAX_FAILED_EPISODE_REARMS || probes >= maxProbes || inputs >= maxInputs) return null

@@ -1657,12 +1657,13 @@ object GameUtil {
                             ),
                             freshCaptureAuthorized = observation.captureAuthorized &&
                                 MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCleanupCapability),
-                            resultPageVisible = observation.resultVisible,
+                            terminalContinuationVisible = observation.resultVisible == true ||
+                                observation.rankProgressVisible,
                         )
                     }
                     if (rearmedTicket != null) {
                         log.warn {
-                            "RESULT_PAGE_CLEANUP_REARMED reason=deadline-fresh-result " +
+                            "RESULT_PAGE_CLEANUP_REARMED reason=deadline-fresh-terminal-continuation " +
                                 "generation=${rearmedTicket.generation} priorProbes=${snapshot.probes} " +
                                 "inputs=${snapshot.inputs} rearm=${terminalPageCleanupCoordinator.snapshot().failedEpisodeRearms} " +
                                 "dispatch=false"
@@ -1804,7 +1805,14 @@ object GameUtil {
                                 gameEndTasks.remove(future)
                                 return@scheduleWithFixedDelay
                             }
-                            val input = PostResultRankProgressPolicy.inputForAttempt(reservedAttempt)
+                            // The shared budget can already include one or
+                            // more ordinary result-page inputs. Select the
+                            // rank-progress control by its own bounded
+                            // ordinal, not that global input counter.
+                            val rankProgressAttempt = cleanupTicket?.let {
+                                terminalPageCleanupCoordinator.snapshot().rankProgressInputs
+                            } ?: 0
+                            val input = PostResultRankProgressPolicy.inputForAttempt(rankProgressAttempt)
                             val accepted = when (input) {
                                 PostResultRankProgressPolicy.Input.CENTER_CLICK ->
                                     MouseUtil.leftButtonClickForRecovery(
@@ -1817,8 +1825,8 @@ object GameUtil {
                             }
                             log.info {
                                 "RANK_PROGRESS_CONTINUE_INPUT input=$input dispatchAccepted=$accepted " +
-                                    "acceptance=awaiting-current-client-postcheck probe=$number " +
-                                    "sharedInput=$reservedAttempt"
+                                "acceptance=awaiting-current-client-postcheck probe=$number " +
+                                "sharedInput=$reservedAttempt rankProgressInput=$rankProgressAttempt"
                             }
                             return@scheduleWithFixedDelay
                         }

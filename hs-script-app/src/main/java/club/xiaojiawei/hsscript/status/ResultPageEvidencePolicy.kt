@@ -169,10 +169,21 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.13..0.16 &&
             centerDarkRatio in 0.13..0.18 &&
             bannerWarmRatio in 0.43..0.50
+        // v4.16.608's authorized Platinum 8 progression page preserves the
+        // lower-center Continue control but uses a silver badge with a much
+        // less-muted banner than the Gold variants.  Its recorded frame was
+        // continue=.040, banner=.281, center-dark=.270, warm=.436.  Keep all
+        // four regions bounded: this is only an intermediate post-result
+        // continuation, never generic board or matchmaking authority.
+        val platinumEightRankProgressSignature = continueGrayLightRatio in 0.035..0.055 &&
+            bannerLowSaturationRatio in 0.24..0.30 &&
+            centerDarkRatio in 0.24..0.30 &&
+            bannerWarmRatio in 0.40..0.48
         return capturedRankProgressSignature || establishedRankProgressSignature ||
             coolBoardGoldRewardSignature || largeGoldMedalRewardSignature || compactGoldRewardSignature ||
             postEnterGoldRewardSignature || coolPostSurrenderGoldRewardSignature || largeGoldFiveRewardSignature ||
-            largeGoldFourRankProgressSignature || goldFourStarProgressSignature
+            largeGoldFourRankProgressSignature || goldFourStarProgressSignature ||
+            platinumEightRankProgressSignature
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */

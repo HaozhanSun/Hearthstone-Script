@@ -263,7 +263,7 @@ class TerminalPageCleanupCoordinatorTest {
                 paused = false,
                 terminalCleanupAuthorized = true,
                 freshCaptureAuthorized = true,
-                resultPageVisible = true,
+                terminalContinuationVisible = true,
             )
         assertNotNull(resumed, "same-game terminal authority and a fresh positive result page permits one retry")
         assertEquals(1, coordinator.snapshot().inputs, "deadline retry does not refund the prior input")
@@ -291,7 +291,7 @@ class TerminalPageCleanupCoordinatorTest {
                 paused = true,
                 terminalCleanupAuthorized = true,
                 freshCaptureAuthorized = true,
-                resultPageVisible = true,
+                terminalContinuationVisible = true,
             ),
             "pause blocks automatic renewal",
         )
@@ -301,7 +301,7 @@ class TerminalPageCleanupCoordinatorTest {
                 paused = false,
                 terminalCleanupAuthorized = true,
                 freshCaptureAuthorized = false,
-                resultPageVisible = true,
+                terminalContinuationVisible = true,
             ),
             "unverified pixels cannot reopen an expired episode",
         )
@@ -311,9 +311,9 @@ class TerminalPageCleanupCoordinatorTest {
                 paused = false,
                 terminalCleanupAuthorized = true,
                 freshCaptureAuthorized = true,
-                resultPageVisible = null,
+                terminalContinuationVisible = false,
             ),
-            "UNKNOWN is not a result-page authorization",
+            "UNKNOWN is not a terminal-continuation authorization",
         )
         assertNull(
             coordinator.rearmAfterDeadline(
@@ -321,7 +321,7 @@ class TerminalPageCleanupCoordinatorTest {
                 paused = false,
                 terminalCleanupAuthorized = false,
                 freshCaptureAuthorized = true,
-                resultPageVisible = true,
+                terminalContinuationVisible = true,
             ),
             "a stale or different game cannot renew the terminal capability",
         )
@@ -331,7 +331,7 @@ class TerminalPageCleanupCoordinatorTest {
                 paused = false,
                 terminalCleanupAuthorized = true,
                 freshCaptureAuthorized = true,
-                resultPageVisible = true,
+                terminalContinuationVisible = true,
             ),
         )
         assertEquals(TerminalPageCleanupCoordinator.State.RUNNING, coordinator.snapshot().state)
@@ -350,7 +350,7 @@ class TerminalPageCleanupCoordinatorTest {
                 paused = false,
                 terminalCleanupAuthorized = true,
                 freshCaptureAuthorized = true,
-                resultPageVisible = true,
+                terminalContinuationVisible = true,
             ),
             "one terminal generation may be rearmed at most once",
         )
@@ -378,7 +378,7 @@ class TerminalPageCleanupCoordinatorTest {
                 paused = false,
                 terminalCleanupAuthorized = true,
                 freshCaptureAuthorized = true,
-                resultPageVisible = true,
+                terminalContinuationVisible = true,
             ),
         )
         assertNull(coordinator.nextProbe(first), "expired callback cannot dispatch after rearm")
