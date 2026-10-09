@@ -531,6 +531,10 @@ class SurrenderPolicyTest {
             1,
             CurrentRankDetector.resolveRankCandidates(listOf("9", "1", "", "1"), visualTenHint = true),
         )
+        assertNull(
+            CurrentRankDetector.resolveRankCandidates(listOf("9x2"), visualTenHint = true),
+            "a rank-plus-stars token must never be promoted to rank ten by a visual hint",
+        )
     }
 
     @Test
@@ -743,6 +747,58 @@ class SurrenderPolicyTest {
             OcrRuntime.settingsProvider = originalSettingsProvider
             OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
             OcrRuntime.providerModeProvider = originalProviderModeProvider
+        }
+    }
+
+    @Test
+    fun `active rank accepts expanded fallback only after both compact PaddleX ROIs are unknown`() {
+        val oldSettingsProvider = OcrRuntime.settingsProvider
+        val oldBridgeFactory = OcrRuntime.paddleXBridgeFactory
+        val oldProviderModeProvider = OcrRuntime.providerModeProvider
+        val requestedRois = mutableListOf<String?>()
+        try {
+            OcrRuntime.providerModeProvider = { OcrProviderMode.PADDLEX_ONLY }
+            OcrRuntime.settingsProvider = {
+                PaddleXOcrSettings(true, "offline-python", "offline-rank-expanded", "cpu", "", 1_000)
+            }
+            OcrRuntime.paddleXBridgeFactory = {
+                object : OcrTextBridge {
+                    override fun recognize(image: BufferedImage, desc: String): String = ""
+
+                    override fun recognizeWithConfidence(
+                        image: BufferedImage,
+                        desc: String,
+                        roi: String?,
+                        timeoutMs: Long?,
+                    ): OcrRecognition {
+                        requestedRois += roi
+                        return when (roi) {
+                            "rank-badge", "rank-badge-small" -> OcrRecognition("", confidence = 0.99)
+                            "rank-badge-expanded" -> OcrRecognition("5", confidence = 0.99)
+                            else -> error("unexpected rank ROI: $roi")
+                        }
+                    }
+
+                    override fun healthCheck() = OcrHealth(true, OcrProviderKind.PADDLEX, "offline fixture")
+                }
+            }
+
+            val detection = requireNotNull(
+                CurrentRankDetector.detectCapturedImage(
+                    BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB),
+                    saveEvidence = false,
+                    evidencePhase = "REPLACE_CARD",
+                ),
+            )
+            assertEquals(5, detection.rank)
+            assertEquals(
+                listOf<String?>("rank-badge", "rank-badge-small", "rank-badge-expanded"),
+                requestedRois,
+            )
+        } finally {
+            OcrRuntime.settingsProvider = oldSettingsProvider
+            OcrRuntime.paddleXBridgeFactory = oldBridgeFactory
+            OcrRuntime.providerModeProvider = oldProviderModeProvider
         }
     }
 

@@ -37,8 +37,8 @@ class DeckSelectionRankBadgeOcrTest {
             configurePaddleX { _, _, roi, _ ->
                 requestedRois += roi
                 when (roi) {
-                    "rank-badge-small" -> OcrRecognition("", confidence = 0.99)
-                    "rank-badge" -> OcrRecognition(rawBadgeText, confidence = 0.99)
+                    "rank-badge-small" -> OcrRecognition(rawBadgeText, confidence = 0.99)
+                    "rank-badge" -> error("full badge should not be needed for an explicit rank-by-stars token")
                     else -> error("unexpected rank ROI: $roi")
                 }
             }
@@ -50,7 +50,7 @@ class DeckSelectionRankBadgeOcrTest {
                     evidencePhase = "DECK_SELECTION",
                 ),
             )
-            assertEquals(listOf<String?>("rank-badge-small", "rank-badge"), requestedRois, "raw=$rawBadgeText")
+            assertEquals(listOf<String?>("rank-badge-small"), requestedRois, "raw=$rawBadgeText")
             assertEquals(4, detection.rank ?: error("raw=$rawBadgeText must resolve rank 4 or remain unknown"))
             assertFalse(detection.rank == 5, "the star count must never become rank 5: raw=$rawBadgeText")
 
@@ -87,6 +87,48 @@ class DeckSelectionRankBadgeOcrTest {
             assertTrue(gate.queueAuthorization.allowed, "positive control rank=$rank")
             assertTrue(gate.permit != null, "positive control rank=$rank must issue permit")
             assertEquals(listOf<String?>("rank-badge-small"), requestedRois)
+        }
+    }
+
+    @Test
+    fun `live rank nine with one to three stars never becomes rank ten or enters queue`() {
+        // The 2026-10-09 deployed incident captured a real deck-selection
+        // frame whose visible badge was rank 9 ×2. PaddleX returned "9x2".
+        // The generic visual-ten fallback reinterpreted the two numeric runs
+        // as rank 10 and sent a queue click. Exercise the retained live
+        // deck-selection screenshot through the same capture path for each
+        // known star-count spelling; all must remain an explicit rank nine.
+        val screenshot = loadDeckSelectionScreenshot()
+        for (rawBadgeText in listOf("9x1", "9x2", "9x3", "9 x 2", "9×2")) {
+            val requestedRois = mutableListOf<String?>()
+            configurePaddleX { _, _, roi, _ ->
+                requestedRois += roi
+                when (roi) {
+                    "rank-badge-small" -> OcrRecognition(rawBadgeText, confidence = 0.99)
+                    "rank-badge" -> error("full badge must not override an explicit rank token: $rawBadgeText")
+                    else -> error("unexpected rank ROI: $roi")
+                }
+            }
+
+            val detection = requireNotNull(
+                CurrentRankDetector.detectCapturedImage(
+                    screen = screenshot,
+                    saveEvidence = false,
+                    evidencePhase = "DECK_SELECTION",
+                ),
+            )
+            assertEquals(9, detection.rank, "raw=$rawBadgeText")
+            assertFalse(detection.rank == 10, "star count must not promote 9 to 10: raw=$rawBadgeText")
+            assertEquals(listOf<String?>("rank-badge-small"), requestedRois, "raw=$rawBadgeText")
+
+            val gate = PreMatchRankGate.evaluate(preMatchEvidence(detection), nowMs = detection.capturedAtMs)
+            assertFalse(gate.queueAuthorization.allowed, "rank 9 / $rawBadgeText must not enter queue")
+            var queueInputs = 0
+            gate.permit?.dispatchIfCurrent(
+                PreMatchRankGate.RuntimeEvidence(true, false, false, true, false),
+                detection.capturedAtMs,
+            ) { queueInputs++ }
+            assertEquals(0, queueInputs, "rank 9 / $rawBadgeText must dispatch no queue input")
         }
     }
 

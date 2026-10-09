@@ -4,11 +4,13 @@ import club.xiaojiawei.hsscript.bean.log.TagChangeEntity
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.enums.TagEnum
 import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
+import club.xiaojiawei.hsscript.status.surrender.SurrenderRuleResult
 import club.xiaojiawei.hsscriptbase.enums.StepEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class ReplaceCardRankSurrenderPhaseTest {
@@ -66,6 +68,36 @@ class ReplaceCardRankSurrenderPhaseTest {
             war.lost = oldLost
             war.conceded = oldConceded
         }
+    }
+
+    @Test
+    fun `bounded unresolved rank becomes guarded surrender instead of automatic pause`() {
+        val original = SurrenderRuleResult(
+            ruleId = "rank-ocr-unresolved",
+            matched = true,
+            shouldSurrender = false,
+            reason = "rank OCR unresolved after 3 bounded attempts",
+            blocksAutomaticSurrender = true,
+        )
+
+        val decision = ReplaceCardPhaseStrategy.mandatorySurrenderForUnresolvedRank(original)
+
+        assertTrue(decision.matched)
+        assertTrue(decision.shouldSurrender, "the active Mulligan must resolve rather than hold forever")
+        assertFalse(decision.blocksAutomaticSurrender, "mandatory rank dispatch must be allowed through its barrier")
+        assertEquals(original.ruleId, decision.ruleId)
+
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+        val capability = MulliganRankDispatchBarrier.requireSurrender(ticket)
+        assertTrue(
+            MulliganRankDispatchBarrier.isSurrenderCapabilityValid(capability),
+            "the conversion still requires the barrier-issued surrender capability",
+        )
+        assertEquals(
+            MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+            MulliganRankDispatchBarrier.currentState(),
+            "ordinary Mulligan input remains closed while the safe resolution is pending",
+        )
     }
 
     private fun invokePhaseHandler(event: TagChangeEntity): Boolean {

@@ -202,7 +202,10 @@ object CurrentRankDetector {
      * deterministic best guess instead of silently becoming "continue".
      * PaddleX's native recognition score is used when supplied; legacy OCR
      * has no native score, so repeated candidates only select the most common
-     * number and never become a fabricated confidence value.
+     * number and never become a fabricated confidence value. The visual
+     * two-digit hint is diagnostic only: it must not manufacture a numeric
+     * rank, because a rank-plus-stars OCR token (for example 9x2) also has
+     * two digit runs.
      */
     internal fun resolveRankCandidate(
         candidates: List<String>,
@@ -210,18 +213,6 @@ object CurrentRankDetector {
         nativeConfidence: Double? = null,
     ): RankCandidate? {
         val parsed = candidates.mapNotNull(::parseRankText)
-        // On the real rank-10 badge, all OCR passes can be contaminated by
-        // the shield artwork and return only invalid multi-digit noise (for
-        // example 939|51|191|91).  If the independent visual check confirms
-        // a two-digit badge and OCR did see numeric pixels, that is still
-        // stronger evidence for rank 10 than accepting an arbitrary lower
-        // rank.  Keep the numeric-evidence requirement so an empty/blank
-        // screen cannot become rank 10 from the visual hint alone.
-        if (visualTenHint && parsed.isEmpty() && candidates.any { it.any(Char::isDigit) }) {
-            // A geometric hint is useful for diagnostics, but is not positive
-            // OCR evidence and must never authorize a queue or game action.
-            return RankCandidate(rank = 10, confidence = nativeConfidence, agreementCount = 0)
-        }
         val counts = parsed.groupingBy { it }.eachCount()
         val best = counts.entries
             .filter { (rank, _) -> rank in MIN_RANK..MAX_RANK || rank > 20 }
@@ -326,13 +317,8 @@ object CurrentRankDetector {
         // installations that have not downloaded eng.traineddata yet.
         val rankLanguage = if (File(tessData, "eng.traineddata").isFile) "eng" else CHI_SIM_DATA
 
-        val expandedRegion = crop(
-            screen,
-            RANK_EXPANDED_LEFT,
-            RANK_EXPANDED_TOP,
-            RANK_EXPANDED_WIDTH,
-            RANK_EXPANDED_HEIGHT,
-        )
+        val expandedRegionBounds = rankExpandedBoundsForTest(screen.width, screen.height)
+        val expandedRegion = crop(screen, expandedRegionBounds)
         val badgeVisualRegion = badgeRegion
         // Gameplay uses the lower-left HUD badge; pre-match deck selection
         // uses the upper-right constructed-rank badge.
@@ -342,10 +328,12 @@ object CurrentRankDetector {
                 looksLikeTwoDigitRank(numericRegion)
             val deckSelection = evidencePhase.equals("DECK_SELECTION", ignoreCase = true)
             // The deck-selection badge includes the season-star count above the
-            // rank numeral. Read the tight numeral window first so OCR cannot
-            // combine e.g. rank 4 and five stars into the ambiguous token "4x5".
-            // The full badge remains a conservative fallback for clients where
-            // the small crop is unreadable.
+            // rank numeral. PaddleX can legitimately return the composed
+            // "rank×stars" token even from the tight numeral window (for
+            // example, "9x2"). Parse that form as a deck-selection badge,
+            // never with the generic visual-ten fallback: otherwise the two
+            // digit runs can be mistaken for a stylized rank ten and authorize
+            // an ineligible rank-nine queue.
             val smallProbe: RankProbeResult
             val bigProbe: RankProbeResult
             if (deckSelection) {
@@ -356,6 +344,7 @@ object CurrentRankDetector {
                     scale = RANK_SMALL_ROI_SCALE,
                     trigger = evidenceTrigger,
                     visualTenHint = visualTenHint,
+                    deckSelectionBadge = true,
                 )
                 bigProbe = if (smallProbe.rank == null) {
                     runPaddleXRankProbe(
@@ -395,7 +384,29 @@ object CurrentRankDetector {
                     skippedRankProbe("smallRoi", numericRegionBounds, RANK_SMALL_ROI_SCALE)
                 }
             }
-            val selection = selectRankProbeResults(bigProbe, smallProbe)
+            val initialSelection = selectRankProbeResults(bigProbe, smallProbe)
+            // The compact HUD crops remain authoritative. This broader,
+            // proven rank-numeral window is a last fallback only after both
+            // compact reads are empty; it never resolves a conflicting pair.
+            val expandedProbe = if (!deckSelection &&
+                initialSelection.unknownReason == "rank-unrecognized-both-roi"
+            ) {
+                runPaddleXRankProbe(
+                    image = expandedRegion,
+                    bounds = expandedRegionBounds,
+                    roi = "expandedRoi",
+                    scale = RANK_SMALL_ROI_SCALE,
+                    trigger = evidenceTrigger,
+                    visualTenHint = false,
+                )
+            } else {
+                skippedRankProbe("expandedRoi", expandedRegionBounds, RANK_SMALL_ROI_SCALE)
+            }
+            val selection = if (expandedProbe.rank != null) {
+                RankProbeSelection("expandedRoi", expandedProbe, expandedProbe.rank, "none")
+            } else {
+                initialSelection
+            }
             val rank = selection.rank
             val selectedProbe = selection.selected
             val ocrText = selectedProbe?.normalizedText.orEmpty()
@@ -412,9 +423,10 @@ object CurrentRankDetector {
             }
             log.info {
                 "RANK_OCR provider=PADDLEX trigger=$evidenceTrigger phase=$evidencePhase " +
-                    "passes=2 bounds=$bounds " +
+                    "passes=3 bounds=$bounds " +
                     "bigRoi=x${bigProbe.bounds.x},y${bigProbe.bounds.y},w${bigProbe.bounds.width},h${bigProbe.bounds.height} " +
                     "smallRoi=x${smallProbe.bounds.x},y${smallProbe.bounds.y},w${smallProbe.bounds.width},h${smallProbe.bounds.height} " +
+                    "expandedRoi=x${expandedProbe.bounds.x},y${expandedProbe.bounds.y},w${expandedProbe.bounds.width},h${expandedProbe.bounds.height} " +
                     "selectedRoi=${selection.selectedRoi ?: "NONE"} selectedRank=${rank ?: "UNKNOWN"} " +
                     "selectedScale=${selectedProbe?.scale ?: "NONE"} " +
                     "raw=${rawOcrText.ifBlank { "<empty>" }} " +
@@ -425,6 +437,7 @@ object CurrentRankDetector {
             }
             logPaddleXRankProbe(bigProbe, evidenceTrigger, evidencePhase)
             logPaddleXRankProbe(smallProbe, evidenceTrigger, evidencePhase)
+            logPaddleXRankProbe(expandedProbe, evidenceTrigger, evidencePhase)
             if (saveEvidence) {
                 saveRankEvidence(
                     screen = screen,
@@ -433,6 +446,7 @@ object CurrentRankDetector {
                     rawOcrTexts = listOf(
                         "bigRoi=${bigProbe.rawText.ifBlank { "<empty>" }}",
                         "smallRoi=${smallProbe.rawText.ifBlank { "<empty>" }}",
+                        "expandedRoi=${expandedProbe.rawText.ifBlank { "<empty>" }}",
                     ),
                     normalizedOcrText = ocrText,
                     numericRank = rank,
@@ -552,7 +566,11 @@ object CurrentRankDetector {
         deckSelectionBadge: Boolean = false,
     ): RankProbeResult {
         val input = if (scale == 1) image else scaleForOcr(image, scale)
-        val providerRoi = if (roi == "bigRoi") "rank-badge" else "rank-badge-small"
+        val providerRoi = when (roi) {
+            "bigRoi" -> "rank-badge"
+            "expandedRoi" -> "rank-badge-expanded"
+            else -> "rank-badge-small"
+        }
         val description = if (roi == "bigRoi") trigger else "$trigger-$roi"
         val recognition = OcrRuntime.recognizeResult(
             input,
@@ -583,19 +601,22 @@ object CurrentRankDetector {
     }
 
     /**
-     * A complete pre-match badge crop can contain both the rank and season
-     * stars. Only accept OCR's explicit rank-by-star form here; arbitrary
-     * multi-number text remains unresolved. Prefer the number-only ROI first.
+     * A pre-match badge crop can contain both the rank and season stars. Only
+     * accept an explicit rank-by-star form or a standalone rank numeral.
+     * Arbitrary multi-number text remains unresolved; in particular, no
+     * visual layout hint may convert a rank-plus-stars token into rank ten.
      */
     internal fun resolveDeckSelectionBadgeCandidate(
         rawText: String,
         confidence: Double?,
     ): RankCandidate? {
         val normalized = normalizeOcrText(rawText)
-        val match = Regex("^\\s*(10|[1-9])\\s*[xX×*]\\s*([0-9]{1,2})\\s*$")
+        val rank = Regex("^\\s*(10|[1-9])(?:\\s*[xX×*]\\s*[0-9]{1,2})?\\s*$")
             .matchEntire(normalized)
+            ?.groupValues
+            ?.get(1)
+            ?.toIntOrNull()
             ?: return null
-        val rank = match.groupValues[1].toIntOrNull() ?: return null
         return RankCandidate(rank = rank, confidence = confidence, agreementCount = 1)
     }
 

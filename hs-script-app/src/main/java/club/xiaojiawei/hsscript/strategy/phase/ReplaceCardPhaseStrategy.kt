@@ -16,7 +16,6 @@ import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.MulliganScreenshot
-import javafx.beans.value.ChangeListener
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.enums.StepEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
@@ -51,9 +50,6 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
     private var rankPreflight: MulliganRankPreflight? = null
 
     @Volatile
-    private var rankHoldResumeListener: ChangeListener<Boolean>? = null
-
-    @Volatile
     private var latestMyMulliganState: MulliganStateEnum? = null
 
     /**
@@ -81,8 +77,6 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
      * INPUT line.
      */
     fun resetForNewGame() {
-        rankHoldResumeListener?.let { PauseStatus.removeChangeListener(it) }
-        rankHoldResumeListener = null
         cancelRankSurrenderRetry(resetBudget = true)
         cancelRankPreflight("new-game")
         // Keep the rank gate scoped to the same game lifecycle as the
@@ -288,51 +282,7 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             provider = {
                 if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
             },
-            onSurrender = surrender@{ result ->
-                if (GameUtil.isTerminalGameState()) {
-                    cancelRankSurrenderRetry(resetBudget = true)
-                    cancelAllTask()
-                    cancelRankPreflight("terminal-state-priority")
-                    val released = MulliganRankDispatchBarrier.completeTerminalWithoutSurrender(barrierTicket)
-                    log.info {
-                        "MULLIGAN_RANK_PREFLIGHT_TERMINAL_PRIORITY ticket=$barrierTicket " +
-                            "rule=${result.ruleId} barrierReleased=$released action=NO_SURRENDER"
-                    }
-                    return@surrender
-                }
-                if (!isRankPreflightEligible()) {
-                    log.info {
-                        "MULLIGAN_RANK_PREFLIGHT_DECISION_DISCARDED reason=phase-or-input-left " +
-                            "rule=${result.ruleId} action=NO_ACTION pause=false"
-                    }
-                    return@surrender
-                }
-                if (!rankSurrenderRequested.compareAndSet(false, true)) return@surrender
-                val surrenderCapability = MulliganRankDispatchBarrier.requireSurrender(barrierTicket)
-                if (surrenderCapability == null) {
-                    log.warn {
-                        "MULLIGAN_RANK_DISPATCH_BARRIER_SURRENDER_REJECTED ticket=$barrierTicket " +
-                            "reason=stale-or-invalid-barrier action=BLOCK"
-                    }
-                    rankSurrenderRequested.set(false)
-                    return@surrender
-                }
-                log.warn {
-                    "MULLIGAN_RANK_DISPATCH_BARRIER state=SURRENDER_REQUIRED ticket=$barrierTicket " +
-                        "rule=${result.ruleId} action=BLOCK_ORDINARY_ALLOW_MANDATORY_SURRENDER_ONLY"
-                }
-                cancelAllTask()
-                val dispatched = dispatchSurrenderDecision(
-                    result,
-                    "mulligan-rank-preflight",
-                    rankSurrenderCapability = surrenderCapability,
-                )
-                if (dispatched) {
-                    cancelRankSurrenderRetry(resetBudget = true)
-                } else {
-                    scheduleRankSurrenderRetry(result, "mulligan-rank-preflight", surrenderCapability, barrierTicket)
-                }
-            },
+            onSurrender = { result -> requestMandatoryRankSurrender(barrierTicket, result) },
             onContinue = {
                 val rank = SurrenderPolicy.currentRankAuthorizedNumber()
                 log.info {
@@ -345,40 +295,76 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
                 }
                 scheduleMulliganAction()
             },
-            onHold = { result -> holdForUnresolvedRank(barrierTicket, result) },
+            // A bounded OCR batch must not leave the client auto-paused in
+            // Mulligan.  Keep ordinary input blocked, but finish this
+            // fail-closed branch through the guarded, retry-capable surrender
+            // path used for a positively ineligible rank.
+            onHold = { result ->
+                requestMandatoryRankSurrender(
+                    barrierTicket,
+                    mandatorySurrenderForUnresolvedRank(result),
+                )
+            },
         ).also { it.start() }
     }
 
-    private fun holdForUnresolvedRank(ticket: Long, result: SurrenderRuleResult) {
-        rankHoldResumeListener?.let(PauseStatus::removeChangeListener)
-        val listener = ChangeListener<Boolean> { _, _, paused ->
-            if (!paused && rankBarrierTicket == ticket &&
-                MulliganRankDispatchBarrier.currentState() == MulliganRankDispatchBarrier.State.PENDING
-            ) {
-                if (isRankPreflightEligible()) {
-                    rankHoldResumeListener?.let { PauseStatus.removeChangeListener(it) }
-                    rankHoldResumeListener = null
-                    SurrenderPolicy.retryRankInspectionAfterHold()
-                    log.warn {
-                        "MULLIGAN_RANK_HOLD_RESUMED ticket=$ticket action=RETRY_FRESH_RANK " +
-                            "ordinaryInput=false reason=explicit-resume"
-                    }
-                    startRankPreflight(ticket)
-                } else {
-                    log.warn {
-                        "MULLIGAN_RANK_HOLD_RESUME_BLOCKED ticket=$ticket " +
-                            "reason=active-mulligan-not-confirmed action=REPAUSE ordinaryInput=false"
-                    }
-                    PauseStatus.setAutomaticPause(true)
-                }
+    /**
+     * The generic policy result is a hold so non-Mulligan callers can make
+     * their own lifecycle decision. An active, bounded Mulligan OCR pass
+     * cannot remain there safely: it becomes a mandatory surrender request
+     * without opening ordinary input or creating an automatic pause.
+     */
+    internal fun mandatorySurrenderForUnresolvedRank(result: SurrenderRuleResult): SurrenderRuleResult =
+        result.copy(
+            matched = true,
+            shouldSurrender = true,
+            blocksAutomaticSurrender = false,
+            reason = result.reason ?: "rank OCR unresolved after bounded Mulligan preflight",
+        )
+
+    private fun requestMandatoryRankSurrender(ticket: Long, result: SurrenderRuleResult) {
+        if (GameUtil.isTerminalGameState()) {
+            cancelRankSurrenderRetry(resetBudget = true)
+            cancelAllTask()
+            cancelRankPreflight("terminal-state-priority")
+            val released = MulliganRankDispatchBarrier.completeTerminalWithoutSurrender(ticket)
+            log.info {
+                "MULLIGAN_RANK_PREFLIGHT_TERMINAL_PRIORITY ticket=$ticket " +
+                    "rule=${result.ruleId} barrierReleased=$released action=NO_SURRENDER"
             }
+            return
         }
-        rankHoldResumeListener = listener
-        PauseStatus.addChangeListener(listener)
-        PauseStatus.setAutomaticPause(true)
+        if (!isRankPreflightEligible()) {
+            log.info {
+                "MULLIGAN_RANK_PREFLIGHT_DECISION_DISCARDED reason=phase-or-input-left " +
+                    "rule=${result.ruleId} action=NO_ACTION pause=false"
+            }
+            return
+        }
+        if (!rankSurrenderRequested.compareAndSet(false, true)) return
+        val surrenderCapability = MulliganRankDispatchBarrier.requireSurrender(ticket)
+        if (surrenderCapability == null) {
+            log.warn {
+                "MULLIGAN_RANK_DISPATCH_BARRIER_SURRENDER_REJECTED ticket=$ticket " +
+                    "reason=stale-or-invalid-barrier action=BLOCK"
+            }
+            rankSurrenderRequested.set(false)
+            return
+        }
         log.warn {
-            "MULLIGAN_RANK_FAIL_CLOSED_HOLD ticket=$ticket rule=${result.ruleId} " +
-                "action=AUTOMATIC_PAUSE ordinaryInput=false surrender=false resume=F1_OR_EXPLICIT"
+            "MULLIGAN_RANK_DISPATCH_BARRIER state=SURRENDER_REQUIRED ticket=$ticket " +
+                "rule=${result.ruleId} action=BLOCK_ORDINARY_ALLOW_MANDATORY_SURRENDER_ONLY pause=false"
+        }
+        cancelAllTask()
+        val dispatched = dispatchSurrenderDecision(
+            result,
+            "mulligan-rank-preflight",
+            rankSurrenderCapability = surrenderCapability,
+        )
+        if (dispatched) {
+            cancelRankSurrenderRetry(resetBudget = true)
+        } else {
+            scheduleRankSurrenderRetry(result, "mulligan-rank-preflight", surrenderCapability, ticket)
         }
     }
 
@@ -390,8 +376,6 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             !rankSurrenderRequested.get()
 
     internal fun cancelRankPreflight(reason: String) {
-        rankHoldResumeListener?.let { PauseStatus.removeChangeListener(it) }
-        rankHoldResumeListener = null
         rankPreflight?.cancel(reason)
         rankPreflight = null
     }
@@ -503,11 +487,11 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         val ticket = rankBarrierTicket ?: MulliganRankDispatchBarrier.beginCurrentGame().also { rankBarrierTicket = it }
         log.warn {
             "MULLIGAN_RANK_PREFLIGHT_WINDOW_ENDED ticket=${rankBarrierTicket ?: "none"} reason=$reason " +
-                "attempts=$attempts action=HOLD_UNRESOLVED_RANK"
+                "attempts=$attempts action=MANDATORY_SURRENDER_UNRESOLVED_RANK"
         }
         cancelRankPreflight("rank-window-ended-$reason")
         cancelAllTask()
-        holdForUnresolvedRank(ticket, result)
+        requestMandatoryRankSurrender(ticket, mandatorySurrenderForUnresolvedRank(result))
     }
 
     /** Guard every mulligan click against a late rank decision or phase exit. */

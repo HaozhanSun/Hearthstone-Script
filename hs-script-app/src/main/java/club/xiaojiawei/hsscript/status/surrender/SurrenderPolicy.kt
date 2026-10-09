@@ -1104,8 +1104,8 @@ object SurrenderPolicy {
         setRankInspectionState(RankInspectionState.BLOCKED)
         log.warn {
             "RANK_POLICY_BLOCKED stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
-                "rule=${result.ruleId} reason=${result.reason} action=HOLD " +
-                "surrender=false pause=true ocrFailure=true"
+                "rule=${result.ruleId} reason=${result.reason} action=BLOCK_ORDINARY_INPUT " +
+                "surrender=phase-owner pause=phase-owner ocrFailure=true"
         }
         return result
     }
