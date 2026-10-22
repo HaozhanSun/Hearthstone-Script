@@ -1606,11 +1606,17 @@ object GameUtil {
 
         val attempt = AtomicInteger(0)
         val clickAttempts = AtomicInteger(0)
+        val unknownFallbackAttempts = AtomicInteger(0)
         val startingWarCount = WarEx.warCount
-        // Live v4.16.565 result handling took roughly 15-25 seconds per
-        // accepted input once capture/focus work was included. Keep retries
-        // serialized and deliberately spaced rather than issuing a burst.
-        val interval = if (terminalCleanupAuthorized) 25_000L else RandomUtil.getActionInterval(800).toLong()
+        var resultFlowProgress = ResultPageDismissalPolicy.FlowProgress()
+        val interval = if (terminalCleanupAuthorized) {
+            RandomUtil.getRandom(
+                ResultPageDismissalPolicy.TERMINAL_RETRY_MIN_INTERVAL_MS,
+                ResultPageDismissalPolicy.TERMINAL_RETRY_MAX_INTERVAL_MS,
+            ).toLong()
+        } else {
+            RandomUtil.getActionInterval(800).toLong()
+        }
         lateinit var future: ScheduledFuture<*>
         future = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
             {
@@ -1674,6 +1680,23 @@ object GameUtil {
                     val screenObservation = if (cleanupTicket != null || resultAlreadyObserved || number > 1) {
                         ScreenStateRecovery.observeResultScreenForRecovery()
                     } else ResultScreenObservation(null, captureAuthorized = false)
+                    val destinationTransitionConfirmed = FreshPostResultDestinationPolicy.isConfirmed(
+                        screenObservation.destinationScreen,
+                        screenObservation.destinationConfidence,
+                        screenObservation.captureAuthorized,
+                    )
+                    resultFlowProgress = ResultPageDismissalPolicy.observeFlow(
+                        resultFlowProgress,
+                        screenObservation,
+                        destinationTransitionConfirmed,
+                    )
+                    log.info {
+                        "RESULT_PAGE_FLOW_STAGE screen=${resultFlowProgress.lastObserved} " +
+                            "defeatObserved=${resultFlowProgress.defeatObserved} " +
+                            "rankProgressObserved=${resultFlowProgress.rankProgressObserved} " +
+                            "postRankTransitionVerified=${resultFlowProgress.postRankTransitionVerified} " +
+                            "probe=$number"
+                    }
                     val visible = screenObservation.resultVisible
                     val maxAttempts = if (cleanupTicket != null) {
                         TerminalPageCleanupCoordinator.DEFAULT_MAX_INPUTS
@@ -1683,7 +1706,7 @@ object GameUtil {
                     } else {
                         clickAttempts.get()
                     }
-                    when (PostResultRankProgressPolicy.decide(
+                    when (ResultPageDismissalPolicy.decideRankProgress(
                         rankProgressVisible = screenObservation.rankProgressVisible,
                         terminalCleanupAuthorized = terminalCleanupStillAuthorized,
                         captureAuthorized = screenObservation.captureAuthorized,
@@ -1691,7 +1714,7 @@ object GameUtil {
                             terminalPageCleanupCoordinator.snapshot().rankProgressInputs
                         } ?: 0,
                     )) {
-                        PostResultRankProgressPolicy.Action.CONTINUE -> {
+                        ResultPageDismissalPolicy.Decision.DISPATCH_CLICK -> {
                             val reservedAttempt = cleanupTicket?.let {
                                 terminalPageCleanupCoordinator.reserveRankProgressInput(
                                     it,
@@ -1728,7 +1751,7 @@ object GameUtil {
                             }
                             return@scheduleWithFixedDelay
                         }
-                        PostResultRankProgressPolicy.Action.WAIT_FOR_AUTHORIZED_CAPTURE -> {
+                        ResultPageDismissalPolicy.Decision.WAIT_FOR_SCREEN_TRANSITION -> {
                             log.warn {
                                 "RANK_PROGRESS_CONTINUE_BLOCKED reason=terminal-proof-and-fresh-capture-required " +
                                     "terminalCleanupAuthorized=$terminalCleanupStillAuthorized " +
@@ -1736,7 +1759,7 @@ object GameUtil {
                             }
                             return@scheduleWithFixedDelay
                         }
-                        PostResultRankProgressPolicy.Action.INPUT_BUDGET_EXHAUSTED -> {
+                        ResultPageDismissalPolicy.Decision.EXHAUSTED -> {
                             cleanupTicket?.let {
                                 terminalPageCleanupCoordinator.fail(it, "rank-progress-input-budget-exhausted")
                             }
@@ -1748,7 +1771,7 @@ object GameUtil {
                             gameEndTasks.remove(future)
                             return@scheduleWithFixedDelay
                         }
-                        PostResultRankProgressPolicy.Action.NOT_APPLICABLE -> Unit
+                        else -> Unit
                     }
                     when (ResultPageDismissalPolicy.decide(
                             inWar = WarEx.inWar,
@@ -1756,15 +1779,12 @@ object GameUtil {
                             attempt = number,
                             maxAttempts = maxAttempts,
                             clickAttempts = clickNumber,
+                            unknownFallbackAttempts = unknownFallbackAttempts.get(),
                             terminalCleanupAuthorized = terminalCleanupStillAuthorized,
                             captureAuthorized = screenObservation.captureAuthorized,
                             visualOnlyResultEvidence = screenObservation.visualOnlyResultEvidence,
                             priorResultPageConfirmed = resultAlreadyObserved,
-                            destinationTransitionConfirmed = FreshPostResultDestinationPolicy.isConfirmed(
-                                screenObservation.destinationScreen,
-                                screenObservation.destinationConfidence,
-                                screenObservation.captureAuthorized,
-                            ),
+                            destinationTransitionConfirmed = destinationTransitionConfirmed,
                         )
                     ) {
                         ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED -> {
@@ -1870,13 +1890,16 @@ object GameUtil {
                             if (terminalCleanupStillAuthorized && resultAlreadyObserved &&
                                 screenObservation.captureAuthorized && visible == null
                             ) {
+                                unknownFallbackAttempts.incrementAndGet()
                                 log.warn {
                                     "RESULT_PAGE_DISMISSAL_UNKNOWN_FALLBACK proof=prior-result-and-terminal-current-capture " +
-                                        "input=$reservedAttempt/${ResultPageDismissalPolicy.MAX_UNKNOWN_RESULT_FALLBACK_INPUTS} " +
+                                        "fallback=${unknownFallbackAttempts.get()}/${ResultPageDismissalPolicy.MAX_UNKNOWN_RESULT_FALLBACK_INPUTS} " +
+                                        "input=$reservedAttempt/$maxAttempts " +
                                         "probe=$number acceptance=awaiting-client-postcheck"
                                 }
                             }
                         }
+                        ResultPageDismissalPolicy.Decision.NOT_APPLICABLE -> Unit
                     }
 
                 runCatching {

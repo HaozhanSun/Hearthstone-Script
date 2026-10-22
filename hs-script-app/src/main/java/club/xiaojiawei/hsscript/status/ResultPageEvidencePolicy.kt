@@ -108,8 +108,20 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.075..0.10 &&
             centerDarkRatio in 0.30..0.34 &&
             bannerWarmRatio in 0.48..0.53
+        // The Oct 21 incident replay retained the same centered rank medal,
+        // while the blurred board shifted the banner palette between captures.
+        // Keep both observed clusters narrow across all four measured regions.
+        val incidentCoolBoardRewardSignature = continueGrayLightRatio in 0.038..0.046 &&
+            bannerLowSaturationRatio in 0.15..0.18 &&
+            centerDarkRatio in 0.19..0.22 &&
+            bannerWarmRatio in 0.29..0.34
+        val incidentWarmBannerRewardSignature = continueGrayLightRatio in 0.037..0.044 &&
+            bannerLowSaturationRatio in 0.52..0.56 &&
+            centerDarkRatio in 0.25..0.29 &&
+            bannerWarmRatio in 0.06..0.10
         return capturedRankProgressSignature || establishedRankProgressSignature ||
-            coolBoardGoldRewardSignature || largeGoldMedalRewardSignature
+            coolBoardGoldRewardSignature || largeGoldMedalRewardSignature ||
+            incidentCoolBoardRewardSignature || incidentWarmBannerRewardSignature
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */
