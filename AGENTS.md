@@ -141,7 +141,7 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
 - Only discard the pending task when the user clearly asks to stop or replace
   it; otherwise leave the conversation with the original task either resumed,
   completed with evidence, or explicitly blocked.
-- Workers report to the current secretary session; only that session deploys.
+- Workers report to the current secretary session; only that session deploys. Every worker must send a direct completion or blocker notification to that current secretary session before ending its turn, including status, changed files/commit, verification evidence, blockers, and the next action; a worker-thread final answer alone is not a handoff.
 - Secretary implementation boundary: the current secretary only performs read-only
   investigation, evidence collection, worker routing, review, and deployment
   coordination. It must not implement code, strategy, or configuration fixes

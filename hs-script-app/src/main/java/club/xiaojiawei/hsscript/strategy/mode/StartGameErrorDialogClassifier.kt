@@ -29,7 +29,10 @@ internal object StartGameErrorDialogClassifier {
             normalized.contains("请再试") || normalized.contains("请重试")
         return when {
             partialError || normalized.isBlank() -> MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN
-            !modalVisible -> MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG
+            !modalVisible && (normalized.contains("选择套牌") || normalized.contains("狂野对战") ||
+                normalized.contains("标准对战") || normalized.contains("搜寻对手") ||
+                normalized.contains("寻找对手") || normalized.contains("取消")) ->
+                MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG
             else -> MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN
         }
     }

@@ -27,6 +27,16 @@ class MatchmakingDialogRecoveryPolicyTest {
     @Test
     fun `only the exact start game error with confirm label is positive evidence`() {
         assertEquals(
+            MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+            StartGameErrorDialogClassifier.classifyModalText("了了/人三三|于AS二是/", 0.61, modalVisible = false),
+            "malformed OCR is not evidence that the error dialog is absent",
+        )
+        assertEquals(
+            MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG,
+            StartGameErrorDialogClassifier.classifyModalText("搜寻对手 取消", 0.92, modalVisible = false),
+            "a recognized search screen is positive evidence that the target error dialog is absent",
+        )
+        assertEquals(
             MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE,
             StartGameErrorDialogClassifier.classify("发生错误", "开始游戏时发生了错误请等待几分钟然后再试", "确定"),
         )
@@ -83,6 +93,37 @@ class MatchmakingDialogRecoveryPolicyTest {
                 modalVisible = false,
             ),
             "text without a visible modal is not click authorization",
+        )
+    }
+
+    @Test
+    fun `offline matchmaking lifecycle keeps queue active on empty OCR and exits only on match or exact error`() {
+        val queueEnabled = MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = false)
+        assertTrue(queueEnabled, "unknown screen OCR must not disable the active queue")
+
+        val emptyOcr = StartGameErrorDialogClassifier.classifyModalText("", null, modalVisible = false)
+        assertEquals(MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN, emptyOcr)
+        assertEquals(
+            MatchmakingDialogRecoveryPolicy.Action.WAIT_AND_RETRY,
+            MatchmakingDialogRecoveryPolicy.decide(active, emptyOcr, completedAttempts = 0, priorClickSent = false).action,
+        )
+
+        val matchArrived = MatchmakingGuardPolicy.decide(
+            MatchmakingGuardPolicy.LiveGameEvidence(true, "FILL_DECK", "game-123", 12),
+        ) == MatchmakingGuardPolicy.Decision.ABORT_GAME_STARTED
+        assertTrue(matchArrived, "live game evidence exits search and cancels recovery")
+
+        val exactError = StartGameErrorDialogClassifier.classifyModalText(
+            "发生错误 开始游戏时发生了错误。请等待几分钟然后再试。确定", 0.95, modalVisible = true,
+        )
+        assertEquals(MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE, exactError)
+        assertEquals(
+            MatchmakingDialogRecoveryPolicy.Action.CLICK_CONFIRM,
+            MatchmakingDialogRecoveryPolicy.decide(active, exactError, completedAttempts = 0, priorClickSent = false).action,
+        )
+        assertTrue(
+            MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = false),
+            "pre-match queue gate is runtime-only; rank is checked after mulligan",
         )
     }
 
