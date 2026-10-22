@@ -104,7 +104,7 @@ class CommonCardAction : CardAction(false, true) {
                 if (card.area is PlayArea) {
                     val endRect = getCardRect(card)
                     if (endRect.isValid()) {
-                        startRect.lClickMoveLClick(endRect)
+                        startRect.lClickMoveLClick(endRect, attackTraceId = AttackInputTimingTrace.begin())
                         lastRect = endRect
                         return true
                     }
@@ -187,7 +187,10 @@ class CommonCardAction : CardAction(false, true) {
             }
             if (startRect.isValid()) {
                 if (belongCard.area == me.playArea) {
-                    startRect.lClickMoveLClick(GameUtil.RIVAL_HERO_RECT)
+                    startRect.lClickMoveLClick(
+                        GameUtil.RIVAL_HERO_RECT,
+                        attackTraceId = AttackInputTimingTrace.begin(),
+                    )
                     lastRect = GameUtil.RIVAL_HERO_RECT
                     return true
                 }

@@ -108,6 +108,7 @@ data class GameRect(
     fun lClickMoveLClick(
         endRect: GameRect?,
         isCancel: Boolean = true,
+        attackTraceId: String? = null,
     ) {
         if (endRect == null) {
             return
@@ -116,12 +117,45 @@ data class GameRect(
         val startPos = getClickPos()
         val endPos = endRect.getClickPos()
         showControlPos()
+        val sourceClickStartedAt = System.nanoTime()
+        attackTraceId?.let {
+            AttackInputTimingTrace.stage(it, "SOURCE_CLICK_DISPATCH_START", "point=(${startPos.x},${startPos.y})")
+        }
         GameUtil.leftButtonClick(startPos)
+        attackTraceId?.let {
+            AttackInputTimingTrace.stage(
+                it,
+                "SOURCE_CLICK_DISPATCH_END",
+                "elapsedMs=${(System.nanoTime() - sourceClickStartedAt) / 1_000_000}",
+            )
+        }
         SystemUtil.delay(80, 140)
+        val movementStartedAt = System.nanoTime()
+        attackTraceId?.let {
+            AttackInputTimingTrace.stage(it, "MOVEMENT_START", "from=(${startPos.x},${startPos.y}) to=(${endPos.x},${endPos.y})")
+        }
         GameUtil.moveMouse(startPos, endPos)
+        attackTraceId?.let {
+            AttackInputTimingTrace.stage(
+                it,
+                "MOVEMENT_END",
+                "elapsedMs=${(System.nanoTime() - movementStartedAt) / 1_000_000}",
+            )
+        }
         SystemUtil.delay(60, 120)
         showControlPos(endRect)
+        val targetClickStartedAt = System.nanoTime()
+        attackTraceId?.let {
+            AttackInputTimingTrace.stage(it, "TARGET_CLICK_DISPATCH_START", "point=(${endPos.x},${endPos.y})")
+        }
         GameUtil.leftButtonClick(endPos)
+        attackTraceId?.let {
+            AttackInputTimingTrace.stage(
+                it,
+                "TARGET_CLICK_DISPATCH_END",
+                "elapsedMs=${(System.nanoTime() - targetClickStartedAt) / 1_000_000}",
+            )
+        }
     }
 
     fun move() {

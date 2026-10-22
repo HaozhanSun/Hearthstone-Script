@@ -880,7 +880,7 @@ object MouseUtil {
                     mouseMode,
                 )
             }
-            SystemUtil.delay(RandomUtil.getMouseStepDelay())
+            SystemUtil.delay(GameplayMouseMovementTiming.scaleStepDelayMs(RandomUtil.getMouseStepDelay()))
             previous = point
         }
     }
@@ -962,7 +962,7 @@ object MouseUtil {
         val path = buildSmoothMousePath(current, target)
         path.drop(1).forEach { point ->
             robot.mouseMove(point.x, point.y)
-            SystemUtil.delay(RandomUtil.getMouseStepDelay())
+            SystemUtil.delay(GameplayMouseMovementTiming.scaleStepDelayMs(RandomUtil.getMouseStepDelay()))
         }
         return path.size
     }
