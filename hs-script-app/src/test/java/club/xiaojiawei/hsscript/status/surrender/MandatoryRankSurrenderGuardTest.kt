@@ -6,10 +6,12 @@ import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
+import club.xiaojiawei.hsscript.status.UpstreamScreenStateRecovery
 import club.xiaojiawei.hsscript.utils.PowerLogUtil
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import club.xiaojiawei.hsscript.utils.GameEndTaskRegistry
@@ -482,6 +484,85 @@ class MandatoryRankSurrenderGuardTest {
         } finally {
             tasks.cancelAll()
             scheduler.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `authoritative terminal deck selection reconciles cleanup before strategy queue input`() {
+        val wasWorking = WorkTimeListener.working
+        val wasPaused = PauseStatus.isPause
+        val oldPauseOrigin = PauseStatus.pauseOrigin
+        try {
+            WorkTimeListener.working = true
+            PauseStatus.setManualPause(false)
+
+            val gameIdentity = "game-20261022-1638:laz#12793"
+            val gameTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+            assertTrue(MulliganRankDispatchBarrier.requireSurrender(gameTicket) != null)
+            MandatoryRankSurrenderGuard.begin(gameIdentity)
+            val acceptedTerminalEvidence = CurrentGameSurrenderTerminalEvidence(
+                gameIdentity = gameIdentity,
+                ownEntityId = "laz#12793",
+                opponentEntityId = "FwHLRB#3332",
+                ownPlayState = "CONCEDED",
+                opponentPlayState = "WON",
+                finalGameOver = true,
+                complete = true,
+            )
+            val terminalCapability =
+                MandatoryRankSurrenderGuard.authorizeTerminalCleanup(acceptedTerminalEvidence)
+            assertTrue(terminalCapability != null)
+            assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", terminalCapability))
+            assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
+            assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+            assertFalse(ActionDispatchGate.allow("matchmaking.start"))
+
+            // Stale/low-confidence screen observations and an old terminal
+            // capability cannot release cleanup; retries remain rejected.
+            assertEquals(
+                MandatoryRankSurrenderDeckSelectionRecovery.Result.BLOCKED,
+                MandatoryRankSurrenderDeckSelectionRecovery.completeIfRequired(
+                    "DECK_SELECTION", 100, "deck-selection-title", freshObservation = false,
+                ),
+            )
+            assertEquals(
+                MandatoryRankSurrenderDeckSelectionRecovery.Result.BLOCKED,
+                MandatoryRankSurrenderDeckSelectionRecovery.completeIfRequired(
+                    "DECK_SELECTION", 84, "deck-selection-title", freshObservation = true,
+                ),
+            )
+            assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+            assertFalse(ActionDispatchGate.allow("matchmaking.start"))
+
+            // This matches the screenshot-backed screen-recovery observation:
+            // a fresh high-confidence deck-selection title after GAMEOVER.
+            assertEquals(
+                MandatoryRankSurrenderDeckSelectionRecovery.Result.COMPLETED,
+                UpstreamScreenStateRecovery.completeMandatoryRankSurrenderAtDeckSelection(
+                    screenKind = "DECK_SELECTION",
+                    confidence = 100,
+                    visualEvidence = "deck-selection-title",
+                    freshObservation = true,
+                ),
+            )
+            assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+            assertTrue(ActionDispatchGate.allow("matchmaking.start"))
+            repeat(10) {
+                assertTrue(ActionDispatchGate.allow("matchmaking.start"), "no stale cleanup block or repeated blocked-action spam")
+            }
+
+            // A next-game retry cannot reuse this match's terminal proof.
+            MulliganRankDispatchBarrier.beginCurrentGame()
+            MandatoryRankSurrenderGuard.begin("next-game:self")
+            assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCapability))
+            assertNull(MandatoryRankSurrenderGuard.authorizeTerminalCleanup(acceptedTerminalEvidence))
+        } finally {
+            WorkTimeListener.working = wasWorking
+            when {
+                !wasPaused -> PauseStatus.setManualPause(false)
+                oldPauseOrigin == PauseStatus.Origin.AUTOMATIC -> PauseStatus.setAutomaticPause(true)
+                else -> PauseStatus.setManualPause(true)
+            }
         }
     }
 

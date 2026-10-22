@@ -928,12 +928,6 @@ object UpstreamScreenStateRecovery {
 
         when (detection.kind) {
             ScreenKind.DECK_SELECTION -> {
-                if (DeckStrategyManager.currentDeckStrategy == null ||
-                    DeckStrategyManager.currentRunMode == null
-                ) {
-                    log.warn { "SCREEN_RECOVERY_DECK_SELECTION_SKIPPED reason=no-selected-strategy" }
-                    return false
-                }
                 val surrenderCompletion = completeMandatoryRankSurrenderAtDeckSelection(
                     screenKind = detection.kind.code,
                     confidence = detection.confidence,
@@ -942,6 +936,11 @@ object UpstreamScreenStateRecovery {
                     // state fingerprint have been revalidated.
                     freshObservation = true,
                 )
+                log.info {
+                    "SCREEN_RECOVERY_TERMINAL_CLEANUP_RECONCILIATION result=${surrenderCompletion.name} " +
+                        "screen=${detection.kind.code} confidence=${detection.confidence} " +
+                        "visualEvidence=${detection.evidence} freshObservation=true"
+                }
                 if (surrenderCompletion ==
                     club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderDeckSelectionRecovery.Result.BLOCKED
                 ) {
@@ -961,6 +960,12 @@ object UpstreamScreenStateRecovery {
                             "confidence=${detection.confidence} visualEvidence=${detection.evidence} " +
                             "queueMayResume=true"
                     }
+                }
+                if (DeckStrategyManager.currentDeckStrategy == null ||
+                    DeckStrategyManager.currentRunMode == null
+                ) {
+                    log.warn { "SCREEN_RECOVERY_DECK_SELECTION_SKIPPED reason=no-selected-strategy" }
+                    return false
                 }
                 Mode.recover(ModeEnum.TOURNAMENT, "visible-deck-selection", enterStrategy = false)
                 log.warn {

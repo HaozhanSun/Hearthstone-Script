@@ -12,6 +12,7 @@ import club.xiaojiawei.hsscriptbase.config.log
  * gate immediately before dispatch and again after acquiring its input lock.
  */
 object ActionDispatchGate {
+    private val terminalCleanupBlockLogThrottle = TerminalCleanupBlockLogThrottle()
 
     fun allow(
         action: String,
@@ -67,12 +68,16 @@ object ActionDispatchGate {
         }
         val terminalCleanupAllowed = action == "terminal-result.dismiss" && terminalCleanupCapabilityValid
         if (terminalCleanupPending && !terminalCleanupAllowed) {
-            log.warn {
-                "ACTION_BLOCKED action=$action reason=terminal-result-cleanup-pending " +
-                    "pause=false working=true dispatch=false"
+            terminalCleanupBlockLogThrottle.onBlocked(action)?.let { suppressed ->
+                log.warn {
+                    "ACTION_BLOCKED action=$action reason=terminal-result-cleanup-pending " +
+                        "pause=false working=true dispatch=false" +
+                        if (suppressed > 0) " repeatedSuppressed=$suppressed" else ""
+                }
             }
             return false
         }
+        terminalCleanupBlockLogThrottle.onAllowed(action)
         val rankSurrenderRecoveryAllowed = rankBarrierState == MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED &&
             recoveryCapabilityValid
         val rankSurrenderRequestAllowed = rankBarrierState == MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED &&
