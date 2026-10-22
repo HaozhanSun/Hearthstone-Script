@@ -126,6 +126,43 @@ class MatchmakingSearchRecoveryTest {
         assertFalse(LifecycleTrace.shouldSuppressStateRecoveryForMatchmaking(observedAt = 0, now = 10_001))
     }
 
+    @Test
+    fun `authorized visual queue evidence propagates with empty Power log but unknown screen does not`() {
+        val queueProbe = ScreenStateRecovery.StartGameErrorDialogProbe(
+            state = MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG,
+            provider = "VISUAL_SIGNATURE",
+            reason = "matchmaking-search-screen-visible",
+        )
+        assertTrue(
+            MatchmakingQueueLifecycleEvidencePolicy.isAuthoritativeActiveSearch(
+                queueProbe,
+                captureAuthorized = true,
+                powerLogLength = 0L,
+            ),
+            "a verified current-client capture is sufficient while the new session Power.log is empty",
+        )
+
+        val unknownProbe = queueProbe.copy(
+            state = MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+            provider = "LEGACY",
+            reason = "ocr-unverified-or-low-confidence",
+        )
+        assertFalse(
+            MatchmakingQueueLifecycleEvidencePolicy.isAuthoritativeActiveSearch(
+                unknownProbe,
+                captureAuthorized = true,
+                powerLogLength = 0L,
+            ),
+        )
+        assertFalse(
+            MatchmakingQueueLifecycleEvidencePolicy.isAuthoritativeActiveSearch(
+                queueProbe,
+                captureAuthorized = false,
+                powerLogLength = 0L,
+            ),
+        )
+    }
+
     private fun beginTerminalCleanup() = run {
         MandatoryRankSurrenderGuard.begin("game-123:self")
         val capability = requireNotNull(

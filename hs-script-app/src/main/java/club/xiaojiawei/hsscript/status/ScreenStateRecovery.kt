@@ -484,7 +484,7 @@ object ScreenStateRecovery {
                 reason = "capture-unavailable",
             )
 
-        return runCatching {
+        val probe = runCatching {
             probeStartGameErrorDialogForImage(capture.image, capture.file?.absolutePath) { roiImage, roiName ->
                 OcrRuntime.recognizeResult(
                     image = roiImage,
@@ -513,6 +513,21 @@ object ScreenStateRecovery {
                 reason = "ocr-failed-${error.javaClass.simpleName}",
             )
         }
+        val powerLogLength = PowerLogListener.logFile?.length() ?: 0L
+        if (MatchmakingQueueLifecycleEvidencePolicy.propagateIfAuthoritative(
+                probe = probe,
+                captureAuthorized = captureResult.foregroundConfirmed,
+                powerLogLength = powerLogLength,
+                observedAt = System.currentTimeMillis(),
+            )
+        ) {
+            log.info {
+                "MATCHMAKING_LIFECYCLE_EVIDENCE source=error-dialog-probe screen=SEARCHING " +
+                    "provider=${probe.provider} powerLogLength=$powerLogLength " +
+                    "captureAuthorized=true lifecycleSuppressionMs=120000 input=none"
+            }
+        }
+        return probe
     }
 
     /** Shared screenshot-to-contract path for production and deterministic offline fixture tests. */
