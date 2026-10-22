@@ -5,8 +5,16 @@ object MatchmakingDialogRecoveryPolicy {
     const val MAX_ATTEMPTS = 20
     const val MIN_OCR_CONFIDENCE = 0.55
 
-    enum class Probe { ERROR_DIALOG_VISIBLE, NO_ERROR_DIALOG, UNKNOWN }
-    enum class Action { CLICK_CONFIRM, WAIT_AND_RETRY, CONFIRMED_DISMISSED, STOP_NOT_PRESENT, CANCEL, EXHAUSTED }
+    enum class Probe { ERROR_DIALOG_VISIBLE, KNOWN_FOUR_CARD_NOTICE_VISIBLE, NO_ERROR_DIALOG, UNKNOWN }
+    enum class Action {
+        CLICK_CONFIRM,
+        DISMISS_KNOWN_NOTICE,
+        WAIT_AND_RETRY,
+        CONFIRMED_DISMISSED,
+        STOP_NOT_PRESENT,
+        CANCEL,
+        EXHAUSTED,
+    }
 
     data class Context(
         val paused: Boolean,
@@ -33,6 +41,11 @@ object MatchmakingDialogRecoveryPolicy {
         if (completedAttempts >= MAX_ATTEMPTS) return Decision(Action.EXHAUSTED, "attempt-limit")
         return when (probe) {
             Probe.ERROR_DIALOG_VISIBLE -> Decision(Action.CLICK_CONFIRM, "exact-error-dialog-visible")
+            Probe.KNOWN_FOUR_CARD_NOTICE_VISIBLE -> if (priorClickSent) {
+                Decision(Action.WAIT_AND_RETRY, "known-notice-awaiting-dismissal-postcheck")
+            } else {
+                Decision(Action.DISMISS_KNOWN_NOTICE, "four-card-notice-and-footer-button-visually-confirmed")
+            }
             Probe.UNKNOWN -> Decision(Action.WAIT_AND_RETRY, "dialog-state-unverified")
             Probe.NO_ERROR_DIALOG -> error("handled above")
         }
@@ -41,4 +54,8 @@ object MatchmakingDialogRecoveryPolicy {
     /** Dispatch exactly the positive confirm decision and return the input adapter's acceptance. */
     fun dispatchConfirm(decision: Decision, clickConfirm: () -> Boolean): Boolean? =
         if (decision.action == Action.CLICK_CONFIRM) clickConfirm() else null
+
+    /** Dispatch the separate, screenshot-identified footer button once; never reuse ERROR_RECT. */
+    fun dispatchKnownNoticeDismissal(decision: Decision, clickFooterButton: () -> Boolean): Boolean? =
+        if (decision.action == Action.DISMISS_KNOWN_NOTICE) clickFooterButton() else null
 }

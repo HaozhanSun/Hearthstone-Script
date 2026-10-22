@@ -48,6 +48,9 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
 
     val ERROR_RECT: GameRect by lazy { GameRect(-0.0397, 0.0325, 0.0856, 0.1249) }
 
+    /** Center point of the lower-center gold button in the visually identified four-card notice. */
+    val FOUR_CARD_NOTICE_DISMISS_RECT: GameRect by lazy { GameRect(-0.0200, 0.0200, 0.2050, 0.2450) }
+
     val CHANGE_MODE_RECT: GameRect by lazy { GameRect(0.2868, 0.3256, -0.4672, -0.4279) }
 
     val WILD_MODE_RECT: GameRect by lazy { GameRect(-0.3072, -0.1755, -0.1924, -0.0647) }
@@ -485,6 +488,23 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                             "MATCHMAKING_ERROR_DIALOG_CLICK trace=$traceId attempt=$attempts " +
                                 "inputAccepted=$accepted targetSystemConfirmed=false " +
                                 "rect=ERROR_RECT reason=${decision.reason}"
+                        }
+                    }
+
+                    MatchmakingDialogRecoveryPolicy.Action.DISMISS_KNOWN_NOTICE -> {
+                        if (abortMatchmakingIfGameStarted(traceId, "popup-recovery-before-notice-dismissal")) {
+                            recoveryTask.cancel(false)
+                            return@LRunnable
+                        }
+                        val accepted = MatchmakingDialogRecoveryPolicy.dispatchKnownNoticeDismissal(decision) {
+                            MouseUtil.leftButtonClickForRecovery(FOUR_CARD_NOTICE_DISMISS_RECT.getCenterClickPos())
+                        } ?: false
+                        attempts++
+                        priorClickSent = priorClickSent || accepted
+                        log.warn {
+                            "MATCHMAKING_NOTICE_MODAL_DISMISS trace=$traceId attempt=$attempts " +
+                                "inputAccepted=$accepted target=FOUR_CARD_NOTICE_FOOTER_BUTTON " +
+                                "actionEvidence=four-blue-card-markers-plus-gold-footer-and-confirm-line"
                         }
                     }
 

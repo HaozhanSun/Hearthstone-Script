@@ -87,6 +87,75 @@ class MatchmakingDialogRecoveryPolicyTest {
     }
 
     @Test
+    fun `captured four card notice is visually identified and only its footer button may dismiss it`() {
+        val notice = fixture("/offline-ocr/screen-recovery/matchmaking-reward-modal-20261021-200538.png")
+        assertTrue(club.xiaojiawei.hsscript.status.MatchmakingRewardNoticeVisualPolicy.isVisible(notice))
+
+        val probe = ScreenStateRecovery.probeStartGameErrorDialogForImage(notice, "incident-fixture") { _, _ ->
+            error("the screenshot's OCR is known to be garbage; the narrow visual signature should take precedence")
+        }
+        assertEquals(MatchmakingDialogRecoveryPolicy.Probe.KNOWN_FOUR_CARD_NOTICE_VISIBLE, probe.state)
+        assertEquals("VISUAL_SIGNATURE", probe.provider)
+
+        val decision = MatchmakingDialogRecoveryPolicy.decide(
+            active,
+            probe.state,
+            completedAttempts = 0,
+            priorClickSent = false,
+        )
+        assertEquals(MatchmakingDialogRecoveryPolicy.Action.DISMISS_KNOWN_NOTICE, decision.action)
+        var footerClicks = 0
+        var errorDialogClicks = 0
+        assertTrue(MatchmakingDialogRecoveryPolicy.dispatchKnownNoticeDismissal(decision) {
+            footerClicks++
+            true
+        }!!)
+        assertEquals(null, MatchmakingDialogRecoveryPolicy.dispatchConfirm(decision) {
+            errorDialogClicks++
+            true
+        })
+        assertEquals(1, footerClicks)
+        assertEquals(0, errorDialogClicks)
+
+        val stillVisible = MatchmakingDialogRecoveryPolicy.decide(
+            active,
+            MatchmakingDialogRecoveryPolicy.Probe.KNOWN_FOUR_CARD_NOTICE_VISIBLE,
+            completedAttempts = 1,
+            priorClickSent = true,
+        )
+        assertEquals(MatchmakingDialogRecoveryPolicy.Action.WAIT_AND_RETRY, stillVisible.action)
+        assertEquals(null, MatchmakingDialogRecoveryPolicy.dispatchKnownNoticeDismissal(stillVisible) {
+            footerClicks++
+            true
+        })
+        assertEquals(1, footerClicks, "the visually grounded CTA is dispatched only once before a fresh postcheck")
+        assertEquals(
+            MatchmakingDialogRecoveryPolicy.Action.CONFIRMED_DISMISSED,
+            MatchmakingDialogRecoveryPolicy.decide(
+                active,
+                MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG,
+                completedAttempts = 1,
+                priorClickSent = true,
+            ).action,
+        )
+    }
+
+    @Test
+    fun `known notice visual signature excludes deck selection and existing error modal fixtures`() {
+        val controls = listOf(
+            "/offline-ocr/screen-recovery/deck-selection-screen.png",
+            "/offline-ocr/screen-recovery/start-game-error-dialog-over-deck-selection.png",
+            "/offline-ocr/screen-recovery/reconnect-failure-dialog-over-deck-selection.png",
+        )
+        controls.forEach { resource ->
+            assertFalse(
+                club.xiaojiawei.hsscript.status.MatchmakingRewardNoticeVisualPolicy.isVisible(fixture(resource)),
+                "false positive for $resource",
+            )
+        }
+    }
+
+    @Test
     fun `provided screenshot fixture selects and accepts only the exact confirm click`() {
         val fixture = requireNotNull(
             javaClass.getResourceAsStream("/offline-ocr/screen-recovery/start-game-error-dialog-over-deck-selection.png"),
@@ -392,6 +461,7 @@ class MatchmakingDialogRecoveryPolicyTest {
     @Test
     fun `pause mode change or started game cancels before any click`() {
         val visible = MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE
+        val knownNotice = MatchmakingDialogRecoveryPolicy.Probe.KNOWN_FOUR_CARD_NOTICE_VISIBLE
         assertEquals(
             MatchmakingDialogRecoveryPolicy.Action.CANCEL,
             MatchmakingDialogRecoveryPolicy.decide(active.copy(paused = true), visible, 0, false).action,
@@ -404,6 +474,11 @@ class MatchmakingDialogRecoveryPolicyTest {
             MatchmakingDialogRecoveryPolicy.Action.CANCEL,
             MatchmakingDialogRecoveryPolicy.decide(active.copy(gameStarted = true), visible, 0, false).action,
         )
+        for (context in listOf(active.copy(paused = true), active.copy(tournamentMode = false), active.copy(gameStarted = true))) {
+            val blocked = MatchmakingDialogRecoveryPolicy.decide(context, knownNotice, 0, false)
+            assertEquals(MatchmakingDialogRecoveryPolicy.Action.CANCEL, blocked.action)
+            assertEquals(null, MatchmakingDialogRecoveryPolicy.dispatchKnownNoticeDismissal(blocked) { true })
+        }
     }
 
     private fun fixture(resource: String) = requireNotNull(javaClass.getResourceAsStream(resource)).use(ImageIO::read)

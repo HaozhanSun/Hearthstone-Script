@@ -528,6 +528,17 @@ object ScreenStateRecovery {
                 reason = "capture-unavailable",
             )
         }
+        if (MatchmakingRewardNoticeVisualPolicy.isVisible(image)) {
+            return StartGameErrorDialogProbe(
+                state = MatchmakingDialogRecoveryPolicy.Probe.KNOWN_FOUR_CARD_NOTICE_VISIBLE,
+                title = "",
+                body = "four-card-notice",
+                confirm = "visually-confirmed-lower-center-button",
+                screenshot = screenshot,
+                provider = "VISUAL_SIGNATURE",
+                reason = "four-card-notice-footer-button-visually-confirmed",
+            )
+        }
         val roi = ScreenStateRoiSelector
             .selectStartGameError(image.width, image.height)
             .singleOrNull()
