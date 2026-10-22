@@ -23,6 +23,7 @@ import club.xiaojiawei.hsscript.status.ScreenWatchdog
 import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 import club.xiaojiawei.hsscript.status.ScreenWatchdogRecoveryAction
 import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
+import club.xiaojiawei.hsscript.status.ResultPageRetryScheduler
 import club.xiaojiawei.hsscript.status.FreshPostResultDestinationPolicy
 import club.xiaojiawei.hsscript.status.ResultPageEvidencePolicy
 import club.xiaojiawei.hsscript.status.ResultScreenObservation
@@ -1618,7 +1619,9 @@ object GameUtil {
             RandomUtil.getActionInterval(800).toLong()
         }
         lateinit var future: ScheduledFuture<*>
-        future = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
+        future = ResultPageRetryScheduler.scheduleWithFixedDelay(
+            EXTRA_THREAD_POOL,
+            interval,
             {
                 val number = if (cleanupTicket != null) {
                     terminalPageCleanupCoordinator.nextProbe(cleanupTicket)
@@ -1962,9 +1965,6 @@ object GameUtil {
                     log.warn(error) { "E2E恢复：关闭旧结算页面尝试失败 #$number" }
                 }
             },
-            interval,
-            interval,
-            TimeUnit.MILLISECONDS,
         )
         gameEndTasks.add(future, GameEndTaskRegistry.Kind.TERMINAL_PAGE)
     }
