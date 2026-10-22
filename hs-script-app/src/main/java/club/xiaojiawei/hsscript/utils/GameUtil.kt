@@ -24,6 +24,7 @@ import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 import club.xiaojiawei.hsscript.status.ScreenWatchdogRecoveryAction
 import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
 import club.xiaojiawei.hsscript.status.ResultPageRetryScheduler
+import club.xiaojiawei.hsscript.status.TerminalResultSequenceController
 import club.xiaojiawei.hsscript.status.FreshPostResultDestinationPolicy
 import club.xiaojiawei.hsscript.status.ResultPageEvidencePolicy
 import club.xiaojiawei.hsscript.status.ResultScreenObservation
@@ -67,11 +68,14 @@ import java.nio.file.Path
 import java.util.*
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.Executors
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
 import kotlin.math.min
+import javafx.beans.value.ChangeListener
 
 
 /**
@@ -1618,11 +1622,21 @@ object GameUtil {
         } else {
             RandomUtil.getActionInterval(800).toLong()
         }
+        if (cleanupTicket != null && terminalCleanupCapability != null) {
+            startTerminalResultSequence(
+                ticket = cleanupTicket,
+                capability = terminalCleanupCapability,
+                startingWarCount = startingWarCount,
+                initialRetryIntervalMs = interval,
+            )
+            return
+        }
         lateinit var future: ScheduledFuture<*>
         future = ResultPageRetryScheduler.scheduleWithFixedDelay(
             EXTRA_THREAD_POOL,
             interval,
-            {
+            interval,
+        ) { retryGate ->
                 val number = if (cleanupTicket != null) {
                     terminalPageCleanupCoordinator.nextProbe(cleanupTicket)
                 } else {
@@ -1676,13 +1690,46 @@ object GameUtil {
                     return@scheduleWithFixedDelay
                 }
 
+                fun awaitInputDispatchEligibility(): Boolean {
+                    val eligible = retryGate.awaitEligibility {
+                        val capabilityValid = MandatoryRankSurrenderGuard
+                            .isTerminalCleanupCapabilityValid(terminalCleanupCapability)
+                        val newGameDetected = WarEx.warCount > startingWarCount
+                        !PauseStatus.isPause && !newGameDetected &&
+                            (Mode.currMode === ModeEnum.GAMEPLAY || capabilityValid) &&
+                            (cleanupTicket == null || capabilityValid) && !future.isCancelled
+                    }
+                    if (eligible) return true
+                    if (cleanupTicket != null) {
+                        if (PauseStatus.isPause && WarEx.warCount <= startingWarCount) {
+                            terminalPageCleanupCoordinator.interrupt(cleanupTicket)
+                        } else {
+                            terminalPageCleanupCoordinator.hold(cleanupTicket)
+                        }
+                    }
+                    log.warn {
+                        "RESULT_PAGE_DISMISSAL_CANCELLED reason=retry-eligibility-invalid " +
+                            "startWarCount=$startingWarCount currentWarCount=${WarEx.warCount} dispatch=false"
+                    }
+                    future.cancel(false)
+                    gameEndTasks.remove(future)
+                    return false
+                }
+
                     // A queued Robot event is not proof the client accepted it.
                     // When Power.log still says inWar, require a fresh positive
                     // result-page observation before every click; never turn an
                     // UNKNOWN postcheck into a success or a speculative input.
+                    val observationStartedAtNanos = System.nanoTime()
                     val screenObservation = if (cleanupTicket != null || resultAlreadyObserved || number > 1) {
                         ScreenStateRecovery.observeResultScreenForRecovery()
                     } else ResultScreenObservation(null, captureAuthorized = false)
+                    val observationDurationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - observationStartedAtNanos)
+                    log.info {
+                        "RESULT_PAGE_RETRY_OBSERVATION probe=$number durationMs=$observationDurationMs " +
+                            "sincePreviousInputMs=${retryGate.elapsedSinceLastDispatchMillis() ?: "none"} " +
+                            "nextInputEligibleInMs=${retryGate.millisUntilEligible()}"
+                    }
                     val destinationTransitionConfirmed = FreshPostResultDestinationPolicy.isConfirmed(
                         screenObservation.destinationScreen,
                         screenObservation.destinationConfidence,
@@ -1718,6 +1765,7 @@ object GameUtil {
                         } ?: 0,
                     )) {
                         ResultPageDismissalPolicy.Decision.DISPATCH_CLICK -> {
+                            if (!awaitInputDispatchEligibility()) return@scheduleWithFixedDelay
                             val reservedAttempt = cleanupTicket?.let {
                                 terminalPageCleanupCoordinator.reserveRankProgressInput(
                                     it,
@@ -1746,6 +1794,13 @@ object GameUtil {
                                 PostResultRankProgressPolicy.Input.KEYBOARD_ENTER ->
                                     MouseUtil.pressEnterForRecovery(terminalCleanupCapability)
                                 null -> false
+                            }
+                            if (input != null) {
+                                val dispatchGapMs = retryGate.recordDispatch()
+                                log.info {
+                                    "RANK_PROGRESS_CONTINUE_CADENCE input=$input " +
+                                        "dispatchGapMs=${dispatchGapMs ?: "first"} retryMs=$interval"
+                                }
                             }
                             log.info {
                                 "RANK_PROGRESS_CONTINUE_INPUT input=$input dispatchAccepted=$accepted " +
@@ -1874,6 +1929,7 @@ object GameUtil {
                                 }
                                 return@scheduleWithFixedDelay
                             }
+                            if (!awaitInputDispatchEligibility()) return@scheduleWithFixedDelay
                             val reservedAttempt = if (cleanupTicket != null) {
                                 terminalPageCleanupCoordinator.reserveInput(cleanupTicket)
                             } else {
@@ -1932,6 +1988,11 @@ object GameUtil {
                                 GAME_END_CONTINUE_RECT.getCenterClickPos(),
                                 terminalCleanupCapability = terminalCleanupCapability,
                             )
+                            val dispatchGapMs = retryGate.recordDispatch()
+                            log.info {
+                                "RESULT_PAGE_DISMISSAL_CADENCE input=CENTER_CLICK " +
+                                    "dispatchGapMs=${dispatchGapMs ?: "first"} retryMs=$interval"
+                            }
                             log.info {
                                 "RESULT_PAGE_DISMISSAL_INPUT input=CENTER_CLICK dispatchAccepted=$accepted " +
                                     "acceptance=awaiting-current-client-postcheck probe=$number sharedInput=$clickNumber"
@@ -1940,6 +2001,11 @@ object GameUtil {
                         ResultPageDismissalPolicy.Input.KEYBOARD_ENTER -> {
                             log.info { "E2E恢复：结果页中心点击未确认，使用一次前台 SendInput Enter 后备输入" }
                             val accepted = MouseUtil.pressEnterForRecovery(terminalCleanupCapability)
+                            val dispatchGapMs = retryGate.recordDispatch()
+                            log.info {
+                                "RESULT_PAGE_DISMISSAL_CADENCE input=KEYBOARD_ENTER " +
+                                    "dispatchGapMs=${dispatchGapMs ?: "first"} retryMs=$interval"
+                            }
                             log.info {
                                 "RESULT_PAGE_DISMISSAL_INPUT input=KEYBOARD_ENTER dispatchAccepted=$accepted " +
                                     "acceptance=awaiting-current-client-postcheck probe=$number sharedInput=$clickNumber"
@@ -1951,6 +2017,11 @@ object GameUtil {
                                 GAME_END_CONTINUE_RECT.getClickPos(),
                                 terminalCleanupCapability = terminalCleanupCapability,
                             )
+                            val dispatchGapMs = retryGate.recordDispatch()
+                            log.info {
+                                "RESULT_PAGE_DISMISSAL_CADENCE input=RETRY_CLICK " +
+                                    "dispatchGapMs=${dispatchGapMs ?: "first"} retryMs=$interval"
+                            }
                             log.info {
                                 "RESULT_PAGE_DISMISSAL_INPUT input=RETRY_CLICK dispatchAccepted=$accepted " +
                                     "acceptance=awaiting-current-client-postcheck probe=$number sharedInput=$clickNumber"
@@ -1964,9 +2035,144 @@ object GameUtil {
                 }.onFailure { error ->
                     log.warn(error) { "E2E恢复：关闭旧结算页面尝试失败 #$number" }
                 }
+        }
+        gameEndTasks.add(future, GameEndTaskRegistry.Kind.TERMINAL_PAGE)
+    }
+
+    private fun startTerminalResultSequence(
+        ticket: TerminalPageCleanupCoordinator.Ticket,
+        capability: MandatoryRankSurrenderGuard.TerminalCleanupCapability,
+        startingWarCount: Int,
+        initialRetryIntervalMs: Long,
+    ) {
+        val inputExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "Terminal Result Continue Clock").apply { isDaemon = true }
+        }
+        lateinit var controller: TerminalResultSequenceController
+        val trackedTasks = CopyOnWriteArrayList<ScheduledFuture<*>>()
+        val pauseListener = ChangeListener<Boolean> { _, _, paused ->
+            if (paused) controller.cancel("paused")
+        }
+        val gameListener = ChangeListener<Number> { _, _, count ->
+            if (count.toInt() > startingWarCount) controller.cancel("new-game-detected")
+        }
+        controller = TerminalResultSequenceController(
+            observerExecutor = EXTRA_THREAD_POOL,
+            inputExecutor = inputExecutor,
+            initialInputCount = terminalPageCleanupCoordinator.snapshot().inputs,
+            initialRetryIntervalMillis = initialRetryIntervalMs,
+            retryIntervalMillis = {
+                RandomUtil.getRandom(
+                    ResultPageDismissalPolicy.TERMINAL_RETRY_MIN_INTERVAL_MS,
+                    ResultPageDismissalPolicy.TERMINAL_RETRY_MAX_INTERVAL_MS,
+                ).toLong()
+            },
+            observerIntervalMillis = TerminalResultSequenceController.DEFAULT_OBSERVER_INTERVAL_MS,
+            monitorIntervalMillis = TerminalResultSequenceController.DEFAULT_MONITOR_INTERVAL_MS,
+            maxDurationMillis = TerminalResultSequenceController.DEFAULT_MAX_DURATION_MS,
+            observe = {
+                val probe = terminalPageCleanupCoordinator.nextProbe(ticket)
+                if (probe == null) {
+                    log.warn {
+                        "RESULT_PAGE_SEQUENCE_OBSERVATION_BLOCKED reason=probe-budget-exhausted " +
+                            "inputs=${terminalPageCleanupCoordinator.snapshot().inputs} dispatch=false"
+                    }
+                    ResultScreenObservation(null, captureAuthorized = false)
+                } else {
+                    val startedAt = System.nanoTime()
+                    val observation = ScreenStateRecovery.observeResultScreenForRecovery()
+                    val durationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+                    log.info {
+                        "RESULT_PAGE_SEQUENCE_OBSERVATION probe=$probe durationMs=$durationMs " +
+                            "screen=${observation.resultVisible ?: "UNKNOWN"} " +
+                            "rankProgress=${observation.rankProgressVisible} " +
+                            "destination=${observation.destinationScreen ?: "UNKNOWN"} " +
+                            "captureAuthorized=${observation.captureAuthorized} " +
+                            "inputs=${terminalPageCleanupCoordinator.snapshot().inputs}"
+                    }
+                    observation
+                }
+            },
+            terminalProofValid = {
+                MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(capability)
+            },
+            paused = { PauseStatus.isPause },
+            sameGame = { WarEx.warCount == startingWarCount },
+            dispatchContinue = { page, attempt, plannedIntervalMs, recordDispatch ->
+                if (PauseStatus.isPause || WarEx.warCount != startingWarCount ||
+                    !MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(capability)
+                ) {
+                    false
+                } else {
+                    val reserved = terminalPageCleanupCoordinator.reserveInput(ticket)
+                    if (reserved == null) {
+                        log.warn {
+                            "RESULT_PAGE_SEQUENCE_INPUT_BLOCKED reason=shared-input-budget-exhausted " +
+                                "attempt=$attempt page=$page dispatch=false"
+                        }
+                        false
+                    } else {
+                        val accepted = MouseUtil.leftButtonClickForRecovery(
+                            GAME_END_CONTINUE_RECT.getCenterClickPos(),
+                            terminalCleanupCapability = capability,
+                        )
+                        val dispatchGapMs = recordDispatch()
+                        log.info {
+                            "RESULT_PAGE_SEQUENCE_INPUT page=$page input=$reserved/" +
+                                "${TerminalResultSequenceController.MAX_CONTINUE_INPUTS} " +
+                                "type=CENTER_CONTINUE dispatchAccepted=$accepted " +
+                                "dispatchGapMs=${dispatchGapMs ?: "first"} " +
+                                "plannedGapMs=$plannedIntervalMs " +
+                                "dispatchMonotonicNanos=${System.nanoTime()} " +
+                                "acceptance=awaiting-screen-observation"
+                        }
+                        true
+                    }
+                }
+            },
+            confirmDestination = { observation ->
+                val confirmed = terminalPageCleanupCoordinator.confirmDestination(ticket)
+                val completed = confirmed && MandatoryRankSurrenderGuard.confirmCompleted(
+                    "SCREEN_RESULT_DISMISSED",
+                    capability,
+                )
+                if (completed) {
+                    log.info {
+                        "RESULT_PAGE_SEQUENCE_CONFIRMED destination=${observation.destinationScreen} " +
+                            "evidence=fresh-authorized-screen requeueAllowed=true rankPreflightRequired=true"
+                    }
+                }
+                completed
+            },
+            onStopped = { reason, destinationConfirmed ->
+                PauseStatus.removeChangeListener(pauseListener)
+                WarEx.warCountProperty.removeListener(gameListener)
+                when {
+                    destinationConfirmed -> Unit
+                    reason == "paused" -> terminalPageCleanupCoordinator.interrupt(ticket)
+                    reason == "new-game-detected" || reason == "terminal-proof-invalid" ->
+                        terminalPageCleanupCoordinator.hold(ticket)
+                    else -> terminalPageCleanupCoordinator.fail(ticket, reason)
+                }
+                log.info {
+                    "RESULT_PAGE_SEQUENCE_STOPPED reason=$reason destinationConfirmed=$destinationConfirmed " +
+                        "inputs=${terminalPageCleanupCoordinator.snapshot().inputs} " +
+                        "probes=${terminalPageCleanupCoordinator.snapshot().probes} " +
+                        "dispatch=false"
+                }
+                trackedTasks.forEach(gameEndTasks::remove)
             },
         )
-        gameEndTasks.add(future, GameEndTaskRegistry.Kind.TERMINAL_PAGE)
+        PauseStatus.addChangeListener(pauseListener)
+        WarEx.warCountProperty.addListener(gameListener)
+        if (initialRetryIntervalMs !in ResultPageDismissalPolicy.TERMINAL_RETRY_MIN_INTERVAL_MS.toLong()..
+            ResultPageDismissalPolicy.TERMINAL_RETRY_MAX_INTERVAL_MS.toLong()
+        ) {
+            log.warn { "RESULT_PAGE_SEQUENCE_INTERVAL_OUT_OF_RANGE intervalMs=$initialRetryIntervalMs" }
+        }
+        trackedTasks += controller.start()
+        trackedTasks.forEach { gameEndTasks.add(it, GameEndTaskRegistry.Kind.TERMINAL_PAGE) }
+        if (controller.snapshot().stopped) trackedTasks.forEach(gameEndTasks::remove)
     }
 
     fun hidePlatformWindow() {
