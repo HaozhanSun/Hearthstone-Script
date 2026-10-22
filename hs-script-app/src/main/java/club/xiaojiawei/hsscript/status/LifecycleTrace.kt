@@ -18,6 +18,7 @@ object LifecycleTrace {
     private const val GAME_OVER_STUCK_TIMEOUT_MS = 30_000L
     private const val STATE_RECOVERY_TIMEOUT_MS = 30_000L
     private const val STATE_RECOVERY_RETRY_INTERVAL_MS = 30_000L
+    private const val MATCHMAKING_SCREEN_RECOVERY_SUPPRESSION_MS = 120_000L
 
     @Volatile
     private var mainWindowShowing = false
@@ -33,6 +34,9 @@ object LifecycleTrace {
     private var stateRecoveryFingerprint = ""
     private var stateRecoveryAttemptAt = 0L
     private val stateRecoveryInFlight = AtomicBoolean(false)
+
+    @Volatile
+    private var activeMatchmakingScreenObservedAt = 0L
 
     fun start() {
         if (running) return
@@ -140,8 +144,24 @@ object LifecycleTrace {
             return
         }
 
-        val fingerprint = stateFingerprint()
         val now = System.currentTimeMillis()
+        if (shouldSuppressStateRecoveryForMatchmaking(activeMatchmakingScreenObservedAt, now)) {
+            stateRecoverySince = 0L
+            stateRecoveryFingerprint = ""
+            stateRecoveryAttemptAt = 0L
+            return
+        }
+        if (activeMatchmakingScreenObservedAt != 0L) {
+            // Suppression expires once per observation; start a fresh stale-state
+            // interval before inspecting the same stale Power.log phase again.
+            activeMatchmakingScreenObservedAt = 0L
+            stateRecoverySince = now
+            stateRecoveryFingerprint = stateFingerprint()
+            stateRecoveryAttemptAt = now
+            return
+        }
+
+        val fingerprint = stateFingerprint()
         if (fingerprint != stateRecoveryFingerprint) {
             stateRecoveryFingerprint = fingerprint
             stateRecoverySince = now
@@ -198,6 +218,15 @@ object LifecycleTrace {
             WarEx.war.currentTurnStep?.name ?: "NONE",
             WarEx.warCount.toString(),
         ).joinToString("|")
+
+    /** The active queue UI is expected while Power.log still reports the previous FILL_DECK phase. */
+    fun markActiveMatchmakingScreenObserved(now: Long = System.currentTimeMillis()) {
+        activeMatchmakingScreenObservedAt = now
+        mark("visible-matchmaking-observed; suppressing stale-phase recovery for ${MATCHMAKING_SCREEN_RECOVERY_SUPPRESSION_MS}ms")
+    }
+
+    internal fun shouldSuppressStateRecoveryForMatchmaking(observedAt: Long, now: Long): Boolean =
+        observedAt > 0L && now >= observedAt && now - observedAt < MATCHMAKING_SCREEN_RECOVERY_SUPPRESSION_MS
 
     private fun snapshot(): String = runCatching {
         val powerLog = PowerLogListener.logFile

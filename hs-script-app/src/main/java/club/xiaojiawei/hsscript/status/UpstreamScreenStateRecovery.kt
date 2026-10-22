@@ -100,6 +100,7 @@ object UpstreamScreenStateRecovery {
         val resultContinueGrayLightRatio: Double,
         val resultBannerLowSaturationRatio: Double,
         val resultBannerWarmRatio: Double = 0.0,
+        val matchmakingSearchVisual: Boolean = false,
     ) {
         override fun toString(): String =
             "hash=${java.lang.Long.toUnsignedString(sampleHash, 16)} " +
@@ -108,7 +109,8 @@ object UpstreamScreenStateRecovery {
                 "loadingCentralDark=${"%.3f".format(Locale.ROOT, loadingCentralDarkRatio)} " +
                 "resultContinueGrayLight=${"%.3f".format(Locale.ROOT, resultContinueGrayLightRatio)} " +
                 "resultBannerLowSaturation=${"%.3f".format(Locale.ROOT, resultBannerLowSaturationRatio)} " +
-                "resultBannerWarm=${"%.3f".format(Locale.ROOT, resultBannerWarmRatio)}"
+                "resultBannerWarm=${"%.3f".format(Locale.ROOT, resultBannerWarmRatio)} " +
+                "matchmakingSearchVisual=$matchmakingSearchVisual"
     }
 
     private data class RegionSignal(
@@ -492,6 +494,7 @@ object UpstreamScreenStateRecovery {
             resultContinueGrayLightRatio = continueSignal.grayLightRatio,
             resultBannerLowSaturationRatio = bannerSignal.lowSaturationRatio,
             resultBannerWarmRatio = bannerSignal.warmRatio,
+            matchmakingSearchVisual = MatchmakingSearchVisualPolicy.isVisible(image),
         )
     }
 
@@ -573,6 +576,9 @@ object UpstreamScreenStateRecovery {
             )
         ) {
             return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
+        }
+        if (visual.matchmakingSearchVisual) {
+            return Detection(ScreenKind.MATCHMAKING, ModeEnum.TOURNAMENT, 98, "matchmaking-search-visual")
         }
         // The live client uses "搜寻对手" while some localized/client builds
         // use "寻找对手". OCR also commonly separates the cancel label, so
@@ -795,6 +801,29 @@ object UpstreamScreenStateRecovery {
         ),
     )?.evidence
 
+    internal fun classifyImageForTest(ocrText: String, image: BufferedImage): String? = detect(
+        ocrText,
+        visualSignature(image),
+    )?.kind?.code
+
+    internal fun classificationEvidenceForImageTest(ocrText: String, image: BufferedImage): String? = detect(
+        ocrText,
+        visualSignature(image),
+    )?.evidence
+
+    /** A fresh queue screen is authoritative proof that result cleanup reached its post-result destination. */
+    internal fun confirmPendingTerminalCleanupAtMatchmaking(
+        screenKind: String,
+        confidence: Int,
+        freshCaptureAuthorized: Boolean,
+    ): Boolean {
+        if (!FreshPostResultDestinationPolicy.isConfirmed(screenKind, confidence, freshCaptureAuthorized)) return false
+        val guard = club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+        if (!guard.isTerminalCleanupPending()) return true
+        val capability = guard.existingTerminalCleanupCapability() ?: return false
+        return guard.confirmCompleted("SCREEN_MATCHMAKING", capability)
+    }
+
     /**
      * Result pages have a stable action label even when the outcome title is
      * rendered with decorative glyphs or OCR misreads (for example, 败北 may
@@ -981,8 +1010,24 @@ object UpstreamScreenStateRecovery {
             }
 
             ScreenKind.MATCHMAKING -> {
+                if (!confirmPendingTerminalCleanupAtMatchmaking(
+                        screenKind = detection.kind.code,
+                        confidence = detection.confidence,
+                        freshCaptureAuthorized = true,
+                    )
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_MATCHMAKING_BLOCKED reason=terminal-cleanup-capability-invalid " +
+                            "dispatch=false"
+                    }
+                    return false
+                }
+                LifecycleTrace.markActiveMatchmakingScreenObserved()
                 Mode.recover(ModeEnum.TOURNAMENT, "visible-matchmaking-screen", enterStrategy = false)
-                log.info { "SCREEN_RECOVERY_APPLIED screen=MATCHMAKING action=WAIT_FOR_GAMEPLAY" }
+                log.info {
+                    "SCREEN_RECOVERY_APPLIED screen=MATCHMAKING action=WAIT_FOR_GAMEPLAY " +
+                        "evidence=${detection.evidence} queuePreserved=true"
+                }
             }
 
             ScreenKind.RECONNECT -> {

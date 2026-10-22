@@ -539,6 +539,17 @@ object ScreenStateRecovery {
                 reason = "four-card-notice-footer-button-visually-confirmed",
             )
         }
+        if (MatchmakingSearchVisualPolicy.isVisible(image)) {
+            return StartGameErrorDialogProbe(
+                state = MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG,
+                title = "",
+                body = "matchmaking-search-screen",
+                confirm = "",
+                screenshot = screenshot,
+                provider = "VISUAL_SIGNATURE",
+                reason = "matchmaking-search-screen-visible",
+            )
+        }
         val roi = ScreenStateRoiSelector
             .selectStartGameError(image.width, image.height)
             .singleOrNull()
