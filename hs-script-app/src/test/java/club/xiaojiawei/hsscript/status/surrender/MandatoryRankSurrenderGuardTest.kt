@@ -6,6 +6,7 @@ import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
+import club.xiaojiawei.hsscript.status.TerminalCleanupQueueResumePolicy
 import club.xiaojiawei.hsscript.status.UpstreamScreenStateRecovery
 import club.xiaojiawei.hsscript.utils.PowerLogUtil
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -551,11 +552,75 @@ class MandatoryRankSurrenderGuardTest {
                 assertTrue(ActionDispatchGate.allow("matchmaking.start"), "no stale cleanup block or repeated blocked-action spam")
             }
 
-            // A next-game retry cannot reuse this match's terminal proof.
-            MulliganRankDispatchBarrier.beginCurrentGame()
-            MandatoryRankSurrenderGuard.begin("next-game:self")
+            // A consecutive next match starts a new terminal cycle with a
+            // fresh game identity, while the first match's proof is stale.
+            val nextTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+            assertTrue(MulliganRankDispatchBarrier.requireSurrender(nextTicket) != null)
+            val nextGameIdentity = "game-20261022-1641:laz#12793"
+            MandatoryRankSurrenderGuard.begin(nextGameIdentity)
             assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCapability))
             assertNull(MandatoryRankSurrenderGuard.authorizeTerminalCleanup(acceptedTerminalEvidence))
+            val secondTerminalEvidence = CurrentGameSurrenderTerminalEvidence(
+                gameIdentity = nextGameIdentity,
+                ownEntityId = "laz#12793",
+                opponentEntityId = "new-opponent#1",
+                ownPlayState = "CONCEDED",
+                opponentPlayState = "WON",
+                finalGameOver = true,
+                complete = true,
+            )
+            val secondTerminalCapability =
+                MandatoryRankSurrenderGuard.authorizeTerminalCleanup(secondTerminalEvidence)
+            assertTrue(secondTerminalCapability != null)
+            assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", secondTerminalCapability))
+            assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+            assertFalse(ActionDispatchGate.allow("matchmaking.start"))
+            assertFalse(
+                TerminalCleanupQueueResumePolicy.shouldResume(
+                    destinationScreen = "DECK_SELECTION",
+                    destinationConfirmed = true,
+                    working = true,
+                    paused = false,
+                    inWar = false,
+                    mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending(),
+                    terminalCleanupPending = MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+                    deckStrategyReady = true,
+                ),
+                "the second cycle cannot queue while its terminal cleanup fence is active",
+            )
+            assertEquals(
+                MandatoryRankSurrenderDeckSelectionRecovery.Result.BLOCKED,
+                MandatoryRankSurrenderDeckSelectionRecovery.completeIfRequired(
+                    "DECK_SELECTION", 100, "deck-selection-title", freshObservation = false,
+                ),
+                "stale second-cycle deck evidence is rejected",
+            )
+            assertEquals(
+                MandatoryRankSurrenderDeckSelectionRecovery.Result.COMPLETED,
+                UpstreamScreenStateRecovery.completeMandatoryRankSurrenderAtDeckSelection(
+                    screenKind = "DECK_SELECTION",
+                    confidence = 100,
+                    visualEvidence = "deck-selection-title",
+                    freshObservation = true,
+                ),
+            )
+            assertTrue(
+                TerminalCleanupQueueResumePolicy.shouldResume(
+                    destinationScreen = "DECK_SELECTION",
+                    destinationConfirmed = true,
+                    working = true,
+                    paused = false,
+                    inWar = false,
+                    mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending(),
+                    terminalCleanupPending = MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+                    deckStrategyReady = true,
+                ),
+                "a fresh second-cycle deck screen schedules the normal queue flow again",
+            )
+            assertTrue(ActionDispatchGate.allow("matchmaking.start"))
+            repeat(10) {
+                assertTrue(ActionDispatchGate.allow("matchmaking.start"), "the second cleanup cycle does not leave stale blocked dispatch")
+            }
         } finally {
             WorkTimeListener.working = wasWorking
             when {

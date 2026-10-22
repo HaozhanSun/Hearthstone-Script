@@ -12,7 +12,9 @@ import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
+import club.xiaojiawei.hsscript.status.TerminalCleanupQueueResumePolicy
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
+import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
@@ -222,6 +224,29 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         startMatching()
     }
 
+    /** Re-enter queue flow after a terminal result observer freshly confirms deck selection. */
+    fun resumeAfterTerminalDeckSelection() {
+        val shouldResume = TerminalCleanupQueueResumePolicy.shouldResume(
+            destinationScreen = "DECK_SELECTION",
+            destinationConfirmed = true,
+            working = WorkTimeListener.working,
+            paused = PauseStatus.isPause,
+            inWar = WarEx.inWar,
+            mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending(),
+            terminalCleanupPending = MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+            deckStrategyReady = DeckStrategyManager.currentDeckStrategy != null &&
+                DeckStrategyManager.currentRunMode != null,
+        )
+        if (!shouldResume) {
+            log.info { "RESULT_PAGE_QUEUE_RESUME_SKIPPED reason=runtime-or-selection-changed" }
+            return
+        }
+        Mode.recover(ModeEnum.TOURNAMENT, "terminal-result-deck-selection", enterStrategy = false)
+        cancelAllEnteredTasks()
+        log.info { "RESULT_PAGE_QUEUE_RESUME started destination=DECK_SELECTION rankPreflightRequired=true" }
+        recoverDeckSelectionAndStart()
+    }
+
     fun selectDeck(deckStrategy: DeckStrategy, deckSlot: Int = expectedDeckSlot(deckStrategy)) {
 //        val decks: List<Deck> = DECKS
 //        for (i in decks.indices.reversed()) {
@@ -261,6 +286,13 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
 
     fun startMatching() {
         val traceId = matchmakingTraceSequence.incrementAndGet()
+        if (MandatoryRankSurrenderGuard.isTerminalCleanupPending()) {
+            log.info {
+                "MATCHMAKING_BLOCKED trace=$traceId reason=terminal-result-cleanup-pending " +
+                    "action=NO_QUEUE_INPUT dispatch=false"
+            }
+            return
+        }
         log.info { "开始匹配 trace=$traceId" }
         val mandatoryRankSurrenderPending =
             club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending()

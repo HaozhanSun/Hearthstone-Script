@@ -30,6 +30,7 @@ import club.xiaojiawei.hsscript.status.ResultPageEvidencePolicy
 import club.xiaojiawei.hsscript.status.ResultScreenObservation
 import club.xiaojiawei.hsscript.status.PostResultRankProgressPolicy
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
+import club.xiaojiawei.hsscript.status.TerminalCleanupQueueResumePolicy
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderRecoveryPolicy
@@ -37,6 +38,7 @@ import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
 import club.xiaojiawei.hsscript.strategy.phase.GameOverPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
+import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil.CHOOSE_ONE_RECTS
 import club.xiaojiawei.hsscript.utils.SystemUtil.delay
 import club.xiaojiawei.hsscriptbase.bean.LRunnable
@@ -2049,6 +2051,7 @@ object GameUtil {
             Thread(runnable, "Terminal Result Continue Clock").apply { isDaemon = true }
         }
         lateinit var controller: TerminalResultSequenceController
+        val confirmedDestination = AtomicReference<String?>()
         val trackedTasks = CopyOnWriteArrayList<ScheduledFuture<*>>()
         val pauseListener = ChangeListener<Boolean> { _, _, paused ->
             if (paused) controller.cancel("paused")
@@ -2137,6 +2140,7 @@ object GameUtil {
                     capability,
                 )
                 if (completed) {
+                    confirmedDestination.set(observation.destinationScreen)
                     log.info {
                         "RESULT_PAGE_SEQUENCE_CONFIRMED destination=${observation.destinationScreen} " +
                             "evidence=fresh-authorized-screen requeueAllowed=true rankPreflightRequired=true"
@@ -2161,6 +2165,26 @@ object GameUtil {
                         "dispatch=false"
                 }
                 trackedTasks.forEach(gameEndTasks::remove)
+                if (TerminalCleanupQueueResumePolicy.shouldResume(
+                        destinationScreen = confirmedDestination.get(),
+                        destinationConfirmed = destinationConfirmed,
+                        working = WorkTimeListener.working,
+                        paused = PauseStatus.isPause,
+                        inWar = WarEx.inWar,
+                        mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending(),
+                        terminalCleanupPending = MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+                        deckStrategyReady = DeckStrategyManager.currentDeckStrategy != null &&
+                            DeckStrategyManager.currentRunMode != null,
+                    )
+                ) {
+                    log.info {
+                        "RESULT_PAGE_QUEUE_RESUME scheduled destination=DECK_SELECTION " +
+                            "evidence=fresh-authorized-screen delayMs=300 rankPreflightRequired=true"
+                    }
+                    EXTRA_THREAD_POOL.schedule({
+                        TournamentModeStrategy.resumeAfterTerminalDeckSelection()
+                    }, 300, TimeUnit.MILLISECONDS)
+                }
             },
         )
         PauseStatus.addChangeListener(pauseListener)
