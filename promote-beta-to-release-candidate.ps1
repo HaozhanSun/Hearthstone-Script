@@ -71,7 +71,13 @@ function Assert-FileHash {
 
 function Get-VersionFromJarName {
     param([Parameter(Mandatory = $true)][string]$JarName)
-    $match = [regex]::Match($JarName, '^hs-script_(v\d+\.\d+\.\d+)\.jar$')
+    # Match the release artifact form and the checked-in local build form. Keep
+    # the timestamp and Pacific zone suffix strict so arbitrary filenames do
+    # not become promotion versions or branch names.
+    $match = [regex]::Match(
+        $JarName.Trim(),
+        '^hs-script_(v\d+\.\d+\.\d+(?:-local-\d{8}-\d{6}(?:PDT|PST))?)\.jar$'
+    )
     if (-not $match.Success) {
         throw "Beta artifact must use a numeric release version before RC promotion: $JarName"
     }

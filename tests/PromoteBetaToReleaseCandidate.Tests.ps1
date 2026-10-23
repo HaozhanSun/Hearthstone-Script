@@ -53,7 +53,7 @@ try {
     Invoke-TestGit -Root $project -Arguments @('commit', '-m', 'beta promotion fixture') | Out-Null
     $betaHead = Invoke-TestGit -Root $project -Arguments @('rev-parse', 'HEAD')
 
-    $jarPath = Join-Path $betaRuntime 'hs-script_v1.2.3.jar'
+    $jarPath = Join-Path $betaRuntime 'hs-script_v4.16.670-local-20261022-225531PDT.jar'
     [System.IO.File]::WriteAllText($jarPath, 'beta-artifact')
     $jarHash = (Get-FileHash -LiteralPath $jarPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $betaManifest = [ordered]@{
@@ -62,7 +62,7 @@ try {
         runtimeDirectoryName = 'Hearthstone Script Beta'
         sourceBranch = 'beta/test-promotion'
         sourceCommit = $betaHead
-        appJar = 'hs-script_v1.2.3.jar'
+        appJar = 'hs-script_v4.16.670-local-20261022-225531PDT.jar'
         appJarSha256 = $jarHash
     }
     $betaManifestPath = Join-Path $betaRuntime 'deployment-manifest.json'
@@ -77,7 +77,7 @@ $root = $env:PROMOTION_TEST_RC_ROOT
 $log = $env:PROMOTION_TEST_INVOCATION
 Add-Content -LiteralPath $log -Value (Get-Date).ToString('o')
 New-Item -ItemType Directory -Path $root -Force | Out-Null
-$jar = Join-Path $root 'hs-script_v1.2.3.jar'
+$jar = Join-Path $root 'hs-script_v4.16.670-local-20261022-225531PDT.jar'
 [System.IO.File]::WriteAllText($jar, 'rc-artifact')
 $hash = (Get-FileHash -LiteralPath $jar -Algorithm SHA256).Hash.ToLowerInvariant()
 $config = Get-Content -LiteralPath (Join-Path (Get-Location) 'release-channel.json') -Raw | ConvertFrom-Json
@@ -91,7 +91,7 @@ $sourceBranch = ((& git branch --show-current) | Out-String).Trim()
   sourceCommit = $sourceCommit
   promotionSourceBranch = [string]$config.promotionSourceBranch
   promotionSourceCommit = [string]$config.promotionSourceCommit
-  appJar = 'hs-script_v1.2.3.jar'
+  appJar = 'hs-script_v4.16.670-local-20261022-225531PDT.jar'
   appJarSha256 = $hash
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 'deployment-manifest.json') -Encoding UTF8
 '@
@@ -102,7 +102,7 @@ $sourceBranch = ((& git branch --show-current) | Out-String).Trim()
     & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild | Out-Null
     if (-not (Test-Path -LiteralPath (Join-Path $rcWorktree 'release-channel.json') -PathType Leaf)) { throw 'RC worktree metadata was not created' }
     $rcConfig = Get-Content -LiteralPath (Join-Path $rcWorktree 'release-channel.json') -Raw | ConvertFrom-Json
-    if ($rcConfig.channel -ne 'release-candidate' -or $rcConfig.branch -ne 'beta/release-candidate-v1.2.3') { throw 'RC metadata was not isolated or branch-bound' }
+    if ($rcConfig.channel -ne 'release-candidate' -or $rcConfig.branch -ne 'beta/release-candidate-v4.16.670-local-20261022-225531PDT') { throw 'RC metadata was not isolated or branch-bound' }
     if ($rcConfig.promotionSourceCommit -ne $betaHead -or $rcConfig.promotionSourceBranch -ne 'beta/test-promotion') { throw 'RC promotion source metadata is incomplete' }
     if ((Get-FileHash -LiteralPath $betaManifestPath -Algorithm SHA256).Hash -cne $betaManifestBefore) { throw 'Promotion modified the Beta manifest' }
     if ((Get-Content -LiteralPath (Join-Path $stableRuntime 'stable-marker.txt') -Raw) -cne $stableMarkerBefore) { throw 'Promotion modified the Stable runtime' }
@@ -111,6 +111,25 @@ $sourceBranch = ((& git branch --show-current) | Out-String).Trim()
     $repeatOutput = & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild
     if (($repeatOutput -join "`n") -notmatch 'PROMOTION_ALREADY_COMPLETE') { throw 'Repeat promotion was not idempotent' }
     if ((Get-Content -LiteralPath $invocationLog).Count -ne 1) { throw 'Repeat promotion rebuilt an already-complete RC' }
+
+    $invalidRuntime = Join-Path $tempRoot 'invalid-beta-runtime'
+    New-Item -ItemType Directory -Path $invalidRuntime -Force | Out-Null
+    $invalidJarName = 'hs-script_v4.16.670-local-20261022-225531UTC.jar'
+    $invalidJarPath = Join-Path $invalidRuntime $invalidJarName
+    [System.IO.File]::WriteAllText($invalidJarPath, 'invalid-beta-artifact')
+    $invalidJarHash = (Get-FileHash -LiteralPath $invalidJarPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    [ordered]@{
+        schema = 1
+        releaseChannel = 'beta'
+        runtimeDirectoryName = 'Hearthstone Script Beta'
+        sourceBranch = 'beta/test-promotion'
+        sourceCommit = $betaHead
+        appJar = $invalidJarName
+        appJarSha256 = $invalidJarHash
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $invalidRuntime 'deployment-manifest.json') -Encoding UTF8
+    Assert-Throws -Action {
+        & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $invalidRuntime -ReleaseCandidateRuntimeRoot (Join-Path $tempRoot 'invalid-rc-runtime') -PromotionWorktree (Join-Path $tempRoot 'invalid-rc-worktree') -BuildScript $fakeBuild | Out-Null
+    } -MessageFragment 'Beta artifact must use a numeric release version'
 
     $missingRuntime = Join-Path $tempRoot 'missing-beta-runtime'
     Assert-Throws -Action { & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $missingRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree (Join-Path $tempRoot 'unused-worktree') -BuildScript $fakeBuild | Out-Null } -MessageFragment 'Beta deployment manifest is missing'
