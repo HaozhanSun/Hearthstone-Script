@@ -315,13 +315,8 @@ object CurrentRankDetector {
         // installations that have not downloaded eng.traineddata yet.
         val rankLanguage = if (File(tessData, "eng.traineddata").isFile) "eng" else CHI_SIM_DATA
 
-        val expandedRegion = crop(
-            screen,
-            RANK_EXPANDED_LEFT,
-            RANK_EXPANDED_TOP,
-            RANK_EXPANDED_WIDTH,
-            RANK_EXPANDED_HEIGHT,
-        )
+        val expandedRegionBounds = rankExpandedBoundsForTest(screen.width, screen.height)
+        val expandedRegion = crop(screen, expandedRegionBounds)
         val badgeVisualRegion = badgeRegion
         // Rank OCR is only invoked after live Mulligan input is confirmed, so
         // every backend uses the lower-left in-game HUD badge crop.
@@ -351,7 +346,26 @@ object CurrentRankDetector {
             } else {
                 skippedRankProbe("bigRoi", badgeRegionBounds, scale = 1)
             }
-            val selection = selectRankProbeResults(bigProbe, smallProbe)
+            val initialSelection = selectRankProbeResults(bigProbe, smallProbe)
+            // Compact crops remain authoritative. Use the wider numeric crop
+            // only when both compact PaddleX probes are unresolved.
+            val expandedProbe = if (initialSelection.unknownReason == "rank-unrecognized-both-roi") {
+                runPaddleXRankProbe(
+                    image = expandedRegion,
+                    bounds = expandedRegionBounds,
+                    roi = "expandedRoi",
+                    scale = RANK_SMALL_ROI_SCALE,
+                    trigger = evidenceTrigger,
+                    visualTenHint = false,
+                )
+            } else {
+                skippedRankProbe("expandedRoi", expandedRegionBounds, RANK_SMALL_ROI_SCALE)
+            }
+            val selection = if (expandedProbe.rank != null) {
+                RankProbeSelection("expandedRoi", expandedProbe, expandedProbe.rank, "none")
+            } else {
+                initialSelection
+            }
             val rank = selection.rank
             val selectedProbe = selection.selected
             val ocrText = selectedProbe?.normalizedText.orEmpty()
@@ -368,9 +382,10 @@ object CurrentRankDetector {
             }
             log.info {
                 "RANK_OCR provider=PADDLEX trigger=$evidenceTrigger phase=$evidencePhase " +
-                    "passes=2 bounds=$bounds " +
+                    "passes=3 bounds=$bounds " +
                     "bigRoi=x${bigProbe.bounds.x},y${bigProbe.bounds.y},w${bigProbe.bounds.width},h${bigProbe.bounds.height} " +
                     "smallRoi=x${smallProbe.bounds.x},y${smallProbe.bounds.y},w${smallProbe.bounds.width},h${smallProbe.bounds.height} " +
+                    "expandedRoi=x${expandedProbe.bounds.x},y${expandedProbe.bounds.y},w${expandedProbe.bounds.width},h${expandedProbe.bounds.height} " +
                     "selectedRoi=${selection.selectedRoi ?: "NONE"} selectedRank=${rank ?: "UNKNOWN"} " +
                     "selectedScale=${selectedProbe?.scale ?: "NONE"} " +
                     "raw=${rawOcrText.ifBlank { "<empty>" }} " +
@@ -381,6 +396,7 @@ object CurrentRankDetector {
             }
             logPaddleXRankProbe(bigProbe, evidenceTrigger, evidencePhase)
             logPaddleXRankProbe(smallProbe, evidenceTrigger, evidencePhase)
+            logPaddleXRankProbe(expandedProbe, evidenceTrigger, evidencePhase)
             if (saveEvidence) {
                 saveRankEvidence(
                     screen = screen,
@@ -389,6 +405,7 @@ object CurrentRankDetector {
                     rawOcrTexts = listOf(
                         "bigRoi=${bigProbe.rawText.ifBlank { "<empty>" }}",
                         "smallRoi=${smallProbe.rawText.ifBlank { "<empty>" }}",
+                        "expandedRoi=${expandedProbe.rawText.ifBlank { "<empty>" }}",
                     ),
                     normalizedOcrText = ocrText,
                     numericRank = rank,
@@ -507,7 +524,11 @@ object CurrentRankDetector {
         visualTenHint: Boolean,
     ): RankProbeResult {
         val input = if (scale == 1) image else RankOcrImagePreprocessor.upscale(image, scale)
-        val providerRoi = if (roi == "bigRoi") "rank-badge" else "rank-badge-small"
+        val providerRoi = when (roi) {
+            "bigRoi" -> "rank-badge"
+            "expandedRoi" -> "rank-badge-expanded"
+            else -> "rank-badge-small"
+        }
         val description = if (roi == "bigRoi") trigger else "$trigger-$roi"
         val recognition = OcrRuntime.recognizeResult(
             input,
