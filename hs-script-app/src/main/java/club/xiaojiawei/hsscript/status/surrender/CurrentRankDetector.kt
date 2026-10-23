@@ -205,12 +205,21 @@ object CurrentRankDetector {
         // example 939|51|191|91).  If the independent visual check confirms
         // a two-digit badge and OCR did see numeric pixels, that is still
         // stronger evidence for rank 10 than accepting an arbitrary lower
-        // rank.  Keep the numeric-evidence requirement so an empty/blank
+        // rank. Keep the numeric-evidence requirement so an empty/blank
         // screen cannot become rank 10 from the visual hint alone.
         if (visualTenHint && parsed.isEmpty() && candidates.any { it.any(Char::isDigit) }) {
-            // A geometric hint is useful for diagnostics, but is not positive
-            // OCR evidence and must never authorize a queue or game action.
-            return RankCandidate(rank = 10, confidence = nativeConfidence, agreementCount = 0)
+            // PaddleX commonly reads only the right glyph of this stylized
+            // badge as `0`. The two-digit geometry supplies the missing left
+            // glyph, while the exact OCR token supplies numeric evidence. Do
+            // not apply this to arbitrary OCR noise: only an isolated zero
+            // gets a positive agreement count and can reach authorization.
+            val normalized = candidates.singleOrNull()?.trim()
+            val rightGlyphRead = normalized == "0"
+            return RankCandidate(
+                rank = 10,
+                confidence = nativeConfidence,
+                agreementCount = if (rightGlyphRead) 1 else 0,
+            )
         }
         val counts = parsed.groupingBy { it }.eachCount()
         val best = counts.entries

@@ -71,6 +71,17 @@ class RankEligibilityPolicyTest {
     }
 
     @Test
+    fun `only exact numeric five or ten authorizes while nine and eleven stay denied`() {
+        assertTrue(evaluate(detection(rank = 10, agreementCount = 1)).eligible)
+        assertFalse(evaluate(detection(rank = 9, agreementCount = 1)).eligible)
+        assertFalse(evaluate(detection(rank = 11, agreementCount = 1)).eligible)
+        assertFalse(
+            evaluate(detection(rank = 10, agreementCount = 0)).eligible,
+            "a rank value without numeric OCR provenance must remain denied",
+        )
+    }
+
+    @Test
     fun `legacy requires repeated identical numeric evidence`() {
         assertTrue(evaluate(detection(rank = 10, provider = "LEGACY", confidence = null, agreementCount = 2)).eligible)
         assertFalse(evaluate(detection(rank = 10, provider = "LEGACY", confidence = null, agreementCount = 1)).eligible)

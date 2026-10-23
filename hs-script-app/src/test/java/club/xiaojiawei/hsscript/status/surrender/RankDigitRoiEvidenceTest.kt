@@ -144,6 +144,75 @@ class RankDigitRoiEvidenceTest {
     }
 
     @Test
+    fun `exact production rank ten policy frame authorizes mulligan continuation`() {
+        val source = javaClass.getResourceAsStream(
+            "/offline-ocr/rank-detection/rank10-production-20261023-152019-rank-resolved.png",
+        ).use { stream ->
+            requireNotNull(stream) { "missing exact production rank-ten policy frame" }
+            requireNotNull(ImageIO.read(stream))
+        }
+        val requested = mutableListOf<String?>()
+        configurePaddleX { _, roi ->
+            requested += roi
+            when (roi) {
+                "rank-badge-small" -> OcrRecognition("0", confidence = 0.99)
+                else -> error("unexpected OCR ROI=$roi")
+            }
+        }
+
+        SurrenderPolicy.resetForNewGame()
+        val detection = requireNotNull(
+            CurrentRankDetector.detectCapturedImage(
+                screen = source,
+                saveEvidence = false,
+                evidencePhase = "REPLACE_CARD",
+            ),
+        )
+
+        assertEquals(listOf<String?>("rank-badge-small"), requested)
+        assertEquals(10, detection.rank)
+        assertEquals(1, detection.agreementCount, "OCR read the right zero of the two-digit badge")
+        assertNull(
+            SurrenderPolicy.evaluateMulliganRankEvidence(
+                detection = detection,
+                actualMode = "GAMEPLAY",
+                inWar = true,
+                nowMs = System.currentTimeMillis(),
+                persistentStreakDecision = null,
+            ),
+            "the exact rank-10 frame must authorize ordinary mulligan input",
+        )
+        assertTrue(SurrenderPolicy.currentRankContinueAuthorized())
+    }
+
+    @Test
+    fun `visual ten fallback does not turn arbitrary OCR noise into authorization`() {
+        assertEquals(
+            1,
+            CurrentRankDetector.resolveRankCandidate(
+                candidates = listOf("0"),
+                visualTenHint = true,
+                nativeConfidence = 0.99,
+            )?.agreementCount,
+        )
+        assertEquals(
+            0,
+            CurrentRankDetector.resolveRankCandidate(
+                candidates = listOf("939|51|191|91"),
+                visualTenHint = true,
+                nativeConfidence = 0.99,
+            )?.agreementCount,
+        )
+        assertNull(
+            CurrentRankDetector.resolveRankCandidate(
+                candidates = listOf("0"),
+                visualTenHint = false,
+                nativeConfidence = 0.99,
+            ),
+        )
+    }
+
+    @Test
     fun `expanded one after zero remains unknown without visual corroboration`() {
         val source = javaClass.getResourceAsStream(
             "/offline-ocr/rank-detection/rank10-beta-20261023-130343-paddlex-one.png",
