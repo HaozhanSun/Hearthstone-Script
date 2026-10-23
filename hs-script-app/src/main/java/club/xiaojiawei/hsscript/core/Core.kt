@@ -126,6 +126,19 @@ object Core {
      * 重启脚本
      */
     fun restart(sync: Boolean = false) {
+        restartInternal(sync = sync, pauseBeforeRestart = true)
+    }
+
+    /**
+     * Restarts a stale client without changing the user pause state.
+     * The idle watchdog is not a user action and must never synthesize F2-like
+     * pause transitions while recovering a confirmed home screen.
+     */
+    fun restartFromIdleWatchdog(sync: Boolean = false) {
+        restartInternal(sync = sync, pauseBeforeRestart = false)
+    }
+
+    private fun restartInternal(sync: Boolean, pauseBeforeRestart: Boolean) {
         if (!restartInFlight.compareAndSet(false, true)) {
             log.warn { "CORE_RESTART_SUPPRESSED reason=restart-already-in-flight" }
             return
@@ -133,10 +146,19 @@ object Core {
         ScreenLogListener.resetDealing()
         val exec = {
             try {
-                PauseStatus.asyncSetPause(true)
+                if (pauseBeforeRestart) {
+                    PauseStatus.asyncSetPause(true)
+                }
                 GameUtil.killGame(true)
-                log.info { "${GAME_CN_NAME}重启中……" }
-                PauseStatus.isPause = false
+                log.info {
+                    "${GAME_CN_NAME}重启中…… source=${if (pauseBeforeRestart) "standard" else "idle-watchdog"} " +
+                        "pauseBeforeRestart=$pauseBeforeRestart"
+                }
+                if (pauseBeforeRestart) {
+                    PauseStatus.isPause = false
+                } else {
+                    StarterConfig.starter.start()
+                }
             } catch (fault: Throwable) {
                 log.error(fault) { "CORE_RESTART_FAILED action=release-restart-gate" }
                 throw fault

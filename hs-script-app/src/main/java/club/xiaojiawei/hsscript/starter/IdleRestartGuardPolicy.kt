@@ -4,8 +4,9 @@ package club.xiaojiawei.hsscript.starter
  * Decides whether the legacy idle restart may restart the client.
  *
  * Power.log is allowed to be empty while Hearthstone is visibly searching for
- * an opponent.  Keep that visual evidence ahead of the log's activity clock,
- * while retaining a bounded recovery path when capture/OCR is unavailable.
+ * an opponent. Keep that visual evidence ahead of the log's activity clock.
+ * Unknown or untrusted capture results are fail-safe: they never authorize a
+ * destructive recovery after a retry budget is exhausted.
  */
 internal object IdleRestartGuardPolicy {
 
@@ -23,14 +24,20 @@ internal object IdleRestartGuardPolicy {
         idleLimitMs: Long,
         observedScreen: String?,
         uncertainProbeAttempts: Int,
+        revalidatedScreen: String? = null,
     ): Decision {
         if (idleForMs <= idleLimitMs) return Decision.NOT_IDLE
-        if (observedScreen.equals("MATCHMAKING", ignoreCase = true)) {
+        val finalScreen = revalidatedScreen ?: observedScreen
+        if (finalScreen.equals("MATCHMAKING", ignoreCase = true)) {
             return Decision.DEFER_ACTIVE_MATCHMAKING
         }
-        if (isUncertainScreen(observedScreen) &&
-            uncertainProbeAttempts + 1 < MAX_UNCERTAIN_PROBES
-        ) {
+        if (isUncertainScreen(finalScreen)) {
+            return Decision.DEFER_UNCERTAIN_SCREEN
+        }
+        if (!finalScreen.equals("HOME", ignoreCase = true)) {
+            return Decision.DEFER_UNCERTAIN_SCREEN
+        }
+        if (revalidatedScreen == null || !observedScreen.equals("HOME", ignoreCase = true)) {
             return Decision.DEFER_UNCERTAIN_SCREEN
         }
         return Decision.RESTART

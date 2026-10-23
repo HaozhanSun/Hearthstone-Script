@@ -64,14 +64,34 @@ class ExceptionListenStarter : AbstractStarter() {
             } else {
                 null
             }
-            when (
+            val initialDecision =
                 IdleRestartGuardPolicy.evaluate(
                     idleForMs = idleForMs,
                     idleLimitMs = idleTime * 60_000L,
                     observedScreen = observedScreen,
                     uncertainProbeAttempts = uncertainIdleProbeAttempts,
                 )
+            val decision = if (
+                initialDecision == IdleRestartGuardPolicy.Decision.DEFER_UNCERTAIN_SCREEN &&
+                observedScreen.equals("HOME", ignoreCase = true)
             ) {
+                val revalidatedScreen = runCatching {
+                    ScreenStateRecovery.observeFreshScreenForWatchdog()?.screen
+                }.onFailure { error ->
+                    log.warn(error) {
+                        "IDLE_RESTART_REVALIDATION_FAILED idleForMs=$idleForMs " +
+                            "uncertainProbeAttempts=$uncertainIdleProbeAttempts"
+                    }
+                }.getOrNull()
+                IdleRestartGuardPolicy.evaluate(
+                    idleForMs = idleForMs,
+                    idleLimitMs = idleTime * 60_000L,
+                    observedScreen = observedScreen,
+                    uncertainProbeAttempts = uncertainIdleProbeAttempts,
+                    revalidatedScreen = revalidatedScreen,
+                )
+            } else initialDecision
+            when (decision) {
                 IdleRestartGuardPolicy.Decision.NOT_IDLE -> {
                     uncertainIdleProbeAttempts = 0
                 }
@@ -84,7 +104,8 @@ class ExceptionListenStarter : AbstractStarter() {
                     }
                 }
                 IdleRestartGuardPolicy.Decision.DEFER_UNCERTAIN_SCREEN -> {
-                    uncertainIdleProbeAttempts++
+                    uncertainIdleProbeAttempts =
+                        (uncertainIdleProbeAttempts + 1).coerceAtMost(IdleRestartGuardPolicy.MAX_UNCERTAIN_PROBES)
                     log.warn {
                         "IDLE_RESTART_PROBE_DEFERRED reason=uncertain-screen " +
                             "screen=${observedScreen ?: "UNKNOWN"} " +
@@ -98,7 +119,7 @@ class ExceptionListenStarter : AbstractStarter() {
                             "screen=${observedScreen ?: "UNKNOWN"} " +
                             "uncertainProbeAttempts=$uncertainIdleProbeAttempts"
                     }
-                    Core.restart()
+                    Core.restartFromIdleWatchdog()
                     Core.lastActiveTime = now
                     uncertainIdleProbeAttempts = 0
                 }
