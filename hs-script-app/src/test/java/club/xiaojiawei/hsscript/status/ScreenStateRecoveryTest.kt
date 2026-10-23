@@ -1,7 +1,9 @@
 package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
+import java.awt.Color
 import java.awt.Rectangle
+import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -10,6 +12,25 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ScreenStateRecoveryTest {
+
+    @Test
+    fun `watchdog classifies visual matchmaking when OCR and Power log are empty`() {
+        val image = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB).apply {
+            createGraphics().also { graphics ->
+                graphics.color = Color(44, 44, 44)
+                graphics.fillRect(0, 0, width, height)
+                graphics.color = Color(205, 35, 12)
+                graphics.fillRect((width * .41).toInt(), (height * .28).toInt(), (width * .20).toInt(), (height * .38).toInt())
+                graphics.color = Color(239, 190, 67)
+                graphics.fillRect((width * .45).toInt(), (height * .80).toInt(), (width * .14).toInt(), (height * .09).toInt())
+                graphics.color = Color(30, 30, 30)
+                graphics.fillRect((width * .61).toInt(), (height * .84).toInt(), (width * .13).toInt(), (height * .12).toInt())
+                graphics.dispose()
+            }
+        }
+
+        assertEquals("MATCHMAKING", ScreenStateRecovery.classifyImageForResultFixture(image))
+    }
 
     @Test
     fun `result postcheck distinguishes terminal result from explicit post-result destination`() {

@@ -143,6 +143,7 @@ object ScreenStateRecovery {
         val resultBannerLowSaturationRatio: Double,
         val resultBannerWarmRatio: Double = 0.0,
         val centeredModalPanelVisual: Boolean = false,
+        val matchmakingSearchVisual: Boolean = false,
     ) {
         override fun toString(): String =
             "hash=${java.lang.Long.toUnsignedString(sampleHash, 16)} " +
@@ -152,7 +153,8 @@ object ScreenStateRecovery {
                 "resultContinueGrayLight=${"%.3f".format(Locale.ROOT, resultContinueGrayLightRatio)} " +
                 "resultBannerLowSaturation=${"%.3f".format(Locale.ROOT, resultBannerLowSaturationRatio)} " +
                 "resultBannerWarm=${"%.3f".format(Locale.ROOT, resultBannerWarmRatio)} " +
-                "centeredModalPanel=$centeredModalPanelVisual"
+                "centeredModalPanel=$centeredModalPanelVisual " +
+                "matchmakingSearchVisual=$matchmakingSearchVisual"
     }
 
     private data class RegionSignal(
@@ -775,6 +777,7 @@ object ScreenStateRecovery {
                 darkRatio = reconnectDialogPanelSignal.darkRatio,
                 warmRatio = reconnectDialogPanelSignal.warmRatio,
             ),
+            matchmakingSearchVisual = MatchmakingSearchVisualPolicy.isVisible(image),
         )
     }
 
@@ -875,6 +878,9 @@ object ScreenStateRecovery {
             )
         ) {
             return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
+        }
+        if (visual.matchmakingSearchVisual) {
+            return Detection(ScreenKind.MATCHMAKING, ModeEnum.TOURNAMENT, 98, "matchmaking-search-visual")
         }
         // A real result panel may also satisfy the generic centered-modal
         // guard. Let only the stronger terminal evidence above take priority;
