@@ -62,6 +62,32 @@ runtime and shortcut separation. The deployment manifest records the channel,
 runtime root, and shortcut name so stale beta artifacts cannot be selected by a
 stable launcher.
 
+## Beta to Release Candidate promotion
+
+Use the checked-in promotion command from a clean, named Beta checkout after
+the Beta artifact has passed the online E2E gate:
+
+```powershell
+pwsh -File .\promote-beta-to-release-candidate.ps1
+```
+
+The command reads the current Beta deployment manifest and requires its
+`sourceBranch` and `sourceCommit` to match the clean checkout exactly. It then
+creates or reuses a `beta/release-candidate-*` branch in a separate worktree,
+commits only Release Candidate channel metadata, and invokes that worktree's
+checked-in `build-and-deploy.ps1 -Channel release-candidate`. The build path
+controls the isolated Release Candidate runtime, manifest, icon, and Desktop,
+Start Menu, and Taskbar shortcuts. It never copies a JAR into Beta or Stable.
+
+The generated manifests record `sourceBranch`/`sourceCommit` for the actual
+checkout and `promotionSourceBranch`/`promotionSourceCommit` for the Beta
+snapshot. A rerun with a matching Release Candidate manifest exits with
+`PROMOTION_ALREADY_COMPLETE` without rebuilding or touching the runtime.
+Missing source metadata, a dirty checkout, a branch/channel mismatch, an
+existing worktree at an unexpected path, a missing Beta manifest, or a
+non-numeric Beta artifact version is a hard refusal. The secretary owns the
+actual build/deploy invocation and live restart.
+
 ## PaddleX runtime parity
 
 Both channels use the same PaddleX sidecar contract. During deployment,

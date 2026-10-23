@@ -362,6 +362,26 @@ $strategyPlugin = Join-Path $runtimeRoot 'plugin\hs-script-base-strategy-plugin.
 if (-not (Test-Path -LiteralPath $strategyLib -PathType Leaf) -or -not (Test-Path -LiteralPath $cardSdkLib -PathType Leaf) -or -not (Test-Path -LiteralPath $strategyPlugin -PathType Leaf)) { throw 'Required strategy/card runtime artifacts are missing' }
 $strategyHash = (Get-FileHash -LiteralPath $strategyLib -Algorithm SHA256).Hash.ToLowerInvariant()
 $cardSdkHash = (Get-FileHash -LiteralPath $cardSdkLib -Algorithm SHA256).Hash.ToLowerInvariant()
+$gitErrorAction = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    $sourceCommitOutput = @(& git -C $projectRoot rev-parse HEAD 2>&1)
+    $sourceCommitExit = $LASTEXITCODE
+    $sourceBranchOutput = @(& git -C $projectRoot branch --show-current 2>&1)
+    $sourceBranchExit = $LASTEXITCODE
+} finally { $ErrorActionPreference = $gitErrorAction }
+$sourceCommit = ($sourceCommitOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+$sourceBranch = ($sourceBranchOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+if ($sourceCommitExit -ne 0 -or $sourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
+    throw "Unable to record the exact source commit for the deployment manifest: $sourceCommit"
+}
+if ($sourceBranchExit -ne 0 -or [string]::IsNullOrWhiteSpace($sourceBranch)) {
+    throw "Unable to record the source branch for the deployment manifest"
+}
+$promotionSourceBranch = [string]$channelConfig.promotionSourceBranch
+$promotionSourceCommit = [string]$channelConfig.promotionSourceCommit
+if ([string]::IsNullOrWhiteSpace($promotionSourceBranch)) { $promotionSourceBranch = $null }
+if ([string]::IsNullOrWhiteSpace($promotionSourceCommit)) { $promotionSourceCommit = $null }
 $manifest = [ordered]@{
     schema = 1
     releaseChannel = $Channel
@@ -371,6 +391,10 @@ $manifest = [ordered]@{
     deploymentId = "$(Split-Path -Leaf $deployedJar)|$($appHash.Substring(0, 16))"
     generatedAt = (Get-Date).ToUniversalTime().ToString('o')
     buildTimestampPacific = $buildTimestampPacific
+    sourceBranch = $sourceBranch.Trim()
+    sourceCommit = $sourceCommit.Trim()
+    promotionSourceBranch = $promotionSourceBranch
+    promotionSourceCommit = $promotionSourceCommit
     appJar = Split-Path -Leaf $deployedJar
     appJarSha256 = $appHash
     strategyPluginLib = $strategyLibRelative
