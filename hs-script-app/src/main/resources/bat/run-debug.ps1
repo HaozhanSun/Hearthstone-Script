@@ -38,6 +38,20 @@ $testOnlySkipSurrender = $env:HS_E2E_SKIP_SURRENDER -eq "true"
 $roundsRequired = 3
 $maxRestarts = 50
 $runId = "{0}_{1}" -f (Get-Random -Minimum 10000 -Maximum 99999), (Get-Random -Minimum 1000 -Maximum 9999)
+$hardCapSeconds = 900
+if (-not [string]::IsNullOrWhiteSpace($env:HS_E2E_HARD_CAP_SECONDS)) {
+    $parsedHardCapSeconds = 0
+    if (-not [int]::TryParse($env:HS_E2E_HARD_CAP_SECONDS, [ref]$parsedHardCapSeconds) -or
+        $parsedHardCapSeconds -lt 1 -or $parsedHardCapSeconds -gt 900) {
+        throw "HS_E2E_HARD_CAP_SECONDS must be an integer from 1 through 900; actual=$($env:HS_E2E_HARD_CAP_SECONDS)"
+    }
+    $hardCapSeconds = $parsedHardCapSeconds
+}
+$hardCapModulePath = Join-Path $scriptDirectory 'debug-run-hardcap.psm1'
+if (-not (Test-Path -LiteralPath $hardCapModulePath -PathType Leaf)) {
+    throw "The E2E hard-cap module was not found: $hardCapModulePath"
+}
+Import-Module -Name $hardCapModulePath -Force -ErrorAction Stop
 
 New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
 ## The ProcessStartInfo below supplies the working directory. Keeping the
@@ -50,6 +64,8 @@ Set-Content -Path $consoleLog -Value @(
     "DEPLOYMENT_ID=$deploymentId",
     "JAR_SHA256=$expectedJarHash",
     "E2E watchdog max restarts=$maxRestarts",
+    "E2E absolute hard cap seconds=$hardCapSeconds",
+    "E2E hard cap policy=deadline-anchored-to-first-beta-jvm-start",
     "E2E run id=$runId",
     "E2E strategy id=$e2eStrategyId",
     "E2E deck position=$e2eDeckPosition",
@@ -228,6 +244,7 @@ $scriptLogBaselineIdentity = if ($initialScriptLog) { $initialScriptLog.Identity
 $scriptLogBaselineLength = if ($initialScriptLog) { $initialScriptLog.Length } else { 0L }
 $consecutiveValidRounds = 0
 $validatedPowerTerminalCount = 0
+$hardCapDeadlineUtc = $null
 while ($true) {
     $attempt++
     Write-Trace "==== Java attempt $attempt start $(Get-Date -Format o) ===="
@@ -287,12 +304,33 @@ while ($true) {
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     if (-not $process.Start()) { throw "Failed to start Java" }
+    # Arm the hard stop before stdout reads, log scans, or startup checks.
+    # The first Beta JVM's actual creation time establishes a fixed deadline
+    # for the whole E2E run; a later retry inherits that deadline instead of
+    # silently receiving another 15 minutes.
+    $processIdentity = Get-DebugRunProcessIdentity -ProcessId $process.Id
+    if ($null -eq $processIdentity) {
+        throw "Could not read the newly started Beta JVM identity: pid=$($process.Id)"
+    }
+    if ($null -eq $hardCapDeadlineUtc) {
+        $hardCapDeadlineUtc = $processIdentity.StartUtc.AddSeconds($hardCapSeconds)
+    }
+    $hardCapContext = New-DebugRunHardCapContext -RunId $runId -ProcessId $processIdentity.ProcessId -ProcessStartUtc $processIdentity.StartUtc -DeadlineUtc $hardCapDeadlineUtc
+    $hardCapBackstop = Start-DebugRunHardCapBackstop -Context $hardCapContext -ModulePath $hardCapModulePath
+    $hardCapDelayMilliseconds = Get-DebugRunHardCapDelayMilliseconds -DeadlineUtc $hardCapDeadlineUtc
+    Write-Trace ("E2E_HARD_CAP_ARMED runId={0} attempt={1} targetPid={2} targetStartUtc={3:o} deadlineUtc={4:o} capSeconds={5} remainingMs={6}" -f $runId, $attempt, $processIdentity.ProcessId, $processIdentity.StartUtc, $hardCapDeadlineUtc, $hardCapSeconds, $hardCapDelayMilliseconds)
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
     $roundsSeen = $false
     $gameReadySeen = $false
+    $hardCapExpired = $false
 
     while (-not $process.HasExited) {
+        if (Test-DebugRunHardCapExpired -Context $hardCapContext) {
+            $hardCapExpired = $true
+            Write-Trace ("E2E_HARD_CAP_EXPIRED runId={0} attempt={1} targetPid={2} deadlineUtc={3:o} action=backstop-owns-termination" -f $runId, $attempt, $process.Id, $hardCapDeadlineUtc)
+            break
+        }
         # Do not query MainWindowHandle/MainWindowTitle from the watchdog.
         # Those .NET properties cross the Win32 GUI boundary and can block or
         # destabilize a JavaFX process while it is changing stages. Process
@@ -398,17 +436,50 @@ while ($true) {
     }
 
     if (-not $process.HasExited) {
-        $process.WaitForExit(120000)
+        if ($hardCapExpired) {
+            # The job is the normal terminator. Waiting for it keeps the
+            # monitor responsive; a direct call is only a bounded fallback if
+            # job creation/execution failed after the absolute deadline.
+            Wait-Job -Job $hardCapBackstop -Timeout 15 | Out-Null
+            Receive-Job -Job $hardCapBackstop -Keep -ErrorAction SilentlyContinue | ForEach-Object {
+                Write-Trace ("E2E_HARD_CAP_BACKSTOP_RESULT runId={0} attempt={1} status={2} rootStopped={3} hearthstoneChildren={4}" -f $runId, $attempt, $_.Status, $_.RootStopped, ($_.HearthstoneChildIds -join ','))
+            }
+            if (-not $process.HasExited) {
+                $fallbackResult = Invoke-DebugRunHardCapStop -Context $hardCapContext
+                Write-Trace ("E2E_HARD_CAP_FALLBACK_RESULT runId={0} attempt={1} status={2} rootStopped={3} hearthstoneChildren={4}" -f $runId, $attempt, $fallbackResult.Status, $fallbackResult.RootStopped, ($fallbackResult.HearthstoneChildIds -join ','))
+            }
+            $process.WaitForExit(15000)
+            if (-not $process.HasExited) {
+                # This is still the exact root Process instance that supplied
+                # the ownership token above. Do not broaden this to a
+                # name-based kill: an unrelated Hearthstone client is never a
+                # valid E2E hard-cap target.
+                Stop-DebugRunHardCapTarget -ProcessId $process.Id
+                $process.WaitForExit(5000)
+            }
+            if (-not $process.HasExited) {
+                Stop-DebugRunHardCapBackstop -Job $hardCapBackstop
+                throw "E2E hard-cap could not stop its owned Beta JVM: pid=$($process.Id) runId=$runId"
+            }
+        } else {
+            $process.WaitForExit(120000)
+        }
     }
     $stdout = $stdoutTask.GetAwaiter().GetResult()
     $stderr = $stderrTask.GetAwaiter().GetResult()
     if ($stdout) { Write-Trace ("JAVA_STDOUT_BEGIN attempt=$attempt`n$stdout`nJAVA_STDOUT_END attempt=$attempt") }
     if ($stderr) { Write-Trace ("JAVA_STDERR_BEGIN attempt=$attempt`n$stderr`nJAVA_STDERR_END attempt=$attempt") }
     Write-Trace "==== Java attempt $attempt exit $(Get-Date -Format o) code=$($process.ExitCode) roundsSeen=$roundsSeen ===="
+    Stop-DebugRunHardCapBackstop -Job $hardCapBackstop
 
     if ($roundsSeen) {
         Write-Trace "==== E2E $roundsRequired consecutive authoritative completed-round markers found for Pirate Warrior; watchdog complete ===="
         exit 0
+    }
+
+    if ($hardCapExpired) {
+        Write-Trace "==== E2E absolute hard cap reached; runner will not restart beyond the original Beta JVM deadline ===="
+        exit 124
     }
 
     if ($attempt -gt $maxRestarts) {

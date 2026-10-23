@@ -78,6 +78,12 @@ class DebugRunUiContractTest {
         val runner = moduleRoot.resolve(Path.of("src", "main", "resources", "bat", "run-debug.ps1"))
         val runnerText = Files.readString(runner)
         assertTrue(runnerText.contains("-Dhs.script.debugrun.prearm=true"))
+        assertTrue(runnerText.contains("HS_E2E_HARD_CAP_SECONDS"))
+        assertTrue(runnerText.contains("\$hardCapSeconds = 900"))
+        assertTrue(runnerText.contains("E2E_HARD_CAP_ARMED"))
+        assertTrue(runnerText.contains("E2E_HARD_CAP_EXPIRED"))
+        assertTrue(runnerText.contains("deadline-anchored-to-first-beta-jvm-start"))
+        assertTrue(runnerText.contains("debug-run-hardcap.psm1"))
         assertTrue(runnerText.contains("deployment-manifest.json"))
         assertTrue(runnerText.contains("manifest.appJar"))
         assertTrue(runnerText.contains("manifest.appJarSha256"))
@@ -98,6 +104,17 @@ class DebugRunUiContractTest {
         val deploy = Files.readString(repositoryRoot.resolve("build-and-deploy.ps1"))
         assertTrue(deploy.contains("run-debug.ps1"))
         assertTrue(deploy.contains("debugRunnerSource"))
+        assertTrue(deploy.contains("debugRunnerHardCapSource"))
+
+        val hardCapModule = moduleRoot.resolve(Path.of(
+            "src", "main", "resources", "bat", "debug-run-hardcap.psm1",
+        ))
+        assertTrue(Files.isRegularFile(hardCapModule), "DebugRun hard-cap module must remain packaged")
+        val hardCapModuleText = Files.readString(hardCapModule)
+        assertTrue(hardCapModuleText.contains("ProcessStartUtc"))
+        assertTrue(hardCapModuleText.contains("Get-DebugRunHearthstoneDescendantIds"))
+        assertTrue(hardCapModuleText.contains("STALE_OR_EXITED_TARGET"))
+        assertTrue(hardCapModuleText.contains("ALREADY_ISSUED"))
 
         val lease = moduleRoot.resolve(Path.of(
             "src",

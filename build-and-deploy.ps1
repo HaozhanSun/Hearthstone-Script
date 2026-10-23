@@ -43,6 +43,7 @@ $cardPluginTarget = Join-Path $projectRoot 'hs-script-base-card-plugin\target\hs
 $cardSdkTarget = Join-Path $projectRoot 'hs-script-card-sdk\target\hs-script-card-sdk-1.3.0.jar'
 $debugRunnerSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\run-debug.ps1'
 $debugRunnerCmdSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\run-debug.cmd'
+$debugRunnerHardCapSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\debug-run-hardcap.psm1'
 $launcherVbsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-as-admin.vbs'
 $launcherPsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-newest-as-admin.ps1'
 $deploymentContractSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\deployment-contract.ps1'
@@ -161,7 +162,7 @@ if (-not (Test-Path -LiteralPath $pomPath -PathType Leaf)) { throw "pom.xml miss
 if (-not (Test-Path -LiteralPath $mavenWrapper -PathType Leaf)) { throw "Maven wrapper missing: $mavenWrapper" }
 if (-not (Test-Path -LiteralPath $runtimeRoot -PathType Container)) { throw "Runtime root missing: $runtimeRoot" }
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'hs-script-app\assembly.xml') -PathType Leaf)) { throw 'Full reactor assembly descriptor is missing' }
-foreach ($runner in @($debugRunnerSource, $debugRunnerCmdSource)) {
+foreach ($runner in @($debugRunnerSource, $debugRunnerCmdSource, $debugRunnerHardCapSource)) {
     if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw "Debug runner source missing: $runner" }
 }
 
@@ -315,6 +316,7 @@ try {
     # source tree while the runtime keeps an older script.
     Copy-Item -LiteralPath $debugRunnerSource -Destination (Join-Path $runtimeRoot 'run-debug.ps1') -Force
     Copy-Item -LiteralPath $debugRunnerCmdSource -Destination (Join-Path $runtimeRoot 'run-debug.cmd') -Force
+    Copy-Item -LiteralPath $debugRunnerHardCapSource -Destination (Join-Path $runtimeRoot 'debug-run-hardcap.psm1') -Force
     Copy-Item -LiteralPath $launcherVbsSource -Destination (Join-Path $runtimeRoot 'launch-as-admin.vbs') -Force
     Copy-Item -LiteralPath $launcherPsSource -Destination (Join-Path $runtimeRoot 'launch-newest-as-admin.ps1') -Force
     Copy-Item -LiteralPath $deploymentContractSource -Destination (Join-Path $runtimeRoot 'deployment-contract.ps1') -Force
