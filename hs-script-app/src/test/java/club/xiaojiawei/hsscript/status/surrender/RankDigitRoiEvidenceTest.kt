@@ -62,6 +62,48 @@ class RankDigitRoiEvidenceTest {
     }
 
     @Test
+    fun `exact Beta rank ten live frame uses expanded PaddleX fallback after tight zero`() {
+        val stream = requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/rank-detection/rank10-beta-20261022-174238-paddlex-zero.png",
+        )) { "missing exact Beta rank-ten zero replay screenshot" }
+        val image = stream.use { requireNotNull(ImageIO.read(it)) }
+        val requested = mutableListOf<String?>()
+        val oldVisualHint = System.getProperty("rank.disable.visual.hint")
+        try {
+            System.setProperty("rank.disable.visual.hint", "true")
+            configurePaddleX { payload, roi ->
+                requested += roi
+                when (roi) {
+                    "rank-badge-small" -> {
+                        assertEquals(180, payload.width)
+                        assertEquals(136, payload.height)
+                        OcrRecognition("0", confidence = 0.6507286)
+                    }
+                    "rank-badge" -> OcrRecognition("", confidence = null)
+                    "rank-badge-expanded" -> {
+                        assertEquals(228, payload.width)
+                        assertEquals(188, payload.height)
+                        OcrRecognition("10", confidence = 0.999)
+                    }
+                    else -> error("unexpected OCR ROI=$roi")
+                }
+            }
+
+            val detection = CurrentRankDetector.detectCapturedImage(image, saveEvidence = false)
+
+            assertEquals(
+                listOf<String?>("rank-badge-small", "rank-badge", "rank-badge-expanded"),
+                requested,
+            )
+            assertEquals(10, detection?.rank)
+            assertTrue(detection?.rank != 0, "tight-ROI zero must never finalize as rank zero")
+        } finally {
+            if (oldVisualHint == null) System.clearProperty("rank.disable.visual.hint")
+            else System.setProperty("rank.disable.visual.hint", oldVisualHint)
+        }
+    }
+
+    @Test
     fun `exact Beta replay with empty OCR remains unknown and fail closed`() {
         val requested = mutableListOf<String?>()
         configurePaddleX { _, roi ->
@@ -72,7 +114,7 @@ class RankDigitRoiEvidenceTest {
         val detection = CurrentRankDetector.detectCapturedImage(fixture(), saveEvidence = false)
 
         assertNull(detection?.rank)
-        assertEquals(listOf<String?>("rank-badge-small", "rank-badge"), requested)
+        assertEquals(listOf<String?>("rank-badge-small", "rank-badge", "rank-badge-expanded"), requested)
         val decision = SurrenderPolicy.unresolvedRankDecision(attempts = 3)
         assertTrue(decision.shouldSurrender, "unresolved in-game rank must retain fail-closed surrender handling")
         assertFalse(decision.blocksAutomaticSurrender)
