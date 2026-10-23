@@ -630,8 +630,8 @@ class SurrenderPolicyTest {
         assertEquals(Rectangle(0, 885, 105, 108), badge)
         assertTrue(badge.x + badge.width <= 105)
         assertTrue(expanded.x + expanded.width <= 100)
-        assertTrue(digit.x + digit.width <= 70)
-        assertEquals(Rectangle(34, 938, 35, 45), digit)
+        assertTrue(digit.x + digit.width <= 76)
+        assertEquals(Rectangle(31, 944, 45, 34), digit)
     }
 
     @Test
@@ -640,7 +640,7 @@ class SurrenderPolicyTest {
         val referenceDigit = CurrentRankDetector.rankDigitBoundsForTest(1920, 1080)
 
         assertEquals(Rectangle(0, 885, 105, 108), referenceBadge)
-        assertEquals(Rectangle(34, 938, 35, 45), referenceDigit)
+        assertEquals(Rectangle(31, 944, 45, 34), referenceDigit)
         for ((width, height) in listOf(2560 to 1440, 1600 to 900, 1280 to 720)) {
             val badge = CurrentRankDetector.rankBadgeBoundsForScreenPhaseForTest(width, height, "REPLACE_CARD")
             val digit = CurrentRankDetector.rankDigitBoundsForScreenPhaseForTest(width, height, "REPLACE_CARD")
@@ -723,9 +723,9 @@ class SurrenderPolicyTest {
             val detection = CurrentRankDetector.detectCapturedImage(screen, saveEvidence = false)
 
             assertEquals(10, detection?.rank)
-            assertEquals(listOf("current-rank-paddlex-badge"), calls)
-            assertEquals(listOf(105 to 108), roiSizes)
-            assertEquals(listOf("rank-badge"), roiLabels)
+            assertEquals(listOf("current-rank-paddlex-badge-smallRoi"), calls)
+            assertEquals(listOf(180 to 136), roiSizes)
+            assertEquals(listOf("rank-badge-small"), roiLabels)
         } finally {
             OcrRuntime.settingsProvider = originalSettingsProvider
             OcrRuntime.paddleXBridgeFactory = originalBridgeFactory
@@ -896,7 +896,7 @@ class SurrenderPolicyTest {
             assertEquals(CurrentRankDetector.RankTier.LEGEND, detection?.tier)
             assertTrue(SurrenderPolicy.isLegendaryDetection(detection))
             assertTrue(SurrenderPolicy.evaluateCurrentRank(233, detection!!.tier)!!.shouldSurrender)
-            assertEquals(listOf(105 to 108), roiSizes)
+            assertEquals(listOf(180 to 136), roiSizes)
         } finally {
             OcrRuntime.settingsProvider = originalSettingsProvider
             OcrRuntime.paddleXBridgeFactory = originalBridgeFactory

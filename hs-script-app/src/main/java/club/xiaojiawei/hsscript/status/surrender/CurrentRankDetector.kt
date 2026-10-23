@@ -56,13 +56,13 @@ object CurrentRankDetector {
     // produced values such as 939/51/191.
     // This inner window is centered on the white numeral row in the 1920x1080
     // Hearthstone HUD and deliberately excludes the portrait and name.
-    private const val RANK_DIGIT_LEFT = 0.018
-    // Keep the narrow numeric fallback inside the badge while leaving room
-    // for the lower blade/plate artwork that can clip the glyph at its edge.
-    // At 1920x1080 this is x=34,y=938,w=35,h=45.
-    private const val RANK_DIGIT_TOP = 0.86852
-    private const val RANK_DIGIT_WIDTH = 0.018
-    private const val RANK_DIGIT_HEIGHT = 0.04167
+    private const val RANK_DIGIT_LEFT = 31.0 / 1920.0
+    // Exact crop around the lower-left numeral, excluding decorative border
+    // pixels that made the previous ROI return empty text on the Beta replay.
+    // At 1920x1080 this is x=31,y=944,w=45,h=34.
+    private const val RANK_DIGIT_TOP = 944.0 / 1080.0
+    private const val RANK_DIGIT_WIDTH = 45.0 / 1920.0
+    private const val RANK_DIGIT_HEIGHT = 34.0 / 1080.0
     // The stylized 10 badge is frequently OCR'd as a lone 1.  This narrow
     // inner window excludes the shield border and the player name, leaving
     // only the numeral row for a conservative two-digit layout check.
@@ -329,32 +329,27 @@ object CurrentRankDetector {
         if (!OcrRuntime.isLegacySelected()) {
             val visualTenHint = !java.lang.Boolean.getBoolean("rank.disable.visual.hint") &&
                 looksLikeTwoDigitRank(numericRegion)
-            val bigProbe = runPaddleXRankProbe(
-                image = badgeRegion,
-                bounds = badgeRegionBounds,
-                roi = "bigRoi",
-                scale = 1,
+            // The number-only crop is the primary PaddleX input. Badge artwork
+            // is queried only when the numeric crop cannot produce a rank.
+            val smallProbe = runPaddleXRankProbe(
+                image = digitRegion,
+                bounds = numericRegionBounds,
+                roi = "smallRoi",
+                scale = RANK_SMALL_ROI_SCALE,
                 trigger = evidenceTrigger,
-                visualTenHint = false,
+                visualTenHint = visualTenHint,
             )
-            // The tight numeric ROI is deliberately enlarged before the
-            // fallback request. It is only sent when the complete badge did
-            // not yield a usable 1..10 rank or >50 Legendary rating.
-            val smallProbe = if (bigProbe.rank == null) {
+            val bigProbe = if (smallProbe.rank == null) {
                 runPaddleXRankProbe(
-                    image = digitRegion,
-                    bounds = numericRegionBounds,
-                    roi = "smallRoi",
-                    scale = RANK_SMALL_ROI_SCALE,
+                    image = badgeRegion,
+                    bounds = badgeRegionBounds,
+                    roi = "bigRoi",
+                    scale = 1,
                     trigger = evidenceTrigger,
-                    visualTenHint = visualTenHint,
+                    visualTenHint = false,
                 )
             } else {
-                skippedRankProbe(
-                    roi = "smallRoi",
-                    bounds = numericRegionBounds,
-                    scale = RANK_SMALL_ROI_SCALE,
-                )
+                skippedRankProbe("bigRoi", badgeRegionBounds, scale = 1)
             }
             val selection = selectRankProbeResults(bigProbe, smallProbe)
             val rank = selection.rank
@@ -511,7 +506,7 @@ object CurrentRankDetector {
         trigger: String,
         visualTenHint: Boolean,
     ): RankProbeResult {
-        val input = if (scale == 1) image else scaleForOcr(image, scale)
+        val input = if (scale == 1) image else RankOcrImagePreprocessor.upscale(image, scale)
         val providerRoi = if (roi == "bigRoi") "rank-badge" else "rank-badge-small"
         val description = if (roi == "bigRoi") trigger else "$trigger-$roi"
         val recognition = OcrRuntime.recognizeResult(
@@ -1060,20 +1055,19 @@ object CurrentRankDetector {
         return scaled
     }
 
+    /** Existing Tesseract preprocessing; PaddleX rank crops use Lanczos3 above. */
     private fun scaleForOcr(image: BufferedImage, scale: Int = 2): BufferedImage {
         val width = (image.width * scale).coerceAtLeast(1)
         val height = (image.height * scale).coerceAtLeast(1)
         val scaled = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
         val graphics = scaled.createGraphics()
         try {
-            graphics.setRenderingHint(
-                RenderingHints.KEY_INTERPOLATION,
-                RenderingHints.VALUE_INTERPOLATION_BICUBIC,
-            )
+            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
             graphics.drawImage(image, 0, 0, width, height, null)
         } finally {
             graphics.dispose()
         }
         return scaled
     }
+
 }
