@@ -104,6 +104,100 @@ class RankDigitRoiEvidenceTest {
     }
 
     @Test
+    fun `exact beta 20261023 rank ten capture never resolves expanded one as rank one`() {
+        val source = javaClass.getResourceAsStream(
+            "/offline-ocr/rank-detection/rank10-beta-20261023-130343-paddlex-one.png",
+        ).use { stream ->
+            requireNotNull(stream) { "missing exact Beta 2026-10-23 rank-ten capture" }
+            requireNotNull(ImageIO.read(stream))
+        }
+        val digitBounds = CurrentRankDetector.rankDigitBoundsForTest(source.width, source.height)
+        assertTrue(
+            CurrentRankDetector.looksLikeTwoDigitRank(
+                source.getSubimage(digitBounds.x, digitBounds.y, digitBounds.width, digitBounds.height),
+            ),
+            "the exact production frame contains a two-glyph rank badge",
+        )
+        configurePaddleX { _, roi ->
+            when (roi) {
+                "rank-badge-small" -> OcrRecognition("0", confidence = 0.99)
+                "rank-badge" -> OcrRecognition("", confidence = null)
+                "rank-badge-expanded" -> OcrRecognition("1", confidence = 1.0)
+                else -> error("unexpected OCR ROI=$roi")
+            }
+        }
+
+        val detection = requireNotNull(
+            CurrentRankDetector.detectCapturedImage(
+                screen = source,
+                saveEvidence = false,
+                evidencePhase = "REPLACE_CARD",
+            ),
+        )
+
+        assertEquals(10, detection.rank, "the exact 10 frame must not be labeled rank 1")
+        assertTrue(detection.rank != 1)
+        assertNull(
+            SurrenderPolicy.evaluateCurrentRank(requireNotNull(detection.rank), detection.tier),
+            "the exact rank-10 frame must not trigger the below-threshold surrender policy",
+        )
+    }
+
+    @Test
+    fun `expanded one after zero remains unknown without visual corroboration`() {
+        val source = javaClass.getResourceAsStream(
+            "/offline-ocr/rank-detection/rank10-beta-20261023-130343-paddlex-one.png",
+        ).use { stream ->
+            requireNotNull(stream) { "missing exact Beta rank-ten capture" }
+            requireNotNull(ImageIO.read(stream))
+        }
+        val oldVisualHint = System.getProperty("rank.disable.visual.hint")
+        try {
+            System.setProperty("rank.disable.visual.hint", "true")
+            configurePaddleX { _, roi ->
+                when (roi) {
+                    "rank-badge-small" -> OcrRecognition("0", confidence = 0.99)
+                    "rank-badge" -> OcrRecognition("", confidence = null)
+                    "rank-badge-expanded" -> OcrRecognition("1", confidence = 1.0)
+                    else -> error("unexpected OCR ROI=$roi")
+                }
+            }
+
+            val detection = CurrentRankDetector.detectCapturedImage(
+                screen = source,
+                saveEvidence = false,
+                evidencePhase = "REPLACE_CARD",
+            )
+
+            assertNull(detection?.rank, "ambiguous 10-vs-1 evidence must fail closed")
+            SurrenderPolicy.resetForNewGame()
+            SurrenderPolicy.forceRankInspectionLatchForTest(
+                completed = false,
+                authorized = false,
+                attempts = 3,
+            )
+            val decision = SurrenderPolicy.evaluateMulliganRankEvidence(
+                detection = detection,
+                actualMode = "GAMEPLAY",
+                inWar = true,
+                nowMs = System.currentTimeMillis(),
+                persistentStreakDecision = null,
+            )
+            assertEquals("rank-ocr-unresolved", decision?.ruleId)
+            assertTrue(decision?.shouldSurrender == true, "ambiguous pre-mulligan evidence must route to safe surrender")
+            assertFalse(SurrenderPolicy.currentRankContinueAuthorized())
+            assertTrue(NeverSurrenderPolicy.isMandatoryRankDispatch("mulligan-rank-preflight", decision!!.ruleId))
+            assertTrue(
+                MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = false),
+                "rank evidence must not block matchmaking input",
+            )
+        } finally {
+            if (oldVisualHint == null) System.clearProperty("rank.disable.visual.hint")
+            else System.setProperty("rank.disable.visual.hint", oldVisualHint)
+        }
+    }
+
+    @Test
     fun `exact Beta replay with empty OCR remains unknown and fail closed`() {
         val requested = mutableListOf<String?>()
         configurePaddleX { _, roi ->

@@ -71,6 +71,7 @@ object CurrentRankDetector {
     private const val RANK_VISUAL_WIDTH = 0.30
     private const val RANK_VISUAL_HEIGHT = 0.25
     private const val RANK_TWO_DIGIT_MIN_SPAN = 24
+    private const val RANK_TEN_CORROBORATION_MIN_CONFIDENCE = 0.85
     private const val RANK_SMALL_ROI_SCALE = 4
 
     data class Detection(
@@ -361,11 +362,12 @@ object CurrentRankDetector {
             } else {
                 skippedRankProbe("expandedRoi", expandedRegionBounds, RANK_SMALL_ROI_SCALE)
             }
-            val selection = if (expandedProbe.rank != null) {
-                RankProbeSelection("expandedRoi", expandedProbe, expandedProbe.rank, "none")
-            } else {
-                initialSelection
-            }
+            val selection = selectExpandedRankProbe(
+                initialSelection = initialSelection,
+                smallProbe = smallProbe,
+                expandedProbe = expandedProbe,
+                visualTenHint = visualTenHint,
+            )
             val rank = selection.rank
             val selectedProbe = selection.selected
             val ocrText = selectedProbe?.normalizedText.orEmpty()
@@ -723,12 +725,13 @@ object CurrentRankDetector {
      * an arbitrary one-digit OCR result into a lower rank.
      */
     internal fun looksLikeTwoDigitRank(image: BufferedImage): Boolean {
-        val left = (image.width * RANK_VISUAL_LEFT).toInt().coerceIn(0, image.width - 1)
-        val top = (image.height * RANK_VISUAL_TOP).toInt().coerceIn(0, image.height - 1)
-        val right = (image.width * (RANK_VISUAL_LEFT + RANK_VISUAL_WIDTH))
-            .toInt().coerceAtMost(image.width)
-        val bottom = (image.height * (RANK_VISUAL_TOP + RANK_VISUAL_HEIGHT))
-            .toInt().coerceAtMost(image.height)
+        // The input is already the number-only ROI. Scanning another narrow
+        // inner window drops the right-hand zero at the production 45x34 HUD
+        // size, making a real rank 10 look like a single-digit rank 1.
+        val left = 0
+        val top = 0
+        val right = image.width
+        val bottom = image.height
         val occupiedColumns = (left until right).filter { x ->
             var foregroundPixels = 0
             for (y in top until bottom) {
@@ -747,6 +750,48 @@ object CurrentRankDetector {
         if (occupiedColumns.isEmpty()) return false
         val span = occupiedColumns.last() - occupiedColumns.first() + 1
         return span >= RANK_TWO_DIGIT_MIN_SPAN && occupiedColumns.size >= RANK_TWO_DIGIT_MIN_SPAN / 2
+    }
+
+    private fun selectExpandedRankProbe(
+        initialSelection: RankProbeSelection,
+        smallProbe: RankProbeResult,
+        expandedProbe: RankProbeResult,
+        visualTenHint: Boolean,
+    ): RankProbeSelection {
+        if (expandedProbe.rank == null) return initialSelection
+
+        // PaddleX can read the left glyph of a stylized 10 as `1` while the
+        // tight crop reads the right glyph as `0`. Resolve that pair as 10
+        // only with independent two-digit geometry and a strong native score.
+        // Without both signals, remain unknown rather than authorizing rank-1
+        // surrender from an ambiguous frame.
+        if (expandedProbe.rank == 1 && smallProbe.normalizedText.trim() == "0") {
+            val confidentlyCorroboratedTen = visualTenHint &&
+                (expandedProbe.confidence ?: 0.0) >= RANK_TEN_CORROBORATION_MIN_CONFIDENCE
+            return if (confidentlyCorroboratedTen) {
+                RankProbeSelection(
+                    selectedRoi = "expandedRoi",
+                    selected = expandedProbe.copy(
+                        candidate = RankCandidate(
+                            rank = 10,
+                            confidence = expandedProbe.confidence,
+                            agreementCount = 2,
+                        ),
+                    ),
+                    rank = 10,
+                    unknownReason = "none",
+                )
+            } else {
+                RankProbeSelection(
+                    selectedRoi = "expandedRoi",
+                    selected = expandedProbe,
+                    rank = null,
+                    unknownReason = "rank-ten-ambiguous",
+                )
+            }
+        }
+
+        return RankProbeSelection("expandedRoi", expandedProbe, expandedProbe.rank, "none")
     }
 
     /**
