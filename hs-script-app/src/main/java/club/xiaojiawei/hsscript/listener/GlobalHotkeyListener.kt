@@ -21,6 +21,34 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.ConcurrentHashMap
 
 /**
+ * Decides whether Windows has supplied sufficient provenance for a fixed F1/F2
+ * control. `WH_KEYBOARD_LL` is the only channel used here because it carries
+ * the injected-input flags. An unflagged event is the strongest distinction
+ * Windows exposes in this process; callers must describe it as
+ * Windows-unflagged, not as cryptographically proven physical input.
+ */
+internal object FixedHotkeyInputPolicy {
+    const val LLKHF_LOWER_IL_INJECTED = 0x00000002
+    const val LLKHF_INJECTED = 0x00000010
+
+    enum class Decision {
+        ACCEPT_WINDOWS_UNFLAGGED,
+        IGNORE_INJECTED,
+        IGNORE_HOOK_UNAVAILABLE,
+    }
+
+    fun decideLowLevel(flags: Int): Decision =
+        if ((flags and (LLKHF_INJECTED or LLKHF_LOWER_IL_INJECTED)) != 0) {
+            Decision.IGNORE_INJECTED
+        } else {
+            Decision.ACCEPT_WINDOWS_UNFLAGGED
+        }
+
+    /** JIntellitype and key-state polling cannot expose per-event injection flags. */
+    fun hookUnavailable(): Decision = Decision.IGNORE_HOOK_UNAVAILABLE
+}
+
+/**
  * 热键监听器
  * @author 肖嘉威
  * @date 2022/12/11 11:23
@@ -44,7 +72,6 @@ object GlobalHotkeyListener : HotkeyListener {
     private const val VK_F2 = 0x71
 
     private val fixedHotkeyHookStarted = AtomicBoolean(false)
-    private val fixedHotkeyStatePollerStarted = AtomicBoolean(false)
     @Volatile
     private var fixedHotkeyHook: WinUser.HHOOK? = null
     private val fixedHotkeyHookCallback = object : WinUser.LowLevelKeyboardProc {
@@ -56,11 +83,19 @@ object GlobalHotkeyListener : HotkeyListener {
             if (nCode >= 0) {
                 val keyboardMessage = wParam.toInt()
                 if (keyboardMessage == WM_KEYDOWN || keyboardMessage == WM_SYSKEYDOWN) {
-                    fixedHotkeyEdgeDetector.onKeyDown(keyboardData.vkCode)?.let {
-                        dispatchFixedHotkey(it, "low-level-hook")
-                    }
+                    handleFixedLowLevelKeyEvent(
+                        virtualKey = keyboardData.vkCode,
+                        scanCode = keyboardData.scanCode,
+                        flags = keyboardData.flags,
+                        keyDown = true,
+                    )
                 } else if (keyboardMessage == WM_KEYUP || keyboardMessage == WM_SYSKEYUP) {
-                    fixedHotkeyEdgeDetector.onKeyUp(keyboardData.vkCode)
+                    handleFixedLowLevelKeyEvent(
+                        virtualKey = keyboardData.vkCode,
+                        scanCode = keyboardData.scanCode,
+                        flags = keyboardData.flags,
+                        keyDown = false,
+                    )
                 }
             }
             val nativeKeyboardData = Pointer.nativeValue(keyboardData.getPointer())
@@ -95,8 +130,6 @@ object GlobalHotkeyListener : HotkeyListener {
         if (JIntellitype.isJIntellitypeSupported()) {
             val hotkey = JIntellitype.getInstance()
 
-            registerFixedControls(hotkey)
-
             ConfigExUtil.getExitHotKey()?.let {
                 if (it.keyCode != 0) {
                     hotkey.registerHotKey(HOT_KEY_EXIT, it.modifier, it.keyCode)
@@ -130,16 +163,8 @@ object GlobalHotkeyListener : HotkeyListener {
         }
     }
 
-    /**
-     * JIntellitype registers a system hotkey, but its native callback was not
-     * reliable while Hearthstone owned the foreground window.  A low-level
-     * Windows keyboard hook receives the key event independently of the
-     * foreground window, including injected E2E key events.  Rising-edge
-     * detection prevents key-repeat from firing the control repeatedly while
-     * a function key is held.
-     */
+    /** Fixed controls intentionally use only the low-level hook. */
     private fun startFixedHotkeyPoller() {
-        startFixedHotkeyStatePoller()
         if (!fixedHotkeyHookStarted.compareAndSet(false, true)) return
 
         Thread({
@@ -166,7 +191,11 @@ object GlobalHotkeyListener : HotkeyListener {
                     // thread pumps its message queue.
                 }
             } catch (error: Throwable) {
-                log.warn(error) { "全局 F1/F2 监听失败" }
+                log.warn(error) {
+                    "FIXED_HOTKEY_UNAVAILABLE source=WH_KEYBOARD_LL " +
+                        "fallback=disabled decision=${FixedHotkeyInputPolicy.hookUnavailable()} " +
+                        "reason=${error.javaClass.simpleName} manualF1F2=unavailable"
+                }
                 fixedHotkeyHookStarted.set(false)
             } finally {
                 fixedHotkeyHook?.let(User32.INSTANCE::UnhookWindowsHookEx)
@@ -178,70 +207,80 @@ object GlobalHotkeyListener : HotkeyListener {
         }
     }
 
-    /**
-     * A low-level hook is the preferred path, but it can be unavailable when
-     * the JVM is launched in a restricted desktop/input session.  Polling
-     * the physical key state is independent of the foreground window and is
-     * therefore the safety net that makes F1/F2 genuinely global.
-     */
-    private fun startFixedHotkeyStatePoller() {
-        if (!fixedHotkeyStatePollerStarted.compareAndSet(false, true)) return
-
-        Thread({
-            var f1Down = false
-            var f2Down = false
-            try {
-                log.info { "固定 F1/F2 全局状态轮询已启动：source=GetAsyncKeyState intervalMs=25" }
-                while (true) {
-                    val f1Now = (User32.INSTANCE.GetAsyncKeyState(VK_F1).toInt() and 0x8000) != 0
-                    val f2Now = (User32.INSTANCE.GetAsyncKeyState(VK_F2).toInt() and 0x8000) != 0
-                    if (f1Now && !f1Down) {
-                        dispatchFixedHotkey(HOT_KEY_START_F1, "GetAsyncKeyState")
-                    }
-                    if (f2Now && !f2Down) {
-                        dispatchFixedHotkey(HOT_KEY_PAUSE_F2, "GetAsyncKeyState")
-                    }
-                    f1Down = f1Now
-                    f2Down = f2Now
-                    Thread.sleep(25)
+    private fun handleFixedLowLevelKeyEvent(
+        virtualKey: Int,
+        scanCode: Int,
+        flags: Int,
+        keyDown: Boolean,
+    ): FixedHotkeyInputPolicy.Decision? {
+        if (virtualKey != VK_F1 && virtualKey != VK_F2) return null
+        val decision = FixedHotkeyInputPolicy.decideLowLevel(flags)
+        val key = if (virtualKey == VK_F1) "F1" else "F2"
+        if (decision != FixedHotkeyInputPolicy.Decision.ACCEPT_WINDOWS_UNFLAGGED) {
+            if (keyDown) {
+                log.warn {
+                    "HOTKEY_INPUT_IGNORED source=WH_KEYBOARD_LL key=$key provenance=injected " +
+                        "scanCode=$scanCode flags=0x${flags.toString(16)} decision=$decision action=none"
                 }
-            } catch (error: InterruptedException) {
-                Thread.currentThread().interrupt()
-            } catch (error: Throwable) {
-                log.warn(error) { "固定 F1/F2 全局状态轮询失败" }
-                fixedHotkeyStatePollerStarted.set(false)
             }
-        }, "Global F1/F2 Hotkey State Poller").apply {
-            isDaemon = true
-            start()
+            return decision
         }
+        if (!keyDown) {
+            fixedHotkeyEdgeDetector.onKeyUp(virtualKey)
+            return decision
+        }
+        fixedHotkeyEdgeDetector.onKeyDown(virtualKey)?.let { id ->
+            dispatchFixedHotkey(id, "WH_KEYBOARD_LL/windows-unflagged", scanCode, flags)
+        } ?: log.info {
+            "HOTKEY_INPUT_IGNORED source=WH_KEYBOARD_LL key=$key provenance=windows-unflagged " +
+                "scanCode=$scanCode flags=0x${flags.toString(16)} decision=key-repeat action=none"
+        }
+        return decision
     }
 
-    /** JIntellitype remains as a compatibility path for injected E2E keys. */
-    private fun registerFixedControls(hotkey: JIntellitype = JIntellitype.getInstance()) {
-        runCatching {
-            hotkey.registerHotKey(HOT_KEY_START_F1, 0, VK_F1)
-            log.info { "固定开始热键已注册：F1（兼容注入事件）" }
-        }.onFailure { error ->
-            log.warn(error) { "注册固定开始热键 F1 兼容通道失败" }
-        }
-
-        runCatching {
-            hotkey.registerHotKey(HOT_KEY_PAUSE_F2, 0, VK_F2)
-            log.info { "固定暂停热键已注册：F2（兼容注入事件）" }
-        }.onFailure { error ->
-            log.warn(error) { "注册固定暂停热键 F2 兼容通道失败" }
-        }
-    }
-
-    private fun dispatchFixedHotkey(id: Int, source: String) {
+    private fun dispatchFixedHotkey(id: Int, source: String, scanCode: Int, flags: Int) {
         val now = System.nanoTime()
         val previous = lastFixedHotkeyNanos.put(id, now)
-        if (previous != null && now - previous < FIXED_HOTKEY_DEDUP_NANOS) return
+        if (previous != null && now - previous < FIXED_HOTKEY_DEDUP_NANOS) {
+            log.info {
+                "HOTKEY_INPUT_IGNORED source=$source key=${if (id == HOT_KEY_START_F1) "F1" else "F2"} " +
+                    "provenance=windows-unflagged scanCode=$scanCode flags=0x${flags.toString(16)} " +
+                    "decision=deduplicated action=none"
+            }
+            return
+        }
+        log.info {
+            "HOTKEY_INPUT_ACCEPTED source=$source key=${if (id == HOT_KEY_START_F1) "F1" else "F2"} " +
+                "provenance=windows-unflagged scanCode=$scanCode flags=0x${flags.toString(16)} " +
+                "action=${if (id == HOT_KEY_START_F1) "resume" else "pause"}"
+        }
         when (id) {
             HOT_KEY_START_F1 -> setPauseState(false, "F1/$source")
             HOT_KEY_PAUSE_F2 -> setPauseState(true, "F2/$source")
         }
+    }
+
+    internal fun pressF2ForTest() =
+        handleFixedLowLevelKeyEvent(VK_F2, 0x3c, 0, keyDown = true)
+
+    internal fun releaseF2ForTest() =
+        handleFixedLowLevelKeyEvent(VK_F2, 0x3c, 0, keyDown = false)
+
+    internal fun pressInjectedF2ForTest() =
+        handleFixedLowLevelKeyEvent(VK_F2, 0x3c, FixedHotkeyInputPolicy.LLKHF_INJECTED, keyDown = true)
+
+    internal fun releaseInjectedF2ForTest() =
+        handleFixedLowLevelKeyEvent(VK_F2, 0x3c, FixedHotkeyInputPolicy.LLKHF_INJECTED, keyDown = false)
+
+    internal fun pressF1ForTest() =
+        handleFixedLowLevelKeyEvent(VK_F1, 0x3b, 0, keyDown = true)
+
+    internal fun releaseF1ForTest() =
+        handleFixedLowLevelKeyEvent(VK_F1, 0x3b, 0, keyDown = false)
+
+    internal fun resetFixedHotkeyStateForTest() {
+        fixedHotkeyEdgeDetector.reset()
+        lastFixedHotkeyNanos.clear()
     }
 
     internal class FixedHotkeyEdgeDetector {
@@ -265,6 +304,11 @@ object GlobalHotkeyListener : HotkeyListener {
                 VK_F1 -> f1Down = false
                 VK_F2 -> f2Down = false
             }
+        }
+
+        fun reset() {
+            f1Down = false
+            f2Down = false
         }
     }
 
@@ -297,9 +341,11 @@ object GlobalHotkeyListener : HotkeyListener {
      */
     override fun onHotKey(i: Int) {
         when (i) {
-            HOT_KEY_START_F1 -> dispatchFixedHotkey(HOT_KEY_START_F1, "JIntellitype")
-
-            HOT_KEY_PAUSE_F2 -> dispatchFixedHotkey(HOT_KEY_PAUSE_F2, "JIntellitype")
+            HOT_KEY_START_F1, HOT_KEY_PAUSE_F2 -> log.warn {
+                "HOTKEY_INPUT_IGNORED source=JIntellitype " +
+                    "key=${if (i == HOT_KEY_START_F1) "F1" else "F2"} provenance=unverifiable " +
+                    "decision=${FixedHotkeyInputPolicy.hookUnavailable()} action=none"
+            }
 
             HOT_KEY_EXIT -> {
                 SystemUtil.notice("捕捉到热键，关闭程序")
@@ -323,7 +369,6 @@ object GlobalHotkeyListener : HotkeyListener {
     /** Fixed F1/F2 controls for supervised/E2E launches. */
     val fixedControlsLaunch: Unit by lazy {
         startFixedHotkeyPoller()
-        if (JIntellitype.isJIntellitypeSupported()) registerFixedControls()
     }
 
 }
