@@ -5,11 +5,14 @@ param(
     [string]$ReleaseCandidateRuntimeRoot = '',
     [string]$ReleaseCandidateBranch = '',
     [string]$PromotionWorktree = '',
-    [string]$BuildScript = ''
+    [string]$BuildScript = '',
+    [string]$VerificationEvidencePath = '',
+    [string]$ShortcutRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[System.Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem') | Out-Null
 if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { $ProjectRoot = $PSScriptRoot }
 $projectRoot = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\')
 
@@ -84,6 +87,211 @@ function Get-VersionFromJarName {
     return $match.Groups[1].Value
 }
 
+function Get-ZipEntryText {
+    param([Parameter(Mandatory = $true)][string]$ArchivePath, [Parameter(Mandatory = $true)][string]$EntryName)
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        $entry = $archive.GetEntry($EntryName)
+        if ($null -eq $entry) { throw "JAR entry is missing: $EntryName in $ArchivePath" }
+        $reader = [System.IO.StreamReader]::new($entry.Open())
+        try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+    } finally { $archive.Dispose() }
+}
+
+function Get-BuildInfo {
+    param([Parameter(Mandatory = $true)][string]$JarPath)
+    $values = @{}
+    foreach ($line in (Get-ZipEntryText -ArchivePath $JarPath -EntryName 'build.info' -ErrorAction Stop) -split "`r?`n") {
+        $separator = $line.IndexOf('=')
+        if ($separator -gt 0) {
+            $values[$line.Substring(0, $separator)] = $line.Substring($separator + 1).Trim()
+        }
+    }
+    return $values
+}
+
+function Get-ManifestRuntimePath {
+    param(
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$PropertyName,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    $relative = Get-PropertyText $Manifest $PropertyName
+    if ([string]::IsNullOrWhiteSpace($relative) -or [System.IO.Path]::IsPathRooted($relative) -or
+        $relative.Contains('/') -and $relative.StartsWith('/')) {
+        throw "$Label must be a runtime-relative path: $relative"
+    }
+    $resolved = [System.IO.Path]::GetFullPath((Join-Path $Root $relative))
+    if (-not $resolved.StartsWith($Root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label escapes its runtime: $relative"
+    }
+    return $resolved
+}
+
+function Assert-ManifestArtifacts {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    foreach ($entry in @(
+        @{ Property = 'appJar'; Hash = 'appJarSha256'; Label = "$Label application JAR" },
+        @{ Property = 'strategyPluginLib'; Hash = 'strategyPluginSha256'; Label = "$Label strategy plugin lib" },
+        @{ Property = 'strategyPlugin'; Hash = 'strategyPluginSha256'; Label = "$Label strategy plugin" },
+        @{ Property = 'cardSdk'; Hash = 'cardSdkSha256'; Label = "$Label card SDK" }
+    )) {
+        $path = Get-ManifestRuntimePath -Manifest $Manifest -Root $Root -PropertyName $entry.Property -Label $entry.Label
+        Assert-FileHash -Path $path -Expected (Get-PropertyText $Manifest $entry.Hash) -Label $entry.Label
+    }
+    if ($null -ne $Manifest.PSObject.Properties['runtimeLibs'] -and $null -ne $Manifest.runtimeLibs) {
+        foreach ($property in $Manifest.runtimeLibs.PSObject.Properties) {
+            $path = [System.IO.Path]::GetFullPath((Join-Path $Root ([string]$property.Name)))
+            if (-not $path.StartsWith($Root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                throw "$Label runtime library escapes its runtime: $($property.Name)"
+            }
+            Assert-FileHash -Path $path -Expected ([string]$property.Value) -Label "$Label runtime library $($property.Name)"
+        }
+    }
+}
+
+function Assert-ArtifactIdentity {
+    param(
+        [Parameter(Mandatory = $true)][string]$JarPath,
+        [Parameter(Mandatory = $true)][string]$JarName,
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)][string]$ExpectedChannel,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+    $expectedVersion = Get-VersionFromJarName $JarName
+    $buildInfo = Get-BuildInfo -JarPath $JarPath
+    Assert-Equals -Expected $expectedVersion -Actual ([string]$buildInfo['version']) -Label "$Label embedded version"
+    Assert-Equals -Expected $ExpectedChannel -Actual ([string]$buildInfo['channel']) -Label "$Label embedded channel"
+    $manifestTimestamp = Get-PropertyText $Manifest 'buildTimestampPacific'
+    if ([string]::IsNullOrWhiteSpace($manifestTimestamp)) { throw "$Label manifest is missing buildTimestampPacific" }
+    Assert-Equals -Expected $manifestTimestamp -Actual ([string]$buildInfo['buildTimestampPacific']) -Label "$Label embedded build timestamp"
+}
+
+function Get-ShortcutDirectories {
+    param([string]$Root)
+    if ([string]::IsNullOrWhiteSpace($Root)) {
+        return @(
+            [Environment]::GetFolderPath('Desktop'),
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'),
+            (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar')
+        )
+    }
+    $base = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
+    return @((Join-Path $base 'Desktop'), (Join-Path $base 'Start Menu'), (Join-Path $base 'Taskbar'))
+}
+
+function Read-ShortcutContract {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $shell = New-Object -ComObject WScript.Shell
+    try {
+        $shortcut = $shell.CreateShortcut($Path)
+        return [pscustomobject]@{
+            TargetPath = [string]$shortcut.TargetPath
+            Arguments = [string]$shortcut.Arguments
+            WorkingDirectory = [string]$shortcut.WorkingDirectory
+            IconLocation = [string]$shortcut.IconLocation
+        }
+    } finally {
+        if ($null -ne $shell) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell) }
+    }
+}
+
+function Assert-LauncherContract {
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$Label)
+    $vbs = Join-Path $Root 'launch-as-admin.vbs'
+    $ps = Join-Path $Root 'launch-newest-as-admin.ps1'
+    $contract = Join-Path $Root 'deployment-contract.ps1'
+    foreach ($path in @($vbs, $ps, $contract)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "$Label launcher file is missing: $path" }
+    }
+    $vbsText = Get-Content -LiteralPath $vbs -Raw
+    $psText = Get-Content -LiteralPath $ps -Raw
+    $contractText = Get-Content -LiteralPath $contract -Raw
+    if ($vbsText -notmatch 'launch-newest-as-admin\.ps1') { throw "$Label VBS launcher does not delegate to the channel PowerShell launcher" }
+    if ($psText -notmatch 'Resolve-Deployment\s+\$scriptDirectory' -or
+        $psText -notmatch 'hs\.script\.deployment\.id' -or $psText -notmatch '\-jar') {
+        throw "$Label PowerShell launcher does not resolve the manifest-backed JAR"
+    }
+    if ($contractText -notmatch 'function Resolve-Deployment') { throw "$Label deployment contract is missing Resolve-Deployment" }
+}
+
+function Assert-ShortcutContract {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$ShortcutName,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$IconPath,
+        [string]$ShortcutBase = ''
+    )
+    $directories = @(Get-ShortcutDirectories -Root $ShortcutBase)
+    $expectedTarget = Join-Path $env:SystemRoot 'System32\wscript.exe'
+    $expectedLauncher = Join-Path $Root 'launch-as-admin.vbs'
+    $expectedArguments = '"' + $expectedLauncher + '"'
+    $expectedPaths = @()
+    foreach ($directory in $directories) {
+        $path = Join-Path $directory $ShortcutName
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "$Label shortcut is missing: $path" }
+        $expectedPaths += [System.IO.Path]::GetFullPath($path)
+        $shortcut = Read-ShortcutContract -Path $path
+        if (-not $expectedTarget.Equals([System.IO.Path]::GetFullPath($shortcut.TargetPath), [StringComparison]::OrdinalIgnoreCase)) {
+            throw "$Label shortcut target $path mismatch: expected '$expectedTarget', actual '$($shortcut.TargetPath)'"
+        }
+        if (-not $expectedArguments.Equals($shortcut.Arguments, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "$Label shortcut arguments $path mismatch: expected '$expectedArguments', actual '$($shortcut.Arguments)'"
+        }
+        $workingDirectory = [System.IO.Path]::GetFullPath($shortcut.WorkingDirectory).TrimEnd('\')
+        if (-not $Root.TrimEnd('\').Equals($workingDirectory, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "$Label shortcut working directory $path mismatch: expected '$Root', actual '$workingDirectory'"
+        }
+        if (-not $shortcut.IconLocation.StartsWith($IconPath, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "$Label shortcut icon $path mismatch: expected '$IconPath', actual '$($shortcut.IconLocation)'"
+        }
+    }
+
+    $runtimeMarker = $Root.TrimEnd('\')
+    $stale = @()
+    foreach ($directory in $directories) {
+        foreach ($candidate in @(Get-ChildItem -LiteralPath $directory -Filter '*.lnk' -File -ErrorAction SilentlyContinue)) {
+            $candidateFullPath = [System.IO.Path]::GetFullPath($candidate.FullName)
+            $shortcut = Read-ShortcutContract -Path $candidate.FullName
+            $sameRuntime = ([System.IO.Path]::GetFullPath($shortcut.WorkingDirectory).TrimEnd('\') -ieq $runtimeMarker) -or
+                $shortcut.Arguments.IndexOf($expectedLauncher, [StringComparison]::OrdinalIgnoreCase) -ge 0
+            if ($sameRuntime -and $expectedPaths -notcontains $candidateFullPath) { $stale += $candidate.FullName }
+        }
+    }
+    if ($stale.Count -gt 0) { throw "$Label has duplicate or stale shortcuts for the RC runtime: $($stale -join '; ')" }
+}
+
+function Assert-VerificationEvidence {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Path,
+        [Parameter(Mandatory = $true)][string]$SourceBranch,
+        [Parameter(Mandatory = $true)][string]$SourceCommit,
+        [Parameter(Mandatory = $true)]$BetaDeployment
+    )
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw 'Online E2E verification evidence is required; pass -VerificationEvidencePath with a current gate JSON file'
+    }
+    $evidence = Read-JsonFile -Path ([System.IO.Path]::GetFullPath($Path)) -Label 'Online E2E verification evidence'
+    Assert-Equals -Expected 'PASS' -Actual (Get-PropertyText $evidence 'status') -Label 'Online E2E evidence status'
+    Assert-Equals -Expected 'beta' -Actual (Get-PropertyText $evidence 'releaseChannel') -Label 'Online E2E evidence channel'
+    Assert-Equals -Expected $SourceBranch -Actual (Get-PropertyText $evidence 'sourceBranch') -Label 'Online E2E evidence source branch'
+    Assert-Equals -Expected $SourceCommit -Actual (Get-PropertyText $evidence 'sourceCommit') -Label 'Online E2E evidence source commit'
+    Assert-Equals -Expected $BetaDeployment.JarName -Actual (Get-PropertyText $evidence 'artifactName') -Label 'Online E2E evidence artifact'
+    Assert-Equals -Expected (Get-PropertyText $BetaDeployment.Manifest 'appJarSha256') -Actual (Get-PropertyText $evidence 'artifactSha256') -Label 'Online E2E evidence artifact hash'
+    if ([int]$evidence.gamesCompleted -lt 3 -or [int]$evidence.terminalMarkers -lt 3) { throw 'Online E2E evidence must prove at least three games and three terminal Power.log markers' }
+    if ($evidence.scriptProcessStable -ne $true) { throw 'Online E2E evidence does not prove stable script process execution' }
+    $screenshot = Get-PropertyText $evidence 'finalScreenshotPath'
+    if ([string]::IsNullOrWhiteSpace($screenshot)) { throw 'Online E2E evidence is missing finalScreenshotPath' }
+    if (-not [System.IO.Path]::IsPathRooted($screenshot)) { $screenshot = Join-Path (Split-Path -Parent ([System.IO.Path]::GetFullPath($Path))) $screenshot }
+    if (-not (Test-Path -LiteralPath $screenshot -PathType Leaf)) { throw "Online E2E final screenshot is missing: $screenshot" }
+}
+
 function Get-CanonicalOutputParent {
     $stableRoot = 'C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script'
     return Split-Path -Parent $stableRoot
@@ -118,6 +326,9 @@ function Get-BetaDeployment {
     $runtime = if ([string]::IsNullOrWhiteSpace($BetaRuntimeRoot)) {
         Join-Path (Get-CanonicalOutputParent) 'Hearthstone Script Beta'
     } else { [System.IO.Path]::GetFullPath($BetaRuntimeRoot).TrimEnd('\') }
+    if ([System.IO.Path]::GetFileName($runtime) -ne 'Hearthstone Script Beta') {
+        throw "Beta runtime must use the isolated Beta directory: $runtime"
+    }
     $manifestPath = Join-Path $runtime 'deployment-manifest.json'
     $manifest = Read-JsonFile -Path $manifestPath -Label 'Beta deployment manifest'
     Assert-Equals -Expected 'beta' -Actual (Get-PropertyText $manifest 'releaseChannel') -Label 'Beta deployment channel'
@@ -135,7 +346,8 @@ function Get-BetaDeployment {
     $jarPath = Join-Path $runtime $jarName
     $jarResolved = [System.IO.Path]::GetFullPath($jarPath)
     if (-not $jarResolved.StartsWith($runtime + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Beta manifest appJar escapes the Beta runtime' }
-    Assert-FileHash -Path $jarPath -Expected (Get-PropertyText $manifest 'appJarSha256') -Label 'Beta application JAR'
+    Assert-ManifestArtifacts -Root $runtime -Manifest $manifest -Label 'Beta'
+    Assert-ArtifactIdentity -JarPath $jarPath -JarName $jarName -Manifest $manifest -ExpectedChannel 'beta' -Label 'Beta artifact'
 
     [pscustomobject]@{
         Config = $config
@@ -183,25 +395,58 @@ function Assert-RcMetadata {
     Assert-Equals -Expected $SourceCommit -Actual (Get-PropertyText $config 'promotionSourceCommit') -Label 'Release Candidate source commit'
 }
 
+function Assert-RcDeployment {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$SourceBranch,
+        [Parameter(Mandatory = $true)][string]$SourceCommit,
+        [string]$ShortcutBase = ''
+    )
+    $manifestPath = Join-Path $Root 'deployment-manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "Release Candidate deployment manifest is missing: $manifestPath" }
+    $manifest = Read-JsonFile -Path $manifestPath -Label 'Release Candidate deployment manifest'
+    Assert-Equals -Expected 'release-candidate' -Actual (Get-PropertyText $manifest 'releaseChannel') -Label 'Release Candidate deployment channel'
+    Assert-Equals -Expected 'Hearthstone Script Release Candidate' -Actual (Get-PropertyText $manifest 'runtimeDirectoryName') -Label 'Release Candidate deployment runtime identity'
+    Assert-Equals -Expected $SourceBranch -Actual (Get-PropertyText $manifest 'promotionSourceBranch') -Label 'Release Candidate deployed source branch'
+    Assert-Equals -Expected $SourceCommit -Actual (Get-PropertyText $manifest 'promotionSourceCommit') -Label 'Release Candidate deployed source commit'
+    $iconPath = Get-ManifestRuntimePath -Manifest $manifest -Root $Root -PropertyName 'iconFile' -Label 'Release Candidate icon'
+    if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) { throw "Release Candidate icon is missing: $iconPath" }
+    $jarName = Get-PropertyText $manifest 'appJar'
+    if ([string]::IsNullOrWhiteSpace($jarName) -or $jarName.Contains('\') -or $jarName.Contains('/')) { throw "Release Candidate manifest appJar must be runtime-local: $jarName" }
+    $jarPath = Join-Path $Root $jarName
+    Assert-ManifestArtifacts -Root $Root -Manifest $manifest -Label 'Release Candidate'
+    Assert-ArtifactIdentity -JarPath $jarPath -JarName $jarName -Manifest $manifest -ExpectedChannel 'release-candidate' -Label 'Release Candidate artifact'
+    Assert-LauncherContract -Root $Root -Label 'Release Candidate'
+    Assert-ShortcutContract -Root $Root -ShortcutName 'Hearthstone Script Release Candidate.lnk' -Label 'Release Candidate' -IconPath $iconPath -ShortcutBase $ShortcutBase
+}
+
 function Test-RcDeployment {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
         [Parameter(Mandatory = $true)][string]$SourceBranch,
-        [Parameter(Mandatory = $true)][string]$SourceCommit
+        [Parameter(Mandatory = $true)][string]$SourceCommit,
+        [string]$ShortcutBase = ''
     )
-    $manifestPath = Join-Path $Root 'deployment-manifest.json'
-    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return $false }
     try {
-        $manifest = Read-JsonFile -Path $manifestPath -Label 'Release Candidate deployment manifest'
-        Assert-Equals -Expected 'release-candidate' -Actual (Get-PropertyText $manifest 'releaseChannel') -Label 'Release Candidate deployment channel'
-        Assert-Equals -Expected 'Hearthstone Script Release Candidate' -Actual (Get-PropertyText $manifest 'runtimeDirectoryName') -Label 'Release Candidate deployment runtime identity'
-        Assert-Equals -Expected $SourceBranch -Actual (Get-PropertyText $manifest 'promotionSourceBranch') -Label 'Release Candidate deployed source branch'
-        Assert-Equals -Expected $SourceCommit -Actual (Get-PropertyText $manifest 'promotionSourceCommit') -Label 'Release Candidate deployed source commit'
-        $jarName = Get-PropertyText $manifest 'appJar'
-        if ([string]::IsNullOrWhiteSpace($jarName) -or $jarName.Contains('\') -or $jarName.Contains('/')) { return $false }
-        Assert-FileHash -Path (Join-Path $Root $jarName) -Expected (Get-PropertyText $manifest 'appJarSha256') -Label 'Release Candidate application JAR'
+        Assert-RcDeployment -Root $Root -SourceBranch $SourceBranch -SourceCommit $SourceCommit -ShortcutBase $ShortcutBase
         return $true
-    } catch { return $false }
+    } catch { Write-Verbose "Release Candidate validation failed: $($_.Exception.Message)"; return $false }
+}
+
+function Assert-RcRuntimeIsSafe {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$SourceBranch,
+        [Parameter(Mandatory = $true)][string]$SourceCommit,
+        [string]$ShortcutBase = ''
+    )
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return }
+    $entries = @(Get-ChildItem -LiteralPath $Root -Force -ErrorAction SilentlyContinue)
+    if ($entries.Count -eq 0) { return }
+    if (-not (Test-Path -LiteralPath (Join-Path $Root 'deployment-manifest.json') -PathType Leaf)) {
+        throw "Existing Release Candidate runtime has no manifest; refusing to overwrite stale files: $Root"
+    }
+    Assert-RcDeployment -Root $Root -SourceBranch $SourceBranch -SourceCommit $SourceCommit -ShortcutBase $ShortcutBase
 }
 
 function Invoke-BuildAndDeploy {
@@ -224,6 +469,7 @@ if ([string]::IsNullOrWhiteSpace($betaBranch) -or $betaBranch -notlike 'beta/*' 
 Assert-GitClean -Root $projectRoot -Label 'Beta source checkout'
 $betaHead = (Invoke-GitText -Root $projectRoot -Arguments @('rev-parse', 'HEAD')).Text
 $betaDeployment = Get-BetaDeployment -Root $projectRoot -Branch $betaBranch -Head $betaHead
+Assert-VerificationEvidence -Path $VerificationEvidencePath -SourceBranch $betaBranch -SourceCommit $betaHead -BetaDeployment $betaDeployment
 
 if ([string]::IsNullOrWhiteSpace($ReleaseCandidateBranch)) { $ReleaseCandidateBranch = "beta/release-candidate-$($betaDeployment.Version)" }
 if ($ReleaseCandidateBranch -notlike 'beta/release-candidate-*') { throw "Release Candidate branch must begin beta/release-candidate-: $ReleaseCandidateBranch" }
@@ -235,6 +481,7 @@ if ([System.IO.Path]::GetFullPath($rcRoot).TrimEnd('\') -eq [System.IO.Path]::Ge
     [System.IO.Path]::GetFileName($rcRoot) -eq 'Hearthstone Script') {
     throw "Release Candidate runtime must be isolated from Beta and Stable: $rcRoot"
 }
+Assert-RcRuntimeIsSafe -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot
 if ([string]::IsNullOrWhiteSpace($PromotionWorktree)) {
     $worktreeLeaf = 'Hearthstone Copilot-' + ($ReleaseCandidateBranch -replace '[^A-Za-z0-9._-]', '-')
     $PromotionWorktree = Join-Path (Split-Path -Parent $projectRoot) $worktreeLeaf
@@ -251,7 +498,7 @@ if ($branchRef.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingRc
 
 # A valid RC manifest is the idempotency fence. A rerun must not rebuild or
 # touch a channel that already contains the exact promoted source snapshot.
-if ($branchRef.ExitCode -eq 0 -and (Test-RcDeployment -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead)) {
+if ($branchRef.ExitCode -eq 0 -and (Test-RcDeployment -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot)) {
     Write-Output "PROMOTION_ALREADY_COMPLETE branch=$ReleaseCandidateBranch sourceCommit=$betaHead runtime=$rcRoot"
     exit 0
 }
@@ -291,7 +538,7 @@ Write-Output "RC_METADATA_COMMITTED branch=$ReleaseCandidateBranch sourceCommit=
 if (-not (Test-Path -LiteralPath $BuildScript -PathType Leaf)) { throw "Checked-in build-and-deploy.ps1 is missing: $BuildScript" }
 Write-Output "BUILD_AND_DEPLOY_INVOCATION=release-candidate worktree=$PromotionWorktree"
 Invoke-BuildAndDeploy -Root $PromotionWorktree -Script $BuildScript
-if (-not (Test-RcDeployment -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead)) {
+if (-not (Test-RcDeployment -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot)) {
     throw "Release Candidate deployment manifest did not validate against the promoted Beta source: $rcRoot"
 }
 Write-Output "PROMOTION_COMPLETE branch=$ReleaseCandidateBranch sourceCommit=$betaHead runtime=$rcRoot"

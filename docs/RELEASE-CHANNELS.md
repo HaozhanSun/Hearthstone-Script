@@ -65,11 +65,21 @@ stable launcher.
 ## Beta to Release Candidate promotion
 
 Use the checked-in promotion command from a clean, named Beta checkout after
-the Beta artifact has passed the online E2E gate:
+the Beta artifact has passed the online E2E gate. The gate must be exported as
+a JSON evidence file bound to the exact deployed Beta commit and JAR:
 
 ```powershell
-pwsh -File .\promote-beta-to-release-candidate.ps1
+pwsh -File .\promote-beta-to-release-candidate.ps1 `
+  -VerificationEvidencePath .\evidence\beta-online-e2e.json
 ```
+
+The evidence file must contain `status: PASS`, `releaseChannel: beta`, the
+exact `sourceBranch`, `sourceCommit`, `artifactName`, and `artifactSha256`,
+`gamesCompleted >= 3`, `terminalMarkers >= 3`, `scriptProcessStable: true`,
+and an existing `finalScreenshotPath`. Omitting the file or presenting proof
+for another build is a hard refusal. The script also accepts `-ShortcutRoot`
+for offline contract tests; normal promotion verifies the real Desktop, Start
+Menu, and Taskbar locations.
 
 The command reads the current Beta deployment manifest and requires its
 `sourceBranch` and `sourceCommit` to match the clean checkout exactly. It then
@@ -84,8 +94,11 @@ checkout and `promotionSourceBranch`/`promotionSourceCommit` for the Beta
 snapshot. A rerun with a matching Release Candidate manifest exits with
 `PROMOTION_ALREADY_COMPLETE` without rebuilding or touching the runtime.
 Missing source metadata, a dirty checkout, a branch/channel mismatch, an
-existing worktree at an unexpected path, a missing Beta manifest, or a
-non-numeric Beta artifact version is a hard refusal. The secretary owns the
+existing worktree at an unexpected path, a missing Beta manifest, a missing or
+stale E2E evidence file, an embedded JAR version/channel/timestamp mismatch, an
+invalid manifest hash, a missing launcher/shortcut, duplicate or stale RC
+shortcuts, a non-numeric Beta artifact version, or a non-empty RC runtime with
+no validated matching manifest is a hard refusal. The secretary owns the
 actual build/deploy invocation and live restart.
 
 ## PaddleX runtime parity
