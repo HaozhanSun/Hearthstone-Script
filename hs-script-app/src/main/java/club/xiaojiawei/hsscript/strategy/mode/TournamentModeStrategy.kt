@@ -6,6 +6,7 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
+import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
@@ -321,7 +322,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
             return
         }
         logMatchmakingCheckpoint(traceId, "before-start")
-        if (abortMatchmakingIfGameStarted(traceId, "before-start-click")) return
+        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "before-start-click")) return
         // Keep the upstream entry sequence: Hearthstone may first display the
         // automatic deck-completion dialog.  A single start click can leave
         // the client on the deck-selection page while the script has already
@@ -329,25 +330,25 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         clickMatchmakingControl(START_RECT)
         logMatchmakingCheckpoint(traceId, "after-start-click")
         SystemUtil.delayLong()
-        if (abortMatchmakingIfGameStarted(traceId, "after-start-click")) return
+        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-start-click")) return
         log.info { "尝试确认自动补全套牌弹窗" }
         logMatchmakingCheckpoint(traceId, "before-complete-deck-click-1")
         clickMatchmakingControl(COMPLETE_DECK_CONFIRM_RECT)
         logMatchmakingCheckpoint(traceId, "after-complete-deck-click-1")
         SystemUtil.delayShortMedium()
-        if (abortMatchmakingIfGameStarted(traceId, "after-complete-deck-click-1")) return
+        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-complete-deck-click-1")) return
         log.info { "重试确认自动补全套牌弹窗" }
         logMatchmakingCheckpoint(traceId, "before-complete-deck-click-2")
         clickMatchmakingControl(COMPLETE_DECK_CONFIRM_RECT)
         logMatchmakingCheckpoint(traceId, "after-complete-deck-click-2")
         SystemUtil.delayShortMedium()
-        if (abortMatchmakingIfGameStarted(traceId, "after-complete-deck-click-2")) return
+        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-complete-deck-click-2")) return
         log.info { "确认补全后再次点击开始" }
         logMatchmakingCheckpoint(traceId, "before-final-start-click")
         clickMatchmakingControl(START_RECT)
         logMatchmakingCheckpoint(traceId, "after-final-start-click")
         captureMatchmakingCheckpoint(traceId, "after-final-start-click")
-        if (abortMatchmakingIfGameStarted(traceId, "after-final-start-click")) return
+        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-final-start-click")) return
         generateTimer(traceId)
         scheduleMatchmakingDialogRecovery(traceId)
     }
@@ -363,6 +364,35 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                 "mode=${Mode.currMode?.name ?: "NONE"} inWar=${evidence.inWar} " +
                 "warPhase=${evidence.warPhase} gameId=${evidence.gameId.ifBlank { "NONE" }} " +
                 "powerLogPosition=${evidence.powerLogPosition}"
+        }
+        return true
+    }
+
+    /**
+     * Revalidate immediately before every queue-control input. A visible
+     * search screen is authoritative even when Power.log is empty/stale.
+     */
+    private fun abortMatchmakingInputIfNoLongerNeeded(traceId: Long, stage: String): Boolean {
+        if (abortMatchmakingIfGameStarted(traceId, stage)) return true
+        val observation = runCatching { ScreenStateRecovery.observeFreshScreenForWatchdog() }
+            .onFailure { error ->
+                log.debug(error) {
+                    "MATCHMAKING_INPUT_SCREEN_PROBE_FAILED trace=$traceId stage=$stage"
+                }
+            }
+            .getOrNull()
+        val decision = MatchmakingInputGuardPolicy.decide(
+            observedScreen = observation?.screen,
+            recentActiveSearchEvidence = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
+        )
+        if (decision != MatchmakingInputGuardPolicy.Decision.BLOCK_ACTIVE_SEARCH) return false
+        cancelAllEnteredTasks()
+        log.warn {
+            "MATCHMAKING_INPUT_BLOCKED trace=$traceId reason=active-search-screen " +
+                "stage=$stage screen=${observation?.screen ?: "UNKNOWN"} " +
+                "confidence=${observation?.confidence ?: 0} " +
+                "freshObservation=${observation != null} powerLogActivity=not-required " +
+                "dispatch=false"
         }
         return true
     }
@@ -611,21 +641,21 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                 LRunnable {
                     if (PauseStatus.isPause || Thread.currentThread().isInterrupted || Mode.currMode === ModeEnum.GAMEPLAY) {
                         cancelAllEnteredTasks()
-                    } else if (abortMatchmakingIfGameStarted(traceId, "match-timeout")) {
+                    } else if (abortMatchmakingInputIfNoLongerNeeded(traceId, "match-timeout")) {
                         cancelAllEnteredTasks()
                     } else {
                         log.info { "匹配失败，再次匹配中" }
                         SystemUtil.notice("匹配失败，再次匹配中")
 //                点击取消匹配按钮
-                        if (abortMatchmakingIfGameStarted(traceId, "match-timeout-before-cancel")) return@LRunnable
+                        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "match-timeout-before-cancel")) return@LRunnable
                         CANCEL_RECT.lClick()
                         SystemUtil.delayLong()
 //                点击错误按钮
-                        if (abortMatchmakingIfGameStarted(traceId, "match-timeout-before-error")) return@LRunnable
+                        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "match-timeout-before-error")) return@LRunnable
                         // ERROR_RECT is only reachable through the exact-dialog
                         // watchdog above, which verifies disappearance after click.
                         log.info { "MATCHMAKING_TIMEOUT_ERROR_DIALOG_CLICK_SKIPPED reason=exact-dialog-watchdog-only" }
-                        if (abortMatchmakingIfGameStarted(traceId, "match-timeout-before-reconnect")) return@LRunnable
+                        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "match-timeout-before-reconnect")) return@LRunnable
                         reconnectAction()
                         val seed = RandomUtil.rerollSeed()
                         log.info { "重新匹配，共享随机种子：$seed" }

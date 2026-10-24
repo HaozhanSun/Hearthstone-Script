@@ -28,6 +28,7 @@ class MatchmakingGuardPolicyTest {
         val startMatching = source.substringAfter("fun startMatching() {").substringBefore("private fun abortMatchmakingIfGameStarted")
 
         assertTrue(startMatching.contains("MatchmakingGuardPolicy.runtimeAllowsInput"))
+        assertTrue(startMatching.contains("abortMatchmakingInputIfNoLongerNeeded"))
         assertTrue(startMatching.contains("rankPolicy=POST_MULLIGAN"))
         assertFalse(startMatching.contains("CurrentRankDetector"))
         assertFalse(startMatching.contains("RankEligibilityPolicy"))

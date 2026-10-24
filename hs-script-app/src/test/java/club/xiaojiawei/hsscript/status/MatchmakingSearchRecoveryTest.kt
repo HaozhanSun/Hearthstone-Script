@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test
 import java.awt.Color
 import java.awt.image.BufferedImage
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingDialogRecoveryPolicy
+import club.xiaojiawei.hsscript.strategy.mode.MatchmakingInputGuardPolicy
 import javax.imageio.ImageIO
 
 class MatchmakingSearchRecoveryTest {
@@ -102,6 +103,22 @@ class MatchmakingSearchRecoveryTest {
         assertEquals(MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG, probe.state)
         assertEquals("VISUAL_SIGNATURE", probe.provider)
         assertEquals("matchmaking-search-screen-visible", probe.reason)
+    }
+
+    @Test
+    fun `visual search fixture blocks duplicate queue input with empty Power log`() {
+        val probe = ScreenStateRecovery.probeStartGameErrorDialogForImage(
+            syntheticSearchScreen(),
+            "offline-search-queue-input-guard",
+        ) { _, _ -> error("visual search must not invoke OCR") }
+        assertEquals(MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG, probe.state)
+        assertEquals(
+            MatchmakingInputGuardPolicy.Decision.BLOCK_ACTIVE_SEARCH,
+            MatchmakingInputGuardPolicy.decide(
+                observedScreen = "MATCHMAKING",
+                recentActiveSearchEvidence = false,
+            ),
+        )
     }
 
     @Test

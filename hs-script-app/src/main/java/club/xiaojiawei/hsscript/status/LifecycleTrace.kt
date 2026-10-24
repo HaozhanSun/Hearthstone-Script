@@ -228,6 +228,10 @@ object LifecycleTrace {
     internal fun shouldSuppressStateRecoveryForMatchmaking(observedAt: Long, now: Long): Boolean =
         observedAt > 0L && now >= observedAt && now - observedAt < MATCHMAKING_SCREEN_RECOVERY_SUPPRESSION_MS
 
+    /** Queue evidence also protects the normal matchmaking input path. */
+    internal fun hasRecentActiveMatchmakingScreen(now: Long = System.currentTimeMillis()): Boolean =
+        shouldSuppressStateRecoveryForMatchmaking(activeMatchmakingScreenObservedAt, now)
+
     private fun snapshot(): String = runCatching {
         val powerLog = PowerLogListener.logFile
         val logState = if (powerLog == null) {
