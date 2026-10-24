@@ -217,9 +217,11 @@ is still a hard refusal unless `-AllowLegacyRcUpgrade` is explicit. With that
 switch, the script captures an identifiable rollback snapshot of RC-managed
 artifacts, launcher files, and shortcuts, leaves `config`, `data`, `log`,
 custom plugin files, and backups in place, and verifies those protected files
-after the build. Only the exact build-managed Base Card/Strategy plugin JARs
-listed by the current release contract are excluded from custom-plugin hash
-preservation; custom files in `plugin/` remain hash-checked. Rollback snapshots
+after the build. Only exact build-managed Base Card/Strategy plugin JARs are
+excluded from custom-plugin hash preservation: the versioned strategy plugin
+in `plugin/` is derived from the deployed manifest's `strategyPluginLib`
+basename, and the Base Card plugin filenames are checked against the release
+build contract. Custom files in `plugin/` remain hash-checked. Rollback snapshots
 record post-deploy verification state. If deployment succeeded but the process
 was interrupted before that state was marked complete, a rerun validates the
 new manifest and rechecks the latest matching snapshot before reporting

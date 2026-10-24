@@ -835,8 +835,6 @@ function Assert-RcBuildManagedPluginContract {
     }
     $deployText = [System.IO.File]::ReadAllText($deployPath)
     foreach ($artifactName in @(
-        'hs-script-base-strategy-plugin-1.1.6.jar',
-        'hs-script-base-card-plugin-1.1.4.jar',
         'hs-script-base-strategy-plugin.jar',
         'hs-script-base-card-plugin.jar'
     )) {
@@ -844,23 +842,40 @@ function Assert-RcBuildManagedPluginContract {
             throw "RC managed-plugin preservation contract is stale: build-and-deploy.ps1 no longer declares destination '$artifactName'; update the explicit managed artifact allowlist before promotion"
         }
     }
+    if (-not $deployText.Contains('$stagedPlugins -Filter ''*.jar'' -File') -or
+        -not $deployText.Contains('plugin\$($pluginJar.Name)')) {
+        throw 'RC managed-plugin preservation contract is stale: build-and-deploy.ps1 no longer copies every staged plugin JAR by its artifact filename'
+    }
+    $strategyLibMatch = [regex]::Match($deployText, 'strategyTarget\s+-Destination\s+\(Join-Path\s+\$runtimeLib\s+''(?<name>hs-script-base-strategy-plugin-[^'']+\.jar)''\)')
+    $cardLibMatch = [regex]::Match($deployText, 'cardPluginTarget\s+-Destination\s+\(Join-Path\s+\$runtimeLib\s+''(?<name>hs-script-base-card-plugin-[^'']+\.jar)''\)')
+    if (-not $strategyLibMatch.Success -or -not $cardLibMatch.Success) {
+        throw 'RC managed-plugin preservation contract is stale: cannot resolve versioned Base Strategy/Card plugin artifact names from build-and-deploy.ps1'
+    }
     $assemblyText = [System.IO.File]::ReadAllText($assemblyPath)
     foreach ($artifactId in @('hs-script-base-card-plugin', 'hs-script-base-strategy-plugin')) {
         if ($assemblyText -notmatch ('<include>com\.github\.xjw580:' + [regex]::Escape($artifactId) + '</include>')) {
             throw "RC managed-plugin preservation contract is stale: assembly.xml no longer includes '$artifactId' in the build-managed plugin set"
         }
     }
+    return [pscustomobject]@{
+        StrategyPluginLibName = $strategyLibMatch.Groups['name'].Value
+        CardPluginLibName = $cardLibMatch.Groups['name'].Value
+    }
 }
 
 function Get-RcBuildManagedPluginPaths {
     param([Parameter(Mandatory = $true)]$Manifest)
-    Assert-RcBuildManagedPluginContract
+    $contract = Assert-RcBuildManagedPluginContract
+    $strategyPluginLibName = [System.IO.Path]::GetFileName((Get-PropertyText $Manifest 'strategyPluginLib').Replace('/', '\'))
+    if ($strategyPluginLibName -notmatch '^hs-script-base-strategy-plugin-[^\\]+\.jar$') {
+        throw "Release Candidate manifest strategyPluginLib is not the expected versioned Base Strategy artifact: $strategyPluginLibName"
+    }
     $paths = @(
         (Get-PropertyText $Manifest 'strategyPlugin').Replace('/', '\'),
         'plugin\hs-script-base-strategy-plugin.jar',
         'plugin\hs-script-base-card-plugin.jar',
-        'plugin\hs-script-base-card-plugin-1.1.4.jar',
-        'plugin\hs-script-base-strategy-plugin-1.1.6.jar'
+        "plugin\$strategyPluginLibName",
+        "plugin\$($contract.CardPluginLibName)"
     )
     return @($paths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
 }

@@ -211,7 +211,7 @@ Add-Content -LiteralPath $log -Value (Get-Date).ToString('o')
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 $managedPluginRoot = Join-Path $root 'plugin'
 New-Item -ItemType Directory -Path $managedPluginRoot -Force | Out-Null
-foreach ($managedName in @('hs-script-base-card-plugin-1.1.4.jar', 'hs-script-base-card-plugin.jar', 'hs-script-base-strategy-plugin-1.1.6.jar', 'hs-script-base-strategy-plugin.jar')) {
+foreach ($managedName in @('hs-script-base-card-plugin-1.1.4.jar', 'hs-script-base-card-plugin.jar', 'hs-script-base-strategy-plugin-1.1.13.jar', 'hs-script-base-strategy-plugin.jar')) {
   [System.IO.File]::WriteAllText((Join-Path $managedPluginRoot $managedName), "new-build-managed-$managedName")
 }
 $timestamp = '2026-10-23 16:00:00 PDT'
@@ -224,10 +224,10 @@ try { $entry = $archive.CreateEntry('build.info'); $writer = [System.IO.StreamWr
  [System.IO.File]::WriteAllText((Join-Path $root 'card-sdk.jar'), 'new-card-sdk-artifact')
  $libRoot = Join-Path $root 'lib'
  New-Item -ItemType Directory -Path $libRoot -Force | Out-Null
- Copy-Item -LiteralPath (Join-Path $root 'strategy-lib.jar') -Destination (Join-Path $libRoot 'hs-script-base-strategy-plugin-1.1.6.jar')
+ Copy-Item -LiteralPath (Join-Path $root 'strategy-lib.jar') -Destination (Join-Path $libRoot 'hs-script-base-strategy-plugin-1.1.13.jar')
  Copy-Item -LiteralPath (Join-Path $root 'card-sdk.jar') -Destination (Join-Path $libRoot 'hs-script-card-sdk-1.3.0.jar')
- Copy-Item -LiteralPath (Join-Path $libRoot 'hs-script-base-strategy-plugin-1.1.6.jar') -Destination (Join-Path $managedPluginRoot 'hs-script-base-strategy-plugin.jar') -Force
- Copy-Item -LiteralPath (Join-Path $managedPluginRoot 'hs-script-base-strategy-plugin.jar') -Destination (Join-Path $managedPluginRoot 'hs-script-base-strategy-plugin-1.1.6.jar') -Force
+ Copy-Item -LiteralPath (Join-Path $libRoot 'hs-script-base-strategy-plugin-1.1.13.jar') -Destination (Join-Path $managedPluginRoot 'hs-script-base-strategy-plugin.jar') -Force
+ Copy-Item -LiteralPath (Join-Path $managedPluginRoot 'hs-script-base-strategy-plugin.jar') -Destination (Join-Path $managedPluginRoot 'hs-script-base-strategy-plugin-1.1.13.jar') -Force
  [System.IO.File]::WriteAllText((Join-Path $root 'hs-script-release-candidate.ico'), 'rc-icon')
 $hash = (Get-FileHash -LiteralPath $jar -Algorithm SHA256).Hash.ToLowerInvariant()
 $strategyHash = (Get-FileHash -LiteralPath (Join-Path $root 'strategy-lib.jar') -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -248,7 +248,7 @@ $sourceBranch = ((& git branch --show-current) | Out-String).Trim()
   deploymentId = "hs-script_v4.16.670-local-20261022-225531PDT.jar|$($hash.Substring(0, 16))"
   appJar = 'hs-script_v4.16.670-local-20261022-225531PDT.jar'
   appJarSha256 = $hash
-  strategyPluginLib = 'lib\hs-script-base-strategy-plugin-1.1.6.jar'
+  strategyPluginLib = 'lib\hs-script-base-strategy-plugin-1.1.13.jar'
   strategyPlugin = 'plugin\hs-script-base-strategy-plugin.jar'
   strategyPluginSha256 = $strategyHash
   cardSdk = 'lib\hs-script-card-sdk-1.3.0.jar'
@@ -520,7 +520,7 @@ try {
     $legacyManagedPluginPaths = @(
         'plugin\hs-script-base-card-plugin-1.1.4.jar',
         'plugin\hs-script-base-card-plugin.jar',
-        'plugin\hs-script-base-strategy-plugin-1.1.6.jar',
+        'plugin\hs-script-base-strategy-plugin-1.1.13.jar',
         'plugin\hs-script-base-strategy-plugin.jar'
     )
     $legacyManagedPluginHashes = @{}
@@ -532,17 +532,17 @@ try {
     }
     $legacyLibRoot = Join-Path $legacyRcRuntime 'lib'
     New-Item -ItemType Directory -Path $legacyLibRoot -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $legacyRcRuntime 'strategy-lib.jar') -Destination (Join-Path $legacyLibRoot 'hs-script-base-strategy-plugin-1.1.6.jar')
+    Copy-Item -LiteralPath (Join-Path $legacyRcRuntime 'strategy-lib.jar') -Destination (Join-Path $legacyLibRoot 'hs-script-base-strategy-plugin-1.1.13.jar')
     Copy-Item -LiteralPath (Join-Path $legacyRcRuntime 'card-sdk.jar') -Destination (Join-Path $legacyLibRoot 'hs-script-card-sdk-1.3.0.jar')
     Copy-Item -LiteralPath (Join-Path $legacyRcRuntime 'strategy-plugin.jar') -Destination (Join-Path $legacyRcRuntime 'plugin\hs-script-base-strategy-plugin.jar') -Force
-    Copy-Item -LiteralPath (Join-Path $legacyRcRuntime 'plugin\hs-script-base-strategy-plugin.jar') -Destination (Join-Path $legacyRcRuntime 'plugin\hs-script-base-strategy-plugin-1.1.6.jar') -Force
+    Copy-Item -LiteralPath (Join-Path $legacyRcRuntime 'plugin\hs-script-base-strategy-plugin.jar') -Destination (Join-Path $legacyRcRuntime 'plugin\hs-script-base-strategy-plugin-1.1.13.jar') -Force
     foreach ($managedPath in $legacyManagedPluginPaths) {
         $legacyManagedPluginHashes[$managedPath] = (Get-FileHash -LiteralPath (Join-Path $legacyRcRuntime $managedPath) -Algorithm SHA256).Hash
     }
-    $legacyManifest.strategyPluginLib = 'lib\hs-script-base-strategy-plugin-1.1.6.jar'
+    $legacyManifest.strategyPluginLib = 'lib\hs-script-base-strategy-plugin-1.1.13.jar'
     $legacyManifest.strategyPlugin = 'plugin\hs-script-base-strategy-plugin.jar'
     $legacyManifest.cardSdk = 'lib\hs-script-card-sdk-1.3.0.jar'
-    $legacyManifest.strategyPluginSha256 = (Get-FileHash -LiteralPath (Join-Path $legacyLibRoot 'hs-script-base-strategy-plugin-1.1.6.jar') -Algorithm SHA256).Hash.ToLowerInvariant()
+    $legacyManifest.strategyPluginSha256 = (Get-FileHash -LiteralPath (Join-Path $legacyLibRoot 'hs-script-base-strategy-plugin-1.1.13.jar') -Algorithm SHA256).Hash.ToLowerInvariant()
     $legacyManifest.cardSdkSha256 = (Get-FileHash -LiteralPath (Join-Path $legacyLibRoot 'hs-script-card-sdk-1.3.0.jar') -Algorithm SHA256).Hash.ToLowerInvariant()
     $legacyManifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $legacyRcRuntime 'deployment-manifest.json') -Encoding UTF8
     New-TestRcLaunchersAndShortcuts -Root $legacyRcRuntime -ShortcutBase $legacyShortcutBase
@@ -580,6 +580,7 @@ try {
     $legacyInstalledManifest = Get-Content -LiteralPath (Join-Path $legacyRcRuntime 'deployment-manifest.json') -Raw | ConvertFrom-Json
     if ($legacyRollbackManifest.verifiedDeploymentId -cne $legacyInstalledManifest.deploymentId) { throw 'Rollback verification marker is not bound to the installed deployment ID' }
     $legacyRollbackManifest.protectedState += [pscustomobject]@{ path = 'plugin\hs-script-base-card-plugin-1.1.4.jar'; sha256 = $legacyManagedPluginHashes['plugin\hs-script-base-card-plugin-1.1.4.jar'].ToLowerInvariant() }
+    $legacyRollbackManifest.protectedState += [pscustomobject]@{ path = 'plugin\hs-script-base-strategy-plugin-1.1.13.jar'; sha256 = $legacyManagedPluginHashes['plugin\hs-script-base-strategy-plugin-1.1.13.jar'].ToLowerInvariant() }
     $legacyRollbackManifest.postDeployVerification = 'PENDING'
     $legacyRollbackManifest.verifiedDeploymentId = ''
     $legacyRollbackManifest.verifiedAt = ''
@@ -616,7 +617,7 @@ try {
     Invoke-TestGit -Root $project -Arguments @('commit', '-m', 'invalid channel metadata fixture') | Out-Null
     Assert-Throws -Action { & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree (Join-Path $tempRoot 'unused-worktree-3') -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null } -MessageFragment 'Beta source channel mismatch'
 
-    Write-Output 'PromoteBetaToReleaseCandidate.Tests: PASS (E2E-pending candidate, exact evidence binding, Stable-readiness hold, short deterministic worktree path, long-path refusal, exact existing worktree/branch staged-metadata resume, no-global-identity deterministic commit, correct metadata commit subject, build-managed plugin replacement, custom plugin hash protection, idempotent post-deploy verification resume, shortcut channel contract, Desktop fallback, empty-field diagnostics, recoverable RC duplicate-pin cleanup, Beta/Stable pin preservation, clean promotion, exact source snapshot, RC isolation, idempotent repeat, dirty/missing/mismatched refusal)'
+    Write-Output 'PromoteBetaToReleaseCandidate.Tests: PASS (E2E-pending candidate, exact evidence binding, Stable-readiness hold, short deterministic worktree path, long-path refusal, exact existing worktree/branch staged-metadata resume, no-global-identity deterministic commit, correct metadata commit subject, manifest-derived versioned strategy plugin replacement, custom plugin hash protection, idempotent post-deploy verification resume, shortcut channel contract, Desktop fallback, empty-field diagnostics, recoverable RC duplicate-pin cleanup, Beta/Stable pin preservation, clean promotion, exact source snapshot, RC isolation, idempotent repeat, dirty/missing/mismatched refusal)'
 } finally {
     Remove-Item Env:PROMOTION_TEST_RC_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:PROMOTION_TEST_INVOCATION -ErrorAction SilentlyContinue
