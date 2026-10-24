@@ -1360,6 +1360,7 @@ object ScreenStateRecovery {
                 ScreenKind.DECK_SELECTION -> "START_MATCHING"
                 ScreenKind.RECONNECT_FAILURE -> "RESTART_CLIENT"
                 ScreenKind.RANK_PROGRESS_CONTINUATION -> "CONTINUE_WITH_TERMINAL_CAPABILITY"
+                ScreenKind.MATCHMAKING -> "WAIT_FOR_GAMEPLAY"
                 else -> "OTHER"
             },
         )

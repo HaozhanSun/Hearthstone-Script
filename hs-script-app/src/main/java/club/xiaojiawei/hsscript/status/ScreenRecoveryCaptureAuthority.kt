@@ -18,6 +18,32 @@ internal enum class ScreenRecoveryCapturePurpose {
 
 /** The only pre-session Power.log exception: a queue-level opponent error modal. */
 internal object ScreenRecoveryCapturePurposePolicy {
+    /**
+     * Generic stale-state recovery may inspect the fresh queue screen before
+     * Hearthstone has opened the new Power.log game segment, but only after a
+     * recent queue input has established bounded matchmaking intent.
+     */
+    fun purposeForStateRecovery(
+        tournamentMode: Boolean,
+        activeGame: Boolean,
+        mulligan: Boolean,
+        terminal: Boolean,
+        recentInputIntent: Boolean,
+    ): ScreenRecoveryCapturePurpose = if (
+        allowsPreSessionMatchmaking(
+            purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_SEARCH,
+            tournamentMode = tournamentMode,
+            activeGame = activeGame,
+            mulligan = mulligan,
+            terminal = terminal,
+            recentInputIntent = recentInputIntent,
+        )
+    ) {
+        ScreenRecoveryCapturePurpose.MATCHMAKING_SEARCH
+    } else {
+        ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY
+    }
+
     fun allowsPreSessionQueueModal(
         purpose: ScreenRecoveryCapturePurpose,
         tournamentMode: Boolean,

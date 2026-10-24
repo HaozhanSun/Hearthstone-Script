@@ -136,6 +136,38 @@ class MatchmakingSearchRecoveryTest {
     }
 
     @Test
+    fun `upstream stale recovery uses matchmaking purpose before current session log exists`() {
+        assertEquals(
+            ScreenRecoveryCapturePurpose.MATCHMAKING_SEARCH,
+            ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
+                tournamentMode = true,
+                activeGame = false,
+                mulligan = false,
+                terminal = false,
+                recentInputIntent = true,
+            ),
+        )
+
+        val transition = ScreenStateRecovery.recoveryTransitionForImageForTest(
+            image = syntheticSearchScreen(),
+            ocrText = "",
+            targeted = emptyMap(),
+        )
+        assertEquals("MATCHMAKING", transition?.screen)
+        assertEquals("WAIT_FOR_GAMEPLAY", transition?.action)
+        assertFalse(
+            ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
+                tournamentMode = true,
+                activeGame = false,
+                mulligan = false,
+                terminal = false,
+                recentInputIntent = false,
+            ) == ScreenRecoveryCapturePurpose.MATCHMAKING_SEARCH,
+            "without a queue intent, stale recovery must not gain pre-session authority",
+        )
+    }
+
+    @Test
     fun `search signature rejects deck error and reconnect dialogs`() {
         listOf(
             "deck-selection-screen.png",

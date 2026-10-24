@@ -15,6 +15,7 @@ import com.sun.jna.platform.win32.WinDef
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
+import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import java.awt.Rectangle
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
@@ -259,6 +260,13 @@ object UpstreamScreenStateRecovery {
             return null
         }
 
+        val capturePurpose = ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
+            tournamentMode = Mode.currMode === ModeEnum.TOURNAMENT,
+            activeGame = WarEx.inWar,
+            mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+            terminal = GameUtil.isTerminalGameState(),
+            recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
+        )
         var authorityRejected = false
         val foregroundResult = MouseUtil.withRecoveryForeground(gameWindow) {
             val currentWindow = resolveVerifiedGameWindow()
@@ -281,7 +289,9 @@ object UpstreamScreenStateRecovery {
                 }
                 null
             } else {
-                ScreenRecoveryAuthorityGate.captureIfAuthorized(evidence) { captureScreen(gameWindow) }
+                ScreenRecoveryAuthorityGate.captureIfAuthorized(evidence) {
+                    captureScreen(gameWindow, purpose = capturePurpose)
+                }
             }
         }
         if (!foregroundResult.foregroundConfirmed) {
@@ -347,8 +357,11 @@ object UpstreamScreenStateRecovery {
         return window
     }
 
-    private fun captureScreen(hwnd: WinDef.HWND): Capture? {
-        val authorizedFrame = ScreenRecoveryWindowCapture.capture(hwnd) ?: return null
+    private fun captureScreen(
+        hwnd: WinDef.HWND,
+        purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+    ): Capture? {
+        val authorizedFrame = ScreenRecoveryWindowCapture.capture(hwnd, purpose = purpose) ?: return null
         val image = authorizedFrame.image
         val saved = DebugScreenshotRing.save(image, "screen-recovery", "stale-screen")
         return Capture(
