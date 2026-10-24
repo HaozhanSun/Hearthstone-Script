@@ -184,6 +184,15 @@ commits only Release Candidate channel metadata, and invokes that worktree's
 checked-in `build-and-deploy.ps1 -Channel release-candidate`. The build path
 controls the isolated Release Candidate runtime, manifest, icon, and Desktop,
 Start Menu, and Taskbar shortcuts. It never copies a JAR into Beta or Stable.
+By default, the worktree is placed at
+`%USERPROFILE%\.codex\worktrees\rc-<12-hex-key>`, a deterministic short path
+derived from the repository path and exact RC branch. Set
+`CODEX_RC_PROMOTION_WORKTREE_ROOT` to override the parent directory, or pass an
+explicit short `-PromotionWorktree`; paths longer than 108 characters are
+rejected before branch/worktree creation to avoid Windows checkout failures.
+If a prior attempt created the exact RC branch but failed before registering a
+worktree, rerun with the same branch/evidence and the short default path: the
+promotion validates and reuses that branch rather than creating another one.
 
 The generated manifests record `sourceBranch`/`sourceCommit` for the actual
 checkout and `promotionSourceBranch`/`promotionSourceCommit` for the Beta

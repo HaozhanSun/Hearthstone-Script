@@ -9,6 +9,16 @@ function Invoke-TestGit {
     return (($output | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
 }
 
+function Get-TestWorktreeBranchPath {
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$Branch)
+    $path = ''
+    foreach ($line in ((Invoke-TestGit -Root $Root -Arguments @('worktree', 'list', '--porcelain')) -split "`r?`n")) {
+        if ($line.StartsWith('worktree ', [StringComparison]::Ordinal)) { $path = $line.Substring('worktree '.Length).Trim() }
+        elseif ($line -eq "branch refs/heads/$Branch") { return [System.IO.Path]::GetFullPath($path).TrimEnd('\') }
+    }
+    return ''
+}
+
 function Assert-Throws {
     param([Parameter(Mandatory = $true)][scriptblock]$Action, [Parameter(Mandatory = $true)][string]$MessageFragment)
     try { & $Action; throw 'Expected action to fail' }
@@ -104,6 +114,8 @@ $betaRuntime = Join-Path $tempRoot 'Hearthstone Script Beta'
 $rcRuntime = Join-Path $tempRoot 'Hearthstone Script Release Candidate'
 $pendingRcRuntime = Join-Path (Join-Path $tempRoot 'pending') 'Hearthstone Script Release Candidate'
 $rcWorktree = Join-Path $tempRoot 'rc-worktree'
+$defaultWorktreeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('rcwt-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$defaultWorktreeBranch = 'beta/release-candidate-worktree-recovery-test'
 $pendingRcWorktree = Join-Path $tempRoot 'pending-rc-worktree'
 $legacyRcRuntime = Join-Path $tempRoot 'legacy\Hearthstone Script Release Candidate'
 $legacyRcWorktree = Join-Path $tempRoot 'legacy-rc-worktree'
@@ -302,6 +314,34 @@ try {
         if ((Get-FileHash -LiteralPath $preservedPin -Algorithm SHA256).Hash -cne $preservedChannelPins[$preservedPin]) { throw "RC pin cleanup modified a Beta/Stable Taskbar shortcut: $preservedPin" }
     }
 
+    # Reproduce the previous failure shape: branch exists but the long-path
+    # worktree add never registered a checkout. Retry using the short root.
+    Invoke-TestGit -Root $project -Arguments @('branch', $defaultWorktreeBranch, $betaHead) | Out-Null
+    $env:CODEX_RC_PROMOTION_WORKTREE_ROOT = Join-Path $tempRoot ('long-' + ('x' * 105))
+    Assert-Throws -Action {
+        & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot (Join-Path (Join-Path $tempRoot 'long-path') 'Hearthstone Script Release Candidate') -ReleaseCandidateBranch $defaultWorktreeBranch -BuildScript $fakeBuild -ShortcutRoot $shortcutBase | Out-Null
+    } -MessageFragment 'exceeds the safe Windows path budget'
+    if ((Get-TestWorktreeBranchPath -Root $project -Branch $defaultWorktreeBranch) -ne '') { throw 'Long-path refusal unexpectedly registered a worktree' }
+
+    $recoveryRuntime = Join-Path (Join-Path $tempRoot 'worktree-recovery') 'Hearthstone Script Release Candidate'
+    $recoveryInvocationLog = Join-Path $tempRoot 'worktree-recovery-build.log'
+    $env:PROMOTION_TEST_RC_ROOT = $recoveryRuntime
+    $env:PROMOTION_TEST_INVOCATION = $recoveryInvocationLog
+    $env:CODEX_RC_PROMOTION_WORKTREE_ROOT = $defaultWorktreeRoot
+    $recoveryOutput = & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $recoveryRuntime -ReleaseCandidateBranch $defaultWorktreeBranch -BuildScript $fakeBuild -ShortcutRoot $shortcutBase
+    $recoveryText = $recoveryOutput -join "`n"
+    $recoveryPathMatch = [regex]::Match($recoveryText, 'CREATED_RC_WORKTREE=(.+)')
+    if (-not $recoveryPathMatch.Success) { throw 'Retry did not create the default short RC worktree from the already-existing branch' }
+    $recoveryWorktreePath = $recoveryPathMatch.Groups[1].Value.Trim()
+    if ($recoveryWorktreePath.Length -gt 90 -or $recoveryWorktreePath -notmatch '[\\/]rc-[0-9a-f]{12}$') { throw "Default promotion worktree path is not short and deterministic: $recoveryWorktreePath" }
+    if ($recoveryText -match 'CREATED_RC_BRANCH=') { throw 'Retry created a different RC branch instead of reusing the exact branch left by the failed attempt' }
+    if ($recoveryText -notmatch "RC_METADATA_COMMITTED branch=$([regex]::Escape($defaultWorktreeBranch))" -or $recoveryText -notmatch 'PROMOTION_COMPLETE') { throw 'Retry did not continue the already-created exact RC branch through the fixture build path' }
+    if ((Get-Content -LiteralPath $recoveryInvocationLog).Count -ne 1) { throw 'Resumed RC branch did not invoke its isolated build path exactly once' }
+    $registeredRecoveryPath = Get-TestWorktreeBranchPath -Root $project -Branch $defaultWorktreeBranch
+    if ($registeredRecoveryPath -cne [System.IO.Path]::GetFullPath($recoveryWorktreePath).TrimEnd('\')) { throw 'Resumed RC branch is not registered at the deterministic short worktree path' }
+    Invoke-TestGit -Root $project -Arguments @('worktree', 'remove', '--force', $registeredRecoveryPath) | Out-Null
+    Remove-Item Env:CODEX_RC_PROMOTION_WORKTREE_ROOT -ErrorAction SilentlyContinue
+
     $badEvidencePath = Join-Path $tempRoot 'wrong-artifact-evidence.json'
     $badEvidence = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
     $badEvidence.artifactSha256 = ('0' * 64)
@@ -482,10 +522,12 @@ try {
     Invoke-TestGit -Root $project -Arguments @('commit', '-m', 'invalid channel metadata fixture') | Out-Null
     Assert-Throws -Action { & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree (Join-Path $tempRoot 'unused-worktree-3') -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null } -MessageFragment 'Beta source channel mismatch'
 
-    Write-Output 'PromoteBetaToReleaseCandidate.Tests: PASS (E2E-pending candidate, exact evidence binding, Stable-readiness hold, shortcut channel contract, Desktop fallback, empty-field diagnostics, recoverable RC duplicate-pin cleanup, Beta/Stable pin preservation, clean promotion, exact source snapshot, RC isolation, idempotent repeat, dirty/missing/mismatched refusal)'
+    Write-Output 'PromoteBetaToReleaseCandidate.Tests: PASS (E2E-pending candidate, exact evidence binding, Stable-readiness hold, short deterministic worktree path, long-path refusal and exact-branch resume, shortcut channel contract, Desktop fallback, empty-field diagnostics, recoverable RC duplicate-pin cleanup, Beta/Stable pin preservation, clean promotion, exact source snapshot, RC isolation, idempotent repeat, dirty/missing/mismatched refusal)'
 } finally {
     Remove-Item Env:PROMOTION_TEST_RC_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:PROMOTION_TEST_INVOCATION -ErrorAction SilentlyContinue
     Remove-Item Env:PROMOTION_TEST_SHORTCUT_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:CODEX_RC_PROMOTION_WORKTREE_ROOT -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $defaultWorktreeRoot) { Remove-Item -LiteralPath $defaultWorktreeRoot -Recurse -Force }
     if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
 }

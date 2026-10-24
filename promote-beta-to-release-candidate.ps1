@@ -551,6 +551,28 @@ function Get-WorktreeBranchPath {
     return ''
 }
 
+function Get-DefaultPromotionWorktreePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProjectRoot,
+        [Parameter(Mandatory = $true)][string]$Branch
+    )
+
+    $worktreeBase = [Environment]::GetEnvironmentVariable('CODEX_RC_PROMOTION_WORKTREE_ROOT')
+    if ([string]::IsNullOrWhiteSpace($worktreeBase)) {
+        $profileRoot = [Environment]::GetFolderPath('UserProfile')
+        if ([string]::IsNullOrWhiteSpace($profileRoot)) { $profileRoot = $env:USERPROFILE }
+        if ([string]::IsNullOrWhiteSpace($profileRoot)) { throw 'Cannot resolve a short default promotion worktree root; set CODEX_RC_PROMOTION_WORKTREE_ROOT explicitly' }
+        $worktreeBase = Join-Path $profileRoot '.codex\worktrees'
+    }
+
+    $identity = ([System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\').ToLowerInvariant() + '|' + $Branch.ToLowerInvariant())
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try { $sha = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($identity)) }
+    finally { $sha256.Dispose() }
+    $key = ([System.BitConverter]::ToString($sha) -replace '-', '').Substring(0, 12).ToLowerInvariant()
+    return Join-Path ([System.IO.Path]::GetFullPath($worktreeBase)) "rc-$key"
+}
+
 function Get-BetaDeployment {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
@@ -925,10 +947,12 @@ if ($PreflightOnly) {
     exit 0
 }
 if ([string]::IsNullOrWhiteSpace($PromotionWorktree)) {
-    $worktreeLeaf = 'Hearthstone Copilot-' + ($ReleaseCandidateBranch -replace '[^A-Za-z0-9._-]', '-')
-    $PromotionWorktree = Join-Path (Split-Path -Parent $projectRoot) $worktreeLeaf
+    $PromotionWorktree = Get-DefaultPromotionWorktreePath -ProjectRoot $projectRoot -Branch $ReleaseCandidateBranch
 }
 $PromotionWorktree = [System.IO.Path]::GetFullPath($PromotionWorktree).TrimEnd('\')
+if ($PromotionWorktree.Length -gt 108) {
+    throw "Promotion worktree path exceeds the safe Windows path budget of 108 characters ($($PromotionWorktree.Length)): $PromotionWorktree. Set CODEX_RC_PROMOTION_WORKTREE_ROOT to a shorter directory or pass a short -PromotionWorktree path."
+}
 if ([string]::IsNullOrWhiteSpace($BuildScript)) { $BuildScript = Join-Path $PromotionWorktree 'build-and-deploy.ps1' }
 
 $branchRef = Invoke-GitText -Root $projectRoot -Arguments @('rev-parse', '--verify', "refs/heads/$ReleaseCandidateBranch") -AllowFailure
