@@ -328,18 +328,44 @@ try {
     $env:PROMOTION_TEST_RC_ROOT = $recoveryRuntime
     $env:PROMOTION_TEST_INVOCATION = $recoveryInvocationLog
     $env:CODEX_RC_PROMOTION_WORKTREE_ROOT = $defaultWorktreeRoot
+    $interruptedWorktreePath = Join-Path $defaultWorktreeRoot 'rc-1390904adea9'
+    $hookRoot = Join-Path $tempRoot 'failing-git-hooks'
+    New-Item -ItemType Directory -Path $hookRoot -Force | Out-Null
+    $hookText = '#!/bin/sh' + [Environment]::NewLine + 'exit 1' + [Environment]::NewLine
+    [System.IO.File]::WriteAllText((Join-Path $hookRoot 'pre-commit'), $hookText)
+    $blankGlobalConfig = Join-Path $tempRoot 'empty-global-gitconfig'
+    [System.IO.File]::WriteAllText($blankGlobalConfig, '')
+    $env:GIT_CONFIG_GLOBAL = $blankGlobalConfig
+    Invoke-TestGit -Root $project -Arguments @('config', '--local', '--unset', 'user.name') | Out-Null
+    Invoke-TestGit -Root $project -Arguments @('config', '--local', '--unset', 'user.email') | Out-Null
+    Invoke-TestGit -Root $project -Arguments @('config', '--local', 'core.hooksPath', $hookRoot) | Out-Null
+    Assert-Throws -Action {
+        & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $recoveryRuntime -ReleaseCandidateBranch $defaultWorktreeBranch -PromotionWorktree $interruptedWorktreePath -BuildScript $fakeBuild -ShortcutRoot $shortcutBase | Out-Null
+    } -MessageFragment 'git -c user.name=Hearthstone Release Operations'
+    $recoveryWorktreePath = Get-TestWorktreeBranchPath -Root $project -Branch $defaultWorktreeBranch
+    if ([string]::IsNullOrWhiteSpace($recoveryWorktreePath)) { throw 'Failed fixture commit did not leave the exact RC branch worktree registered for recovery' }
+    $stagedAfterInterruptedCommit = Invoke-TestGit -Root $recoveryWorktreePath -Arguments @('status', '--porcelain')
+    if (@($stagedAfterInterruptedCommit -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -ne 2) { throw 'Simulated failed metadata commit did not leave exactly the two expected staged files' }
+    Remove-Item -LiteralPath (Join-Path $hookRoot 'pre-commit') -Force
+    Invoke-TestGit -Root $project -Arguments @('config', '--local', '--unset', 'core.hooksPath') | Out-Null
     $recoveryOutput = & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $recoveryRuntime -ReleaseCandidateBranch $defaultWorktreeBranch -BuildScript $fakeBuild -ShortcutRoot $shortcutBase
-    $recoveryText = $recoveryOutput -join "`n"
-    $recoveryPathMatch = [regex]::Match($recoveryText, 'CREATED_RC_WORKTREE=(.+)')
-    if (-not $recoveryPathMatch.Success) { throw 'Retry did not create the default short RC worktree from the already-existing branch' }
-    $recoveryWorktreePath = $recoveryPathMatch.Groups[1].Value.Trim()
+    $recoveryText = $recoveryOutput -join [Environment]::NewLine
+    $recoveryWorktreePath = Get-TestWorktreeBranchPath -Root $project -Branch $defaultWorktreeBranch
+    if ([string]::IsNullOrWhiteSpace($recoveryWorktreePath)) { throw 'Retry did not resume the default short RC worktree for the already-existing branch' }
+    if ($recoveryWorktreePath -cne [System.IO.Path]::GetFullPath($interruptedWorktreePath).TrimEnd('\')) { throw 'Retry did not reuse the exact already-registered interrupted worktree path' }
     if ($recoveryWorktreePath.Length -gt 90 -or $recoveryWorktreePath -notmatch '[\\/]rc-[0-9a-f]{12}$') { throw "Default promotion worktree path is not short and deterministic: $recoveryWorktreePath" }
     if ($recoveryText -match 'CREATED_RC_BRANCH=') { throw 'Retry created a different RC branch instead of reusing the exact branch left by the failed attempt' }
+    if ($recoveryText -notmatch 'RESUMING_RC_METADATA_WORKTREE') { throw 'Retry did not report that it validated and resumed staged metadata from the interrupted commit' }
     if ($recoveryText -notmatch "RC_METADATA_COMMITTED branch=$([regex]::Escape($defaultWorktreeBranch))" -or $recoveryText -notmatch 'PROMOTION_COMPLETE') { throw 'Retry did not continue the already-created exact RC branch through the fixture build path' }
     if ((Get-Content -LiteralPath $recoveryInvocationLog).Count -ne 1) { throw 'Resumed RC branch did not invoke its isolated build path exactly once' }
-    $registeredRecoveryPath = Get-TestWorktreeBranchPath -Root $project -Branch $defaultWorktreeBranch
-    if ($registeredRecoveryPath -cne [System.IO.Path]::GetFullPath($recoveryWorktreePath).TrimEnd('\')) { throw 'Resumed RC branch is not registered at the deterministic short worktree path' }
-    Invoke-TestGit -Root $project -Arguments @('worktree', 'remove', '--force', $registeredRecoveryPath) | Out-Null
+    $recoverySubject = Invoke-TestGit -Root $recoveryWorktreePath -Arguments @('log', '-1', '--format=%s')
+    if ($recoverySubject -cne 'Prepare Beta v4.16.670-local-20261022-225531PDT as Release Candidate') { throw "RC metadata commit message is malformed or unexpected: $recoverySubject" }
+    $recoveryAuthor = Invoke-TestGit -Root $recoveryWorktreePath -Arguments @('log', '-1', '--format=%an <%ae>')
+    if ($recoveryAuthor -cne 'Hearthstone Release Operations <codex-release-operations@users.noreply.github.com>') { throw "RC metadata commit identity is not deterministic: $recoveryAuthor" }
+    Invoke-TestGit -Root $project -Arguments @('worktree', 'remove', '--force', $recoveryWorktreePath) | Out-Null
+    Invoke-TestGit -Root $project -Arguments @('config', '--local', 'user.name', 'Promotion Test') | Out-Null
+    Invoke-TestGit -Root $project -Arguments @('config', '--local', 'user.email', 'promotion-test@example.invalid') | Out-Null
+    Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction SilentlyContinue
     Remove-Item Env:CODEX_RC_PROMOTION_WORKTREE_ROOT -ErrorAction SilentlyContinue
 
     $badEvidencePath = Join-Path $tempRoot 'wrong-artifact-evidence.json'
@@ -522,12 +548,13 @@ try {
     Invoke-TestGit -Root $project -Arguments @('commit', '-m', 'invalid channel metadata fixture') | Out-Null
     Assert-Throws -Action { & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree (Join-Path $tempRoot 'unused-worktree-3') -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null } -MessageFragment 'Beta source channel mismatch'
 
-    Write-Output 'PromoteBetaToReleaseCandidate.Tests: PASS (E2E-pending candidate, exact evidence binding, Stable-readiness hold, short deterministic worktree path, long-path refusal and exact-branch resume, shortcut channel contract, Desktop fallback, empty-field diagnostics, recoverable RC duplicate-pin cleanup, Beta/Stable pin preservation, clean promotion, exact source snapshot, RC isolation, idempotent repeat, dirty/missing/mismatched refusal)'
+    Write-Output 'PromoteBetaToReleaseCandidate.Tests: PASS (E2E-pending candidate, exact evidence binding, Stable-readiness hold, short deterministic worktree path, long-path refusal, exact existing worktree/branch staged-metadata resume, no-global-identity deterministic commit, correct metadata commit subject, shortcut channel contract, Desktop fallback, empty-field diagnostics, recoverable RC duplicate-pin cleanup, Beta/Stable pin preservation, clean promotion, exact source snapshot, RC isolation, idempotent repeat, dirty/missing/mismatched refusal)'
 } finally {
     Remove-Item Env:PROMOTION_TEST_RC_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:PROMOTION_TEST_INVOCATION -ErrorAction SilentlyContinue
     Remove-Item Env:PROMOTION_TEST_SHORTCUT_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:CODEX_RC_PROMOTION_WORKTREE_ROOT -ErrorAction SilentlyContinue
+    Remove-Item Env:GIT_CONFIG_GLOBAL -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $defaultWorktreeRoot) { Remove-Item -LiteralPath $defaultWorktreeRoot -Recurse -Force }
     if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
 }

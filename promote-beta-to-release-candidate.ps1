@@ -719,6 +719,53 @@ function Assert-RcMetadata {
     Assert-Equals -Expected $Verification.StableReadiness -Actual (Get-PropertyText $config 'stableReadiness') -Label 'Release Candidate Stable readiness status'
 }
 
+function Assert-RcInterruptedMetadataWorktree {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$SourceBranch,
+        [Parameter(Mandatory = $true)][string]$SourceCommit,
+        [Parameter(Mandatory = $true)][string]$Branch,
+        [Parameter(Mandatory = $true)]$Verification
+    )
+
+    $statusLines = @(Get-GitStatusLines -Root $Root)
+    if ($statusLines.Count -eq 0) { return $false }
+    if ((Invoke-GitText -Root $Root -Arguments @('rev-parse', 'HEAD')).Text -cne $SourceCommit) {
+        throw 'Release Candidate worktree is dirty on a commit other than its exact Beta source; refusing interrupted-metadata resume'
+    }
+
+    $allowed = @('release-channel.json', 'sync-shortcuts.ps1')
+    foreach ($line in $statusLines) {
+        if ($line.Length -lt 4 -or $line.Substring(3).Trim('"') -cnotin $allowed) {
+            throw "Release Candidate worktree has unrelated staged or unstaged changes; refusing interrupted-metadata resume: $line"
+        }
+    }
+
+    $temporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('hs-rc-metadata-resume-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $temporaryDirectory -Force | Out-Null
+    try {
+        foreach ($relativePath in $allowed) {
+            $headText = (Invoke-GitText -Root $Root -Arguments @('show', "HEAD:$relativePath")).Text
+            $expectedPath = Join-Path $temporaryDirectory ([System.IO.Path]::GetFileName($relativePath))
+            [System.IO.File]::WriteAllText($expectedPath, $headText + [Environment]::NewLine, $utf8NoBom)
+            if ($relativePath -eq 'release-channel.json') {
+                Set-RcMetadata -Path $expectedPath -Branch $Branch -SourceBranch $SourceBranch -SourceCommit $SourceCommit -Verification $Verification
+            } else {
+                [void](Set-RcShortcutSyncDesktopFallback -Path $expectedPath)
+            }
+            $actualText = [regex]::Replace([System.IO.File]::ReadAllText((Join-Path $Root $relativePath)), '\r\n?', [string][char]10).TrimEnd([char]10)
+            $expectedText = [regex]::Replace([System.IO.File]::ReadAllText($expectedPath), '\r\n?', [string][char]10).TrimEnd([char]10)
+            if ($actualText -cne $expectedText) {
+                throw "Release Candidate worktree contains edits beyond the exact interrupted promotion output in '$relativePath'; refusing resume"
+            }
+        }
+    } finally {
+        if (Test-Path -LiteralPath $temporaryDirectory) { Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force }
+    }
+    Assert-RcMetadata -Root $Root -Branch $Branch -SourceBranch $SourceBranch -SourceCommit $SourceCommit -Verification $Verification
+    return $true
+}
+
 function Assert-RcDeployment {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
@@ -946,17 +993,18 @@ if ($PreflightOnly) {
     Write-Output "PREFLIGHT_OK betaVersion=$($betaDeployment.Version) sourceCommit=$betaHead rcRuntime=$rcRoot legacyRcUpgrade=$legacyRcUpgrade taskbarDuplicatePins=$($rcTaskbarDuplicates.Count) cleanup=deferred-to-promotion"
     exit 0
 }
-if ([string]::IsNullOrWhiteSpace($PromotionWorktree)) {
-    $PromotionWorktree = Get-DefaultPromotionWorktreePath -ProjectRoot $projectRoot -Branch $ReleaseCandidateBranch
+$promotionWorktreeWasExplicit = -not [string]::IsNullOrWhiteSpace($PromotionWorktree)
+$branchRef = Invoke-GitText -Root $projectRoot -Arguments @('rev-parse', '--verify', "refs/heads/$ReleaseCandidateBranch") -AllowFailure
+$existingRcWorktree = Get-WorktreeBranchPath -Root $projectRoot -Branch $ReleaseCandidateBranch
+if (-not $promotionWorktreeWasExplicit) {
+    if (-not [string]::IsNullOrWhiteSpace($existingRcWorktree)) { $PromotionWorktree = $existingRcWorktree }
+    else { $PromotionWorktree = Get-DefaultPromotionWorktreePath -ProjectRoot $projectRoot -Branch $ReleaseCandidateBranch }
 }
 $PromotionWorktree = [System.IO.Path]::GetFullPath($PromotionWorktree).TrimEnd('\')
 if ($PromotionWorktree.Length -gt 108) {
     throw "Promotion worktree path exceeds the safe Windows path budget of 108 characters ($($PromotionWorktree.Length)): $PromotionWorktree. Set CODEX_RC_PROMOTION_WORKTREE_ROOT to a shorter directory or pass a short -PromotionWorktree path."
 }
 if ([string]::IsNullOrWhiteSpace($BuildScript)) { $BuildScript = Join-Path $PromotionWorktree 'build-and-deploy.ps1' }
-
-$branchRef = Invoke-GitText -Root $projectRoot -Arguments @('rev-parse', '--verify', "refs/heads/$ReleaseCandidateBranch") -AllowFailure
-$existingRcWorktree = Get-WorktreeBranchPath -Root $projectRoot -Branch $ReleaseCandidateBranch
 if ($branchRef.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingRcWorktree) -and
     $existingRcWorktree -cne $PromotionWorktree) {
     throw "Release Candidate branch is already checked out elsewhere: $existingRcWorktree"
@@ -992,7 +1040,12 @@ if ([string]::IsNullOrWhiteSpace($existingRcWorktree)) {
     Write-Output "CREATED_RC_WORKTREE=$PromotionWorktree"
 } else { $PromotionWorktree = $existingRcWorktree }
 
-Assert-GitClean -Root $PromotionWorktree -Label 'Release Candidate source checkout before metadata update'
+$resumingInterruptedMetadata = Assert-RcInterruptedMetadataWorktree -Root $PromotionWorktree -Branch $ReleaseCandidateBranch -SourceBranch $betaBranch -SourceCommit $betaHead -Verification $verification
+if ($resumingInterruptedMetadata) {
+    Write-Output "RESUMING_RC_METADATA_WORKTREE branch=$ReleaseCandidateBranch path=$PromotionWorktree"
+} else {
+    Assert-GitClean -Root $PromotionWorktree -Label 'Release Candidate source checkout before metadata update'
+}
 $rcConfigPath = Join-Path $PromotionWorktree 'release-channel.json'
 Set-RcMetadata -Path $rcConfigPath -Branch $ReleaseCandidateBranch -SourceBranch $betaBranch -SourceCommit $betaHead -Verification $verification
 $rcShortcutSyncPath = Join-Path $PromotionWorktree 'sync-shortcuts.ps1'
@@ -1002,7 +1055,8 @@ Assert-RcMetadata -Root $PromotionWorktree -Branch $ReleaseCandidateBranch -Sour
 $metadataStatus = Invoke-GitText -Root $PromotionWorktree -Arguments @('status', '--porcelain', '--untracked-files=all')
 if (-not [string]::IsNullOrWhiteSpace($metadataStatus.Text)) {
     Invoke-GitText -Root $PromotionWorktree -Arguments @('add', '--', 'release-channel.json', 'sync-shortcuts.ps1') | Out-Null
-    Invoke-GitText -Root $PromotionWorktree -Arguments @('commit', '-m', "Prepare Beta $betaDeployment.Version as Release Candidate") | Out-Null
+    $metadataCommitMessage = 'Prepare Beta {0} as Release Candidate' -f $betaDeployment.Version
+    Invoke-GitText -Root $PromotionWorktree -Arguments @('-c', 'user.name=Hearthstone Release Operations', '-c', 'user.email=codex-release-operations@users.noreply.github.com', 'commit', '-m', $metadataCommitMessage) | Out-Null
 }
 Assert-GitClean -Root $PromotionWorktree -Label 'Release Candidate source checkout after metadata commit'
 Assert-RcMetadata -Root $PromotionWorktree -Branch $ReleaseCandidateBranch -SourceBranch $betaBranch -SourceCommit $betaHead -Verification $verification

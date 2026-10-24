@@ -193,6 +193,15 @@ rejected before branch/worktree creation to avoid Windows checkout failures.
 If a prior attempt created the exact RC branch but failed before registering a
 worktree, rerun with the same branch/evidence and the short default path: the
 promotion validates and reuses that branch rather than creating another one.
+If the exact branch already has a registered worktree at a short path, an
+omitted `-PromotionWorktree` reuses that existing path in place, even if it
+differs from the new deterministic default.
+If an interruption occurs after writing/staging the two promotion metadata
+files but before their commit completes, rerun validates their contents against
+the exact expected transformation from the Beta source before resuming; any
+other dirty file or altered metadata is rejected. The metadata commit uses a
+fixed per-command Git author and a version-formatted subject, so it does not
+depend on user/global Git identity settings.
 
 The generated manifests record `sourceBranch`/`sourceCommit` for the actual
 checkout and `promotionSourceBranch`/`promotionSourceCommit` for the Beta
