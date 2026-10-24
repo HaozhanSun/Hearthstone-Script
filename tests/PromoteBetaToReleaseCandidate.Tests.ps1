@@ -129,6 +129,13 @@ try {
 '@
     [System.IO.File]::WriteAllText((Join-Path $project 'release-channel.json'), $config)
     [System.IO.File]::WriteAllText((Join-Path $project 'build-and-deploy.ps1'), "param([string]`$Channel)`n")
+    [System.IO.File]::WriteAllText((Join-Path $project 'pom.xml'), @'
+<project>
+  <properties>
+    <local-build-timestamp-pacific>2026-10-23 15:00:00 PDT</local-build-timestamp-pacific>
+  </properties>
+</project>
+'@)
     Invoke-TestGit -Root $project -Arguments @('add', '--all') | Out-Null
     Invoke-TestGit -Root $project -Arguments @('commit', '-m', 'beta promotion fixture') | Out-Null
     $betaHead = Invoke-TestGit -Root $project -Arguments @('rev-parse', 'HEAD')
@@ -228,9 +235,25 @@ $env:PROMOTION_TEST_SHORTCUT_ROOT = $shortcutBase
     if ((Get-Content -LiteralPath (Join-Path $stableRuntime 'stable-marker.txt') -Raw) -cne $stableMarkerBefore) { throw 'Promotion modified the Stable runtime' }
     if ((Get-Content -LiteralPath $invocationLog).Count -ne 1) { throw 'Initial promotion did not invoke the build path exactly once' }
 
+    $sourcePomPath = Join-Path $project 'pom.xml'
+    $sourcePom = [System.IO.File]::ReadAllText($sourcePomPath)
+    $timestampOnlyPom = $sourcePom.Replace('2026-10-23 15:00:00 PDT', '2026-10-23 16:00:00 PDT')
+    [System.IO.File]::WriteAllText($sourcePomPath, $timestampOnlyPom)
     $repeatOutput = & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase
     if (($repeatOutput -join "`n") -notmatch 'PROMOTION_ALREADY_COMPLETE') { throw 'Repeat promotion was not idempotent' }
     if ((Get-Content -LiteralPath $invocationLog).Count -ne 1) { throw 'Repeat promotion rebuilt an already-complete RC' }
+
+    [System.IO.File]::WriteAllText($sourcePomPath, $timestampOnlyPom.Replace('2026-10-23 16:00:00 PDT', '2026-10-23 16:01:00 PDT'))
+    Assert-Throws -Action {
+        & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null
+    } -MessageFragment 'timestamp-only delta does not equal deployed buildTimestampPacific'
+    [System.IO.File]::WriteAllText($sourcePomPath, $timestampOnlyPom)
+
+    Set-Content -LiteralPath (Join-Path $project 'unexpected.txt') -Value 'reject this change'
+    Assert-Throws -Action {
+        & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null
+    } -MessageFragment 'unsupported changes; only the root pom.xml build timestamp delta is allowed'
+    Remove-Item -LiteralPath (Join-Path $project 'unexpected.txt') -Force
 
     $extraShortcut = Join-Path (Join-Path $shortcutBase 'Desktop') 'RC-stale-copy.lnk'
     $shell = New-Object -ComObject WScript.Shell
@@ -275,7 +298,7 @@ $env:PROMOTION_TEST_SHORTCUT_ROOT = $shortcutBase
     Assert-Throws -Action { & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $missingRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree (Join-Path $tempRoot 'unused-worktree') -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null } -MessageFragment 'Beta deployment manifest is missing'
 
     Set-Content -LiteralPath (Join-Path $project 'dirty.txt') -Value 'dirty'
-    Assert-Throws -Action { & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null } -MessageFragment 'Beta source checkout is dirty'
+    Assert-Throws -Action { & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null } -MessageFragment 'unsupported changes; only the root pom.xml build timestamp delta is allowed'
     Remove-Item -LiteralPath (Join-Path $project 'dirty.txt') -Force
 
     $wrongBranchConfig = Get-Content -LiteralPath (Join-Path $project 'release-channel.json') -Raw | ConvertFrom-Json

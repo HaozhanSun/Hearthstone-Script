@@ -82,7 +82,11 @@ for offline contract tests; normal promotion verifies the real Desktop, Start
 Menu, and Taskbar locations.
 
 The command reads the current Beta deployment manifest and requires its
-`sourceBranch` and `sourceCommit` to match the clean checkout exactly. It then
+`sourceBranch` and `sourceCommit` to match the checkout exactly. A post-deploy
+Beta checkout may contain only the root `pom.xml` one-line
+`local-build-timestamp-pacific` update, and only when it exactly matches the
+deployed manifest timestamp; all other staged, unstaged, or untracked changes
+are rejected. It then
 creates or reuses a `beta/release-candidate-*` branch in a separate worktree,
 commits only Release Candidate channel metadata, and invokes that worktree's
 checked-in `build-and-deploy.ps1 -Channel release-candidate`. The build path

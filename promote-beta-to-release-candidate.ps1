@@ -38,11 +38,57 @@ function Invoke-GitText {
     [pscustomobject]@{ ExitCode = $exitCode; Text = $text.Trim() }
 }
 
+function Get-GitStatusLines {
+    param([Parameter(Mandatory = $true)][string]$Root)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = @(& git -C $Root status --porcelain --untracked-files=all 2>&1)
+        $exitCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
+    if ($exitCode -ne 0) { throw "git status failed in $Root (exit $exitCode): $($output -join [Environment]::NewLine)" }
+    return @($output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
 function Assert-GitClean {
     param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$Label)
     $status = Invoke-GitText -Root $Root -Arguments @('status', '--porcelain', '--untracked-files=all')
     if (-not [string]::IsNullOrWhiteSpace($status.Text)) {
         throw "$Label is dirty; refusing promotion: $($status.Text -replace "`r?`n", '; ')"
+    }
+}
+
+function Assert-BetaSourceCheckout {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)]$BetaDeployment
+    )
+    $statusLines = @(Get-GitStatusLines -Root $Root)
+    if ($statusLines.Count -eq 0) { return }
+
+    $unsupported = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in $statusLines) {
+        if ($line.Length -lt 3 -or $line.Substring(0, 2) -ne ' M' -or $line.Substring(3) -ne 'pom.xml') {
+            [void]$unsupported.Add($line)
+        }
+    }
+    $cached = Invoke-GitText -Root $Root -Arguments @('diff', '--cached', '--name-only')
+    if (-not [string]::IsNullOrWhiteSpace($cached.Text)) { [void]$unsupported.Add("staged: $($cached.Text -replace "`r?`n", '; ')") }
+    if ($unsupported.Count -gt 0) {
+        throw "Beta source checkout has unsupported changes; only the root pom.xml build timestamp delta is allowed: $($unsupported -join '; ')"
+    }
+
+    $pomPath = Join-Path $Root 'pom.xml'
+    $headPom = Invoke-GitText -Root $Root -Arguments @('show', 'HEAD:pom.xml')
+    $manifestTimestamp = Get-PropertyText $BetaDeployment.Manifest 'buildTimestampPacific'
+    if ([string]::IsNullOrWhiteSpace($manifestTimestamp)) { throw 'Beta deployment manifest lacks buildTimestampPacific for timestamp-only checkout validation' }
+    $timestampPattern = '(?m)^([ \t]*<local-build-timestamp-pacific>)[^<]+(</local-build-timestamp-pacific>[ \t]*)(\r?)$'
+    $expectedPom = [regex]::Replace($headPom.Text, $timestampPattern, { param($match) $match.Groups[1].Value + $manifestTimestamp + $match.Groups[2].Value + $match.Groups[3].Value }, 1)
+    if ($expectedPom -eq $headPom.Text) { throw 'Beta source pom.xml lacks local-build-timestamp-pacific; refusing timestamp-only exception' }
+    $currentPom = [System.IO.File]::ReadAllText($pomPath)
+    $normalize = { param([string]$Text) $Text -replace "`r`n?", "`n" }
+    if ((& $normalize $currentPom) -cne (& $normalize $expectedPom)) {
+        throw "Beta source checkout timestamp-only delta does not equal deployed buildTimestampPacific '$manifestTimestamp'"
     }
 }
 
@@ -466,9 +512,9 @@ $betaBranch = $branchResult.Text
 if ([string]::IsNullOrWhiteSpace($betaBranch) -or $betaBranch -notlike 'beta/*' -or $betaBranch -like 'beta/release-candidate-*') {
     throw "Promotion must start from a named non-RC beta branch; current branch is '$betaBranch'"
 }
-Assert-GitClean -Root $projectRoot -Label 'Beta source checkout'
 $betaHead = (Invoke-GitText -Root $projectRoot -Arguments @('rev-parse', 'HEAD')).Text
 $betaDeployment = Get-BetaDeployment -Root $projectRoot -Branch $betaBranch -Head $betaHead
+Assert-BetaSourceCheckout -Root $projectRoot -BetaDeployment $betaDeployment
 Assert-VerificationEvidence -Path $VerificationEvidencePath -SourceBranch $betaBranch -SourceCommit $betaHead -BetaDeployment $betaDeployment
 
 if ([string]::IsNullOrWhiteSpace($ReleaseCandidateBranch)) { $ReleaseCandidateBranch = "beta/release-candidate-$($betaDeployment.Version)" }
