@@ -76,27 +76,34 @@ use the current canonical channel roots and the pushed operations checkout:
 
 ```powershell
 $scriptRoot = 'C:\Users\yzjsh\.codex\worktrees\rc-promotion-ops-main-20261023'
-$betaProjectRoot = 'C:\Users\yzjsh\.codex\worktrees\beta-source-v4.16.679-4bc5beba'
+$betaProjectRoot = 'C:\Users\yzjsh\.codex\worktrees\beta-current-rank-candidate\Hearthstone Copilot'
 $betaRuntimeRoot = 'C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script Beta'
 $rcRuntimeRoot = 'C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script Release Candidate'
 $betaBranch = 'beta/current-rank-candidate-v4.16-integration'
 $betaCommit = '4bc5beba9ac65ad3c3b7f35777ae2f8e110fe9eb'
 ```
 
-Create the clean, exact-source checkout once. This clone gives the old
-deployed commit its manifest-declared branch name without disturbing the
-existing, newer Beta worktree:
+Do not clone/fetch this Beta branch from GitHub: the deployed Beta source is a
+local worktree state and that branch is not published remotely. Before either
+command, verify that the existing checkout itself is at the exact manifest
+branch and commit. These checks must stop on any mismatch; do not force-move the
+branch, edit its metadata, or substitute a different checkout. If no matching
+local checkout is available, stop and restore one from a known backup/worktree.
 
 ```powershell
-git clone --no-checkout https://github.com/HaozhanSun/Hearthstone-Script.git $betaProjectRoot
-if ($LASTEXITCODE -ne 0) { throw 'Could not clone the Beta source checkout' }
-git -C $betaProjectRoot fetch origin $betaBranch
-if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the Beta source branch' }
-git -C $betaProjectRoot switch --create $betaBranch $betaCommit
-if ($LASTEXITCODE -ne 0) { throw 'Could not check out the exact deployed Beta source commit' }
-if ((git -C $betaProjectRoot rev-parse HEAD).Trim() -ne $betaCommit) { throw 'Beta source checkout is not at the manifest commit' }
-if ((git -C $betaProjectRoot branch --show-current).Trim() -ne $betaBranch) { throw 'Beta source checkout branch does not match the manifest' }
+$actualBetaBranch = (git -C $betaProjectRoot branch --show-current).Trim()
+$actualBetaCommit = (git -C $betaProjectRoot rev-parse HEAD).Trim()
+if ($actualBetaBranch -ne $betaBranch) { throw "Beta branch mismatch: expected $betaBranch, found $actualBetaBranch" }
+if ($actualBetaCommit -ne $betaCommit) { throw "Beta commit mismatch: expected $betaCommit, found $actualBetaCommit; stop and restore the matching source checkout" }
 ```
+
+Current-state warning: the named local checkout was inspected on 2026-10-23 and
+its HEAD was `7f1954025111002e4046b5df33e4e5992d250942`, not the deployed
+manifest commit above. Therefore the verification block correctly aborts for
+the checkout as it currently stands; do not run promotion until a known local
+checkout at `4bc5beba9ac65ad3c3b7f35777ae2f8e110fe9eb` is restored. Its working
+tree also has generated POM modifications, which must be validated against the
+manifest by the helper after the branch/HEAD checks pass.
 
 Online E2E evidence is optional for creating an RC candidate; this does not
 relax the online gate for Stable or authorize merging an unverified candidate
