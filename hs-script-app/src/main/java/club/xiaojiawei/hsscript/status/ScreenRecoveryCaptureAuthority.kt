@@ -8,9 +8,11 @@ internal data class CapturedWindowIdentity(
     val processId: Int,
 )
 
-/** Pre-session capture is permitted only for the exact matchmaking error-modal probe. */
+/** Pre-session capture is permitted only for bounded matchmaking probes. */
 internal enum class ScreenRecoveryCapturePurpose {
     SCREEN_STATE_RECOVERY,
+    /** Fresh SEARCHING observation immediately after a verified queue input. */
+    MATCHMAKING_SEARCH,
     MATCHMAKING_ERROR_DIALOG,
 }
 
@@ -42,7 +44,7 @@ internal object ScreenRecoveryCapturePurposePolicy {
         mulligan: Boolean,
         terminal: Boolean,
         recentInputIntent: Boolean,
-    ): Boolean = purpose == ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY &&
+    ): Boolean = purpose == ScreenRecoveryCapturePurpose.MATCHMAKING_SEARCH &&
         recentInputIntent && tournamentMode && !activeGame && !mulligan && !terminal
 }
 

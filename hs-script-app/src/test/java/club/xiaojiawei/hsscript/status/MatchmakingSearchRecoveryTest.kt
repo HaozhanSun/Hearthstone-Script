@@ -125,7 +125,7 @@ class MatchmakingSearchRecoveryTest {
     fun `queue start establishes bounded pre-session capture authority`() {
         assertTrue(
             ScreenRecoveryCapturePurposePolicy.allowsPreSessionMatchmaking(
-                purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+                purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_SEARCH,
                 tournamentMode = true,
                 activeGame = false,
                 mulligan = false,

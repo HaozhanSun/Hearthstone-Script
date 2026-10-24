@@ -323,7 +323,7 @@ class MulliganRankPreflightTest {
     }
 
     @Test
-    fun `cold PaddleX rank read lasting longer than five seconds is not preempted`() {
+    fun `PaddleX preflight deadline stays bounded despite long provider timeout`() {
         val scheduler = ManualScheduler()
         var continued = 0
         var attempts = 0
@@ -354,8 +354,8 @@ class MulliganRankPreflightTest {
 
         preflight.start()
         scheduler.runScheduledAfter(7_000)
-        assertEquals(41_000L, scheduler.nextTimeoutDelayMs())
-        scheduler.runWorker(elapsedAfterStartMs = 9_000L)
+        assertEquals(5_000L, scheduler.nextTimeoutDelayMs())
+        scheduler.runWorker(elapsedAfterStartMs = 4_000L)
 
         assertEquals(1, attempts)
         assertEquals(1, continued)

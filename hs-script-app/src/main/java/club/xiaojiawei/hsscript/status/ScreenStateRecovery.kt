@@ -224,7 +224,7 @@ object ScreenStateRecovery {
             ) {
                 null
             } else {
-                captureScreen(currentWindow)
+                captureScreen(currentWindow, purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_SEARCH)
             }
         }
         if (!ScreenRecoveryRuntime.isCurrent(recoveryToken) || !captureResult.foregroundConfirmed) return null

@@ -31,21 +31,18 @@ internal data class MulliganRankPreflightConfig(
     }
 
     /**
-     * PaddleX may perform two serialized rank probes, each with a bounded
-     * queue wait and provider request. Do not let the older 5s task timeout
-     * cancel a valid cold start before the provider's own deadline.
+     * The preflight deadline is the lifecycle safety bound. The provider's
+     * configured request timeout may be much larger for general OCR, but it
+     * must not stretch a finite Mulligan retry into minutes. Cancelling the
+     * worker interrupts the sidecar request and the next attempt captures a
+     * fresh frame/probe.
      */
     internal fun effectiveAttemptTimeoutMs(provider: String, paddleXRequestTimeoutMs: Long): Long {
+        // Keep the parameters in the contract for telemetry/tests: the
+        // configured provider deadline is intentionally not allowed to widen
+        // the preflight lifecycle deadline.
         if (!provider.equals("PADDLEX", ignoreCase = true)) return attemptTimeoutMs
-        val requestBudget = paddleXRequestTimeoutMs.coerceAtLeast(1L)
-        val multiplier = 4L // two probes × (coordinator queue + provider request)
-        val safetyMarginMs = 1_000L
-        val paddlexBudget = if (requestBudget > (Long.MAX_VALUE - safetyMarginMs) / multiplier) {
-            Long.MAX_VALUE
-        } else {
-            requestBudget * multiplier + safetyMarginMs
-        }
-        return maxOf(attemptTimeoutMs, paddlexBudget)
+        return attemptTimeoutMs.coerceAtLeast(1L)
     }
 
     private companion object {

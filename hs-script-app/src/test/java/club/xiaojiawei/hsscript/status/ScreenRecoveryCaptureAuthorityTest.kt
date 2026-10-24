@@ -196,7 +196,7 @@ class ScreenRecoveryCaptureAuthorityTest {
 
         assertTrue(
             ScreenRecoveryCapturePurposePolicy.allowsPreSessionMatchmaking(
-                purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+                purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_SEARCH,
                 tournamentMode = true,
                 activeGame = false,
                 mulligan = false,
@@ -214,6 +214,17 @@ class ScreenRecoveryCaptureAuthorityTest {
                 recentInputIntent = true,
             ),
             "the matchmaking intent is only for normal screen observation, not dialog input",
+        )
+        assertFalse(
+            ScreenRecoveryCapturePurposePolicy.allowsPreSessionMatchmaking(
+                purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+                tournamentMode = true,
+                activeGame = false,
+                mulligan = false,
+                terminal = false,
+                recentInputIntent = true,
+            ),
+            "generic recovery must not inherit queue-start authority",
         )
         assertFalse(
             ScreenRecoveryCapturePurposePolicy.allowsPreSessionMatchmaking(

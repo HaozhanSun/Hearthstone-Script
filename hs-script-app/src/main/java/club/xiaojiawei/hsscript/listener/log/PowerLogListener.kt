@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscript.status.RuntimeFaultBackoff
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.surrender.CurrentGamePowerLogTerminalTracker
 import club.xiaojiawei.hsscript.status.surrender.CurrentGameSurrenderTerminalEvidence
+import club.xiaojiawei.hsscript.status.surrender.CurrentGameTerminalReconciler
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.status.surrender.PowerLogTerminalTailReader
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
@@ -58,6 +59,10 @@ object PowerLogListener :
     @Volatile
     private var terminalTailFence = false
     private val currentGamePowerLogTerminalTracker = CurrentGamePowerLogTerminalTracker()
+    private val currentGameTerminalReconciler = CurrentGameTerminalReconciler(
+        tracker = currentGamePowerLogTerminalTracker,
+        onAccepted = { ReplaceCardPhaseStrategy.onAuthoritativeTerminalProofAccepted() },
+    )
     @Volatile
     private var currentGameTerminalEvidencePosition: Long? = null
 
@@ -103,12 +108,10 @@ object PowerLogListener :
         if (!MandatoryRankSurrenderGuard.isPending() ||
             !currentGamePowerLogTerminalTracker.hasCompleteTerminalEvidence()
         ) return
-        val evidence = currentGamePowerLogTerminalTracker.currentGameSurrenderEvidence(
+        val evidence = currentGameTerminalReconciler.reconcile(
             WarEx.war.me.gameId,
             WarEx.war.rival.gameId,
         ) ?: return
-        val capability = MandatoryRankSurrenderGuard.reconcileTerminalEvidence(evidence) ?: return
-        ReplaceCardPhaseStrategy.onAuthoritativeTerminalProofAccepted()
         log.info {
             "RANK_SURRENDER_TERMINAL_RECONCILED source=late-current-session-tail " +
                 "barrier=cleared terminalUiCleanup=pending " +
