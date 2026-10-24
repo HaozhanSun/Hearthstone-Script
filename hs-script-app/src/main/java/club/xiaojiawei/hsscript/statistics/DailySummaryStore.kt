@@ -23,6 +23,7 @@ data class DailySummary(
     val playDurationMinutes: Int = 0,
     val experience: Int = 0,
     internal val recordIds: Set<Int> = emptySet(),
+    internal val resetAt: Instant? = null,
 )
 
 /** A completed game contribution used by the persistent daily summary. */
@@ -63,6 +64,20 @@ class DailySummaryStore(
     fun current(date: LocalDate): DailySummary = summaries[date] ?: DailySummary(date)
 
     /**
+     * Reset only the selected local day. The SQLite records remain intact, but
+     * the reset marker prevents old records from being rehydrated on restart.
+     * Games completed after the reset continue to count normally.
+     */
+    @Synchronized
+    fun clear(date: LocalDate = LocalDate.now(clock)): DailySummary {
+        val reset = DailySummary(date = date, resetAt = clock.instant())
+        summaries[date] = reset
+        persist()
+        notifyListeners()
+        return reset
+    }
+
+    /**
      * Reconcile records already present in the authoritative SQLite store.
      * Record ids make this safe to repeat after a crash between DB insertion
      * and summary persistence: missing contributions are added once, while
@@ -74,6 +89,7 @@ class DailySummaryStore(
         var changed = !summaries.containsKey(date)
         for (event in events) {
             if (event.recordId != null && event.completedAt.atZone(zoneId).toLocalDate().equals(date) &&
+                (summary.resetAt == null || event.completedAt.isAfter(summary.resetAt)) &&
                 event.recordId !in summary.recordIds
             ) {
                 summary = summary.add(event)
@@ -90,6 +106,7 @@ class DailySummaryStore(
     fun record(event: DailyGameSummaryEvent): DailySummary {
         val date = event.completedAt.atZone(zoneId).toLocalDate()
         val current = summaries[date] ?: DailySummary(date)
+        if (current.resetAt != null && !event.completedAt.isAfter(current.resetAt)) return current
         if (event.recordId != null && event.recordId in current.recordIds) return current
         val updated = current.add(event)
         summaries[date] = updated
@@ -133,6 +150,8 @@ class DailySummaryStore(
                         .firstOrNull { it == "$DATE_PREFIX$date.recordIds" }
                         ?.let { properties.getProperty(it).split(',').mapNotNull(String::toIntOrNull).toSet() }
                         ?: emptySet(),
+                    resetAt = properties.getProperty("$DATE_PREFIX$date.resetAt")
+                        ?.let { runCatching { Instant.parse(it) }.getOrNull() },
                 )
             }
         }.onFailure { error ->
@@ -158,6 +177,9 @@ class DailySummaryStore(
                 properties.setProperty("$DATE_PREFIX$date.experience", summary.experience.toString())
                 if (summary.recordIds.isNotEmpty()) {
                     properties.setProperty("$DATE_PREFIX$date.recordIds", summary.recordIds.sorted().joinToString(","))
+                }
+                summary.resetAt?.let { resetAt ->
+                    properties.setProperty("$DATE_PREFIX$date.resetAt", resetAt.toString())
                 }
             }
             Files.newBufferedWriter(temporary, StandardCharsets.UTF_8).use { writer ->
@@ -194,6 +216,8 @@ object DailySummaryService {
     fun addListener(listener: () -> Unit) = store.addListener(listener)
 
     fun current(): DailySummary = store.current()
+
+    fun clearToday(): DailySummary = store.clear()
 
     fun bootstrap(events: Iterable<DailyGameSummaryEvent>) =
         store.bootstrap(LocalDate.now(DailySummaryStore.PACIFIC_ZONE), events)

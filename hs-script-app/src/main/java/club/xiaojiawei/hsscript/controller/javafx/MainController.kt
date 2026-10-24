@@ -695,12 +695,13 @@ class MainController : MainView() {
             Modal(
                 rootPane,
                 null,
-                "重置统计数据？",
+                "重置今日统计数据？",
                 {
                     Platform.runLater {
                         resetStatistics()
+                        DailySummaryService.clearToday()
                         refreshStatisticsViews()
-                        notificationManger.showSuccess("统计数据已重置", 2)
+                        notificationManger.showSuccess("今日统计数据已重置", 2)
                     }
                 },
                 {},

@@ -115,6 +115,57 @@ class DailySummaryStoreTest {
         }
     }
 
+    @Test
+    fun `reset clears only today and remains cleared across restart`() {
+        val directory = Files.createTempDirectory("daily-summary-reset")
+        try {
+            val previousDate = LocalDate.of(2026, 10, 22)
+            val currentDate = previousDate.plusDays(1)
+            val currentInstant = currentDate.atTime(12, 0).atZone(pacific).toInstant()
+            val oldToday = event(
+                id = 501,
+                completedAt = currentDate.atTime(9, 0).atZone(pacific).toInstant(),
+                result = true,
+                duration = 10,
+                experience = 4,
+            )
+            val previous = event(
+                id = 502,
+                completedAt = previousDate.atTime(18, 0).atZone(pacific).toInstant(),
+                result = false,
+                duration = 8,
+                experience = 3,
+            )
+            val path = directory.resolve("daily-summary.properties")
+            val store = DailySummaryStore(path, pacific, Clock.fixed(currentInstant, pacific))
+            store.record(oldToday)
+            store.record(previous)
+
+            store.clear()
+
+            assertEquals(0, store.current(currentDate).totalGames)
+            assertEquals(1, store.current(previousDate).totalGames)
+
+            val restarted = DailySummaryStore(path, pacific, Clock.fixed(currentInstant, pacific))
+            restarted.bootstrap(currentDate, listOf(oldToday))
+            assertEquals(0, restarted.current(currentDate).totalGames)
+            assertEquals(1, restarted.current(previousDate).totalGames)
+
+            val newToday = event(
+                id = 503,
+                completedAt = currentDate.atTime(13, 0).atZone(pacific).toInstant(),
+                result = true,
+                duration = 6,
+                experience = 2,
+            )
+            restarted.record(newToday)
+            assertEquals(1, restarted.current(currentDate).totalGames)
+            assertEquals(1, restarted.current(currentDate).wins)
+        } finally {
+            directory.toFile().deleteRecursively()
+        }
+    }
+
     private fun event(
         id: Int,
         completedAt: java.time.Instant,
