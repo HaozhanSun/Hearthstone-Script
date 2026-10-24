@@ -827,22 +827,61 @@ function Assert-RcProtectedDirectories {
     }
 }
 
+function Assert-RcBuildManagedPluginContract {
+    $deployPath = Join-Path $PSScriptRoot 'build-and-deploy.ps1'
+    $assemblyPath = Join-Path $PSScriptRoot 'assembly.xml'
+    foreach ($path in @($deployPath, $assemblyPath)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Cannot verify RC build-managed plugin contract; release source file is missing: $path" }
+    }
+    $deployText = [System.IO.File]::ReadAllText($deployPath)
+    foreach ($artifactName in @(
+        'hs-script-base-strategy-plugin-1.1.6.jar',
+        'hs-script-base-card-plugin-1.1.4.jar',
+        'hs-script-base-strategy-plugin.jar',
+        'hs-script-base-card-plugin.jar'
+    )) {
+        if (-not $deployText.Contains("'$artifactName'")) {
+            throw "RC managed-plugin preservation contract is stale: build-and-deploy.ps1 no longer declares destination '$artifactName'; update the explicit managed artifact allowlist before promotion"
+        }
+    }
+    $assemblyText = [System.IO.File]::ReadAllText($assemblyPath)
+    foreach ($artifactId in @('hs-script-base-card-plugin', 'hs-script-base-strategy-plugin')) {
+        if ($assemblyText -notmatch ('<include>com\.github\.xjw580:' + [regex]::Escape($artifactId) + '</include>')) {
+            throw "RC managed-plugin preservation contract is stale: assembly.xml no longer includes '$artifactId' in the build-managed plugin set"
+        }
+    }
+}
+
+function Get-RcBuildManagedPluginPaths {
+    param([Parameter(Mandatory = $true)]$Manifest)
+    Assert-RcBuildManagedPluginContract
+    $paths = @(
+        (Get-PropertyText $Manifest 'strategyPlugin').Replace('/', '\'),
+        'plugin\hs-script-base-strategy-plugin.jar',
+        'plugin\hs-script-base-card-plugin.jar',
+        'plugin\hs-script-base-card-plugin-1.1.4.jar',
+        'plugin\hs-script-base-strategy-plugin-1.1.6.jar'
+    )
+    return @($paths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+}
+
+function Test-RcBuildManagedPluginPath {
+    param([Parameter(Mandatory = $true)][string]$RelativePath, [Parameter(Mandatory = $true)]$Manifest)
+    return @(Get-RcBuildManagedPluginPaths -Manifest $Manifest | Where-Object { $_ -ieq $RelativePath.Replace('/', '\') }).Count -gt 0
+}
+
 function Get-RcProtectedState {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
         [Parameter(Mandatory = $true)]$Manifest
     )
     Assert-RcProtectedDirectories -Root $Root
-    $managedPluginPaths = @(
-        (Get-PropertyText $Manifest 'strategyPlugin').Replace('/', '\'),
-        (Get-PropertyText $Manifest 'strategyPluginLib').Replace('/', '\')
-    )
     $state = [System.Collections.Generic.List[object]]::new()
     foreach ($directory in @('config', 'data', 'log', 'plugin')) {
         $directoryRoot = Join-Path $Root $directory
         foreach ($file in @(Get-ChildItem -LiteralPath $directoryRoot -File -Recurse -ErrorAction Stop)) {
             $relative = [System.IO.Path]::GetRelativePath($Root, $file.FullName).Replace('/', '\')
-            if ($managedPluginPaths -contains $relative) { continue }
+            if ($directory -eq 'plugin' -and (Test-RcBuildManagedPluginPath -RelativePath $relative -Manifest $Manifest)) { continue }
             $hash = if ($relative -ieq 'config\script.ini') { '' } else { (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
             $state.Add([pscustomobject]@{ path = $relative; sha256 = $hash })
         }
@@ -859,9 +898,12 @@ function Get-RcProtectedState {
 function Assert-RcProtectedState {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)][object[]]$State
+        [Parameter(Mandatory = $true)][object[]]$State,
+        [Parameter(Mandatory = $true)]$Manifest
     )
     foreach ($entry in $State) {
+        if (([string]$entry.path).StartsWith('plugin\', [StringComparison]::OrdinalIgnoreCase) -and
+            (Test-RcBuildManagedPluginPath -RelativePath ([string]$entry.path) -Manifest $Manifest)) { continue }
         $path = Join-Path $Root ([string]$entry.path)
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw "Release Candidate protected file disappeared during upgrade: $path"
@@ -870,6 +912,61 @@ function Assert-RcProtectedState {
             Assert-FileHash -Path $path -Expected ([string]$entry.sha256) -Label "Release Candidate protected file $($entry.path)"
         }
     }
+}
+
+function Get-RcRollbackSnapshotForVerification {
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$CurrentDeploymentId)
+    $parent = Split-Path -Parent $Root
+    $matches = @()
+    foreach ($directory in @(Get-ChildItem -LiteralPath $parent -Directory -Filter 'Hearthstone Script Release Candidate.rollback-*' -ErrorAction SilentlyContinue)) {
+        $manifestPath = Join-Path $directory.FullName 'rollback-manifest.json'
+        if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { continue }
+        try { $snapshot = Read-JsonFile -Path $manifestPath -Label 'Release Candidate rollback manifest' }
+        catch { continue }
+        if ((Get-PropertyText $snapshot 'kind') -cne 'release-candidate-rollback-snapshot') { continue }
+        $snapshotRuntime = Get-PropertyText $snapshot 'runtimeRoot'
+        if ([string]::IsNullOrWhiteSpace($snapshotRuntime) -or
+            [System.IO.Path]::GetFullPath($snapshotRuntime).TrimEnd('\') -ine [System.IO.Path]::GetFullPath($Root).TrimEnd('\')) { continue }
+        if ((Get-PropertyText $snapshot 'deploymentId') -ceq $CurrentDeploymentId) { continue }
+        $matches += [pscustomobject]@{ Directory = $directory; ManifestPath = $manifestPath; Manifest = $snapshot }
+    }
+    if ($matches.Count -eq 0) { return $null }
+    return $matches | Sort-Object { $_.Directory.LastWriteTimeUtc } -Descending | Select-Object -First 1
+}
+
+function Complete-RcRollbackSnapshotPostDeployVerification {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)]$DeploymentManifest
+    )
+    $deploymentId = Get-PropertyText $DeploymentManifest 'deploymentId'
+    $snapshot = Get-RcRollbackSnapshotForVerification -Root $Root -CurrentDeploymentId $deploymentId
+    if ($null -eq $snapshot) { return '' }
+    if ((Get-PropertyText $snapshot.Manifest 'postDeployVerification') -ceq 'PASS' -and
+        (Get-PropertyText $snapshot.Manifest 'verifiedDeploymentId') -ceq $deploymentId) {
+        return $snapshot.Directory.FullName
+    }
+
+    if ($null -eq $snapshot.Manifest.PSObject.Properties['protectedState']) {
+        throw "Matching Release Candidate rollback snapshot lacks protectedState; refusing to declare post-deploy verification complete: $($snapshot.ManifestPath)"
+    }
+    $state = @($snapshot.Manifest.protectedState)
+    Assert-RcProtectedState -Root $Root -State $state -Manifest $DeploymentManifest
+    $snapshot.Manifest | Add-Member -Force -NotePropertyName postDeployVerification -NotePropertyValue 'PASS'
+    $snapshot.Manifest | Add-Member -Force -NotePropertyName verifiedDeploymentId -NotePropertyValue $deploymentId
+    $snapshot.Manifest | Add-Member -Force -NotePropertyName verifiedAt -NotePropertyValue (Get-Date).ToString('o')
+    [System.IO.File]::WriteAllText($snapshot.ManifestPath, ($snapshot.Manifest | ConvertTo-Json -Depth 10) + [Environment]::NewLine, $utf8NoBom)
+    return $snapshot.Directory.FullName
+}
+
+function Set-RcRollbackSnapshotPostDeployVerification {
+    param([Parameter(Mandatory = $true)][string]$SnapshotPath, [Parameter(Mandatory = $true)][string]$DeploymentId)
+    $manifestPath = Join-Path $SnapshotPath 'rollback-manifest.json'
+    $snapshot = Read-JsonFile -Path $manifestPath -Label 'Release Candidate rollback manifest'
+    $snapshot | Add-Member -Force -NotePropertyName postDeployVerification -NotePropertyValue 'PASS'
+    $snapshot | Add-Member -Force -NotePropertyName verifiedDeploymentId -NotePropertyValue $DeploymentId
+    $snapshot | Add-Member -Force -NotePropertyName verifiedAt -NotePropertyValue (Get-Date).ToString('o')
+    [System.IO.File]::WriteAllText($manifestPath, ($snapshot | ConvertTo-Json -Depth 10) + [Environment]::NewLine, $utf8NoBom)
 }
 
 function New-RcRollbackSnapshot {
@@ -919,6 +1016,9 @@ function New-RcRollbackSnapshot {
         createdAt = (Get-Date).ToString('o')
         runtimeRoot = $Root
         deploymentId = $deploymentId
+        postDeployVerification = 'PENDING'
+        verifiedDeploymentId = ''
+        verifiedAt = ''
         managedFiles = @($copied)
         shortcutFiles = @($shortcutCopies)
         protectedState = @($protectedState)
@@ -1014,6 +1114,8 @@ if ($branchRef.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingRc
 # touch a channel that already contains the exact promoted source snapshot.
 if ($branchRef.ExitCode -eq 0 -and (Test-RcDeployment -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot -Verification $verification)) {
     $currentRcManifest = Read-JsonFile -Path (Join-Path $rcRoot 'deployment-manifest.json') -Label 'Release Candidate deployment manifest'
+    $verifiedSnapshotPath = Complete-RcRollbackSnapshotPostDeployVerification -Root $rcRoot -DeploymentManifest $currentRcManifest
+    if (-not [string]::IsNullOrWhiteSpace($verifiedSnapshotPath)) { Write-Output "RC_PROTECTED_STATE_VERIFIED=$rcRoot snapshot=$verifiedSnapshotPath" }
     $currentRcIcon = Get-ManifestRuntimePath -Manifest $currentRcManifest -Root $rcRoot -PropertyName 'iconFile' -Label 'Release Candidate icon'
     $duplicateBackup = Move-RcDuplicateTaskbarPinsToBackup -Root $rcRoot -ShortcutName 'Hearthstone Script Release Candidate.lnk' -Label 'Release Candidate' -IconPath $currentRcIcon -ShortcutBase $ShortcutRoot
     if (-not [string]::IsNullOrWhiteSpace($duplicateBackup)) { Write-Output "RC_TASKBAR_DUPLICATE_PINS_BACKED_UP=$duplicateBackup" }
@@ -1080,7 +1182,8 @@ if (-not (Test-RcDeployment -Root $rcRoot -SourceBranch $betaBranch -SourceCommi
     throw "Release Candidate deployment manifest did not validate against the promoted Beta source: $rcRoot"
 }
 if ($null -ne $legacySnapshot) {
-    Assert-RcProtectedState -Root $rcRoot -State @($legacySnapshot.ProtectedState)
+    Assert-RcProtectedState -Root $rcRoot -State @($legacySnapshot.ProtectedState) -Manifest $deployedRcManifest
+    Set-RcRollbackSnapshotPostDeployVerification -SnapshotPath $legacySnapshot.Root -DeploymentId (Get-PropertyText $deployedRcManifest 'deploymentId')
     Write-Output "RC_PROTECTED_STATE_VERIFIED=$rcRoot"
 }
 Write-Output "PROMOTION_COMPLETE branch=$ReleaseCandidateBranch sourceCommit=$betaHead onlineE2e=$($verification.Status) stableReady=False runtime=$rcRoot"

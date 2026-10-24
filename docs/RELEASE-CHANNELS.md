@@ -217,7 +217,13 @@ is still a hard refusal unless `-AllowLegacyRcUpgrade` is explicit. With that
 switch, the script captures an identifiable rollback snapshot of RC-managed
 artifacts, launcher files, and shortcuts, leaves `config`, `data`, `log`,
 custom plugin files, and backups in place, and verifies those protected files
-after the build. Unknown or malformed RC state still fails closed. The
+after the build. Only the exact build-managed Base Card/Strategy plugin JARs
+listed by the current release contract are excluded from custom-plugin hash
+preservation; custom files in `plugin/` remain hash-checked. Rollback snapshots
+record post-deploy verification state. If deployment succeeded but the process
+was interrupted before that state was marked complete, a rerun validates the
+new manifest and rechecks the latest matching snapshot before reporting
+`PROMOTION_ALREADY_COMPLETE`. Unknown or malformed RC state still fails closed. The
 secretary owns the actual build/deploy invocation and live restart.
 
 Preflight is read-only and reports the number of exact duplicate RC Taskbar
