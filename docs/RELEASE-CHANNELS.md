@@ -64,51 +64,74 @@ stable launcher.
 
 ## Beta to Release Candidate promotion
 
-Use the checked-in promotion command from a named Beta checkout to create an
-isolated Release Candidate. Online E2E evidence is optional for creating an RC
-candidate; this does not relax the online gate for Stable or authorize merging
-an unverified candidate to `main`. First run the read-only preflight. If E2E has
-passed, supply its JSON evidence file so it can be validated and bound to the
-exact deployed Beta commit and JAR:
+Use the checked-out operations/main copy of the promotion helper, but pass
+`-ProjectRoot` for a clean Beta checkout at the exact source commit recorded in
+the Beta manifest. The helper itself must not be run with its default project
+root: that would inspect the operations checkout instead of the Beta source.
+The current deployed Beta identity is branch
+`beta/current-rank-candidate-v4.16-integration`, commit
+`4bc5beba9ac65ad3c3b7f35777ae2f8e110fe9eb`, artifact
+`hs-script_v4.16.679-local-20261023-223850PDT.jar`. These PowerShell variables
+use the current canonical channel roots and the pushed operations checkout:
 
 ```powershell
-pwsh -File .\promote-beta-to-release-candidate.ps1 `
-  -VerificationEvidencePath .\evidence\beta-online-e2e.json `
-  -PreflightOnly
+$scriptRoot = 'C:\Users\yzjsh\.codex\worktrees\rc-promotion-ops-main-20261023'
+$betaProjectRoot = 'C:\Users\yzjsh\.codex\worktrees\beta-source-v4.16.679-4bc5beba'
+$betaRuntimeRoot = 'C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script Beta'
+$rcRuntimeRoot = 'C:\Users\yzjsh\Documents\Codex\2026-08-15\for-all-these-delay-short-are-2\outputs\Hearthstone Script Release Candidate'
+$betaBranch = 'beta/current-rank-candidate-v4.16-integration'
+$betaCommit = '4bc5beba9ac65ad3c3b7f35777ae2f8e110fe9eb'
 ```
 
-To prepare a candidate while E2E is still pending, omit
-`-VerificationEvidencePath` from both preflight and promotion:
+Create the clean, exact-source checkout once. This clone gives the old
+deployed commit its manifest-declared branch name without disturbing the
+existing, newer Beta worktree:
 
 ```powershell
-pwsh -File .\promote-beta-to-release-candidate.ps1 `
-  -PreflightOnly
+git clone --no-checkout https://github.com/HaozhanSun/Hearthstone-Script.git $betaProjectRoot
+if ($LASTEXITCODE -ne 0) { throw 'Could not clone the Beta source checkout' }
+git -C $betaProjectRoot fetch origin $betaBranch
+if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the Beta source branch' }
+git -C $betaProjectRoot switch --create $betaBranch $betaCommit
+if ($LASTEXITCODE -ne 0) { throw 'Could not check out the exact deployed Beta source commit' }
+if ((git -C $betaProjectRoot rev-parse HEAD).Trim() -ne $betaCommit) { throw 'Beta source checkout is not at the manifest commit' }
+if ((git -C $betaProjectRoot branch --show-current).Trim() -ne $betaBranch) { throw 'Beta source checkout branch does not match the manifest' }
 ```
 
-For the currently installed legacy RC (a valid older RC manifest without
-promotion-source fields), add the explicit reviewed upgrade switch to both
-commands. It is orthogonal to whether E2E evidence is provided. For example,
-to preflight a pending candidate against that legacy RC:
+Online E2E evidence is optional for creating an RC candidate; this does not
+relax the online gate for Stable or authorize merging an unverified candidate
+to `main`. For the current legacy RC, first run the read-only pending-E2E
+preflight below. It omits `-VerificationEvidencePath` and includes the explicit
+`-AllowLegacyRcUpgrade` opt-in:
 
 ```powershell
-pwsh -File .\promote-beta-to-release-candidate.ps1 `
+pwsh -NoProfile -File (Join-Path $scriptRoot 'promote-beta-to-release-candidate.ps1') `
+  -ProjectRoot $betaProjectRoot `
+  -BetaRuntimeRoot $betaRuntimeRoot `
+  -ReleaseCandidateRuntimeRoot $rcRuntimeRoot `
   -AllowLegacyRcUpgrade `
   -PreflightOnly
+if ($LASTEXITCODE -ne 0) { throw 'RC preflight failed; do not promote' }
 ```
 
-Preflight validates the deployed Beta manifest, artifact hashes and embedded
-build metadata, source commit/branch, any supplied evidence binding, channel
-isolation, and the existing RC runtime without creating a branch, worktree,
-commit, build, manifest, or shortcut. It must print `PREFLIGHT_OK` before the
-real command is allowed. For an E2E-pending candidate, the final command omits
-`-VerificationEvidencePath`; when evidence is available, include the same path
-used during preflight:
+Proceed only if preflight prints `PREFLIGHT_OK`. This is the exact pending-E2E
+promotion command for the current Beta/legacy-RC pair; it deliberately has no
+`-VerificationEvidencePath`:
 
 ```powershell
-pwsh -File .\promote-beta-to-release-candidate.ps1 `
-  -VerificationEvidencePath .\evidence\beta-online-e2e.json `
+pwsh -NoProfile -File (Join-Path $scriptRoot 'promote-beta-to-release-candidate.ps1') `
+  -ProjectRoot $betaProjectRoot `
+  -BetaRuntimeRoot $betaRuntimeRoot `
+  -ReleaseCandidateRuntimeRoot $rcRuntimeRoot `
   -AllowLegacyRcUpgrade
+if ($LASTEXITCODE -ne 0) { throw 'RC promotion failed' }
 ```
+
+For another Beta source snapshot or after this legacy RC upgrade, update the
+branch, full commit, artifact identity, and exact-source clone path from the
+Beta deployment manifest. If verified E2E evidence is available instead, pass
+the same `-VerificationEvidencePath` JSON to both preflight and promotion; all
+other roots and `-ProjectRoot` remain explicit.
 
 When supplied, the evidence file must contain `status: PASS`,
 `releaseChannel: beta`, the exact `sourceBranch`, `sourceCommit`, `artifactName`,
