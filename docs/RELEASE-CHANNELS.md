@@ -64,9 +64,22 @@ stable launcher.
 
 ## Beta to Release Candidate promotion
 
-Use the checked-in promotion command from a clean, named Beta checkout after
-the Beta artifact has passed the online E2E gate. The gate must be exported as
-a JSON evidence file bound to the exact deployed Beta commit and JAR:
+Use the checked-in promotion command from a named Beta checkout after the Beta
+artifact has passed the online E2E gate. First run the read-only preflight. The
+gate must be exported as a JSON evidence file bound to the exact deployed Beta
+commit and JAR:
+
+```powershell
+pwsh -File .\promote-beta-to-release-candidate.ps1 `
+  -VerificationEvidencePath .\evidence\beta-online-e2e.json `
+  -PreflightOnly
+```
+
+Preflight validates the deployed Beta manifest, artifact hashes and embedded
+build metadata, source commit/branch, evidence binding, channel isolation, and
+the existing RC runtime without creating a branch, worktree, commit, build,
+manifest, or shortcut. It must print `PREFLIGHT_OK` before the real command is
+allowed:
 
 ```powershell
 pwsh -File .\promote-beta-to-release-candidate.ps1 `
@@ -83,10 +96,11 @@ Menu, and Taskbar locations.
 
 The command reads the current Beta deployment manifest and requires its
 `sourceBranch` and `sourceCommit` to match the checkout exactly. A post-deploy
-Beta checkout may contain only the root `pom.xml` one-line
-`local-build-timestamp-pacific` update, and only when it exactly matches the
-deployed manifest timestamp; all other staged, unstaged, or untracked changes
-are rejected. It then
+Beta checkout may contain only generated POM version updates to the manifest's
+exact artifact version and the root `pom.xml`
+`local-build-timestamp-pacific` update to the manifest's exact timestamp. This
+handles the checked-in build path's version propagation across module POMs;
+all other staged, unstaged, or untracked changes are rejected. It then
 creates or reuses a `beta/release-candidate-*` branch in a separate worktree,
 commits only Release Candidate channel metadata, and invokes that worktree's
 checked-in `build-and-deploy.ps1 -Channel release-candidate`. The build path
@@ -102,8 +116,20 @@ existing worktree at an unexpected path, a missing Beta manifest, a missing or
 stale E2E evidence file, an embedded JAR version/channel/timestamp mismatch, an
 invalid manifest hash, a missing launcher/shortcut, duplicate or stale RC
 shortcuts, a non-numeric Beta artifact version, or a non-empty RC runtime with
-no validated matching manifest is a hard refusal. The secretary owns the
-actual build/deploy invocation and live restart.
+no validated matching manifest is a hard refusal. An older RC installation is
+therefore not silently overwritten: archive or otherwise reconcile it through
+the channel owner's approved procedure, then rerun preflight. The secretary
+owns the actual build/deploy invocation and live restart.
+
+For repeat use, rerun the same command with the same evidence only after the
+Beta manifest still names the same source commit and artifact. A matching RC
+manifest returns `PROMOTION_ALREADY_COMPLETE` without rebuilding or changing
+shortcuts. For rollback, do not copy a JAR by hand: select the previously
+verified Beta source snapshot, rerun preflight, and use the same promotion
+script so the RC manifest, artifact hashes, launcher, and three shortcuts are
+validated together. Verify the resulting RC manifest and launcher before any
+live restart. This runbook change is prepared in the worker branch; publishing
+it to GitHub `main` remains a secretary-owned action.
 
 ## PaddleX runtime parity
 

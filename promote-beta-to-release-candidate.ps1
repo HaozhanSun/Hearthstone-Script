@@ -7,7 +7,9 @@ param(
     [string]$PromotionWorktree = '',
     [string]$BuildScript = '',
     [string]$VerificationEvidencePath = '',
-    [string]$ShortcutRoot = ''
+    [string]$ShortcutRoot = '',
+    [switch]$PreflightOnly,
+    [switch]$AllowLegacyRcUpgrade
 )
 
 $ErrorActionPreference = 'Stop'
@@ -68,28 +70,67 @@ function Assert-BetaSourceCheckout {
 
     $unsupported = [System.Collections.Generic.List[string]]::new()
     foreach ($line in $statusLines) {
-        if ($line.Length -lt 3 -or $line.Substring(0, 2) -ne ' M' -or $line.Substring(3) -ne 'pom.xml') {
+        if ($line.Length -lt 3 -or $line.Substring(0, 2) -ne ' M' -or
+            [System.IO.Path]::GetFileName($line.Substring(3)) -cne 'pom.xml') {
             [void]$unsupported.Add($line)
         }
     }
     $cached = Invoke-GitText -Root $Root -Arguments @('diff', '--cached', '--name-only')
     if (-not [string]::IsNullOrWhiteSpace($cached.Text)) { [void]$unsupported.Add("staged: $($cached.Text -replace "`r?`n", '; ')") }
-    if ($unsupported.Count -gt 0) {
-        throw "Beta source checkout has unsupported changes; only the root pom.xml build timestamp delta is allowed: $($unsupported -join '; ')"
-    }
 
-    $pomPath = Join-Path $Root 'pom.xml'
-    $headPom = Invoke-GitText -Root $Root -Arguments @('show', 'HEAD:pom.xml')
     $manifestTimestamp = Get-PropertyText $BetaDeployment.Manifest 'buildTimestampPacific'
-    if ([string]::IsNullOrWhiteSpace($manifestTimestamp)) { throw 'Beta deployment manifest lacks buildTimestampPacific for timestamp-only checkout validation' }
-    $timestampPattern = '(?m)^([ \t]*<local-build-timestamp-pacific>)[^<]+(</local-build-timestamp-pacific>[ \t]*)(\r?)$'
-    $expectedPom = [regex]::Replace($headPom.Text, $timestampPattern, { param($match) $match.Groups[1].Value + $manifestTimestamp + $match.Groups[2].Value + $match.Groups[3].Value }, 1)
-    if ($expectedPom -eq $headPom.Text) { throw 'Beta source pom.xml lacks local-build-timestamp-pacific; refusing timestamp-only exception' }
-    $currentPom = [System.IO.File]::ReadAllText($pomPath)
-    $normalize = { param([string]$Text) $Text -replace "`r`n?", "`n" }
-    if ((& $normalize $currentPom) -cne (& $normalize $expectedPom)) {
-        throw "Beta source checkout timestamp-only delta does not equal deployed buildTimestampPacific '$manifestTimestamp'"
+    if ([string]::IsNullOrWhiteSpace($manifestTimestamp)) { throw 'Beta deployment manifest lacks buildTimestampPacific for generated POM validation' }
+    $expectedVersion = $BetaDeployment.Version
+    foreach ($line in @($statusLines | Where-Object {
+        $_.Length -ge 3 -and $_.Substring(0, 2) -eq ' M' -and
+        [System.IO.Path]::GetFileName($_.Substring(3)) -ceq 'pom.xml'
+    })) {
+        $relativePath = $line.Substring(3)
+        try {
+            $headPom = Invoke-GitText -Root $Root -Arguments @('show', "HEAD:$relativePath")
+            $expectedPom = Get-ExpectedBetaPomText -RelativePath $relativePath -HeadText $headPom.Text -Version $expectedVersion -Timestamp $manifestTimestamp
+            $currentPom = [System.IO.File]::ReadAllText((Join-Path $Root $relativePath))
+            $normalize = { param([string]$Text) ($Text -replace "`r`n?", "`n").TrimEnd() }
+            if ((& $normalize $currentPom) -cne (& $normalize $expectedPom)) {
+                [void]$unsupported.Add("$relativePath (does not match deployed version '$expectedVersion' and timestamp '$manifestTimestamp')")
+            }
+        } catch {
+            [void]$unsupported.Add("$relativePath ($($_.Exception.Message))")
+        }
     }
+    if ($unsupported.Count -gt 0) {
+        throw "Beta source checkout has unsupported changes; only generated POM version/timestamp deltas matching the deployed Beta manifest are allowed: $($unsupported -join '; ')"
+    }
+}
+
+function Get-ExpectedBetaPomText {
+    param(
+        [Parameter(Mandatory = $true)][string]$RelativePath,
+        [Parameter(Mandatory = $true)][string]$HeadText,
+        [Parameter(Mandatory = $true)][string]$Version,
+        [Parameter(Mandatory = $true)][string]$Timestamp
+    )
+
+    $expected = $HeadText
+    if ($RelativePath -ieq 'pom.xml') {
+        $versionPattern = '<version>[^<]+</version>'
+        $versionMatch = [regex]::Match($expected, $versionPattern)
+        if (-not $versionMatch.Success) { throw 'root pom.xml lacks its project version' }
+        $expected = ([regex]::new($versionPattern)).Replace($expected, "<version>$Version</version>", 1)
+
+        $timestampPattern = '(?m)^([ \t]*<local-build-timestamp-pacific>)[^<]+(</local-build-timestamp-pacific>[ \t]*)(\r?)$'
+        $timestampMatch = [regex]::Match($expected, $timestampPattern)
+        if (-not $timestampMatch.Success) { throw 'root pom.xml lacks local-build-timestamp-pacific' }
+        $timestampReplacement = $timestampMatch.Groups[1].Value + $Timestamp + $timestampMatch.Groups[2].Value + $timestampMatch.Groups[3].Value
+        $expected = ([regex]::new($timestampPattern)).Replace($expected, $timestampReplacement, 1)
+    } else {
+        $parentPattern = '(?s)(<parent\b[^>]*>.*?<version>)[^<]+(</version>)'
+        $parentMatch = [regex]::Match($expected, $parentPattern)
+        if (-not $parentMatch.Success) { throw 'module pom.xml lacks a parent version' }
+        $parentReplacement = $parentMatch.Groups[1].Value + $Version + $parentMatch.Groups[2].Value
+        $expected = ([regex]::new($parentPattern)).Replace($expected, $parentReplacement, 1)
+    }
+    return $expected
 }
 
 function Read-JsonFile {
@@ -444,17 +485,20 @@ function Assert-RcMetadata {
 function Assert-RcDeployment {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)][string]$SourceBranch,
-        [Parameter(Mandatory = $true)][string]$SourceCommit,
-        [string]$ShortcutBase = ''
+        [string]$SourceBranch = '',
+        [string]$SourceCommit = '',
+        [string]$ShortcutBase = '',
+        [switch]$RequirePromotionSource
     )
     $manifestPath = Join-Path $Root 'deployment-manifest.json'
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "Release Candidate deployment manifest is missing: $manifestPath" }
     $manifest = Read-JsonFile -Path $manifestPath -Label 'Release Candidate deployment manifest'
     Assert-Equals -Expected 'release-candidate' -Actual (Get-PropertyText $manifest 'releaseChannel') -Label 'Release Candidate deployment channel'
     Assert-Equals -Expected 'Hearthstone Script Release Candidate' -Actual (Get-PropertyText $manifest 'runtimeDirectoryName') -Label 'Release Candidate deployment runtime identity'
-    Assert-Equals -Expected $SourceBranch -Actual (Get-PropertyText $manifest 'promotionSourceBranch') -Label 'Release Candidate deployed source branch'
-    Assert-Equals -Expected $SourceCommit -Actual (Get-PropertyText $manifest 'promotionSourceCommit') -Label 'Release Candidate deployed source commit'
+    if ($RequirePromotionSource) {
+        Assert-Equals -Expected $SourceBranch -Actual (Get-PropertyText $manifest 'promotionSourceBranch') -Label 'Release Candidate deployed source branch'
+        Assert-Equals -Expected $SourceCommit -Actual (Get-PropertyText $manifest 'promotionSourceCommit') -Label 'Release Candidate deployed source commit'
+    }
     $iconPath = Get-ManifestRuntimePath -Manifest $manifest -Root $Root -PropertyName 'iconFile' -Label 'Release Candidate icon'
     if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) { throw "Release Candidate icon is missing: $iconPath" }
     $jarName = Get-PropertyText $manifest 'appJar'
@@ -474,9 +518,120 @@ function Test-RcDeployment {
         [string]$ShortcutBase = ''
     )
     try {
-        Assert-RcDeployment -Root $Root -SourceBranch $SourceBranch -SourceCommit $SourceCommit -ShortcutBase $ShortcutBase
+        Assert-RcDeployment -Root $Root -SourceBranch $SourceBranch -SourceCommit $SourceCommit -ShortcutBase $ShortcutBase -RequirePromotionSource
         return $true
     } catch { Write-Verbose "Release Candidate validation failed: $($_.Exception.Message)"; return $false }
+}
+
+function Assert-RcProtectedDirectories {
+    param([Parameter(Mandatory = $true)][string]$Root)
+    foreach ($name in @('config', 'data', 'log', 'plugin')) {
+        $path = Join-Path $Root $name
+        if (-not (Test-Path -LiteralPath $path -PathType Container)) {
+            throw "Release Candidate protected directory is missing; refusing legacy upgrade: $path"
+        }
+    }
+}
+
+function Get-RcProtectedState {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)]$Manifest
+    )
+    Assert-RcProtectedDirectories -Root $Root
+    $managedPluginPaths = @(
+        (Get-PropertyText $Manifest 'strategyPlugin').Replace('/', '\'),
+        (Get-PropertyText $Manifest 'strategyPluginLib').Replace('/', '\')
+    )
+    $state = [System.Collections.Generic.List[object]]::new()
+    foreach ($directory in @('config', 'data', 'log', 'plugin')) {
+        $directoryRoot = Join-Path $Root $directory
+        foreach ($file in @(Get-ChildItem -LiteralPath $directoryRoot -File -Recurse -ErrorAction Stop)) {
+            $relative = [System.IO.Path]::GetRelativePath($Root, $file.FullName).Replace('/', '\')
+            if ($managedPluginPaths -contains $relative) { continue }
+            $hash = if ($relative -ieq 'config\script.ini') { '' } else { (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+            $state.Add([pscustomobject]@{ path = $relative; sha256 = $hash })
+        }
+    }
+    foreach ($file in @(Get-ChildItem -LiteralPath $Root -File -Filter 'hs_cards.db.backup-*' -ErrorAction SilentlyContinue)) {
+        $state.Add([pscustomobject]@{
+            path = $file.Name
+            sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        })
+    }
+    return @($state)
+}
+
+function Assert-RcProtectedState {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][object[]]$State
+    )
+    foreach ($entry in $State) {
+        $path = Join-Path $Root ([string]$entry.path)
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Release Candidate protected file disappeared during upgrade: $path"
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$entry.sha256)) {
+            Assert-FileHash -Path $path -Expected ([string]$entry.sha256) -Label "Release Candidate protected file $($entry.path)"
+        }
+    }
+}
+
+function New-RcRollbackSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)]$Manifest,
+        [string]$ShortcutBase = ''
+    )
+    Assert-RcProtectedDirectories -Root $Root
+    $deploymentId = Get-PropertyText $Manifest 'deploymentId'
+    if ([string]::IsNullOrWhiteSpace($deploymentId)) { throw 'Legacy Release Candidate manifest lacks deploymentId; refusing upgrade snapshot' }
+    $token = ($deploymentId -replace '[^A-Za-z0-9._-]', '_')
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmssfff'
+    $snapshot = Join-Path (Split-Path -Parent $Root) "Hearthstone Script Release Candidate.rollback-$stamp-$token"
+    if (Test-Path -LiteralPath $snapshot) { throw "Rollback snapshot path already exists; refusing to overwrite it: $snapshot" }
+    New-Item -ItemType Directory -Path $snapshot -Force | Out-Null
+
+    $copied = [System.Collections.Generic.List[string]]::new()
+    foreach ($file in @(Get-ChildItem -LiteralPath $Root -File -ErrorAction Stop | Where-Object { $_.Name -notlike 'hs_cards.db' -and $_.Name -notlike 'hs_cards.db.backup-*' })) {
+        Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $snapshot $file.Name) -Force
+        $copied.Add($file.Name)
+    }
+    foreach ($directory in @('lib', 'plugin', 'resources', 'aot')) {
+        $source = Join-Path $Root $directory
+        if (Test-Path -LiteralPath $source -PathType Container) {
+            Copy-Item -LiteralPath $source -Destination (Join-Path $snapshot $directory) -Recurse -Force
+            $copied.Add("$directory\*")
+        }
+    }
+
+    $shortcutCopies = [System.Collections.Generic.List[string]]::new()
+    $shortcutDirectories = @(Get-ShortcutDirectories -Root $ShortcutBase)
+    $shortcutDirectoryNames = @('Desktop', 'Start Menu', 'Taskbar')
+    for ($index = 0; $index -lt $shortcutDirectories.Count; $index++) {
+        $source = Join-Path $shortcutDirectories[$index] 'Hearthstone Script Release Candidate.lnk'
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Legacy Release Candidate shortcut disappeared before snapshot: $source" }
+        $destinationDirectory = Join-Path (Join-Path $snapshot 'shortcuts') $shortcutDirectoryNames[$index]
+        New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+        Copy-Item -LiteralPath $source -Destination (Join-Path $destinationDirectory (Split-Path -Leaf $source)) -Force
+        $shortcutCopies.Add((Join-Path 'shortcuts' "$($shortcutDirectoryNames[$index])\Hearthstone Script Release Candidate.lnk"))
+    }
+
+    $protectedState = @(Get-RcProtectedState -Root $Root -Manifest $Manifest)
+    $metadata = [ordered]@{
+        schema = 1
+        kind = 'release-candidate-rollback-snapshot'
+        createdAt = (Get-Date).ToString('o')
+        runtimeRoot = $Root
+        deploymentId = $deploymentId
+        managedFiles = @($copied)
+        shortcutFiles = @($shortcutCopies)
+        protectedState = @($protectedState)
+        note = 'config, data, log, custom plugin files, and backup files remain in the live runtime and are verified after upgrade'
+    }
+    $metadata | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $snapshot 'rollback-manifest.json') -Encoding UTF8
+    return [pscustomobject]@{ Root = $snapshot; ProtectedState = $protectedState }
 }
 
 function Assert-RcRuntimeIsSafe {
@@ -484,15 +639,25 @@ function Assert-RcRuntimeIsSafe {
         [Parameter(Mandatory = $true)][string]$Root,
         [Parameter(Mandatory = $true)][string]$SourceBranch,
         [Parameter(Mandatory = $true)][string]$SourceCommit,
-        [string]$ShortcutBase = ''
+        [string]$ShortcutBase = '',
+        [switch]$AllowLegacyUpgrade
     )
-    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return }
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return $false }
     $entries = @(Get-ChildItem -LiteralPath $Root -Force -ErrorAction SilentlyContinue)
-    if ($entries.Count -eq 0) { return }
+    if ($entries.Count -eq 0) { return $false }
     if (-not (Test-Path -LiteralPath (Join-Path $Root 'deployment-manifest.json') -PathType Leaf)) {
         throw "Existing Release Candidate runtime has no manifest; refusing to overwrite stale files: $Root"
     }
-    Assert-RcDeployment -Root $Root -SourceBranch $SourceBranch -SourceCommit $SourceCommit -ShortcutBase $ShortcutBase
+    try {
+        Assert-RcDeployment -Root $Root -SourceBranch $SourceBranch -SourceCommit $SourceCommit -ShortcutBase $ShortcutBase -RequirePromotionSource
+        return $false
+    } catch {
+        if (-not $AllowLegacyUpgrade) { throw }
+        Assert-RcDeployment -Root $Root -SourceBranch '' -SourceCommit '' -ShortcutBase $ShortcutBase
+        Assert-RcProtectedDirectories -Root $Root
+        Write-Verbose "LEGACY_RC_VALIDATED_FOR_UPGRADE runtime=$Root"
+        return $true
+    }
 }
 
 function Invoke-BuildAndDeploy {
@@ -527,7 +692,11 @@ if ([System.IO.Path]::GetFullPath($rcRoot).TrimEnd('\') -eq [System.IO.Path]::Ge
     [System.IO.Path]::GetFileName($rcRoot) -eq 'Hearthstone Script') {
     throw "Release Candidate runtime must be isolated from Beta and Stable: $rcRoot"
 }
-Assert-RcRuntimeIsSafe -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot
+ $legacyRcUpgrade = Assert-RcRuntimeIsSafe -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot -AllowLegacyUpgrade:$AllowLegacyRcUpgrade
+if ($PreflightOnly) {
+    Write-Output "PREFLIGHT_OK betaVersion=$($betaDeployment.Version) sourceCommit=$betaHead rcRuntime=$rcRoot legacyRcUpgrade=$legacyRcUpgrade"
+    exit 0
+}
 if ([string]::IsNullOrWhiteSpace($PromotionWorktree)) {
     $worktreeLeaf = 'Hearthstone Copilot-' + ($ReleaseCandidateBranch -replace '[^A-Za-z0-9._-]', '-')
     $PromotionWorktree = Join-Path (Split-Path -Parent $projectRoot) $worktreeLeaf
@@ -582,9 +751,19 @@ Assert-RcMetadata -Root $PromotionWorktree -Branch $ReleaseCandidateBranch -Sour
 Write-Output "RC_METADATA_COMMITTED branch=$ReleaseCandidateBranch sourceCommit=$betaHead"
 
 if (-not (Test-Path -LiteralPath $BuildScript -PathType Leaf)) { throw "Checked-in build-and-deploy.ps1 is missing: $BuildScript" }
+$legacySnapshot = $null
+if ($legacyRcUpgrade) {
+    $legacyManifest = Read-JsonFile -Path (Join-Path $rcRoot 'deployment-manifest.json') -Label 'Legacy Release Candidate deployment manifest'
+    $legacySnapshot = New-RcRollbackSnapshot -Root $rcRoot -Manifest $legacyManifest -ShortcutBase $ShortcutRoot
+    Write-Output "RC_ROLLBACK_SNAPSHOT=$($legacySnapshot.Root)"
+}
 Write-Output "BUILD_AND_DEPLOY_INVOCATION=release-candidate worktree=$PromotionWorktree"
 Invoke-BuildAndDeploy -Root $PromotionWorktree -Script $BuildScript
 if (-not (Test-RcDeployment -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot)) {
     throw "Release Candidate deployment manifest did not validate against the promoted Beta source: $rcRoot"
+}
+if ($null -ne $legacySnapshot) {
+    Assert-RcProtectedState -Root $rcRoot -State @($legacySnapshot.ProtectedState)
+    Write-Output "RC_PROTECTED_STATE_VERIFIED=$rcRoot"
 }
 Write-Output "PROMOTION_COMPLETE branch=$ReleaseCandidateBranch sourceCommit=$betaHead runtime=$rcRoot"

@@ -59,6 +59,7 @@ function New-TestRuntimeManifest {
         schema = 1
         releaseChannel = $Channel
         runtimeDirectoryName = $RuntimeName
+        deploymentId = "fixture-$JarName"
         iconFile = 'hs-script-release-candidate.ico'
         sourceBranch = $SourceBranch
         sourceCommit = $SourceCommit
@@ -91,6 +92,7 @@ function New-TestRcLaunchersAndShortcuts {
             $shortcut.TargetPath = Join-Path $env:SystemRoot 'System32\wscript.exe'
             $shortcut.Arguments = '"' + (Join-Path $Root 'launch-as-admin.vbs') + '"'
             $shortcut.WorkingDirectory = $Root
+            $shortcut.IconLocation = (Join-Path $Root 'hs-script-release-candidate.ico') + ',0'
             $shortcut.Save()
         }
     } finally { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell) }
@@ -101,6 +103,9 @@ $project = Join-Path $tempRoot 'beta-source'
 $betaRuntime = Join-Path $tempRoot 'Hearthstone Script Beta'
 $rcRuntime = Join-Path $tempRoot 'Hearthstone Script Release Candidate'
 $rcWorktree = Join-Path $tempRoot 'rc-worktree'
+$legacyRcRuntime = Join-Path $tempRoot 'legacy\Hearthstone Script Release Candidate'
+$legacyRcWorktree = Join-Path $tempRoot 'legacy-rc-worktree'
+$legacyShortcutBase = Join-Path $tempRoot 'legacy-shortcuts'
 $stableRuntime = Join-Path $tempRoot 'Hearthstone Script'
 $shortcutBase = Join-Path $tempRoot 'shortcuts'
 $fakeBuild = Join-Path $tempRoot 'fake-build.ps1'
@@ -131,9 +136,20 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $project 'build-and-deploy.ps1'), "param([string]`$Channel)`n")
     [System.IO.File]::WriteAllText((Join-Path $project 'pom.xml'), @'
 <project>
+  <version>v4.16.669</version>
   <properties>
     <local-build-timestamp-pacific>2026-10-23 15:00:00 PDT</local-build-timestamp-pacific>
   </properties>
+</project>
+'@)
+    New-Item -ItemType Directory -Path (Join-Path $project 'hs-script-app') -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $project 'hs-script-app\pom.xml'), @'
+<project>
+  <parent>
+    <groupId>fixture</groupId>
+    <artifactId>hs-script</artifactId>
+    <version>v4.16.669</version>
+  </parent>
 </project>
 '@)
     Invoke-TestGit -Root $project -Arguments @('add', '--all') | Out-Null
@@ -235,24 +251,38 @@ $env:PROMOTION_TEST_SHORTCUT_ROOT = $shortcutBase
     if ((Get-Content -LiteralPath (Join-Path $stableRuntime 'stable-marker.txt') -Raw) -cne $stableMarkerBefore) { throw 'Promotion modified the Stable runtime' }
     if ((Get-Content -LiteralPath $invocationLog).Count -ne 1) { throw 'Initial promotion did not invoke the build path exactly once' }
 
+    $preflightOutput = & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase -PreflightOnly
+    if (($preflightOutput -join "`n") -notmatch 'PREFLIGHT_OK') { throw 'Preflight did not report success' }
+    if ((Get-Content -LiteralPath $invocationLog).Count -ne 1) { throw 'Preflight invoked the build path' }
+
     $sourcePomPath = Join-Path $project 'pom.xml'
     $sourcePom = [System.IO.File]::ReadAllText($sourcePomPath)
-    $timestampOnlyPom = $sourcePom.Replace('2026-10-23 15:00:00 PDT', '2026-10-23 16:00:00 PDT')
-    [System.IO.File]::WriteAllText($sourcePomPath, $timestampOnlyPom)
+    $generatedRootPom = $sourcePom.Replace('<version>v4.16.669</version>', '<version>v4.16.670-local-20261022-225531PDT</version>').Replace('2026-10-23 15:00:00 PDT', '2026-10-23 16:00:00 PDT')
+    [System.IO.File]::WriteAllText($sourcePomPath, $generatedRootPom)
+    $modulePomPath = Join-Path $project 'hs-script-app\pom.xml'
+    $modulePom = [System.IO.File]::ReadAllText($modulePomPath)
+    $moduleGeneratedPom = $modulePom.Replace('v4.16.669', 'v4.16.670-local-20261022-225531PDT')
+    [System.IO.File]::WriteAllText($modulePomPath, $moduleGeneratedPom)
     $repeatOutput = & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase
     if (($repeatOutput -join "`n") -notmatch 'PROMOTION_ALREADY_COMPLETE') { throw 'Repeat promotion was not idempotent' }
     if ((Get-Content -LiteralPath $invocationLog).Count -ne 1) { throw 'Repeat promotion rebuilt an already-complete RC' }
 
-    [System.IO.File]::WriteAllText($sourcePomPath, $timestampOnlyPom.Replace('2026-10-23 16:00:00 PDT', '2026-10-23 16:01:00 PDT'))
+    [System.IO.File]::WriteAllText($modulePomPath, $moduleGeneratedPom.Replace('v4.16.670-local-20261022-225531PDT', 'v4.16.999-local-20261022-225531PDT'))
     Assert-Throws -Action {
         & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null
-    } -MessageFragment 'timestamp-only delta does not equal deployed buildTimestampPacific'
-    [System.IO.File]::WriteAllText($sourcePomPath, $timestampOnlyPom)
+    } -MessageFragment 'does not match deployed version'
+    [System.IO.File]::WriteAllText($modulePomPath, $moduleGeneratedPom)
+
+    [System.IO.File]::WriteAllText($sourcePomPath, $generatedRootPom.Replace('2026-10-23 16:00:00 PDT', '2026-10-23 16:01:00 PDT'))
+    Assert-Throws -Action {
+        & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null
+    } -MessageFragment 'does not match deployed version'
+    [System.IO.File]::WriteAllText($sourcePomPath, $generatedRootPom)
 
     Set-Content -LiteralPath (Join-Path $project 'unexpected.txt') -Value 'reject this change'
     Assert-Throws -Action {
         & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null
-    } -MessageFragment 'unsupported changes; only the root pom.xml build timestamp delta is allowed'
+    } -MessageFragment 'unsupported changes; only generated POM version/timestamp deltas matching the deployed Beta manifest are allowed'
     Remove-Item -LiteralPath (Join-Path $project 'unexpected.txt') -Force
 
     $extraShortcut = Join-Path (Join-Path $shortcutBase 'Desktop') 'RC-stale-copy.lnk'
@@ -298,8 +328,46 @@ $env:PROMOTION_TEST_SHORTCUT_ROOT = $shortcutBase
     Assert-Throws -Action { & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $missingRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree (Join-Path $tempRoot 'unused-worktree') -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null } -MessageFragment 'Beta deployment manifest is missing'
 
     Set-Content -LiteralPath (Join-Path $project 'dirty.txt') -Value 'dirty'
-    Assert-Throws -Action { & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null } -MessageFragment 'unsupported changes; only the root pom.xml build timestamp delta is allowed'
+    Assert-Throws -Action { & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null } -MessageFragment 'unsupported changes; only generated POM version/timestamp deltas matching the deployed Beta manifest are allowed'
     Remove-Item -LiteralPath (Join-Path $project 'dirty.txt') -Force
+
+    New-Item -ItemType Directory -Path (Join-Path $legacyRcRuntime 'config'), (Join-Path $legacyRcRuntime 'data'), (Join-Path $legacyRcRuntime 'log'), (Join-Path $legacyRcRuntime 'plugin'), (Join-Path $legacyRcRuntime 'rollback-backups') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $legacyRcRuntime 'config\user.ini') -Value 'keep-config' -NoNewline
+    Set-Content -LiteralPath (Join-Path $legacyRcRuntime 'config\script.ini') -Value 'keep-script-config' -NoNewline
+    Set-Content -LiteralPath (Join-Path $legacyRcRuntime 'data\user.db') -Value 'keep-data' -NoNewline
+    Set-Content -LiteralPath (Join-Path $legacyRcRuntime 'log\user.log') -Value 'keep-log' -NoNewline
+    Set-Content -LiteralPath (Join-Path $legacyRcRuntime 'plugin\custom-plugin.jar') -Value 'keep-plugin' -NoNewline
+    Set-Content -LiteralPath (Join-Path $legacyRcRuntime 'rollback-backups\old.bak') -Value 'keep-backup' -NoNewline
+    Set-Content -LiteralPath (Join-Path $legacyRcRuntime 'hs_cards.db.backup-legacy.bak') -Value 'keep-card-backup' -NoNewline
+    $legacyJarName = 'hs-script_v4.16.669-local-20261022-181002PDT.jar'
+    $legacyManifest = New-TestRuntimeManifest -Root $legacyRcRuntime -JarName $legacyJarName -Channel 'release-candidate' -RuntimeName 'Hearthstone Script Release Candidate' -SourceBranch 'beta/test-promotion' -SourceCommit $betaHead -Timestamp '2026-10-22 18:10:02 PDT'
+    New-TestRcLaunchersAndShortcuts -Root $legacyRcRuntime -ShortcutBase $legacyShortcutBase
+    $legacySentinels = @(
+        (Join-Path $legacyRcRuntime 'config\user.ini'),
+        (Join-Path $legacyRcRuntime 'config\script.ini'),
+        (Join-Path $legacyRcRuntime 'data\user.db'),
+        (Join-Path $legacyRcRuntime 'log\user.log'),
+        (Join-Path $legacyRcRuntime 'plugin\custom-plugin.jar'),
+        (Join-Path $legacyRcRuntime 'rollback-backups\old.bak'),
+        (Join-Path $legacyRcRuntime 'hs_cards.db.backup-legacy.bak')
+    )
+    $legacySentinelHashes = @{}
+    foreach ($sentinel in $legacySentinels) { $legacySentinelHashes[$sentinel] = (Get-FileHash -LiteralPath $sentinel -Algorithm SHA256).Hash }
+    $env:PROMOTION_TEST_RC_ROOT = $legacyRcRuntime
+    $legacyPreflight = & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $legacyRcRuntime -PromotionWorktree $legacyRcWorktree -ReleaseCandidateBranch 'beta/release-candidate-legacy-upgrade-test' -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $legacyShortcutBase -AllowLegacyRcUpgrade -PreflightOnly
+    if (($legacyPreflight -join "`n") -notmatch 'PREFLIGHT_OK.*legacyRcUpgrade=True') { throw 'Legacy RC preflight did not report the reviewed upgrade path' }
+    if ((Get-ChildItem -LiteralPath (Split-Path -Parent $legacyRcRuntime) -Directory -Filter 'Hearthstone Script Release Candidate.rollback-*' -ErrorAction SilentlyContinue).Count -ne 0) { throw 'Preflight created a rollback snapshot' }
+    $legacyOutput = & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $legacyRcRuntime -PromotionWorktree $legacyRcWorktree -ReleaseCandidateBranch 'beta/release-candidate-legacy-upgrade-test' -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $legacyShortcutBase -AllowLegacyRcUpgrade
+    $legacyOutputText = $legacyOutput -join "`n"
+    if ($legacyOutputText -notmatch 'RC_ROLLBACK_SNAPSHOT=' -or $legacyOutputText -notmatch 'RC_PROTECTED_STATE_VERIFIED=' -or $legacyOutputText -notmatch 'PROMOTION_COMPLETE') { throw 'Legacy RC upgrade did not report snapshot, protected state, and completion' }
+    $legacySnapshotPath = ([regex]::Match($legacyOutputText, 'RC_ROLLBACK_SNAPSHOT=(.+)')).Groups[1].Value.Trim()
+    if (-not (Test-Path -LiteralPath (Join-Path $legacySnapshotPath 'rollback-manifest.json') -PathType Leaf)) { throw 'Legacy RC rollback manifest is missing' }
+    if (-not (Test-Path -LiteralPath (Join-Path $legacySnapshotPath $legacyJarName) -PathType Leaf)) { throw 'Legacy RC old application JAR was not snapshotted' }
+    foreach ($sentinel in $legacySentinels) {
+        if (-not (Test-Path -LiteralPath $sentinel -PathType Leaf)) { throw "Legacy RC sentinel disappeared: $sentinel" }
+        if ((Get-FileHash -LiteralPath $sentinel -Algorithm SHA256).Hash -cne $legacySentinelHashes[$sentinel]) { throw "Legacy RC sentinel changed: $sentinel" }
+    }
+    $env:PROMOTION_TEST_RC_ROOT = $rcRuntime
 
     $wrongBranchConfig = Get-Content -LiteralPath (Join-Path $project 'release-channel.json') -Raw | ConvertFrom-Json
     $wrongBranchConfig.branch = 'beta/not-the-current-branch'
