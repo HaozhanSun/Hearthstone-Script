@@ -28,6 +28,7 @@ import club.xiaojiawei.hsscript.status.RuntimeSelectionState
 import club.xiaojiawei.hsscript.status.RuntimeSelectionUiContract
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.WorkTimeStatus
+import club.xiaojiawei.hsscript.statistics.DailySummaryService
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
 import club.xiaojiawei.hsscript.utils.ConfigUtil.getString
 import club.xiaojiawei.hsscript.utils.ConfigUtil.putString
@@ -156,12 +157,13 @@ class MainController : MainView() {
     }
 
     private fun refreshStatisticsViews() {
+        val daily = DailySummaryService.current()
         val snapshot = MainStatisticsSnapshot.from(
-            totalGameCount = WarEx.effectiveGameCount,
-            playedGameCount = WarEx.playedCount,
-            playedWinCount = WarEx.playedWinCount,
-            hangingTimeMinutes = WarEx.hangingTime,
-            experience = WarEx.hangingEXP,
+            totalGameCount = daily.totalGames,
+            playedGameCount = daily.realGames,
+            playedWinCount = daily.wins,
+            hangingTimeMinutes = daily.playDurationMinutes,
+            experience = daily.experience,
         )
         displayedTotalGameCount.set(snapshot.totalGameCount)
         displayedPlayedGameCount.set(snapshot.playedGameCount)
@@ -531,6 +533,7 @@ class MainController : MainView() {
         WarEx.playedWinCountProperty.addListener(refreshStatistics)
         WarEx.hangingTimeProperty.addListener(refreshStatistics)
         WarEx.hangingEXPProperty.addListener(refreshStatistics)
+        DailySummaryService.addListener { runUI { refreshStatisticsViews() } }
         DeckStrategyManager.deckStrategies.addListener(
             SetChangeListener { _: SetChangeListener.Change<out DeckStrategy?>? ->
                 runUI { reloadRunMode() }

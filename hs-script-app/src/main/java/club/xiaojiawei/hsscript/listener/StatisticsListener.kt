@@ -5,8 +5,12 @@ import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.statistics.Record
 import club.xiaojiawei.hsscript.statistics.RecordDaoEx
 import club.xiaojiawei.hsscript.statistics.SurrenderClassifier
+import club.xiaojiawei.hsscript.statistics.DailyGameSummaryEvent
+import club.xiaojiawei.hsscript.statistics.DailySummaryService
+import club.xiaojiawei.hsscript.statistics.DailySummaryStore
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscriptbase.config.log
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -18,6 +22,19 @@ import java.time.ZoneId
 object StatisticsListener {
 
     val launch: Unit by lazy {
+        DailySummaryService.bootstrap(
+            RecordDaoEx.RECORD_DAO.findAll().mapNotNull { record ->
+                val endTime = record.endTime ?: return@mapNotNull null
+                DailyGameSummaryEvent(
+                    recordId = record.id,
+                    result = record.result == true,
+                    surrendered = record.surrendered,
+                    durationMinutes = durationMinutes(record.startTime, endTime),
+                    experience = record.experience ?: 0,
+                    completedAt = endTime.atZone(DailySummaryStore.PACIFIC_ZONE).toInstant(),
+                )
+            },
+        )
         WarEx.warCountProperty.addListener { _, _, _: Number ->
             WarEx.war.run {
                 val startDateTime = LocalDateTime.ofInstant(Instant.ofEpochMilli(startTime), ZoneId.systemDefault())
@@ -41,7 +58,7 @@ object StatisticsListener {
                             "surrenderReason=${WarEx.surrenderReason ?: "<blank>"} " +
                             "label=${surrendered ?: "UNKNOWN"}"
                 }
-                recordDao.insert(
+                val inserted = recordDao.insert(
                     Record(
                         gameNumber = WarEx.currentCompletedGameNumber,
                         strategyId = deckStrategy.id(),
@@ -57,7 +74,24 @@ object StatisticsListener {
                         endTime = endDateTime,
                     )
                 )
+                DailySummaryService.record(
+                    DailyGameSummaryEvent(
+                        recordId = inserted.id,
+                        result = inserted.result == true,
+                        surrendered = inserted.surrendered,
+                        durationMinutes = durationMinutes(inserted.startTime, inserted.endTime),
+                        experience = inserted.experience ?: 0,
+                        completedAt = if (endTime > 0L) {
+                            Instant.ofEpochMilli(endTime)
+                        } else {
+                            Instant.now()
+                        },
+                    ),
+                )
             }
         }
     }
+
+    private fun durationMinutes(start: LocalDateTime?, end: LocalDateTime?): Int =
+        if (start == null || end == null) 0 else Duration.between(start, end).toMinutes().toInt().coerceAtLeast(0)
 }
