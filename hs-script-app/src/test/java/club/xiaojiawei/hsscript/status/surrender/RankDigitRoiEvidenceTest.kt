@@ -186,6 +186,53 @@ class RankDigitRoiEvidenceTest {
     }
 
     @Test
+    fun `low confidence visual zero reruns expanded ROI and keeps the 0 point 90 bar`() {
+        val source = javaClass.getResourceAsStream(
+            "/offline-ocr/rank-detection/rank10-production-20261023-152019-rank-resolved.png",
+        ).use { stream ->
+            requireNotNull(stream) { "missing exact production rank-ten policy frame" }
+            requireNotNull(ImageIO.read(stream))
+        }
+        val requested = mutableListOf<String?>()
+        configurePaddleX { _, roi ->
+            requested += roi
+            when (roi) {
+                // Matches the live v4.16.677 trace: the tight ROI sees only
+                // the right-hand zero with native confidence 0.6507286.
+                "rank-badge-small" -> OcrRecognition("0", confidence = 0.6507286)
+                // The independent expanded read sees the left glyph as 1.
+                "rank-badge-expanded" -> OcrRecognition("1", confidence = 0.999)
+                else -> error("unexpected OCR ROI=$roi")
+            }
+        }
+
+        SurrenderPolicy.resetForNewGame()
+        val detection = requireNotNull(
+            CurrentRankDetector.detectCapturedImage(
+                screen = source,
+                saveEvidence = false,
+                evidencePhase = "REPLACE_CARD",
+            ),
+        )
+
+        assertEquals(listOf<String?>("rank-badge-small", "rank-badge-expanded"), requested)
+        assertEquals(10, detection.rank)
+        assertEquals(0.999, detection.confidence)
+        assertEquals(2, detection.agreementCount)
+        assertNull(
+            SurrenderPolicy.evaluateMulliganRankEvidence(
+                detection = detection,
+                actualMode = "GAMEPLAY",
+                inWar = true,
+                nowMs = System.currentTimeMillis(),
+                persistentStreakDecision = null,
+            ),
+            "the expanded >= 0.90 corroboration must authorize rank 10",
+        )
+        assertTrue(SurrenderPolicy.currentRankContinueAuthorized())
+    }
+
+    @Test
     fun `visual ten fallback does not turn arbitrary OCR noise into authorization`() {
         assertEquals(
             1,

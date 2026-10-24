@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscript.status.RuntimeFaultBackoff
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.surrender.CurrentGamePowerLogTerminalTracker
 import club.xiaojiawei.hsscript.status.surrender.CurrentGameSurrenderTerminalEvidence
+import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.status.surrender.PowerLogTerminalTailReader
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator
@@ -89,7 +90,31 @@ object PowerLogListener :
             line,
             currentSessionEvidence = !replayingExistingLog || replayingVerifiedCurrentSessionGame,
         )
+        reconcileLateMandatoryRankSurrenderTerminalProof()
         currentGameTerminalEvidencePosition = logFile?.getPosition() ?: currentGameTerminalEvidencePosition
+    }
+
+    /**
+     * GAME_OVER can race the final STATE=COMPLETE tail. Reconcile it at the
+     * point where the verified current-session tracker becomes complete so a
+     * result-page worker does not retain the stale SURRENDER_REQUIRED barrier.
+     */
+    private fun reconcileLateMandatoryRankSurrenderTerminalProof() {
+        if (!MandatoryRankSurrenderGuard.isPending() ||
+            !currentGamePowerLogTerminalTracker.hasCompleteTerminalEvidence()
+        ) return
+        val evidence = currentGamePowerLogTerminalTracker.currentGameSurrenderEvidence(
+            WarEx.war.me.gameId,
+            WarEx.war.rival.gameId,
+        ) ?: return
+        val capability = MandatoryRankSurrenderGuard.reconcileTerminalEvidence(evidence) ?: return
+        ReplaceCardPhaseStrategy.onAuthoritativeTerminalProofAccepted()
+        log.info {
+            "RANK_SURRENDER_TERMINAL_RECONCILED source=late-current-session-tail " +
+                "barrier=cleared terminalUiCleanup=pending " +
+                "gameIdentity=${evidence.gameIdentity} ownPlayState=${evidence.ownPlayState} " +
+                "ownConceded=${evidence.ownConceded} capabilityIssued=true"
+        }
     }
 
     /**
@@ -104,6 +129,7 @@ object PowerLogListener :
     ): PowerLogTerminalTailReader.Result? {
         val boundLog = logFile ?: return null
         if (currentGamePowerLogTerminalTracker.hasCompleteTerminalEvidence()) {
+            reconcileLateMandatoryRankSurrenderTerminalProof()
             return PowerLogTerminalTailReader.Result(PowerLogTerminalTailReader.StopReason.COMPLETE, 0)
         }
         val startPosition = currentGameTerminalEvidencePosition ?: boundLog.getPosition()
@@ -120,6 +146,7 @@ object PowerLogListener :
                             line,
                             currentSessionEvidence = !replayingExistingLog || replayingVerifiedCurrentSessionGame,
                         )
+                        reconcileLateMandatoryRankSurrenderTerminalProof()
                     },
                 )
                 currentGameTerminalEvidencePosition = tail.getPosition()

@@ -194,6 +194,47 @@ class ScreenRecoveryCaptureAuthorityTest {
             "even a positive queue context cannot remove the log gate from ordinary/game-state capture",
         )
 
+        assertTrue(
+            ScreenRecoveryCapturePurposePolicy.allowsPreSessionMatchmaking(
+                purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+                tournamentMode = true,
+                activeGame = false,
+                mulligan = false,
+                terminal = false,
+                recentInputIntent = true,
+            ),
+        )
+        assertFalse(
+            ScreenRecoveryCapturePurposePolicy.allowsPreSessionMatchmaking(
+                purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG,
+                tournamentMode = true,
+                activeGame = false,
+                mulligan = false,
+                terminal = false,
+                recentInputIntent = true,
+            ),
+            "the matchmaking intent is only for normal screen observation, not dialog input",
+        )
+        assertFalse(
+            ScreenRecoveryCapturePurposePolicy.allowsPreSessionMatchmaking(
+                purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+                tournamentMode = true,
+                activeGame = false,
+                mulligan = false,
+                terminal = false,
+                recentInputIntent = false,
+            ),
+        )
+        assertTrue(
+            ScreenRecoveryCaptureAuthority.isAuthorized(
+                evidence(
+                    currentSessionReady = false,
+                    preSessionMatchmakingAuthorized = true,
+                ),
+            ),
+            "a bounded queue-start intent authorizes capture while the new Power.log is empty",
+        )
+
         val occludedModal = evidence(
             currentSessionReady = false,
             purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG,
@@ -287,6 +328,7 @@ class ScreenRecoveryCaptureAuthorityTest {
         imageHeight: Int = client.height,
         purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
         preSessionQueueModalAuthorized: Boolean = false,
+        preSessionMatchmakingAuthorized: Boolean = false,
         currentGameProcessId: Long? = game.processId.toLong(),
         targetWindowVisibleBefore: Boolean = true,
         targetWindowVisibleAfter: Boolean = true,
@@ -304,6 +346,7 @@ class ScreenRecoveryCaptureAuthorityTest {
         visibleOwnersAfter = owners,
         purpose = purpose,
         preSessionQueueModalAuthorized = preSessionQueueModalAuthorized,
+        preSessionMatchmakingAuthorized = preSessionMatchmakingAuthorized,
         currentGameProcessId = currentGameProcessId,
         targetWindowVisibleBefore = targetWindowVisibleBefore,
         targetWindowVisibleAfter = targetWindowVisibleAfter,

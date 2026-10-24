@@ -122,6 +122,20 @@ class MatchmakingSearchRecoveryTest {
     }
 
     @Test
+    fun `queue start establishes bounded pre-session capture authority`() {
+        assertTrue(
+            ScreenRecoveryCapturePurposePolicy.allowsPreSessionMatchmaking(
+                purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+                tournamentMode = true,
+                activeGame = false,
+                mulligan = false,
+                terminal = false,
+                recentInputIntent = true,
+            ),
+        )
+    }
+
+    @Test
     fun `search signature rejects deck error and reconnect dialogs`() {
         listOf(
             "deck-selection-screen.png",

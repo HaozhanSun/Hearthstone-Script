@@ -46,6 +46,22 @@ object MandatoryRankSurrenderGuard {
         }
     }
 
+    /**
+     * Reconcile a late, complete current-game Power.log terminal block.
+     *
+     * GAME_OVER may be entered before the final STATE=COMPLETE line is
+     * consumed.  Callers that observe that tail can atomically mint the
+     * already-authorized cleanup capability and release the Mulligan barrier;
+     * incomplete or mismatched evidence remains fail-closed.
+     */
+    @Synchronized
+    fun reconcileTerminalEvidence(
+        evidence: CurrentGameSurrenderTerminalEvidence?,
+    ): TerminalCleanupCapability? {
+        val capability = authorizeTerminalCleanup(evidence) ?: return null
+        return capability.takeIf { confirmCompleted("POWERLOG_TERMINAL", it) }
+    }
+
     fun isTerminalCleanupCapabilityValid(capability: TerminalCleanupCapability?): Boolean =
         (pending || terminalCleanupPending) && capability != null && capability === activeTerminalCleanupCapability
 

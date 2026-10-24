@@ -71,7 +71,10 @@ object CurrentRankDetector {
     private const val RANK_VISUAL_WIDTH = 0.30
     private const val RANK_VISUAL_HEIGHT = 0.25
     private const val RANK_TWO_DIGIT_MIN_SPAN = 24
-    private const val RANK_TEN_CORROBORATION_MIN_CONFIDENCE = 0.85
+    // A visual two-glyph hint can authorize an extra probe, but it cannot
+    // lower the shared PaddleX authorization bar. The expanded probe must
+    // independently meet the same 0.90 score used by RankEligibilityCorePolicy.
+    private const val RANK_TEN_CORROBORATION_MIN_CONFIDENCE = 0.90
     private const val RANK_SMALL_ROI_SCALE = 4
 
     data class Detection(
@@ -359,7 +362,14 @@ object CurrentRankDetector {
             val initialSelection = selectRankProbeResults(bigProbe, smallProbe)
             // Compact crops remain authoritative. Use the wider numeric crop
             // only when both compact PaddleX probes are unresolved.
-            val expandedProbe = if (initialSelection.unknownReason == "rank-unrecognized-both-roi") {
+            val needsTenCorroboration = visualTenHint &&
+                smallProbe.rank == 10 &&
+                smallProbe.normalizedText.trim() == "0" &&
+                (smallProbe.confidence ?: 0.0) < RANK_TEN_CORROBORATION_MIN_CONFIDENCE
+            val expandedProbe = if (
+                initialSelection.unknownReason == "rank-unrecognized-both-roi" ||
+                needsTenCorroboration
+            ) {
                 runPaddleXRankProbe(
                     image = expandedRegion,
                     bounds = expandedRegionBounds,
@@ -798,6 +808,32 @@ object CurrentRankDetector {
                     unknownReason = "rank-ten-ambiguous",
                 )
             }
+        }
+
+        // The tight ROI may already have synthesized rank 10 from a visual
+        // two-glyph hint plus a lone right-hand zero. When that result is
+        // below the PaddleX bar, retain the fail-closed behavior unless the
+        // independent expanded ROI also recognizes the badge with >= 0.90.
+        if (
+            initialSelection.rank == 10 &&
+            visualTenHint &&
+            smallProbe.normalizedText.trim() == "0" &&
+            (smallProbe.confidence ?: 0.0) < RANK_TEN_CORROBORATION_MIN_CONFIDENCE &&
+            expandedProbe.rank == 10 &&
+            (expandedProbe.confidence ?: 0.0) >= RANK_TEN_CORROBORATION_MIN_CONFIDENCE
+        ) {
+            return RankProbeSelection(
+                selectedRoi = "expandedRoi",
+                selected = expandedProbe.copy(
+                    candidate = RankCandidate(
+                        rank = 10,
+                        confidence = expandedProbe.confidence,
+                        agreementCount = 2,
+                    ),
+                ),
+                rank = 10,
+                unknownReason = "none",
+            )
         }
 
         return RankProbeSelection("expandedRoi", expandedProbe, expandedProbe.rank, "none")

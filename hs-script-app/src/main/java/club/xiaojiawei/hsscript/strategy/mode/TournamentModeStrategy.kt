@@ -328,6 +328,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         // the client on the deck-selection page while the script has already
         // logged START_MATCHING, which is not a real state transition.
         clickMatchmakingControl(START_RECT)
+        LifecycleTrace.markMatchmakingInputDispatched()
         logMatchmakingCheckpoint(traceId, "after-start-click")
         SystemUtil.delayLong()
         if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-start-click")) return
@@ -346,6 +347,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         log.info { "确认补全后再次点击开始" }
         logMatchmakingCheckpoint(traceId, "before-final-start-click")
         clickMatchmakingControl(START_RECT)
+        LifecycleTrace.markMatchmakingInputDispatched()
         logMatchmakingCheckpoint(traceId, "after-final-start-click")
         captureMatchmakingCheckpoint(traceId, "after-final-start-click")
         if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-final-start-click")) return
@@ -386,6 +388,9 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
             recentActiveSearchEvidence = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
         )
         if (decision != MatchmakingInputGuardPolicy.Decision.BLOCK_ACTIVE_SEARCH) return false
+        if (observation?.screen.equals("MATCHMAKING", ignoreCase = true)) {
+            LifecycleTrace.markActiveMatchmakingScreenObserved()
+        }
         cancelAllEnteredTasks()
         log.warn {
             "MATCHMAKING_INPUT_BLOCKED trace=$traceId reason=active-search-screen " +

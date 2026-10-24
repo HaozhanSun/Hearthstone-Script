@@ -29,6 +29,21 @@ internal object ScreenRecoveryCapturePurposePolicy {
         mulligan = mulligan,
         terminal = terminal,
     )
+
+    /**
+     * A just-dispatched queue start is the bounded authority for observing a
+     * new SEARCHING screen before Hearthstone creates the current Power.log.
+     * This authorizes capture only; screen classification still gates recovery.
+     */
+    fun allowsPreSessionMatchmaking(
+        purpose: ScreenRecoveryCapturePurpose,
+        tournamentMode: Boolean,
+        activeGame: Boolean,
+        mulligan: Boolean,
+        terminal: Boolean,
+        recentInputIntent: Boolean,
+    ): Boolean = purpose == ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY &&
+        recentInputIntent && tournamentMode && !activeGame && !mulligan && !terminal
 }
 
 internal data class ScreenRecoveryCaptureEvidence(
@@ -45,6 +60,7 @@ internal data class ScreenRecoveryCaptureEvidence(
     val visibleOwnersAfter: List<CapturedWindowIdentity?>,
     val purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
     val preSessionQueueModalAuthorized: Boolean = false,
+    val preSessionMatchmakingAuthorized: Boolean = false,
     val currentGameProcessId: Long? = target?.processId?.toLong(),
     val targetWindowVisibleBefore: Boolean = true,
     val targetWindowVisibleAfter: Boolean = true,
@@ -76,11 +92,15 @@ internal object ScreenRecoveryCaptureAuthority {
         if (!evidence.targetWindowVisibleBefore || !evidence.targetWindowVisibleAfter) {
             return "target-window-not-visible-before-and-after"
         }
-        if (!evidence.currentSessionReady && !evidence.preSessionQueueModalAuthorized) {
+        if (!evidence.currentSessionReady &&
+            !evidence.preSessionQueueModalAuthorized &&
+            !evidence.preSessionMatchmakingAuthorized
+        ) {
             return "current-game-session-not-ready"
         }
         if (!evidence.currentSessionReady &&
-            evidence.purpose != ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG
+            evidence.purpose != ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG &&
+            !evidence.preSessionMatchmakingAuthorized
         ) return "current-game-session-not-ready"
         if (target.rootWindow == 0L || target.processId <= 0) return "target-window-identity-invalid"
         if (evidence.foregroundBefore != target || evidence.foregroundAfter != target) {

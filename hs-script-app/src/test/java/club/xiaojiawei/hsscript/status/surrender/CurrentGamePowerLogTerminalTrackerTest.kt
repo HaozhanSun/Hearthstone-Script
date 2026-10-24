@@ -19,7 +19,10 @@ import org.junit.jupiter.api.Test
 
 class CurrentGamePowerLogTerminalTrackerTest {
     @AfterEach
-    fun cleanup() = MandatoryRankSurrenderGuard.resetForTest()
+    fun cleanup() {
+        MandatoryRankSurrenderGuard.resetForTest()
+        MulliganRankDispatchBarrier.resetForTest()
+    }
 
     @Test
     fun `terminal proof is owned by the latest live game and correct players`() {
@@ -229,6 +232,8 @@ class CurrentGamePowerLogTerminalTrackerTest {
             tracker.observeLine(firstLine)
             val identity = requireNotNull(tracker.currentGameIdentity("player-self#1"))
             MandatoryRankSurrenderGuard.begin(identity)
+            val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+            assertNotNull(MulliganRankDispatchBarrier.requireSurrender(ticket))
             var line: String?
             do {
                 line = file.readLine()
@@ -259,11 +264,20 @@ class CurrentGamePowerLogTerminalTrackerTest {
         assertTrue(evidence?.ownConceded == true, "preserve the earlier local CONCEDED event")
         assertEquals(null, evidence?.opponentEntityId, "the live model did not resolve the opponent id")
         assertTrue(MandatorySurrenderTerminalEvidence.authorizes(requestedIdentity, evidence))
+        assertFalse(
+            ActionDispatchGate.allowForState(
+                action = "recovery.left",
+                paused = false,
+                working = true,
+                rankBarrierState = MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+            ),
+            "ordinary recovery remains blocked before complete terminal proof",
+        )
 
-        val cleanup = MandatoryRankSurrenderGuard.authorizeTerminalCleanup(evidence)
+        val cleanup = MandatoryRankSurrenderGuard.reconcileTerminalEvidence(evidence)
         assertNotNull(cleanup)
-        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", cleanup))
         assertFalse(MandatoryRankSurrenderGuard.isPending(), "accepted same-game proof clears the rank barrier")
+        assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
         assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
         assertFalse(
             ActionDispatchGate.allowForState(

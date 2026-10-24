@@ -19,6 +19,7 @@ object LifecycleTrace {
     private const val STATE_RECOVERY_TIMEOUT_MS = 30_000L
     private const val STATE_RECOVERY_RETRY_INTERVAL_MS = 30_000L
     private const val MATCHMAKING_SCREEN_RECOVERY_SUPPRESSION_MS = 120_000L
+    private const val MATCHMAKING_INPUT_INTENT_WINDOW_MS = 15 * 60_000L
 
     @Volatile
     private var mainWindowShowing = false
@@ -37,6 +38,9 @@ object LifecycleTrace {
 
     @Volatile
     private var activeMatchmakingScreenObservedAt = 0L
+
+    @Volatile
+    private var matchmakingInputIntentAt = 0L
 
     fun start() {
         if (running) return
@@ -225,12 +229,22 @@ object LifecycleTrace {
         mark("visible-matchmaking-observed; suppressing stale-phase recovery for ${MATCHMAKING_SCREEN_RECOVERY_SUPPRESSION_MS}ms")
     }
 
+    /** A recent Start dispatch permits capture while the new queue has no Power.log yet. */
+    fun markMatchmakingInputDispatched(now: Long = System.currentTimeMillis()) {
+        matchmakingInputIntentAt = now
+        mark("matchmaking-input-dispatched; pre-session capture enabled for ${MATCHMAKING_INPUT_INTENT_WINDOW_MS}ms")
+    }
+
     internal fun shouldSuppressStateRecoveryForMatchmaking(observedAt: Long, now: Long): Boolean =
         observedAt > 0L && now >= observedAt && now - observedAt < MATCHMAKING_SCREEN_RECOVERY_SUPPRESSION_MS
 
     /** Queue evidence also protects the normal matchmaking input path. */
     internal fun hasRecentActiveMatchmakingScreen(now: Long = System.currentTimeMillis()): Boolean =
         shouldSuppressStateRecoveryForMatchmaking(activeMatchmakingScreenObservedAt, now)
+
+    internal fun hasRecentMatchmakingInputIntent(now: Long = System.currentTimeMillis()): Boolean =
+        matchmakingInputIntentAt > 0L && now >= matchmakingInputIntentAt &&
+            now - matchmakingInputIntentAt < MATCHMAKING_INPUT_INTENT_WINDOW_MS
 
     private fun snapshot(): String = runCatching {
         val powerLog = PowerLogListener.logFile

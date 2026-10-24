@@ -66,7 +66,8 @@ internal object ScreenRecoveryWindowCapture {
             powerLogLength = attachedPowerLog?.length() ?: 0L,
         )
         val preSessionQueueModalBefore = preSessionQueueModalContext(purpose)
-        if (!currentPowerLogReady && !preSessionQueueModalBefore) {
+        val preSessionMatchmakingBefore = preSessionMatchmakingContext(purpose)
+        if (!currentPowerLogReady && !preSessionQueueModalBefore && !preSessionMatchmakingBefore) {
             return reject(
                 "current-game-session-not-ready",
                 hwnd,
@@ -78,6 +79,7 @@ internal object ScreenRecoveryWindowCapture {
         if (!currentPowerLogReady) {
             log.info {
                 "SCREEN_RECOVERY_CAPTURE_PRESESSION purpose=${purpose.name} " +
+                    "matchmakingIntent=$preSessionMatchmakingBefore " +
                     "authority=current-pid-window-foreground-pixel-ownership " +
                     "powerLog=${attachedPowerLog?.path() ?: "none"} " +
                     "currentPowerLog=${currentPowerLog?.absolutePath ?: "none"} " +
@@ -107,6 +109,7 @@ internal object ScreenRecoveryWindowCapture {
         val processStillAlive = GameUtil.isAliveOfGame() && currentPidAfter == target.processId.toLong()
         val targetWindowVisibleAfter = User32.INSTANCE.IsWindowVisible(hwnd)
         val preSessionQueueModalAfter = preSessionQueueModalContext(purpose)
+        val preSessionMatchmakingAfter = preSessionMatchmakingContext(purpose)
         val evidence = ScreenRecoveryCaptureEvidence(
             processAlive = processStillAlive,
             currentSessionReady = currentPowerLogReady,
@@ -121,6 +124,7 @@ internal object ScreenRecoveryWindowCapture {
             visibleOwnersAfter = ownersAfter,
             purpose = purpose,
             preSessionQueueModalAuthorized = preSessionQueueModalBefore && preSessionQueueModalAfter,
+            preSessionMatchmakingAuthorized = preSessionMatchmakingBefore && preSessionMatchmakingAfter,
             currentGameProcessId = currentPidAfter,
             targetWindowVisibleBefore = targetWindowVisibleBefore,
             targetWindowVisibleAfter = targetWindowVisibleAfter,
@@ -153,6 +157,16 @@ internal object ScreenRecoveryWindowCapture {
             activeGame = WarEx.inWar,
             mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
             terminal = GameUtil.isTerminalGameState(),
+        )
+
+    private fun preSessionMatchmakingContext(purpose: ScreenRecoveryCapturePurpose): Boolean =
+        ScreenRecoveryCapturePurposePolicy.allowsPreSessionMatchmaking(
+            purpose = purpose,
+            tournamentMode = Mode.currMode === ModeEnum.TOURNAMENT,
+            activeGame = WarEx.inWar,
+            mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+            terminal = GameUtil.isTerminalGameState(),
+            recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
         )
 
     private fun clientBoundsOnScreen(hwnd: WinDef.HWND): Rectangle? = runCatching {
