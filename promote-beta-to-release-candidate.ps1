@@ -148,7 +148,7 @@ function Get-PropertyText {
 }
 
 function Assert-Equals {
-    param([Parameter(Mandatory = $true)][string]$Expected, [Parameter(Mandatory = $true)][string]$Actual, [Parameter(Mandatory = $true)][string]$Label)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Expected, [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Actual, [Parameter(Mandatory = $true)][string]$Label)
     if ($Expected -cne $Actual) { throw "$Label mismatch: expected '$Expected', actual '$Actual'" }
 }
 
@@ -362,7 +362,13 @@ function Assert-VerificationEvidence {
         [Parameter(Mandatory = $true)]$BetaDeployment
     )
     if ([string]::IsNullOrWhiteSpace($Path)) {
-        throw 'Online E2E verification evidence is required; pass -VerificationEvidencePath with a current gate JSON file'
+        return [pscustomobject]@{
+            Status = 'PENDING'
+            BetaArtifactName = $BetaDeployment.JarName
+            BetaArtifactSha256 = Get-PropertyText $BetaDeployment.Manifest 'appJarSha256'
+            EvidenceSha256 = ''
+            StableReadiness = 'NOT_READY_E2E_PENDING'
+        }
     }
     $evidence = Read-JsonFile -Path ([System.IO.Path]::GetFullPath($Path)) -Label 'Online E2E verification evidence'
     Assert-Equals -Expected 'PASS' -Actual (Get-PropertyText $evidence 'status') -Label 'Online E2E evidence status'
@@ -377,6 +383,26 @@ function Assert-VerificationEvidence {
     if ([string]::IsNullOrWhiteSpace($screenshot)) { throw 'Online E2E evidence is missing finalScreenshotPath' }
     if (-not [System.IO.Path]::IsPathRooted($screenshot)) { $screenshot = Join-Path (Split-Path -Parent ([System.IO.Path]::GetFullPath($Path))) $screenshot }
     if (-not (Test-Path -LiteralPath $screenshot -PathType Leaf)) { throw "Online E2E final screenshot is missing: $screenshot" }
+    return [pscustomobject]@{
+        Status = 'PASS'
+        BetaArtifactName = $BetaDeployment.JarName
+        BetaArtifactSha256 = Get-PropertyText $BetaDeployment.Manifest 'appJarSha256'
+        EvidenceSha256 = (Get-FileHash -LiteralPath ([System.IO.Path]::GetFullPath($Path)) -Algorithm SHA256).Hash.ToLowerInvariant()
+        StableReadiness = 'REQUIRES_INDEPENDENT_MAIN_GATE_REVIEW'
+    }
+}
+
+function Set-RcDeploymentVerificationMetadata {
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)]$Verification)
+    $manifestPath = Join-Path $Root 'deployment-manifest.json'
+    $manifest = Read-JsonFile -Path $manifestPath -Label 'Release Candidate deployment manifest'
+    $manifest | Add-Member -Force -NotePropertyName onlineE2eStatus -NotePropertyValue $Verification.Status
+    $manifest | Add-Member -Force -NotePropertyName onlineE2eBetaArtifactName -NotePropertyValue $Verification.BetaArtifactName
+    $manifest | Add-Member -Force -NotePropertyName onlineE2eBetaArtifactSha256 -NotePropertyValue $Verification.BetaArtifactSha256
+    $manifest | Add-Member -Force -NotePropertyName onlineE2eEvidenceSha256 -NotePropertyValue $Verification.EvidenceSha256
+    $manifest | Add-Member -Force -NotePropertyName stableReady -NotePropertyValue $false
+    $manifest | Add-Member -Force -NotePropertyName stableReadiness -NotePropertyValue $Verification.StableReadiness
+    [System.IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 10) + [Environment]::NewLine, $utf8NoBom)
 }
 
 function Get-CanonicalOutputParent {
@@ -452,7 +478,8 @@ function Set-RcMetadata {
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Branch,
         [Parameter(Mandatory = $true)][string]$SourceBranch,
-        [Parameter(Mandatory = $true)][string]$SourceCommit
+        [Parameter(Mandatory = $true)][string]$SourceCommit,
+        [Parameter(Mandatory = $true)]$Verification
     )
     $config = Read-JsonFile -Path $Path -Label 'Release Candidate channel metadata'
     $config.channel = 'release-candidate'
@@ -466,12 +493,18 @@ function Set-RcMetadata {
     else { $config.promotionSourceBranch = $SourceBranch }
     if ($null -eq $config.PSObject.Properties['promotionSourceCommit']) { $config | Add-Member -NotePropertyName promotionSourceCommit -NotePropertyValue $SourceCommit }
     else { $config.promotionSourceCommit = $SourceCommit }
+    $config | Add-Member -Force -NotePropertyName onlineE2eStatus -NotePropertyValue $Verification.Status
+    $config | Add-Member -Force -NotePropertyName onlineE2eBetaArtifactName -NotePropertyValue $Verification.BetaArtifactName
+    $config | Add-Member -Force -NotePropertyName onlineE2eBetaArtifactSha256 -NotePropertyValue $Verification.BetaArtifactSha256
+    $config | Add-Member -Force -NotePropertyName onlineE2eEvidenceSha256 -NotePropertyValue $Verification.EvidenceSha256
+    $config | Add-Member -Force -NotePropertyName stableReady -NotePropertyValue $false
+    $config | Add-Member -Force -NotePropertyName stableReadiness -NotePropertyValue $Verification.StableReadiness
     $json = $config | ConvertTo-Json -Depth 10
     [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, $utf8NoBom)
 }
 
 function Assert-RcMetadata {
-    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$Branch, [Parameter(Mandatory = $true)][string]$SourceBranch, [Parameter(Mandatory = $true)][string]$SourceCommit)
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$Branch, [Parameter(Mandatory = $true)][string]$SourceBranch, [Parameter(Mandatory = $true)][string]$SourceCommit, [Parameter(Mandatory = $true)]$Verification)
     $config = Read-JsonFile -Path (Join-Path $Root 'release-channel.json') -Label 'Release Candidate channel metadata'
     Assert-Equals -Expected 'release-candidate' -Actual (Get-PropertyText $config 'channel') -Label 'Release Candidate channel'
     Assert-Equals -Expected $Branch -Actual (Get-PropertyText $config 'branch') -Label 'Release Candidate branch metadata'
@@ -480,6 +513,12 @@ function Assert-RcMetadata {
     Assert-Equals -Expected 'hs-script-release-candidate.ico' -Actual (Get-PropertyText $config 'iconFileName') -Label 'Release Candidate icon identity'
     Assert-Equals -Expected $SourceBranch -Actual (Get-PropertyText $config 'promotionSourceBranch') -Label 'Release Candidate source branch'
     Assert-Equals -Expected $SourceCommit -Actual (Get-PropertyText $config 'promotionSourceCommit') -Label 'Release Candidate source commit'
+    Assert-Equals -Expected $Verification.Status -Actual (Get-PropertyText $config 'onlineE2eStatus') -Label 'Release Candidate online E2E status'
+    Assert-Equals -Expected $Verification.BetaArtifactName -Actual (Get-PropertyText $config 'onlineE2eBetaArtifactName') -Label 'Release Candidate E2E Beta artifact'
+    Assert-Equals -Expected $Verification.BetaArtifactSha256 -Actual (Get-PropertyText $config 'onlineE2eBetaArtifactSha256') -Label 'Release Candidate E2E Beta artifact hash'
+    Assert-Equals -Expected $Verification.EvidenceSha256 -Actual (Get-PropertyText $config 'onlineE2eEvidenceSha256') -Label 'Release Candidate E2E evidence hash'
+    Assert-Equals -Expected 'False' -Actual ([string]$config.stableReady) -Label 'Release Candidate Stable readiness flag'
+    Assert-Equals -Expected $Verification.StableReadiness -Actual (Get-PropertyText $config 'stableReadiness') -Label 'Release Candidate Stable readiness status'
 }
 
 function Assert-RcDeployment {
@@ -488,6 +527,7 @@ function Assert-RcDeployment {
         [string]$SourceBranch = '',
         [string]$SourceCommit = '',
         [string]$ShortcutBase = '',
+        $Verification,
         [switch]$RequirePromotionSource
     )
     $manifestPath = Join-Path $Root 'deployment-manifest.json'
@@ -498,6 +538,14 @@ function Assert-RcDeployment {
     if ($RequirePromotionSource) {
         Assert-Equals -Expected $SourceBranch -Actual (Get-PropertyText $manifest 'promotionSourceBranch') -Label 'Release Candidate deployed source branch'
         Assert-Equals -Expected $SourceCommit -Actual (Get-PropertyText $manifest 'promotionSourceCommit') -Label 'Release Candidate deployed source commit'
+    }
+    if ($null -ne $Verification) {
+        Assert-Equals -Expected $Verification.Status -Actual (Get-PropertyText $manifest 'onlineE2eStatus') -Label 'Release Candidate deployed online E2E status'
+        Assert-Equals -Expected $Verification.BetaArtifactName -Actual (Get-PropertyText $manifest 'onlineE2eBetaArtifactName') -Label 'Release Candidate deployed E2E Beta artifact'
+        Assert-Equals -Expected $Verification.BetaArtifactSha256 -Actual (Get-PropertyText $manifest 'onlineE2eBetaArtifactSha256') -Label 'Release Candidate deployed E2E Beta artifact hash'
+        Assert-Equals -Expected $Verification.EvidenceSha256 -Actual (Get-PropertyText $manifest 'onlineE2eEvidenceSha256') -Label 'Release Candidate deployed E2E evidence hash'
+        Assert-Equals -Expected 'False' -Actual ([string]$manifest.stableReady) -Label 'Release Candidate deployed Stable readiness flag'
+        Assert-Equals -Expected $Verification.StableReadiness -Actual (Get-PropertyText $manifest 'stableReadiness') -Label 'Release Candidate deployed Stable readiness status'
     }
     $iconPath = Get-ManifestRuntimePath -Manifest $manifest -Root $Root -PropertyName 'iconFile' -Label 'Release Candidate icon'
     if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) { throw "Release Candidate icon is missing: $iconPath" }
@@ -515,10 +563,11 @@ function Test-RcDeployment {
         [Parameter(Mandatory = $true)][string]$Root,
         [Parameter(Mandatory = $true)][string]$SourceBranch,
         [Parameter(Mandatory = $true)][string]$SourceCommit,
-        [string]$ShortcutBase = ''
+        [string]$ShortcutBase = '',
+        $Verification
     )
     try {
-        Assert-RcDeployment -Root $Root -SourceBranch $SourceBranch -SourceCommit $SourceCommit -ShortcutBase $ShortcutBase -RequirePromotionSource
+        Assert-RcDeployment -Root $Root -SourceBranch $SourceBranch -SourceCommit $SourceCommit -ShortcutBase $ShortcutBase -Verification $Verification -RequirePromotionSource
         return $true
     } catch { Write-Verbose "Release Candidate validation failed: $($_.Exception.Message)"; return $false }
 }
@@ -680,7 +729,7 @@ if ([string]::IsNullOrWhiteSpace($betaBranch) -or $betaBranch -notlike 'beta/*' 
 $betaHead = (Invoke-GitText -Root $projectRoot -Arguments @('rev-parse', 'HEAD')).Text
 $betaDeployment = Get-BetaDeployment -Root $projectRoot -Branch $betaBranch -Head $betaHead
 Assert-BetaSourceCheckout -Root $projectRoot -BetaDeployment $betaDeployment
-Assert-VerificationEvidence -Path $VerificationEvidencePath -SourceBranch $betaBranch -SourceCommit $betaHead -BetaDeployment $betaDeployment
+$verification = Assert-VerificationEvidence -Path $VerificationEvidencePath -SourceBranch $betaBranch -SourceCommit $betaHead -BetaDeployment $betaDeployment
 
 if ([string]::IsNullOrWhiteSpace($ReleaseCandidateBranch)) { $ReleaseCandidateBranch = "beta/release-candidate-$($betaDeployment.Version)" }
 if ($ReleaseCandidateBranch -notlike 'beta/release-candidate-*') { throw "Release Candidate branch must begin beta/release-candidate-: $ReleaseCandidateBranch" }
@@ -713,8 +762,8 @@ if ($branchRef.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingRc
 
 # A valid RC manifest is the idempotency fence. A rerun must not rebuild or
 # touch a channel that already contains the exact promoted source snapshot.
-if ($branchRef.ExitCode -eq 0 -and (Test-RcDeployment -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot)) {
-    Write-Output "PROMOTION_ALREADY_COMPLETE branch=$ReleaseCandidateBranch sourceCommit=$betaHead runtime=$rcRoot"
+if ($branchRef.ExitCode -eq 0 -and (Test-RcDeployment -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot -Verification $verification)) {
+    Write-Output "PROMOTION_ALREADY_COMPLETE branch=$ReleaseCandidateBranch sourceCommit=$betaHead onlineE2e=$($verification.Status) stableReady=False runtime=$rcRoot"
     exit 0
 }
 
@@ -739,15 +788,15 @@ if ([string]::IsNullOrWhiteSpace($existingRcWorktree)) {
 
 Assert-GitClean -Root $PromotionWorktree -Label 'Release Candidate source checkout before metadata update'
 $rcConfigPath = Join-Path $PromotionWorktree 'release-channel.json'
-Set-RcMetadata -Path $rcConfigPath -Branch $ReleaseCandidateBranch -SourceBranch $betaBranch -SourceCommit $betaHead
-Assert-RcMetadata -Root $PromotionWorktree -Branch $ReleaseCandidateBranch -SourceBranch $betaBranch -SourceCommit $betaHead
+Set-RcMetadata -Path $rcConfigPath -Branch $ReleaseCandidateBranch -SourceBranch $betaBranch -SourceCommit $betaHead -Verification $verification
+Assert-RcMetadata -Root $PromotionWorktree -Branch $ReleaseCandidateBranch -SourceBranch $betaBranch -SourceCommit $betaHead -Verification $verification
 $metadataStatus = Invoke-GitText -Root $PromotionWorktree -Arguments @('status', '--porcelain', '--untracked-files=all')
 if (-not [string]::IsNullOrWhiteSpace($metadataStatus.Text)) {
     Invoke-GitText -Root $PromotionWorktree -Arguments @('add', '--', 'release-channel.json') | Out-Null
     Invoke-GitText -Root $PromotionWorktree -Arguments @('commit', '-m', "Promote Beta $betaDeployment.Version to Release Candidate") | Out-Null
 }
 Assert-GitClean -Root $PromotionWorktree -Label 'Release Candidate source checkout after metadata commit'
-Assert-RcMetadata -Root $PromotionWorktree -Branch $ReleaseCandidateBranch -SourceBranch $betaBranch -SourceCommit $betaHead
+Assert-RcMetadata -Root $PromotionWorktree -Branch $ReleaseCandidateBranch -SourceBranch $betaBranch -SourceCommit $betaHead -Verification $verification
 Write-Output "RC_METADATA_COMMITTED branch=$ReleaseCandidateBranch sourceCommit=$betaHead"
 
 if (-not (Test-Path -LiteralPath $BuildScript -PathType Leaf)) { throw "Checked-in build-and-deploy.ps1 is missing: $BuildScript" }
@@ -759,11 +808,12 @@ if ($legacyRcUpgrade) {
 }
 Write-Output "BUILD_AND_DEPLOY_INVOCATION=release-candidate worktree=$PromotionWorktree"
 Invoke-BuildAndDeploy -Root $PromotionWorktree -Script $BuildScript
-if (-not (Test-RcDeployment -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot)) {
+Set-RcDeploymentVerificationMetadata -Root $rcRoot -Verification $verification
+if (-not (Test-RcDeployment -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot -Verification $verification)) {
     throw "Release Candidate deployment manifest did not validate against the promoted Beta source: $rcRoot"
 }
 if ($null -ne $legacySnapshot) {
     Assert-RcProtectedState -Root $rcRoot -State @($legacySnapshot.ProtectedState)
     Write-Output "RC_PROTECTED_STATE_VERIFIED=$rcRoot"
 }
-Write-Output "PROMOTION_COMPLETE branch=$ReleaseCandidateBranch sourceCommit=$betaHead runtime=$rcRoot"
+Write-Output "PROMOTION_COMPLETE branch=$ReleaseCandidateBranch sourceCommit=$betaHead onlineE2e=$($verification.Status) stableReady=False runtime=$rcRoot"

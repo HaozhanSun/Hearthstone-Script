@@ -64,33 +64,45 @@ stable launcher.
 
 ## Beta to Release Candidate promotion
 
-Use the checked-in promotion command from a named Beta checkout after the Beta
-artifact has passed the online E2E gate. First run the read-only preflight. The
-gate must be exported as a JSON evidence file bound to the exact deployed Beta
-commit and JAR:
+Use the checked-in promotion command from a named Beta checkout to create an
+isolated Release Candidate. Online E2E evidence is optional for creating an RC
+candidate; this does not relax the online gate for Stable or authorize merging
+an unverified candidate to `main`. First run the read-only preflight. If E2E has
+passed, supply its JSON evidence file so it can be validated and bound to the
+exact deployed Beta commit and JAR:
 
 ```powershell
 pwsh -File .\promote-beta-to-release-candidate.ps1 `
   -VerificationEvidencePath .\evidence\beta-online-e2e.json `
+  -PreflightOnly
+```
+
+To prepare a candidate while E2E is still pending, omit
+`-VerificationEvidencePath` from both preflight and promotion:
+
+```powershell
+pwsh -File .\promote-beta-to-release-candidate.ps1 `
   -PreflightOnly
 ```
 
 For the currently installed legacy RC (a valid older RC manifest without
 promotion-source fields), add the explicit reviewed upgrade switch to both
-preflight and promotion:
+commands. It is orthogonal to whether E2E evidence is provided. For example,
+to preflight a pending candidate against that legacy RC:
 
 ```powershell
 pwsh -File .\promote-beta-to-release-candidate.ps1 `
-  -VerificationEvidencePath .\evidence\beta-online-e2e.json `
   -AllowLegacyRcUpgrade `
   -PreflightOnly
 ```
 
 Preflight validates the deployed Beta manifest, artifact hashes and embedded
-build metadata, source commit/branch, evidence binding, channel isolation, and
-the existing RC runtime without creating a branch, worktree, commit, build,
-manifest, or shortcut. It must print `PREFLIGHT_OK` before the real command is
-allowed:
+build metadata, source commit/branch, any supplied evidence binding, channel
+isolation, and the existing RC runtime without creating a branch, worktree,
+commit, build, manifest, or shortcut. It must print `PREFLIGHT_OK` before the
+real command is allowed. For an E2E-pending candidate, the final command omits
+`-VerificationEvidencePath`; when evidence is available, include the same path
+used during preflight:
 
 ```powershell
 pwsh -File .\promote-beta-to-release-candidate.ps1 `
@@ -98,12 +110,21 @@ pwsh -File .\promote-beta-to-release-candidate.ps1 `
   -AllowLegacyRcUpgrade
 ```
 
-The evidence file must contain `status: PASS`, `releaseChannel: beta`, the
-exact `sourceBranch`, `sourceCommit`, `artifactName`, and `artifactSha256`,
-`gamesCompleted >= 3`, `terminalMarkers >= 3`, `scriptProcessStable: true`,
-and an existing `finalScreenshotPath`. Omitting the file or presenting proof
-for another build is a hard refusal. The script also accepts `-ShortcutRoot`
-for offline contract tests; normal promotion verifies the real Desktop, Start
+When supplied, the evidence file must contain `status: PASS`,
+`releaseChannel: beta`, the exact `sourceBranch`, `sourceCommit`, `artifactName`,
+and `artifactSha256`, `gamesCompleted >= 3`, `terminalMarkers >= 3`,
+`scriptProcessStable: true`, and an existing `finalScreenshotPath`. Supplied
+but stale, malformed, or mismatched evidence remains a hard refusal; it never
+silently degrades to pending. With no evidence, both `release-channel.json`
+and the deployed RC manifest record `onlineE2eStatus: PENDING`, bind the status
+to the exact Beta artifact name/hash, leave the evidence hash blank, and set
+`stableReady: false` / `stableReadiness: NOT_READY_E2E_PENDING`. With valid
+evidence, they record `onlineE2eStatus: PASS` and the evidence JSON SHA-256,
+still set `stableReady: false`, and require
+`stableReadiness: REQUIRES_INDEPENDENT_MAIN_GATE_REVIEW`. An RC candidate is
+never automatically Stable-ready; the daytime secretary must independently
+verify the full Stable gate. The script also accepts `-ShortcutRoot` for
+offline contract tests; normal promotion verifies the real Desktop, Start
 Menu, and Taskbar locations.
 
 The command reads the current Beta deployment manifest and requires its
@@ -124,8 +145,8 @@ checkout and `promotionSourceBranch`/`promotionSourceCommit` for the Beta
 snapshot. A rerun with a matching Release Candidate manifest exits with
 `PROMOTION_ALREADY_COMPLETE` without rebuilding or touching the runtime.
 Missing source metadata, a dirty checkout, a branch/channel mismatch, an
-existing worktree at an unexpected path, a missing Beta manifest, a missing or
-stale E2E evidence file, an embedded JAR version/channel/timestamp mismatch, an
+existing worktree at an unexpected path, a missing Beta manifest, invalid
+supplied E2E evidence, an embedded JAR version/channel/timestamp mismatch, an
 invalid manifest hash, a missing launcher/shortcut, duplicate or stale RC
 shortcuts, a non-numeric Beta artifact version, or a non-empty RC runtime with
 no validated matching manifest is a hard refusal. A valid older RC installation

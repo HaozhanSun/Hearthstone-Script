@@ -102,7 +102,9 @@ $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('hs-beta-rc-promotion-'
 $project = Join-Path $tempRoot 'beta-source'
 $betaRuntime = Join-Path $tempRoot 'Hearthstone Script Beta'
 $rcRuntime = Join-Path $tempRoot 'Hearthstone Script Release Candidate'
+$pendingRcRuntime = Join-Path (Join-Path $tempRoot 'pending') 'Hearthstone Script Release Candidate'
 $rcWorktree = Join-Path $tempRoot 'rc-worktree'
+$pendingRcWorktree = Join-Path $tempRoot 'pending-rc-worktree'
 $legacyRcRuntime = Join-Path $tempRoot 'legacy\Hearthstone Script Release Candidate'
 $legacyRcWorktree = Join-Path $tempRoot 'legacy-rc-worktree'
 $legacyShortcutBase = Join-Path $tempRoot 'legacy-shortcuts'
@@ -238,15 +240,38 @@ try {
     $env:PROMOTION_TEST_INVOCATION = $invocationLog
 $env:PROMOTION_TEST_SHORTCUT_ROOT = $shortcutBase
 
+    $pendingInvocationLog = Join-Path $tempRoot 'pending-build-invocations.log'
+    $env:PROMOTION_TEST_RC_ROOT = $pendingRcRuntime
+    $env:PROMOTION_TEST_INVOCATION = $pendingInvocationLog
+    $pendingOutput = & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $pendingRcRuntime -PromotionWorktree $pendingRcWorktree -ReleaseCandidateBranch 'beta/release-candidate-pending-test' -BuildScript $fakeBuild -ShortcutRoot $shortcutBase
+    $pendingText = $pendingOutput -join "`n"
+    if ($pendingText -notmatch 'PROMOTION_COMPLETE.*onlineE2e=PENDING stableReady=False') { throw 'Evidence-free RC candidate was not labelled E2E-pending and not Stable-ready' }
+    $pendingManifest = Get-Content -LiteralPath (Join-Path $pendingRcRuntime 'deployment-manifest.json') -Raw | ConvertFrom-Json
+    if ($pendingManifest.onlineE2eStatus -ne 'PENDING' -or $pendingManifest.stableReady -ne $false -or $pendingManifest.stableReadiness -ne 'NOT_READY_E2E_PENDING') { throw 'Pending E2E state was not recorded safely in the deployed manifest' }
+    if ($pendingManifest.onlineE2eBetaArtifactName -ne $jarName -or $pendingManifest.onlineE2eBetaArtifactSha256 -ne $betaManifest.appJarSha256 -or $pendingManifest.onlineE2eEvidenceSha256 -ne '') { throw 'Pending manifest did not bind status to the exact Beta artifact or unexpectedly claim evidence' }
+    $pendingConfig = Get-Content -LiteralPath (Join-Path $pendingRcWorktree 'release-channel.json') -Raw | ConvertFrom-Json
+    if ($pendingConfig.onlineE2eStatus -ne 'PENDING' -or $pendingConfig.stableReady -ne $false) { throw 'Pending E2E state was not recorded in RC branch metadata' }
+
+    $badEvidencePath = Join-Path $tempRoot 'wrong-artifact-evidence.json'
+    $badEvidence = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+    $badEvidence.artifactSha256 = ('0' * 64)
+    $badEvidence | ConvertTo-Json | Set-Content -LiteralPath $badEvidencePath -Encoding UTF8
     Assert-Throws -Action {
-        & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -ShortcutRoot $shortcutBase | Out-Null
-    } -MessageFragment 'Online E2E verification evidence is required'
+        & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot (Join-Path $tempRoot 'bad-evidence-rc') -PromotionWorktree (Join-Path $tempRoot 'bad-evidence-worktree') -BuildScript $fakeBuild -VerificationEvidencePath $badEvidencePath -ShortcutRoot $shortcutBase | Out-Null
+    } -MessageFragment 'Online E2E evidence artifact hash mismatch'
+
+    $env:PROMOTION_TEST_RC_ROOT = $rcRuntime
+    $env:PROMOTION_TEST_INVOCATION = $invocationLog
 
     & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null
     if (-not (Test-Path -LiteralPath (Join-Path $rcWorktree 'release-channel.json') -PathType Leaf)) { throw 'RC worktree metadata was not created' }
     $rcConfig = Get-Content -LiteralPath (Join-Path $rcWorktree 'release-channel.json') -Raw | ConvertFrom-Json
     if ($rcConfig.channel -ne 'release-candidate' -or $rcConfig.branch -ne 'beta/release-candidate-v4.16.670-local-20261022-225531PDT') { throw 'RC metadata was not isolated or branch-bound' }
     if ($rcConfig.promotionSourceCommit -ne $betaHead -or $rcConfig.promotionSourceBranch -ne 'beta/test-promotion') { throw 'RC promotion source metadata is incomplete' }
+    if ($rcConfig.onlineE2eStatus -ne 'PASS' -or $rcConfig.onlineE2eBetaArtifactName -ne $jarName -or $rcConfig.onlineE2eBetaArtifactSha256 -ne $betaManifest.appJarSha256 -or $rcConfig.stableReady -ne $false -or $rcConfig.stableReadiness -ne 'REQUIRES_INDEPENDENT_MAIN_GATE_REVIEW') { throw 'RC source metadata did not bind successful evidence while preserving independent Stable gate review' }
+    $rcManifest = Get-Content -LiteralPath (Join-Path $rcRuntime 'deployment-manifest.json') -Raw | ConvertFrom-Json
+    $expectedEvidenceHash = (Get-FileHash -LiteralPath $evidencePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($rcManifest.onlineE2eStatus -ne 'PASS' -or $rcManifest.onlineE2eEvidenceSha256 -ne $expectedEvidenceHash -or $rcManifest.stableReady -ne $false -or $rcManifest.stableReadiness -ne 'REQUIRES_INDEPENDENT_MAIN_GATE_REVIEW') { throw 'Deployed manifest did not record artifact-bound E2E evidence and Stable gate status' }
     if ((Get-FileHash -LiteralPath $betaManifestPath -Algorithm SHA256).Hash -cne $betaManifestBefore) { throw 'Promotion modified the Beta manifest' }
     if ((Get-Content -LiteralPath (Join-Path $stableRuntime 'stable-marker.txt') -Raw) -cne $stableMarkerBefore) { throw 'Promotion modified the Stable runtime' }
     if ((Get-Content -LiteralPath $invocationLog).Count -ne 1) { throw 'Initial promotion did not invoke the build path exactly once' }
@@ -384,7 +409,7 @@ $env:PROMOTION_TEST_SHORTCUT_ROOT = $shortcutBase
     Invoke-TestGit -Root $project -Arguments @('commit', '-m', 'invalid channel metadata fixture') | Out-Null
     Assert-Throws -Action { & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree (Join-Path $tempRoot 'unused-worktree-3') -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null } -MessageFragment 'Beta source channel mismatch'
 
-    Write-Output 'PromoteBetaToReleaseCandidate.Tests: PASS (clean promotion, exact source snapshot, RC isolation, idempotent repeat, dirty/missing/mismatched refusal, Beta/Stable preservation)'
+    Write-Output 'PromoteBetaToReleaseCandidate.Tests: PASS (E2E-pending candidate, exact evidence binding, Stable-readiness hold, clean promotion, exact source snapshot, RC isolation, idempotent repeat, dirty/missing/mismatched refusal, Beta/Stable preservation)'
 } finally {
     Remove-Item Env:PROMOTION_TEST_RC_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:PROMOTION_TEST_INVOCATION -ErrorAction SilentlyContinue
