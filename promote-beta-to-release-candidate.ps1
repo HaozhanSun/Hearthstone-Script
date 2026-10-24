@@ -262,13 +262,26 @@ function Assert-ArtifactIdentity {
 function Get-ShortcutDirectories {
     param([string]$Root)
     if ([string]::IsNullOrWhiteSpace($Root)) {
-        return @(
-            [Environment]::GetFolderPath('Desktop'),
-            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'),
-            (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar')
+        $profileRoot = [Environment]::GetFolderPath('UserProfile')
+        if ([string]::IsNullOrWhiteSpace($profileRoot)) { $profileRoot = [string]$env:USERPROFILE }
+        if ([string]::IsNullOrWhiteSpace($profileRoot)) { throw 'Cannot resolve user profile path for shortcut validation (UserProfile and USERPROFILE are empty)' }
+        $desktop = [Environment]::GetFolderPath('Desktop')
+        if ([string]::IsNullOrWhiteSpace($desktop)) { $desktop = Join-Path $profileRoot 'Desktop' }
+        $appData = [Environment]::GetFolderPath('ApplicationData')
+        if ([string]::IsNullOrWhiteSpace($appData)) { $appData = [string]$env:APPDATA }
+        if ([string]::IsNullOrWhiteSpace($appData)) { $appData = Join-Path $profileRoot 'AppData\Roaming' }
+        $directories = @(
+            $desktop,
+            (Join-Path $appData 'Microsoft\Windows\Start Menu\Programs'),
+            (Join-Path $appData 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar')
         )
+        for ($index = 0; $index -lt $directories.Count; $index++) {
+            $directories[$index] = Get-NormalizedShortcutPath -Value ([string]$directories[$index]) -ShortcutPath "<standard-shortcut-location:$index>" -Field 'Directory'
+        }
+        return $directories
     }
-    $base = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $base = Get-NormalizedShortcutPath -Value $Root -ShortcutPath '<shortcut-test-root>' -Field 'Directory'
+    $base = $base.TrimEnd('\')
     return @((Join-Path $base 'Desktop'), (Join-Path $base 'Start Menu'), (Join-Path $base 'Taskbar'))
 }
 
@@ -286,6 +299,104 @@ function Read-ShortcutContract {
     } finally {
         if ($null -ne $shell) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell) }
     }
+}
+
+function Get-NormalizedShortcutPath {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value,
+        [Parameter(Mandatory = $true)][string]$ShortcutPath,
+        [Parameter(Mandatory = $true)][string]$Field
+    )
+    if ([string]::IsNullOrWhiteSpace($Value)) { throw "Shortcut '$ShortcutPath' has empty field '$Field'" }
+    try { return [System.IO.Path]::GetFullPath($Value) }
+    catch { throw "Shortcut '$ShortcutPath' has invalid field '$Field': $Value ($($_.Exception.Message))" }
+}
+
+function Get-RcDuplicateTaskbarPins {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$ShortcutName,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [string]$ShortcutBase = ''
+    )
+    $directories = @(Get-ShortcutDirectories -Root $ShortcutBase)
+    $taskbarDirectory = $directories[2]
+    if (-not (Test-Path -LiteralPath $taskbarDirectory -PathType Container)) { return @() }
+    $expectedTarget = [System.IO.Path]::GetFullPath((Join-Path $env:SystemRoot 'System32\wscript.exe'))
+    $expectedLauncher = [System.IO.Path]::GetFullPath((Join-Path $Root 'launch-as-admin.vbs'))
+    $expectedArguments = '"' + $expectedLauncher + '"'
+    $duplicatePattern = '^' + [regex]::Escape([System.IO.Path]::GetFileNameWithoutExtension($ShortcutName)) + ' \(\d+\)\.lnk$'
+    $pins = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($candidate in @(Get-ChildItem -LiteralPath $taskbarDirectory -Filter '*.lnk' -File -ErrorAction SilentlyContinue)) {
+        if ($candidate.Name -notmatch $duplicatePattern) { continue }
+        $shortcut = Read-ShortcutContract -Path $candidate.FullName
+        $arguments = [string]$shortcut.Arguments
+        $workingDirectory = [string]$shortcut.WorkingDirectory
+        $referencesRcLauncher = -not [string]::IsNullOrWhiteSpace($arguments) -and
+            $arguments.IndexOf($expectedLauncher, [StringComparison]::OrdinalIgnoreCase) -ge 0
+        $workingDirectoryIsRc = $false
+        if (-not [string]::IsNullOrWhiteSpace($workingDirectory)) {
+            try { $workingDirectoryIsRc = [System.IO.Path]::GetFullPath($workingDirectory).TrimEnd('\').Equals($Root.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) }
+            catch { throw "$Label duplicate candidate shortcut '$($candidate.FullName)' has invalid field 'WorkingDirectory': $workingDirectory ($($_.Exception.Message))" }
+        }
+        if (-not $referencesRcLauncher -and -not $workingDirectoryIsRc) { continue }
+
+        $targetPath = Get-NormalizedShortcutPath -Value ([string]$shortcut.TargetPath) -ShortcutPath $candidate.FullName -Field 'TargetPath'
+        if (-not $expectedTarget.Equals($targetPath, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "$Label duplicate candidate shortcut '$($candidate.FullName)' field 'TargetPath' mismatch: expected '$expectedTarget', actual '$($shortcut.TargetPath)'"
+        }
+        if ([string]::IsNullOrWhiteSpace($arguments)) { throw "$Label duplicate candidate shortcut '$($candidate.FullName)' has empty field 'Arguments'" }
+        if (-not $expectedArguments.Equals($arguments, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "$Label duplicate candidate shortcut '$($candidate.FullName)' field 'Arguments' mismatch: expected '$expectedArguments', actual '$arguments'"
+        }
+        $pins.Add([pscustomobject]@{
+            Path = [System.IO.Path]::GetFullPath($candidate.FullName)
+            Name = $candidate.Name
+            Sha256 = (Get-FileHash -LiteralPath $candidate.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        })
+    }
+    return @($pins)
+}
+
+function Move-RcDuplicateTaskbarPinsToBackup {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$ShortcutName,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$IconPath,
+        [string]$ShortcutBase = ''
+    )
+    $pins = @(Get-RcDuplicateTaskbarPins -Root $Root -ShortcutName $ShortcutName -Label $Label -ShortcutBase $ShortcutBase)
+    if ($pins.Count -eq 0) { return '' }
+
+    Assert-ShortcutContract -Root $Root -ShortcutName $ShortcutName -Label $Label -IconPath $IconPath -ShortcutBase $ShortcutBase
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmssfff'
+    $backupRoot = Join-Path (Join-Path $Root 'shortcut-pin-backups') $stamp
+    if (Test-Path -LiteralPath $backupRoot) { throw "RC shortcut backup path already exists; refusing to overwrite: $backupRoot" }
+    $taskbarBackup = Join-Path $backupRoot 'Taskbar'
+    New-Item -ItemType Directory -Path $taskbarBackup -Force | Out-Null
+    $entries = @($pins | ForEach-Object {
+        [pscustomobject]@{ originalPath = $_.Path; backupRelativePath = Join-Path 'Taskbar' $_.Name; sha256 = $_.Sha256 }
+    })
+    [ordered]@{
+        schema = 1
+        kind = 'release-candidate-duplicate-taskbar-pin-backup'
+        createdAt = (Get-Date).ToString('o')
+        runtimeRoot = $Root
+        entries = $entries
+    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $backupRoot 'backup-manifest.json') -Encoding UTF8
+
+    foreach ($pin in $pins) {
+        if (-not (Test-Path -LiteralPath $pin.Path -PathType Leaf)) { throw "RC duplicate Taskbar pin changed before cleanup: $($pin.Path); backup manifest: $backupRoot" }
+        $currentHash = (Get-FileHash -LiteralPath $pin.Path -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($currentHash -cne $pin.Sha256) { throw "RC duplicate Taskbar pin changed before cleanup: $($pin.Path); backup manifest: $backupRoot" }
+        $backupPath = Join-Path $backupRoot (Join-Path 'Taskbar' $pin.Name)
+        Move-Item -LiteralPath $pin.Path -Destination $backupPath
+        $backupHash = (Get-FileHash -LiteralPath $backupPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($backupHash -cne $pin.Sha256) { throw "RC duplicate Taskbar pin backup hash mismatch: $backupPath; source record: $($pin.Path)" }
+    }
+    return $backupRoot
 }
 
 function Assert-LauncherContract {
@@ -316,39 +427,55 @@ function Assert-ShortcutContract {
         [string]$ShortcutBase = ''
     )
     $directories = @(Get-ShortcutDirectories -Root $ShortcutBase)
-    $expectedTarget = Join-Path $env:SystemRoot 'System32\wscript.exe'
-    $expectedLauncher = Join-Path $Root 'launch-as-admin.vbs'
+    $expectedTarget = [System.IO.Path]::GetFullPath((Join-Path $env:SystemRoot 'System32\wscript.exe'))
+    $expectedLauncher = [System.IO.Path]::GetFullPath((Join-Path $Root 'launch-as-admin.vbs'))
     $expectedArguments = '"' + $expectedLauncher + '"'
     $expectedPaths = @()
     foreach ($directory in $directories) {
-        $path = Join-Path $directory $ShortcutName
+        $resolvedDirectory = Get-NormalizedShortcutPath -Value ([string]$directory) -ShortcutPath "<${Label}-shortcut-directory>" -Field 'Directory'
+        $path = Join-Path $resolvedDirectory $ShortcutName
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "$Label shortcut is missing: $path" }
         $expectedPaths += [System.IO.Path]::GetFullPath($path)
         $shortcut = Read-ShortcutContract -Path $path
-        if (-not $expectedTarget.Equals([System.IO.Path]::GetFullPath($shortcut.TargetPath), [StringComparison]::OrdinalIgnoreCase)) {
-            throw "$Label shortcut target $path mismatch: expected '$expectedTarget', actual '$($shortcut.TargetPath)'"
+        $actualTarget = Get-NormalizedShortcutPath -Value ([string]$shortcut.TargetPath) -ShortcutPath $path -Field 'TargetPath'
+        if (-not $expectedTarget.Equals($actualTarget, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "$Label shortcut '$path' field 'TargetPath' mismatch: expected '$expectedTarget', actual '$($shortcut.TargetPath)'"
         }
+        if ([string]::IsNullOrWhiteSpace([string]$shortcut.Arguments)) { throw "$Label shortcut '$path' has empty field 'Arguments'" }
         if (-not $expectedArguments.Equals($shortcut.Arguments, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "$Label shortcut arguments $path mismatch: expected '$expectedArguments', actual '$($shortcut.Arguments)'"
+            throw "$Label shortcut '$path' field 'Arguments' mismatch: expected '$expectedArguments', actual '$($shortcut.Arguments)'"
         }
-        $workingDirectory = [System.IO.Path]::GetFullPath($shortcut.WorkingDirectory).TrimEnd('\')
+        $workingDirectory = (Get-NormalizedShortcutPath -Value ([string]$shortcut.WorkingDirectory) -ShortcutPath $path -Field 'WorkingDirectory').TrimEnd('\')
         if (-not $Root.TrimEnd('\').Equals($workingDirectory, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "$Label shortcut working directory $path mismatch: expected '$Root', actual '$workingDirectory'"
+            throw "$Label shortcut '$path' field 'WorkingDirectory' mismatch: expected '$Root', actual '$workingDirectory'"
         }
+        if ([string]::IsNullOrWhiteSpace([string]$shortcut.IconLocation)) { throw "$Label shortcut '$path' has empty field 'IconLocation'" }
         if (-not $shortcut.IconLocation.StartsWith($IconPath, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "$Label shortcut icon $path mismatch: expected '$IconPath', actual '$($shortcut.IconLocation)'"
+            throw "$Label shortcut '$path' field 'IconLocation' mismatch: expected '$IconPath', actual '$($shortcut.IconLocation)'"
         }
     }
 
+    $duplicateTaskbarPaths = @{}
+    foreach ($pin in @(Get-RcDuplicateTaskbarPins -Root $Root -ShortcutName $ShortcutName -Label $Label -ShortcutBase $ShortcutBase)) {
+        $duplicateTaskbarPaths[$pin.Path] = $true
+    }
     $runtimeMarker = $Root.TrimEnd('\')
     $stale = @()
     foreach ($directory in $directories) {
         foreach ($candidate in @(Get-ChildItem -LiteralPath $directory -Filter '*.lnk' -File -ErrorAction SilentlyContinue)) {
             $candidateFullPath = [System.IO.Path]::GetFullPath($candidate.FullName)
+            if ($expectedPaths -contains $candidateFullPath -or $duplicateTaskbarPaths.ContainsKey($candidateFullPath)) { continue }
             $shortcut = Read-ShortcutContract -Path $candidate.FullName
-            $sameRuntime = ([System.IO.Path]::GetFullPath($shortcut.WorkingDirectory).TrimEnd('\') -ieq $runtimeMarker) -or
-                $shortcut.Arguments.IndexOf($expectedLauncher, [StringComparison]::OrdinalIgnoreCase) -ge 0
-            if ($sameRuntime -and $expectedPaths -notcontains $candidateFullPath) { $stale += $candidate.FullName }
+            $workingDirectory = [string]$shortcut.WorkingDirectory
+            $arguments = [string]$shortcut.Arguments
+            $workingDirectoryIsRc = $false
+            if (-not [string]::IsNullOrWhiteSpace($workingDirectory)) {
+                try { $workingDirectoryIsRc = [System.IO.Path]::GetFullPath($workingDirectory).TrimEnd('\') -ieq $runtimeMarker }
+                catch { throw "$Label shortcut '$($candidate.FullName)' has invalid field 'WorkingDirectory': $workingDirectory ($($_.Exception.Message))" }
+            }
+            $sameRuntime = $workingDirectoryIsRc -or
+                (-not [string]::IsNullOrWhiteSpace($arguments) -and $arguments.IndexOf($expectedLauncher, [StringComparison]::OrdinalIgnoreCase) -ge 0)
+            if ($sameRuntime) { $stale += $candidate.FullName }
         }
     }
     if ($stale.Count -gt 0) { throw "$Label has duplicate or stale shortcuts for the RC runtime: $($stale -join '; ')" }
@@ -471,6 +598,55 @@ function Get-BetaDeployment {
         JarPath = $jarPath
         Version = Get-VersionFromJarName $jarName
     }
+}
+
+function Assert-ShortcutSyncChannelContract {
+    param([Parameter(Mandatory = $true)][string]$Root)
+    $buildPath = Join-Path $Root 'build-and-deploy.ps1'
+    $syncPath = Join-Path $Root 'sync-shortcuts.ps1'
+    foreach ($path in @($buildPath, $syncPath)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Beta release script is missing required shortcut channel contract file: $path" }
+    }
+    $buildText = Get-Content -LiteralPath $buildPath -Raw
+    if ($buildText -notmatch '(?is)sync-shortcuts\.ps1[\s\S]{0,1200}?-Channel\s+\$Channel') {
+        throw "Beta build-and-deploy.ps1 does not pass -Channel to sync-shortcuts.ps1: $buildPath"
+    }
+    $tokens = $null
+    $parseErrors = $null
+    $syncAst = [System.Management.Automation.Language.Parser]::ParseFile($syncPath, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -gt 0) { throw "Beta sync-shortcuts.ps1 cannot be parsed for its channel parameter contract: $syncPath ($($parseErrors[0].Message))" }
+    $hasChannelParameter = $null -ne $syncAst.ParamBlock -and @($syncAst.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -ieq 'Channel' }).Count -gt 0
+    if (-not $hasChannelParameter) { throw "Beta build-and-deploy.ps1 passes -Channel, but sync-shortcuts.ps1 does not declare a Channel parameter: $syncPath" }
+}
+
+function Set-RcShortcutSyncDesktopFallback {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Release Candidate shortcut sync script is missing: $Path" }
+    $text = [System.IO.File]::ReadAllText($Path)
+    $desktopLinePattern = '(?m)^(?<indent>[ \t]*)\[Environment\]::GetFolderPath\(["'']Desktop["'']\),[ \t\r]*$'
+    $desktopMatches = [regex]::Matches($text, $desktopLinePattern)
+    if ($desktopMatches.Count -eq 0) {
+        if ($text.Contains('$desktopFallback')) { return $false }
+        throw "Release Candidate sync-shortcuts.ps1 has no recognizable Desktop known-folder entry to add a safe fallback: $Path"
+    }
+    if ($desktopMatches.Count -ne 1) { throw "Release Candidate sync-shortcuts.ps1 has multiple Desktop known-folder entries; refusing an ambiguous RC-only patch: $Path" }
+
+    $match = $desktopMatches[0]
+    $indent = $match.Groups['indent'].Value
+    $newline = if ($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+    $fallbackLines = @(
+        ($indent + '$desktopFallback = [Environment]::GetFolderPath(''Desktop'')'),
+        ($indent + 'if ([string]::IsNullOrWhiteSpace($desktopFallback)) {'),
+        ($indent + '    $profileRoot = [Environment]::GetFolderPath(''UserProfile'')'),
+        ($indent + '    if ([string]::IsNullOrWhiteSpace($profileRoot)) { $profileRoot = [string]$env:USERPROFILE }'),
+        ($indent + '    if ([string]::IsNullOrWhiteSpace($profileRoot)) { throw ''Cannot resolve user profile path for Release Candidate Desktop shortcut'' }'),
+        ($indent + '    $desktopFallback = Join-Path $profileRoot ''Desktop'''),
+        ($indent + '}')
+    ) -join $newline
+    $text = $text.Insert($match.Index, $fallbackLines + $newline)
+    $text = [regex]::Replace($text, $desktopLinePattern, { param($m) $m.Groups['indent'].Value + '$desktopFallback,' }, 1)
+    [System.IO.File]::WriteAllText($Path, $text, $utf8NoBom)
+    return $true
 }
 
 function Set-RcMetadata {
@@ -729,6 +905,7 @@ if ([string]::IsNullOrWhiteSpace($betaBranch) -or $betaBranch -notlike 'beta/*' 
 $betaHead = (Invoke-GitText -Root $projectRoot -Arguments @('rev-parse', 'HEAD')).Text
 $betaDeployment = Get-BetaDeployment -Root $projectRoot -Branch $betaBranch -Head $betaHead
 Assert-BetaSourceCheckout -Root $projectRoot -BetaDeployment $betaDeployment
+Assert-ShortcutSyncChannelContract -Root $projectRoot
 $verification = Assert-VerificationEvidence -Path $VerificationEvidencePath -SourceBranch $betaBranch -SourceCommit $betaHead -BetaDeployment $betaDeployment
 
 if ([string]::IsNullOrWhiteSpace($ReleaseCandidateBranch)) { $ReleaseCandidateBranch = "beta/release-candidate-$($betaDeployment.Version)" }
@@ -741,9 +918,10 @@ if ([System.IO.Path]::GetFullPath($rcRoot).TrimEnd('\') -eq [System.IO.Path]::Ge
     [System.IO.Path]::GetFileName($rcRoot) -eq 'Hearthstone Script') {
     throw "Release Candidate runtime must be isolated from Beta and Stable: $rcRoot"
 }
- $legacyRcUpgrade = Assert-RcRuntimeIsSafe -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot -AllowLegacyUpgrade:$AllowLegacyRcUpgrade
+$legacyRcUpgrade = Assert-RcRuntimeIsSafe -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot -AllowLegacyUpgrade:$AllowLegacyRcUpgrade
+$rcTaskbarDuplicates = @(Get-RcDuplicateTaskbarPins -Root $rcRoot -ShortcutName 'Hearthstone Script Release Candidate.lnk' -Label 'Release Candidate' -ShortcutBase $ShortcutRoot)
 if ($PreflightOnly) {
-    Write-Output "PREFLIGHT_OK betaVersion=$($betaDeployment.Version) sourceCommit=$betaHead rcRuntime=$rcRoot legacyRcUpgrade=$legacyRcUpgrade"
+    Write-Output "PREFLIGHT_OK betaVersion=$($betaDeployment.Version) sourceCommit=$betaHead rcRuntime=$rcRoot legacyRcUpgrade=$legacyRcUpgrade taskbarDuplicatePins=$($rcTaskbarDuplicates.Count) cleanup=deferred-to-promotion"
     exit 0
 }
 if ([string]::IsNullOrWhiteSpace($PromotionWorktree)) {
@@ -763,6 +941,10 @@ if ($branchRef.ExitCode -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingRc
 # A valid RC manifest is the idempotency fence. A rerun must not rebuild or
 # touch a channel that already contains the exact promoted source snapshot.
 if ($branchRef.ExitCode -eq 0 -and (Test-RcDeployment -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot -Verification $verification)) {
+    $currentRcManifest = Read-JsonFile -Path (Join-Path $rcRoot 'deployment-manifest.json') -Label 'Release Candidate deployment manifest'
+    $currentRcIcon = Get-ManifestRuntimePath -Manifest $currentRcManifest -Root $rcRoot -PropertyName 'iconFile' -Label 'Release Candidate icon'
+    $duplicateBackup = Move-RcDuplicateTaskbarPinsToBackup -Root $rcRoot -ShortcutName 'Hearthstone Script Release Candidate.lnk' -Label 'Release Candidate' -IconPath $currentRcIcon -ShortcutBase $ShortcutRoot
+    if (-not [string]::IsNullOrWhiteSpace($duplicateBackup)) { Write-Output "RC_TASKBAR_DUPLICATE_PINS_BACKED_UP=$duplicateBackup" }
     Write-Output "PROMOTION_ALREADY_COMPLETE branch=$ReleaseCandidateBranch sourceCommit=$betaHead onlineE2e=$($verification.Status) stableReady=False runtime=$rcRoot"
     exit 0
 }
@@ -789,11 +971,14 @@ if ([string]::IsNullOrWhiteSpace($existingRcWorktree)) {
 Assert-GitClean -Root $PromotionWorktree -Label 'Release Candidate source checkout before metadata update'
 $rcConfigPath = Join-Path $PromotionWorktree 'release-channel.json'
 Set-RcMetadata -Path $rcConfigPath -Branch $ReleaseCandidateBranch -SourceBranch $betaBranch -SourceCommit $betaHead -Verification $verification
+$rcShortcutSyncPath = Join-Path $PromotionWorktree 'sync-shortcuts.ps1'
+$desktopFallbackPatched = Set-RcShortcutSyncDesktopFallback -Path $rcShortcutSyncPath
+if ($desktopFallbackPatched) { Write-Output "RC_SHORTCUT_SYNC_DESKTOP_FALLBACK=applied path=$rcShortcutSyncPath" }
 Assert-RcMetadata -Root $PromotionWorktree -Branch $ReleaseCandidateBranch -SourceBranch $betaBranch -SourceCommit $betaHead -Verification $verification
 $metadataStatus = Invoke-GitText -Root $PromotionWorktree -Arguments @('status', '--porcelain', '--untracked-files=all')
 if (-not [string]::IsNullOrWhiteSpace($metadataStatus.Text)) {
-    Invoke-GitText -Root $PromotionWorktree -Arguments @('add', '--', 'release-channel.json') | Out-Null
-    Invoke-GitText -Root $PromotionWorktree -Arguments @('commit', '-m', "Promote Beta $betaDeployment.Version to Release Candidate") | Out-Null
+    Invoke-GitText -Root $PromotionWorktree -Arguments @('add', '--', 'release-channel.json', 'sync-shortcuts.ps1') | Out-Null
+    Invoke-GitText -Root $PromotionWorktree -Arguments @('commit', '-m', "Prepare Beta $betaDeployment.Version as Release Candidate") | Out-Null
 }
 Assert-GitClean -Root $PromotionWorktree -Label 'Release Candidate source checkout after metadata commit'
 Assert-RcMetadata -Root $PromotionWorktree -Branch $ReleaseCandidateBranch -SourceBranch $betaBranch -SourceCommit $betaHead -Verification $verification
@@ -808,6 +993,10 @@ if ($legacyRcUpgrade) {
 }
 Write-Output "BUILD_AND_DEPLOY_INVOCATION=release-candidate worktree=$PromotionWorktree"
 Invoke-BuildAndDeploy -Root $PromotionWorktree -Script $BuildScript
+$deployedRcManifest = Read-JsonFile -Path (Join-Path $rcRoot 'deployment-manifest.json') -Label 'Release Candidate deployment manifest'
+$deployedRcIcon = Get-ManifestRuntimePath -Manifest $deployedRcManifest -Root $rcRoot -PropertyName 'iconFile' -Label 'Release Candidate icon'
+$duplicateBackup = Move-RcDuplicateTaskbarPinsToBackup -Root $rcRoot -ShortcutName 'Hearthstone Script Release Candidate.lnk' -Label 'Release Candidate' -IconPath $deployedRcIcon -ShortcutBase $ShortcutRoot
+if (-not [string]::IsNullOrWhiteSpace($duplicateBackup)) { Write-Output "RC_TASKBAR_DUPLICATE_PINS_BACKED_UP=$duplicateBackup" }
 Set-RcDeploymentVerificationMetadata -Root $rcRoot -Verification $verification
 if (-not (Test-RcDeployment -Root $rcRoot -SourceBranch $betaBranch -SourceCommit $betaHead -ShortcutBase $ShortcutRoot -Verification $verification)) {
     throw "Release Candidate deployment manifest did not validate against the promoted Beta source: $rcRoot"

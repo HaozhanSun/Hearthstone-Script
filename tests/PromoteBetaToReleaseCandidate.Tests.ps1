@@ -135,7 +135,19 @@ try {
 }
 '@
     [System.IO.File]::WriteAllText((Join-Path $project 'release-channel.json'), $config)
-    [System.IO.File]::WriteAllText((Join-Path $project 'build-and-deploy.ps1'), "param([string]`$Channel)`n")
+    [System.IO.File]::WriteAllText((Join-Path $project 'build-and-deploy.ps1'), @'
+param([string]$Channel)
+& (Join-Path $PSScriptRoot 'sync-shortcuts.ps1') -RuntimeRoot $runtimeRoot -Channel $Channel
+'@)
+    [System.IO.File]::WriteAllText((Join-Path $project 'sync-shortcuts.ps1'), @'
+[CmdletBinding()]
+param([string]$Channel)
+$shortcutDirectories = @(
+    [Environment]::GetFolderPath("Desktop"),
+    (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"),
+    (Join-Path $env:APPDATA "Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar")
+)
+'@)
     [System.IO.File]::WriteAllText((Join-Path $project 'pom.xml'), @'
 <project>
   <version>v4.16.669</version>
@@ -233,12 +245,39 @@ try {
         $shortcut.IconLocation = (Join-Path $root 'hs-script-release-candidate.ico') + ',0'
         $shortcut.Save()
     }
+    $duplicate = $shell.CreateShortcut((Join-Path (Join-Path $env:PROMOTION_TEST_SHORTCUT_ROOT 'Taskbar') 'Hearthstone Script Release Candidate (2).lnk'))
+    $duplicate.TargetPath = Join-Path $env:SystemRoot 'System32\wscript.exe'
+    $duplicate.Arguments = '"' + (Join-Path $root 'launch-as-admin.vbs') + '"'
+    $duplicate.WorkingDirectory = $root
+    $duplicate.IconLocation = (Join-Path $root 'hs-script-release-candidate.ico') + ',0'
+    $duplicate.Save()
 } finally { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell) }
 '@
     [System.IO.File]::WriteAllText($fakeBuild, $fakeBuildText)
     $env:PROMOTION_TEST_RC_ROOT = $rcRuntime
     $env:PROMOTION_TEST_INVOCATION = $invocationLog
 $env:PROMOTION_TEST_SHORTCUT_ROOT = $shortcutBase
+
+$taskbarDirectory = Join-Path $shortcutBase 'Taskbar'
+New-Item -ItemType Directory -Path $taskbarDirectory -Force | Out-Null
+$preservedChannelPins = @{}
+$shell = New-Object -ComObject WScript.Shell
+try {
+    foreach ($channelPin in @(
+        @{ Name = 'Hearthstone Script Beta.lnk'; Runtime = (Join-Path $tempRoot 'Hearthstone Script Beta'); Launcher = 'beta-launch.vbs' },
+        @{ Name = 'Hearthstone Script.lnk'; Runtime = $stableRuntime; Launcher = 'stable-launch.vbs' }
+    )) {
+        $launcherPath = Join-Path $channelPin.Runtime $channelPin.Launcher
+        $pin = $shell.CreateShortcut((Join-Path $taskbarDirectory $channelPin.Name))
+        $pin.TargetPath = Join-Path $env:SystemRoot 'System32\wscript.exe'
+        $pin.Arguments = '"' + $launcherPath + '"'
+        $pin.WorkingDirectory = $channelPin.Runtime
+        $pin.IconLocation = $launcherPath + ',0'
+        $pin.Save()
+        $pinPath = Join-Path $taskbarDirectory $channelPin.Name
+        $preservedChannelPins[$pinPath] = (Get-FileHash -LiteralPath $pinPath -Algorithm SHA256).Hash
+    }
+} finally { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell) }
 
     $pendingInvocationLog = Join-Path $tempRoot 'pending-build-invocations.log'
     $env:PROMOTION_TEST_RC_ROOT = $pendingRcRuntime
@@ -251,6 +290,17 @@ $env:PROMOTION_TEST_SHORTCUT_ROOT = $shortcutBase
     if ($pendingManifest.onlineE2eBetaArtifactName -ne $jarName -or $pendingManifest.onlineE2eBetaArtifactSha256 -ne $betaManifest.appJarSha256 -or $pendingManifest.onlineE2eEvidenceSha256 -ne '') { throw 'Pending manifest did not bind status to the exact Beta artifact or unexpectedly claim evidence' }
     $pendingConfig = Get-Content -LiteralPath (Join-Path $pendingRcWorktree 'release-channel.json') -Raw | ConvertFrom-Json
     if ($pendingConfig.onlineE2eStatus -ne 'PENDING' -or $pendingConfig.stableReady -ne $false) { throw 'Pending E2E state was not recorded in RC branch metadata' }
+    $duplicateTaskbarPath = Join-Path $taskbarDirectory 'Hearthstone Script Release Candidate (2).lnk'
+    if (Test-Path -LiteralPath $duplicateTaskbarPath) { throw 'RC duplicate Taskbar pin remained active after deployment' }
+    $pinBackupRoots = @(Get-ChildItem -LiteralPath (Join-Path $pendingRcRuntime 'shortcut-pin-backups') -Directory -ErrorAction SilentlyContinue)
+    if ($pinBackupRoots.Count -ne 1) { throw 'Expected one recoverable RC Taskbar duplicate-pin backup after pending candidate deployment' }
+    $pinBackupManifest = Get-Content -LiteralPath (Join-Path $pinBackupRoots[0].FullName 'backup-manifest.json') -Raw | ConvertFrom-Json
+    if ($pinBackupManifest.entries.Count -ne 1 -or $pinBackupManifest.entries[0].originalPath -cne $duplicateTaskbarPath) { throw 'Duplicate-pin backup manifest does not identify the exact RC Taskbar link' }
+    $backedUpPin = Join-Path $pinBackupRoots[0].FullName $pinBackupManifest.entries[0].backupRelativePath
+    if (-not (Test-Path -LiteralPath $backedUpPin -PathType Leaf) -or (Get-FileHash -LiteralPath $backedUpPin -Algorithm SHA256).Hash.ToLowerInvariant() -cne $pinBackupManifest.entries[0].sha256) { throw 'RC duplicate Taskbar pin backup is missing or its hash changed' }
+    foreach ($preservedPin in $preservedChannelPins.Keys) {
+        if ((Get-FileHash -LiteralPath $preservedPin -Algorithm SHA256).Hash -cne $preservedChannelPins[$preservedPin]) { throw "RC pin cleanup modified a Beta/Stable Taskbar shortcut: $preservedPin" }
+    }
 
     $badEvidencePath = Join-Path $tempRoot 'wrong-artifact-evidence.json'
     $badEvidence = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
@@ -267,6 +317,9 @@ $env:PROMOTION_TEST_SHORTCUT_ROOT = $shortcutBase
     if (-not (Test-Path -LiteralPath (Join-Path $rcWorktree 'release-channel.json') -PathType Leaf)) { throw 'RC worktree metadata was not created' }
     $rcConfig = Get-Content -LiteralPath (Join-Path $rcWorktree 'release-channel.json') -Raw | ConvertFrom-Json
     if ($rcConfig.channel -ne 'release-candidate' -or $rcConfig.branch -ne 'beta/release-candidate-v4.16.670-local-20261022-225531PDT') { throw 'RC metadata was not isolated or branch-bound' }
+    $promotedShortcutSync = Get-Content -LiteralPath (Join-Path $rcWorktree 'sync-shortcuts.ps1') -Raw
+    if ($promotedShortcutSync -notmatch '\[string\]\$Channel' -or $promotedShortcutSync -notmatch '\$desktopFallback = \[Environment\]::GetFolderPath') { throw 'RC snapshot did not retain the channel contract and receive the isolated Desktop fallback' }
+    if ($promotedShortcutSync -match '\[Environment\]::GetFolderPath\(["'']Desktop["'']\),') { throw 'RC snapshot retained the unsafe empty Desktop path expression' }
     if ($rcConfig.promotionSourceCommit -ne $betaHead -or $rcConfig.promotionSourceBranch -ne 'beta/test-promotion') { throw 'RC promotion source metadata is incomplete' }
     if ($rcConfig.onlineE2eStatus -ne 'PASS' -or $rcConfig.onlineE2eBetaArtifactName -ne $jarName -or $rcConfig.onlineE2eBetaArtifactSha256 -ne $betaManifest.appJarSha256 -or $rcConfig.stableReady -ne $false -or $rcConfig.stableReadiness -ne 'REQUIRES_INDEPENDENT_MAIN_GATE_REVIEW') { throw 'RC source metadata did not bind successful evidence while preserving independent Stable gate review' }
     $rcManifest = Get-Content -LiteralPath (Join-Path $rcRuntime 'deployment-manifest.json') -Raw | ConvertFrom-Json
@@ -279,6 +332,26 @@ $env:PROMOTION_TEST_SHORTCUT_ROOT = $shortcutBase
     $preflightOutput = & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase -PreflightOnly
     if (($preflightOutput -join "`n") -notmatch 'PREFLIGHT_OK') { throw 'Preflight did not report success' }
     if ((Get-Content -LiteralPath $invocationLog).Count -ne 1) { throw 'Preflight invoked the build path' }
+
+    $canonicalTaskbarShortcut = Join-Path $taskbarDirectory 'Hearthstone Script Release Candidate.lnk'
+    $shell = New-Object -ComObject WScript.Shell
+    try {
+        $brokenShortcut = $shell.CreateShortcut($canonicalTaskbarShortcut)
+        $brokenShortcut.WorkingDirectory = ''
+        $brokenShortcut.Save()
+    } finally { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell) }
+    Assert-Throws -Action {
+        & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree $rcWorktree -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase -AllowLegacyRcUpgrade -PreflightOnly | Out-Null
+    } -MessageFragment "Shortcut '$canonicalTaskbarShortcut' has empty field 'WorkingDirectory'"
+    $shell = New-Object -ComObject WScript.Shell
+    try {
+        $restoredShortcut = $shell.CreateShortcut($canonicalTaskbarShortcut)
+        $restoredShortcut.TargetPath = Join-Path $env:SystemRoot 'System32\wscript.exe'
+        $restoredShortcut.Arguments = '"' + (Join-Path $rcRuntime 'launch-as-admin.vbs') + '"'
+        $restoredShortcut.WorkingDirectory = $rcRuntime
+        $restoredShortcut.IconLocation = (Join-Path $rcRuntime 'hs-script-release-candidate.ico') + ',0'
+        $restoredShortcut.Save()
+    } finally { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell) }
 
     $sourcePomPath = Join-Path $project 'pom.xml'
     $sourcePom = [System.IO.File]::ReadAllText($sourcePomPath)
@@ -409,7 +482,7 @@ $env:PROMOTION_TEST_SHORTCUT_ROOT = $shortcutBase
     Invoke-TestGit -Root $project -Arguments @('commit', '-m', 'invalid channel metadata fixture') | Out-Null
     Assert-Throws -Action { & $promotionScript -ProjectRoot $project -BetaRuntimeRoot $betaRuntime -ReleaseCandidateRuntimeRoot $rcRuntime -PromotionWorktree (Join-Path $tempRoot 'unused-worktree-3') -BuildScript $fakeBuild -VerificationEvidencePath $evidencePath -ShortcutRoot $shortcutBase | Out-Null } -MessageFragment 'Beta source channel mismatch'
 
-    Write-Output 'PromoteBetaToReleaseCandidate.Tests: PASS (E2E-pending candidate, exact evidence binding, Stable-readiness hold, clean promotion, exact source snapshot, RC isolation, idempotent repeat, dirty/missing/mismatched refusal, Beta/Stable preservation)'
+    Write-Output 'PromoteBetaToReleaseCandidate.Tests: PASS (E2E-pending candidate, exact evidence binding, Stable-readiness hold, shortcut channel contract, Desktop fallback, empty-field diagnostics, recoverable RC duplicate-pin cleanup, Beta/Stable pin preservation, clean promotion, exact source snapshot, RC isolation, idempotent repeat, dirty/missing/mismatched refusal)'
 } finally {
     Remove-Item Env:PROMOTION_TEST_RC_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:PROMOTION_TEST_INVOCATION -ErrorAction SilentlyContinue

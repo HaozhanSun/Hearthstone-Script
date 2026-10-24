@@ -202,6 +202,20 @@ custom plugin files, and backups in place, and verifies those protected files
 after the build. Unknown or malformed RC state still fails closed. The
 secretary owns the actual build/deploy invocation and live restart.
 
+Preflight is read-only and reports the number of exact duplicate RC Taskbar
+pins as `taskbarDuplicatePins`; cleanup is deferred until promotion. After the
+checked-in RC build path has synchronized the canonical shortcuts, the helper
+moves only `Hearthstone Script Release Candidate (n).lnk` Taskbar files whose
+target is `wscript.exe` and whose arguments point to the exact RC launcher into
+`shortcut-pin-backups/<timestamp>/Taskbar` under the RC runtime. A manifest
+records each original path and SHA-256 so the pins can be restored. The
+canonical RC pin remains in place; Beta and Stable shortcut names/targets are
+not candidates for cleanup. The helper also verifies before promotion that
+`build-and-deploy.ps1` passes `-Channel` to a `sync-shortcuts.ps1` that declares
+that parameter. In the isolated RC source snapshot only, it adds a Desktop
+known-folder fallback for hosts where `Environment.GetFolderPath('Desktop')`
+returns blank; it does not edit the Beta source checkout or Beta runtime.
+
 For repeat use, rerun the same command with the same evidence only after the
 Beta manifest still names the same source commit and artifact. A matching RC
 manifest returns `PROMOTION_ALREADY_COMPLETE` without rebuilding or changing
