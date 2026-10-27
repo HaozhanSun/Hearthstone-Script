@@ -87,6 +87,13 @@ object ActionDispatchGate {
                     gameWindow.toString(),
                     System.currentTimeMillis(),
                 ),
+            betaResultConfirmationPermitValid = action == BetaStartupResultConfirmationPolicy.DISPATCH_ACTION &&
+                processId != null && gameWindow != null &&
+                StartupInputReadiness.hasBetaResultConfirmationPermit(
+                    processId,
+                    gameWindow.toString(),
+                    System.currentTimeMillis(),
+                ),
         )
         if (!startupGateAllowed) {
             log.warn {
@@ -111,6 +118,13 @@ object ActionDispatchGate {
             startupNoticeDismissPermitValid = action == StartupNoticeRecoveryPolicy.DISPATCH_ACTION &&
                 processId != null && gameWindow != null &&
                 StartupInputReadiness.hasNoticeDismissPermit(
+                    processId,
+                    gameWindow.toString(),
+                    System.currentTimeMillis(),
+                ),
+            betaResultConfirmationPermitValid = action == BetaStartupResultConfirmationPolicy.DISPATCH_ACTION &&
+                processId != null && gameWindow != null &&
+                StartupInputReadiness.hasBetaResultConfirmationPermit(
                     processId,
                     gameWindow.toString(),
                     System.currentTimeMillis(),
@@ -178,6 +192,7 @@ object ActionDispatchGate {
         preSessionReconnectPermitValid: Boolean = false,
         startupTraditionalBattleSelectionReady: Boolean = false,
         startupNoticeDismissPermitValid: Boolean = false,
+        betaResultConfirmationPermitValid: Boolean = false,
     ): Boolean {
         if (paused || !working) {
             log.warn {
@@ -195,6 +210,7 @@ object ActionDispatchGate {
                 rankSurrenderCapabilityValid = rankSurrenderRequestCapabilityValid,
                 startupTraditionalBattleSelectionReady = startupTraditionalBattleSelectionReady,
                 startupNoticeDismissPermitValid = startupNoticeDismissPermitValid,
+                betaResultConfirmationPermitValid = betaResultConfirmationPermitValid,
             )
         ) {
             log.warn {

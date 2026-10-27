@@ -22,6 +22,7 @@ internal object StartupInputReadiness {
     private val proof = AtomicReference<Proof?>(null)
     private val reconnectPermit = AtomicReference<ReconnectPermit?>(null)
     private val noticeDismissPermit = AtomicReference<NoticeDismissPermit?>(null)
+    private val betaResultConfirmationPermit = AtomicReference<NoticeDismissPermit?>(null)
 
     const val HUB_TRADITIONAL_BATTLE_ACTION = "mode.select-traditional"
     const val HUB_MODE_CHOOSER_PROOF_MAX_AGE_MS = 8_000L
@@ -41,6 +42,9 @@ internal object StartupInputReadiness {
         noticeDismissPermit.updateAndGet { current ->
             if (current != null && current.pid == pid && current.hwnd == hwnd) null else current
         }
+        betaResultConfirmationPermit.updateAndGet { current ->
+            if (current != null && current.pid == pid && current.hwnd == hwnd) null else current
+        }
         proof.set(Proof(pid, hwnd, screen, now))
     }
 
@@ -51,6 +55,7 @@ internal object StartupInputReadiness {
             return
         }
         reconnectPermit.set(null)
+        betaResultConfirmationPermit.set(null)
         proof.set(Proof(pid, hwnd, HUB_MODE_CHOOSER_SCREEN, now))
     }
 
@@ -62,6 +67,11 @@ internal object StartupInputReadiness {
         }
         reconnectPermit.set(null)
         noticeDismissPermit.updateAndGet { current ->
+            if (current != null && (pid == null || current.pid == pid) &&
+                (hwnd == null || current.hwnd == hwnd)
+            ) null else current
+        }
+        betaResultConfirmationPermit.updateAndGet { current ->
             if (current != null && (pid == null || current.pid == pid) &&
                 (hwnd == null || current.hwnd == hwnd)
             ) null else current
@@ -112,6 +122,31 @@ internal object StartupInputReadiness {
         return true
     }
 
+    fun issueBetaResultConfirmationPermit(pid: Int, hwnd: String, point: Point, now: Long): Boolean {
+        if (pid <= 0 || hwnd.isBlank() || point.x < 0 || point.y < 0) return false
+        proof.set(null)
+        reconnectPermit.set(null)
+        noticeDismissPermit.set(null)
+        betaResultConfirmationPermit.set(
+            NoticeDismissPermit(pid, hwnd, Point(point), now + BetaStartupResultConfirmationPolicy.PERMIT_LIFETIME_MS),
+        )
+        return true
+    }
+
+    fun hasBetaResultConfirmationPermit(pid: Int, hwnd: String, point: Point, now: Long): Boolean =
+        betaResultConfirmationPermit.get()?.let {
+            now <= it.expiresAt && it.pid == pid && it.hwnd == hwnd && it.point == point
+        } == true
+
+    fun hasBetaResultConfirmationPermit(pid: Int, hwnd: String, now: Long): Boolean =
+        betaResultConfirmationPermit.get()?.let { now <= it.expiresAt && it.pid == pid && it.hwnd == hwnd } == true
+
+    fun consumeBetaResultConfirmationPermit(pid: Int, hwnd: String, point: Point, now: Long): Boolean {
+        val current = betaResultConfirmationPermit.get() ?: return false
+        return current.pid == pid && current.hwnd == hwnd && current.point == point &&
+            now <= current.expiresAt && betaResultConfirmationPermit.compareAndSet(current, null)
+    }
+
     fun hasNoticeDismissPermit(pid: Int, hwnd: String, point: Point, now: Long): Boolean =
         noticeDismissPermit.get()?.let {
             now <= it.expiresAt && it.pid == pid && it.hwnd == hwnd && it.point == point
@@ -130,6 +165,7 @@ internal object StartupInputReadiness {
         proof.set(null)
         reconnectPermit.set(null)
         noticeDismissPermit.set(null)
+        betaResultConfirmationPermit.set(null)
     }
 
     private val ONLINE_MENU_SCREENS = setOf(
@@ -165,11 +201,14 @@ internal object StartupInputAuthorizationPolicy {
         rankSurrenderCapabilityValid: Boolean = false,
         startupTraditionalBattleSelectionReady: Boolean = false,
         startupNoticeDismissPermitValid: Boolean = false,
+        betaResultConfirmationPermitValid: Boolean = false,
     ): Boolean = if (action == StartupNoticeRecoveryPolicy.DISPATCH_ACTION) {
         // A non-empty Power.log can make the session model ready while the
         // client is still on this modal. The exact permit plus final active
         // game/queue checks remain decisive for this one known button.
         startupNoticeDismissPermitValid
+    } else if (action == BetaStartupResultConfirmationPolicy.DISPATCH_ACTION) {
+        betaResultConfirmationPermitValid
     } else currentSessionReady || freshOnlineMenuReady ||
         (action.startsWith("startup.") && action != StartupNoticeRecoveryPolicy.DISPATCH_ACTION) ||
         (action == StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION &&

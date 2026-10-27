@@ -18,6 +18,9 @@ import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.StartupInputReadiness
+import club.xiaojiawei.hsscript.status.BetaStartupResultConfirmationPolicy
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscript.status.StartupNoticeRecoveryPolicy
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
@@ -491,9 +494,11 @@ object MouseUtil {
         terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
         preSessionReconnect: Boolean = false,
         preSessionStartupNotice: Boolean = false,
+        preSessionBetaResultConfirmation: Boolean = false,
     ): Boolean {
         val dispatchAction = when {
             terminalCleanupCapability != null -> "terminal-result.dismiss"
+            preSessionBetaResultConfirmation -> BetaStartupResultConfirmationPolicy.DISPATCH_ACTION
             preSessionStartupNotice -> StartupNoticeRecoveryPolicy.DISPATCH_ACTION
             preSessionReconnect -> "recovery.reconnect"
             else -> "recovery.left"
@@ -566,6 +571,45 @@ object MouseUtil {
             } finally {
                 DRIVER_LOCK.unlock()
             }
+        }
+        if (preSessionBetaResultConfirmation) {
+            val hwnd = ScriptStatus.gameHWND ?: return false
+            val pid = GameUtil.findGameProcessIdForDiagnostics()?.toInt() ?: return false
+            fun permitStillMatches(): Boolean =
+                StartupInputReadiness.hasBetaResultConfirmationPermit(
+                    pid, hwnd.toString(), pos, System.currentTimeMillis(),
+                ) && GameUtil.findGameProcessIdForDiagnostics() == pid.toLong() &&
+                    GameUtil.isVerifiedCurrentGameWindow(hwnd) && !WarEx.inWar &&
+                    BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta" &&
+                    !ScreenStateRecovery.isCurrentGameSessionReadyForStart() &&
+                    !GameUtil.isTerminalGameState() &&
+                    Mode.currMode === ModeEnum.LOGIN &&
+                    !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+                    !LifecycleTrace.hasRecentMatchmakingInputIntent()
+            if (!permitStillMatches() || !hwndIsValid(hwnd) || !WorkTimeListener.working || PauseStatus.isPause) {
+                log.warn { "BETA_STARTUP_RESULT_CONFIRMATION_BLOCKED reason=stale-or-unsafe-permit pid=$pid hwnd=$hwnd input=not-sent" }
+                return false
+            }
+            val lockAcquired = try { DRIVER_LOCK.tryLock(3000, TimeUnit.MILLISECONDS) }
+            catch (error: InterruptedException) { Thread.currentThread().interrupt(); false }
+            if (!lockAcquired) return false
+            try {
+                synchronized(e2eRobotLock) {
+                    if (!ActionDispatchGate.allow(dispatchAction) || !permitStillMatches() ||
+                        !WorkTimeListener.working || PauseStatus.isPause ||
+                        !forceFocusWindowForRecovery(hwnd) || !permitStillMatches()
+                    ) {
+                        log.warn { "BETA_STARTUP_RESULT_CONFIRMATION_BLOCKED reason=dispatch-recheck-failed pid=$pid hwnd=$hwnd input=not-sent" }
+                        return false
+                    }
+                    val accepted = sendE2eWindowsClick(pos)
+                    if (accepted) StartupInputReadiness.consumeBetaResultConfirmationPermit(
+                        pid, hwnd.toString(), pos, System.currentTimeMillis(),
+                    )
+                    log.warn { "BETA_STARTUP_RESULT_CONFIRMATION_CLICK_SENT pid=$pid hwnd=$hwnd pos=$pos accepted=$accepted input=SendInput" }
+                    return accepted
+                }
+            } finally { DRIVER_LOCK.unlock() }
         }
         val hwnd = ScriptStatus.gameHWND
         if (preSessionReconnect) {

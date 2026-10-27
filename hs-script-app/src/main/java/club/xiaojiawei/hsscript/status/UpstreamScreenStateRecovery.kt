@@ -11,6 +11,8 @@ import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.MouseUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import com.sun.jna.platform.win32.WinDef
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
@@ -68,6 +70,7 @@ object UpstreamScreenStateRecovery {
         RECONNECT("RECONNECT"),
         RECONNECT_FAILURE("RECONNECT_FAILURE"),
         AMAZON_APPSTORE_NOTICE("AMAZON_APPSTORE_NOTICE"),
+        BETA_RESULT_CONFIRMATION("BETA_RESULT_CONFIRMATION"),
         SERVER_UNAVAILABLE("SERVER_UNAVAILABLE"),
         LOGIN("LOGIN"),
         GAME_MODE("GAME_MODE"),
@@ -316,6 +319,9 @@ object UpstreamScreenStateRecovery {
 
         if (detection?.kind == ScreenKind.AMAZON_APPSTORE_NOTICE &&
             dismissFreshAmazonAppstoreNotice(authorizedCapture)
+        ) return true
+        if (detection?.kind == ScreenKind.BETA_RESULT_CONFIRMATION &&
+            dismissFreshBetaResultConfirmation(authorizedCapture)
         ) return true
 
         // Keep one durable, categorized copy for every 30-second recovery
@@ -1058,9 +1064,83 @@ object UpstreamScreenStateRecovery {
         return true
     }
 
+    /** Exact Beta-only startup acknowledgement; no readiness/menu proof is granted by the click. */
+    private fun dismissFreshBetaResultConfirmation(captured: AuthorizedCapture): Boolean {
+        val expectedWindow = captured.gameWindow
+        val currentPid = GameUtil.findGameProcessIdForDiagnostics()?.toInt() ?: return false
+        fun allowed(purpose: ScreenRecoveryCapturePurpose): Boolean =
+            BetaStartupResultConfirmationPolicy.mayAcknowledge(
+                betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
+                purpose = purpose,
+                currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+                activeGame = WarEx.inWar || GameUtil.isTerminalGameState(),
+                activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                    LifecycleTrace.hasRecentMatchmakingInputIntent(),
+                mode = Mode.currMode?.name,
+                trustedCurrentWindow = GameUtil.findGameProcessIdForDiagnostics() == currentPid.toLong() &&
+                    ScriptStatus.gameHWND?.toString() == expectedWindow.toString() &&
+                    GameUtil.isVerifiedCurrentGameWindow(expectedWindow),
+            )
+
+        if (!allowed(captured.purpose)) {
+            log.warn { "BETA_STARTUP_RESULT_CONFIRMATION_BLOCKED stage=initial reason=safety-policy input=not-sent" }
+            return false
+        }
+        val fresh = captureVerifiedGameScreen(stuckForMs = 0L, startupProbe = true) ?: return false
+        if (fresh.purpose != ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE ||
+            fresh.gameWindow.toString() != expectedWindow.toString() ||
+            GameUtil.findGameProcessIdForDiagnostics() != currentPid.toLong() ||
+            !GameUtil.isVerifiedCurrentGameWindow(expectedWindow)
+        ) {
+            log.warn { "BETA_STARTUP_RESULT_CONFIRMATION_BLOCKED stage=fresh reason=window-or-purpose-changed input=not-sent" }
+            return false
+        }
+        val freshText = runOCR(fresh.capture)
+        val freshPoint = BetaStartupResultConfirmationPolicy.confirmButtonPoint(
+            fresh.capture.image.width,
+            fresh.capture.image.height,
+            fresh.capture.bounds.x,
+            fresh.capture.bounds.y,
+        )
+        if (!BetaStartupResultConfirmationPolicy.matches(freshText) || freshPoint == null || !allowed(fresh.purpose)) {
+            log.warn {
+                "BETA_STARTUP_RESULT_CONFIRMATION_BLOCKED stage=fresh reason=signature-or-safety-mismatch " +
+                    "screen=${if (BetaStartupResultConfirmationPolicy.matches(freshText)) "EXACT" else "UNKNOWN"} input=not-sent"
+            }
+            return false
+        }
+        if (!StartupInputReadiness.issueBetaResultConfirmationPermit(
+                currentPid,
+                expectedWindow.toString(),
+                freshPoint,
+                System.currentTimeMillis(),
+            )
+        ) return false
+        val accepted = MouseUtil.leftButtonClickForRecovery(
+            freshPoint,
+            preSessionBetaResultConfirmation = true,
+        )
+        log.warn {
+            "BETA_STARTUP_RESULT_CONFIRMATION_DISPATCHED pid=$currentPid hwnd=$expectedWindow " +
+                "pos=$freshPoint accepted=$accepted input=SendInput"
+        }
+        return accepted
+    }
+
     private fun detect(ocrText: String, visual: VisualSignature): Detection? {
         val text = ocrText.lowercase(Locale.ROOT)
         fun has(vararg terms: String): Boolean = terms.all { text.contains(it) }
+
+        if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta" &&
+            BetaStartupResultConfirmationPolicy.matches(text)
+        ) {
+            return Detection(
+                ScreenKind.BETA_RESULT_CONFIRMATION,
+                ModeEnum.LOGIN,
+                100,
+                "beta-previous-ranked-result-confirmation-exact-text",
+            )
+        }
 
         // More specific screens must win before generic home/login words.
         if (StartupNoticeRecoveryPolicy.isAmazonAppstoreSunsetNotice(text)) {
