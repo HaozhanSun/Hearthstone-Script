@@ -14,6 +14,8 @@ import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import com.sun.jna.platform.win32.WinDef
+import com.sun.jna.platform.win32.User32
+import com.sun.jna.ptr.IntByReference
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
@@ -59,6 +61,7 @@ object UpstreamScreenStateRecovery {
     private val unknownStartupRestartPolicy = UnknownStartupRestartPolicy()
     private val indefiniteReconnectRestartPolicy = IndefiniteReconnectRestartPolicy()
     private val clientRestartInFlight = ClientRestartRequestGate()
+    private val exactCaptureOcrReuse = ExactCaptureOcrReuse()
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
@@ -99,6 +102,8 @@ object UpstreamScreenStateRecovery {
         val gameWindowKnown: Boolean,
         val purpose: ScreenRecoveryCapturePurpose,
         val capturedAtNanos: Long,
+        val processId: Long = 0L,
+        val windowId: String = "",
         val resultProbeTimings: ResultProbeCaptureTimings = ResultProbeCaptureTimings(),
     )
 
@@ -711,8 +716,11 @@ object UpstreamScreenStateRecovery {
         purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
         staleForMs: Long = 0L,
     ): Capture? {
+        val processIdBeforeCapture = windowProcessId(hwnd)
+        if (processIdBeforeCapture <= 0L) return null
         val captureStartedAt = System.nanoTime()
         val authorizedFrame = ScreenRecoveryWindowCapture.capture(hwnd, purpose = purpose, staleForMs = staleForMs) ?: return null
+        if (windowProcessId(hwnd) != processIdBeforeCapture) return null
         val authorizedCaptureMs = ResultScreenProbeTelemetry.elapsedMs(captureStartedAt)
         val image = authorizedFrame.image
         val screenshotStartedAt = System.nanoTime()
@@ -730,6 +738,8 @@ object UpstreamScreenStateRecovery {
             gameWindowKnown = true,
             purpose = purpose,
             capturedAtNanos = System.nanoTime(),
+            processId = processIdBeforeCapture,
+            windowId = hwnd.toString(),
             resultProbeTimings = ResultProbeCaptureTimings(
                 authorizedCaptureMs = authorizedCaptureMs,
                 screenshotSaveMs = screenshotSaveMs,
@@ -739,6 +749,12 @@ object UpstreamScreenStateRecovery {
     }
 
     private fun runOCR(capture: Capture): String = runOCR(capture, File(TESS_DATA_PATH))
+
+    private fun windowProcessId(hwnd: WinDef.HWND): Long {
+        val pid = IntByReference()
+        User32.INSTANCE.GetWindowThreadProcessId(hwnd, pid)
+        return pid.value.toLong()
+    }
 
     private fun runOCR(
         capture: Capture,
@@ -754,10 +770,35 @@ object UpstreamScreenStateRecovery {
             onTimings?.invoke(ResultProbeOcrTimings(path = "SKIPPED_MISSING_TESSDATA"))
             return ""
         }
+        val fingerprintStartedAt = System.nanoTime()
+        val fingerprint = if (ExactCaptureOcrReuse.enabledForChannel(BuildInfo.RELEASE_CHANNEL) &&
+            capture.processId > 0 && capture.windowId.isNotBlank()
+        ) ExactCaptureOcrReuse.fingerprint(capture.image) else null
+        val fingerprintMs = if (fingerprint == null) 0L else ResultScreenProbeTelemetry.elapsedMs(fingerprintStartedAt)
+        if (fingerprint != null) {
+            val reused = exactCaptureOcrReuse.lookup(capture.processId, capture.windowId, fingerprint)
+            if (reused != null) {
+                onTimings?.invoke(
+                    ResultProbeOcrTimings(
+                        provider = "LEGACY_TESSERACT",
+                        path = "BETA_EXACT_FRESH_FRAME_REUSE",
+                        totalMs = fingerprintMs,
+                    ),
+                )
+                log.info {
+                    "SCREEN_RECOVERY_OCR_REUSED reason=exact-fresh-frame pid=${capture.processId} " +
+                        "hwnd=${capture.windowId} fingerprintMs=$fingerprintMs"
+                }
+                return reused
+            }
+        }
         var targetedMs = 0L
         var secondaryMs = 0L
         var path = "FAILED"
+        var roiTimingSummary = ""
+        var ocrSucceeded = false
         val result = runCatching {
+            val roiTimings = mutableListOf<String>()
             // ScreenStateRoiSelector no longer has the former broad
             // screen-state-center crop. Probe the same narrow, capture-local
             // anchors as beta recovery so the upstream fallback cannot turn
@@ -767,6 +808,7 @@ object UpstreamScreenStateRecovery {
                 capture.image.height,
             )
             fun recognize(roi: ScreenStateRoiSelector.Roi, targeted: Boolean): String {
+                val roiStartedAt = System.nanoTime()
                 val crop = crop(capture.image, roi.bounds)
                 val image = if (targeted) enlargeTargetedOcr(crop) else resizeForOcr(crop)
                 val language = if (roi.name == ScreenStateRoiSelector.YOGG_SERVER_UNAVAILABLE_ROI) {
@@ -774,21 +816,25 @@ object UpstreamScreenStateRecovery {
                 } else {
                     CHI_SIM_DATA
                 }
-                return Tesseract().apply {
+                val value = Tesseract().apply {
                     setDatapath(tessData.absolutePath)
                     setLanguage(language)
                     setPageSegMode(if (targeted && language == "eng") 6 else if (targeted) 7 else 11)
                     setVariable("user_defined_dpi", if (targeted) "180" else "160")
                 }.doOCR(image).replace(Regex("\\s+"), "")
+                roiTimings += "${roi.name}:${ResultScreenProbeTelemetry.elapsedMs(roiStartedAt)}"
+                return value
             }
             val targetedStartedAt = System.nanoTime()
             val targetedText = try {
                 targetedRois.joinToString(separator = "") { recognize(it, targeted = true) }
             } finally {
                 targetedMs = ResultScreenProbeTelemetry.elapsedMs(targetedStartedAt)
+                roiTimingSummary = roiTimings.joinToString(",")
             }
             if (detect(targetedText, capture.visual) != null) {
                 path = "TARGETED_ONLY"
+                ocrSucceeded = true
                 return@runCatching targetedText
             }
             val secondaryStartedAt = System.nanoTime()
@@ -797,11 +843,16 @@ object UpstreamScreenStateRecovery {
             } finally {
                 secondaryMs = ResultScreenProbeTelemetry.elapsedMs(secondaryStartedAt)
             }
+            roiTimingSummary = roiTimings.joinToString(",")
             path = "TARGETED_PLUS_SECONDARY"
+            ocrSucceeded = true
             targetedText + secondaryText
         }.getOrElse { error ->
             log.warn(error) { "SCREEN_RECOVERY_OCR_FAILED" }
             ""
+        }
+        if (fingerprint != null && ocrSucceeded) {
+            exactCaptureOcrReuse.remember(capture.processId, capture.windowId, fingerprint, result)
         }
         onTimings?.invoke(
             ResultProbeOcrTimings(
@@ -812,6 +863,11 @@ object UpstreamScreenStateRecovery {
                 totalMs = targetedMs + secondaryMs,
             ),
         )
+        log.info {
+            "SCREEN_RECOVERY_OCR_ROI_TIMING pid=${capture.processId} hwnd=${capture.windowId} " +
+                "fingerprintMs=$fingerprintMs path=$path targetedMs=$targetedMs secondaryMs=$secondaryMs " +
+                "roiMs=${roiTimingSummary.ifBlank { "UNAVAILABLE" }}"
+        }
         return result
     }
 
