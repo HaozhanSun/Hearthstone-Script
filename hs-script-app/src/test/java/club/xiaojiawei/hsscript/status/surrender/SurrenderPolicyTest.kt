@@ -737,8 +737,12 @@ class SurrenderPolicyTest {
         val originalSettingsProvider = OcrRuntime.settingsProvider
         val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
         val originalOutput = System.getProperty("hs.script.unknown-state.dir")
+        val originalArtifactRoot = System.getProperty("hs.script.artifact-root")
         val root = Files.createTempDirectory("rank-evidence-regression-").toFile()
         try {
+            // Beta screenshot writes require the launcher's artifact-root capability
+            // in addition to a category-specific output directory.
+            System.setProperty("hs.script.artifact-root", root.absolutePath)
             System.setProperty("hs.script.unknown-state.dir", root.absolutePath)
             var ocrText = "10"
             OcrRuntime.settingsProvider = {
@@ -785,6 +789,11 @@ class SurrenderPolicyTest {
                 System.clearProperty("hs.script.unknown-state.dir")
             } else {
                 System.setProperty("hs.script.unknown-state.dir", originalOutput)
+            }
+            if (originalArtifactRoot == null) {
+                System.clearProperty("hs.script.artifact-root")
+            } else {
+                System.setProperty("hs.script.artifact-root", originalArtifactRoot)
             }
             root.deleteRecursively()
         }
