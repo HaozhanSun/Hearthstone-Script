@@ -7,6 +7,7 @@ param(
     [string]$TaskNameOverride = '',
     [datetime]$NowUtc = [datetime]::UtcNow,
     [int]$MaxDeletes = 25000,
+    [string]$TestOnlyDisappearBeforeDeletePath = '',
     [switch]$InstallTask,
     [switch]$VerifyTask,
     [switch]$DescribeTask
@@ -118,6 +119,11 @@ function Get-ErrorKey([string]$RootName, [string]$Stage, [System.Exception]$Exce
     return "$RootName|$Stage|$($Exception.GetType().FullName)|$hresult"
 }
 
+function Get-UnderlyingException([System.Exception]$Exception) {
+    while ($Exception -is [System.Management.Automation.MethodInvocationException] -and $null -ne $Exception.InnerException) { $Exception = $Exception.InnerException }
+    return $Exception
+}
+
 function Write-DurableSummary([string]$Path, [string]$Line) {
     $directory = Split-Path -Parent $Path
     if (Test-ReparsePath $directory) { throw "Diagnostic summary directory is a reparse point: $directory" }
@@ -132,7 +138,7 @@ function Write-DurableSummary([string]$Path, [string]$Line) {
     [System.IO.File]::AppendAllText($Path, $normalized + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
 }
 
-function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [datetime]$Now, [int]$Limit, [string]$SharedRoot) {
+function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [datetime]$Now, [int]$Limit, [string]$SharedRoot, [string]$TestOnlyDisappearPath) {
     $Root = Get-CanonicalPath $Root
     Assert-DeploymentIdentity $Root $ExpectedChannel
     $runtimeLog = Join-Path $Root 'log'
@@ -208,7 +214,7 @@ function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [da
         $stack.Push($rootPath)
         while ($stack.Count -gt 0 -and $deleted -lt $Limit) {
             $directory = $stack.Pop()
-            try { $entries = [System.IO.Directory]::EnumerateFileSystemEntries($directory) } catch { Add-RunError $candidateRoot.Name 'enumerate' $directory $_.Exception; continue }
+            try { $entries = [System.IO.Directory]::EnumerateFileSystemEntries($directory) } catch { Add-RunError $candidateRoot.Name 'enumerate' $directory (Get-UnderlyingException $_.Exception); continue }
             foreach ($entry in $entries) {
                 if ($deleted -ge $Limit) { break }
                 try {
@@ -235,13 +241,18 @@ function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [da
                         Add-RunError $candidateRoot.Name 'open-probe' $entry $probe.Exception; continue
                     }
                     $length = $info.Length
+                    if (-not [string]::IsNullOrWhiteSpace($TestOnlyDisappearPath) -and $entry -ieq $TestOnlyDisappearPath) {
+                        [System.IO.File]::Delete($entry)
+                        Add-RootCount $candidateRoot.Name 'disappeared'
+                        continue
+                    }
                     [System.IO.File]::Delete($entry)
                     $deleted++
                     Add-RootCount $candidateRoot.Name 'deleted'
                     $bytes += $length
                 } catch {
                     if ($_.Exception -is [System.IO.FileNotFoundException] -or $_.Exception -is [System.IO.DirectoryNotFoundException]) { Add-RootCount $candidateRoot.Name 'disappeared'; continue }
-                    Add-RunError $candidateRoot.Name 'metadata-or-delete' $entry $_.Exception
+                    Add-RunError $candidateRoot.Name 'metadata-or-delete' $entry (Get-UnderlyingException $_.Exception)
                 }
             }
         }
@@ -316,6 +327,15 @@ if ([string]::IsNullOrWhiteSpace($TaskNameOverride)) {
     $taskName = $TaskNameOverride
 }
 
+if (-not [string]::IsNullOrWhiteSpace($TestOnlyDisappearBeforeDeletePath)) {
+    $testOnlyPath = Get-CanonicalPath $TestOnlyDisappearBeforeDeletePath
+    $tempPrefix = (Get-CanonicalPath ([System.IO.Path]::GetTempPath())) + '\'
+    if (-not $testOnlyPath.StartsWith($tempPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $testOnlyPath -PathType Leaf) -or (Test-ReparsePath $testOnlyPath)) {
+        throw 'TestOnlyDisappearBeforeDeletePath must name an existing, non-reparse file under the system temporary directory.'
+    }
+} else { $testOnlyPath = '' }
+
 if ($DescribeTask) {
     $definition = Get-TaskDefinition $Channel $RuntimeRoot $SharedGameLogRoot
     [pscustomobject]@{
@@ -372,4 +392,4 @@ if ($VerifyTask -or $InstallTask) {
     exit 0
 }
 
-Invoke-DiagnosticRetention $Channel $RuntimeRoot $NowUtc $MaxDeletes $SharedGameLogRoot
+Invoke-DiagnosticRetention $Channel $RuntimeRoot $NowUtc $MaxDeletes $SharedGameLogRoot $testOnlyPath
