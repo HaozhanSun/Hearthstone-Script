@@ -10,6 +10,15 @@ $ErrorActionPreference = "Stop"
 [System.Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem') | Out-Null
 
 $projectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $MyInvocation.MyCommand.Path)).TrimEnd('\')
+$sourceBranchOutput = @(& git -C $projectRoot branch --show-current 2>&1)
+if ($LASTEXITCODE -ne 0) {
+    $gitError = ($sourceBranchOutput -join [Environment]::NewLine).Trim()
+    throw "Unable to determine the source Git branch before release preparation. Ensure Git is available and this project is inside a Git worktree. $gitError"
+}
+$sourceBranch = ($sourceBranchOutput -join [Environment]::NewLine).Trim()
+if ([string]::IsNullOrWhiteSpace($sourceBranch)) {
+    throw 'Cannot build or deploy from a detached Git worktree. Check out the intended named release branch, then rerun build-and-deploy.ps1.'
+}
 $channelConfigPath = Join-Path $projectRoot 'release-channel.json'
 if (-not (Test-Path -LiteralPath $channelConfigPath -PathType Leaf)) { throw "Release channel configuration missing: $channelConfigPath" }
 $channelConfig = Get-Content -LiteralPath $channelConfigPath -Raw | ConvertFrom-Json
@@ -32,9 +41,6 @@ $iconFileName = [string]$channelConfig.iconFileName
 if ([string]::IsNullOrWhiteSpace($iconFileName)) { throw 'release-channel.json iconFileName is missing' }
 $runtimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\')
 $runtimeExists = Test-Path -LiteralPath $runtimeRoot -PathType Container
-if (-not $runtimeExists -and $Channel -ne 'stable') {
-    New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
-}
 $pomPath = Join-Path $projectRoot 'pom.xml'
 $mavenWrapper = Join-Path $projectRoot 'mvnw.cmd'
 $targetRoot = Join-Path $projectRoot 'hs-script-app\target'
@@ -46,10 +52,32 @@ $debugRunnerCmdSource = Join-Path $projectRoot 'hs-script-app\src\main\resources
 $debugRunnerHardCapSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\debug-run-hardcap.psm1'
 $launcherVbsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-as-admin.vbs'
 $launcherPsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-newest-as-admin.ps1'
+$launcherGuardianPolicySource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launcher-guardian-policy.ps1'
 $deploymentContractSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\deployment-contract.ps1'
+$paddleXConfigUtilsSource = Join-Path $projectRoot 'paddlex-config-utils.ps1'
 $manifestPath = Join-Path $runtimeRoot 'deployment-manifest.json'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 . (Join-Path $projectRoot 'build-version-utils.ps1')
+
+foreach ($requiredSource in @($deploymentContractSource, $launcherGuardianPolicySource, $paddleXConfigUtilsSource)) {
+    if (-not (Test-Path -LiteralPath $requiredSource -PathType Leaf)) {
+        throw "Required deployment source is missing: $requiredSource"
+    }
+}
+. $deploymentContractSource
+. $paddleXConfigUtilsSource
+$runtimeGate = $null
+trap {
+    if ($null -ne $runtimeGate) {
+        try { Exit-HsScriptRuntimeGate $runtimeGate } catch { }
+        $runtimeGate = $null
+    }
+    throw
+}
+$runtimeGate = Enter-HsScriptRuntimeGate $runtimeRoot
+if (-not $runtimeExists -and $Channel -ne 'stable') {
+    New-Item -ItemType Directory -Path $runtimeRoot -Force | Out-Null
+}
 
 function Get-JarManifest([string]$JarPath) {
     $zip = [System.IO.Compression.ZipFile]::OpenRead($JarPath)
@@ -117,44 +145,6 @@ function Get-PomProperty([string]$Text, [string]$PropertyName) {
 function Assert-UsableCardDatabase([string]$Path, [string]$Context) {
     if (-not (Test-UsableCardDatabase $Path)) {
         throw "$Context does not contain a usable SQLite cards table: $Path"
-    }
-}
-
-function ConvertTo-IniPath([string]$Path) {
-    return $Path.Replace('\', '/').Replace(':', '\:')
-}
-
-function Sync-PaddleXOcrConfig([string]$Root) {
-    $configPath = Join-Path $Root 'config\script.ini'
-    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return }
-
-    $userHome = [Environment]::GetFolderPath('UserProfile')
-    $python = [Environment]::GetEnvironmentVariable('PADDLEX_OCR_PYTHON')
-    if ([string]::IsNullOrWhiteSpace($python) -and -not [string]::IsNullOrWhiteSpace($userHome)) {
-        $venvPython = Join-Path $userHome '.codex\paddlex-ocr-venv\Scripts\python.exe'
-        if (Test-Path -LiteralPath $venvPython -PathType Leaf) { $python = $venvPython }
-    }
-    $modulePath = Join-Path $Root 'resources\paddlex-vision\src'
-    $cachePath = if ([string]::IsNullOrWhiteSpace($userHome)) { '' } else { Join-Path $userHome '.cache\paddlex-ocr-models' }
-    $defaults = [ordered]@{
-        PADDLEX_OCR_PYTHON = $python
-        PADDLEX_OCR_MODULE_PATH = $modulePath
-        PADDLEX_OCR_MODEL_CACHE = $cachePath
-    }
-
-    $content = [System.IO.File]::ReadAllText($configPath)
-    $updated = $content
-    foreach ($entry in $defaults.GetEnumerator()) {
-        if ([string]::IsNullOrWhiteSpace($entry.Value)) { continue }
-        $pattern = "(?m)^([ \t]*$([regex]::Escape($entry.Key))[ \t]*=[ \t]*)[ \t]*$"
-        $value = ConvertTo-IniPath ([string]$entry.Value)
-        $updated = [regex]::Replace($updated, $pattern, { param($match) $match.Groups[1].Value + $value })
-    }
-    if ($updated -ne $content) {
-        [System.IO.File]::WriteAllText($configPath, $updated, $utf8NoBom)
-        Write-Output "PADDLEX_CONFIG_SYNC=$configPath"
-    } else {
-        Write-Output "PADDLEX_CONFIG_SYNC=unchanged:$configPath"
     }
 }
 
@@ -237,11 +227,6 @@ if ($embeddedBuildTimestampPacific -cne $buildTimestampPacific) {
 }
 Write-Output "ARTIFACT_TIMESTAMP_VERIFIED=$embeddedBuildTimestampPacific"
 
-$deploymentContractSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\deployment-contract.ps1'
-if (-not (Test-Path -LiteralPath $deploymentContractSource -PathType Leaf)) {
-    throw "Deployment contract is missing: $deploymentContractSource"
-}
-. $deploymentContractSource
 $stoppedRuntimeProcesses = @(Stop-ManagedHsScriptProcesses $runtimeRoot)
 if ($stoppedRuntimeProcesses.Count -gt 0) {
     Write-Output "STOPPED_RUNTIME_PROCESSES=$($stoppedRuntimeProcesses -join ',')"
@@ -319,6 +304,7 @@ try {
     Copy-Item -LiteralPath $debugRunnerHardCapSource -Destination (Join-Path $runtimeRoot 'debug-run-hardcap.psm1') -Force
     Copy-Item -LiteralPath $launcherVbsSource -Destination (Join-Path $runtimeRoot 'launch-as-admin.vbs') -Force
     Copy-Item -LiteralPath $launcherPsSource -Destination (Join-Path $runtimeRoot 'launch-newest-as-admin.ps1') -Force
+    Copy-Item -LiteralPath $launcherGuardianPolicySource -Destination (Join-Path $runtimeRoot 'launcher-guardian-policy.ps1') -Force
     Copy-Item -LiteralPath $deploymentContractSource -Destination (Join-Path $runtimeRoot 'deployment-contract.ps1') -Force
     Copy-Item -LiteralPath $channelConfigPath -Destination (Join-Path $runtimeRoot 'release-channel.json') -Force
 } finally {
@@ -327,7 +313,15 @@ try {
 
 Assert-UsableCardDatabase $runtimeCardDb 'Post-deployment runtime'
 
-Sync-PaddleXOcrConfig $runtimeRoot
+$paddleXSyncArgs = @{ Root = $runtimeRoot }
+if ($Channel -eq 'beta') {
+    # Preserve Beta's historical GAME_PATH/PLATFORM_PATH values while keeping
+    # module/python/cache repair and module-path validation shared with RC.
+    $paddleXSyncArgs.PreserveGamePlatformPaths = $true
+}
+Sync-PaddleXOcrConfig @paddleXSyncArgs
+$verifiedPaddleXModulePath = Assert-PaddleXOcrModulePath $runtimeRoot
+Write-Output "PADDLEX_MODULE_PATH_VERIFIED=$verifiedPaddleXModulePath"
 
 $deployedJar = Join-Path $runtimeRoot (Split-Path -Leaf $builtJar)
 $iconPath = Join-Path $runtimeRoot $iconFileName
@@ -410,6 +404,9 @@ $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -En
 & (Join-Path $projectRoot 'sync-shortcuts.ps1') -RuntimeRoot $runtimeRoot -ShortcutName $ShortcutName `
     -IconPath $iconPath -Description ([string]$channelConfig.displayName) -Channel $Channel
 if (-not $?) { throw "Shortcut synchronization failed" }
+
+Exit-HsScriptRuntimeGate $runtimeGate
+$runtimeGate = $null
 
 Write-Output "DEPLOYED_JAR=$deployedJar"
 Write-Output "DEPLOYMENT_ID=$($manifest.deploymentId)"

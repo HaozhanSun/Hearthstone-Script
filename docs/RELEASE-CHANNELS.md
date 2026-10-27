@@ -134,11 +134,19 @@ it to GitHub `main` remains a secretary-owned action.
 ## PaddleX runtime parity
 
 Both channels use the same PaddleX sidecar contract. During deployment,
-`build-and-deploy.ps1` fills only blank `PADDLEX_OCR_PYTHON`,
-`PADDLEX_OCR_MODULE_PATH`, and `PADDLEX_OCR_MODEL_CACHE` values in the channel
-`config/script.ini`; existing non-empty user values are preserved. Runtime
-resolution uses the same order when a key remains blank: configured value,
-environment variable, packaged module path or the per-user PaddleX venv/cache
-default. The application startup log records the resolved values and health
-check result, so a missing PaddleX installation is explicit rather than a
-silent legacy-provider substitution.
+`build-and-deploy.ps1` fills only blank `PADDLEX_OCR_PYTHON` and
+`PADDLEX_OCR_MODEL_CACHE` values. It preserves a configured
+`PADDLEX_OCR_MODULE_PATH` when that directory exists; a blank or invalid module
+path is repaired to the packaged module directory. Deployment then fails
+closed unless the resolved module directory exists. Runtime resolution uses the configured value,
+environment variable, packaged module path, or per-user PaddleX venv/cache
+default in that order. The application startup log records the resolved values
+and health check result, so a missing PaddleX installation is explicit rather
+than a silent legacy-provider substitution.
+
+Beta preserves its configured `GAME_PATH` and `PLATFORM_PATH` as before. The
+Release Candidate deployment may repair invalid values from the validated Beta
+runtime or verified machine defaults. Both build paths hold the channel runtime
+mutex while they build and deploy, and refresh the deployment contract and
+launcher guardian policy beside the runtime launcher so a shortcut cannot start
+against files being replaced or stale guardian logic.
