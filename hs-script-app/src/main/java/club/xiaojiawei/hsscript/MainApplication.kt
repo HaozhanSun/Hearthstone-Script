@@ -21,6 +21,7 @@ import club.xiaojiawei.hsscript.status.RuntimeSafety
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.TaskManager
 import club.xiaojiawei.hsscript.status.LifecycleTrace
+import club.xiaojiawei.hsscript.status.DiagnosticRetentionService
 import club.xiaojiawei.hsscript.utils.*
 import club.xiaojiawei.hsscript.utils.SystemUtil.addTrayWithLabel
 import club.xiaojiawei.hsscript.utils.SystemUtil.shutdownSoft
@@ -237,6 +238,7 @@ class MainApplication : Application() {
         DebugRunController.prearmBeforeScheduleChecks()
         launchService()
         LifecycleTrace.start()
+        DiagnosticRetentionService.start()
         CardGroupUtil.applyEnabledCardGroups()
         ShutdownHookConfig.init
     }

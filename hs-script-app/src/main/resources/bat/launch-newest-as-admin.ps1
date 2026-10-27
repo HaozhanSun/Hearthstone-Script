@@ -81,9 +81,12 @@ function Start-HsScriptChild([object]$ResolvedDeployment, [bool]$GuardianRestart
                 Add-Content -LiteralPath $selectionLog -Value ("{0} betaArtifactRoot=DISABLED reason=no-non-runtime-volume-meets-capacity" -f (Get-Date -Format o))
             }
             $betaAppLogDirectory = Join-Path $logDirectory 'app'
+            $betaRuntimeDiagnosticDirectory = Join-Path $logDirectory 'runtime-log'
             New-Item -ItemType Directory -Force -Path $betaAppLogDirectory | Out-Null
+            New-Item -ItemType Directory -Force -Path $betaRuntimeDiagnosticDirectory | Out-Null
             $guardianStatePath = Join-Path $logDirectory 'guardian-state.json'
             $betaLoggingArgument = '-Dhs.script.log.dir="' + [System.IO.Path]::GetFullPath($betaAppLogDirectory) + '" ' +
+                '-Dhs.script.beta-runtime-log-root="' + [System.IO.Path]::GetFullPath($betaRuntimeDiagnosticDirectory) + '" ' +
                 '-Dhs.script.guardian-state.path="' + [System.IO.Path]::GetFullPath($guardianStatePath) + '" '
         }
         $arguments = $javaTempArgument + $betaArtifactArgument + $betaLoggingArgument + '-Dhs.script.launch.source=shortcut -Djna.library.path="' +
