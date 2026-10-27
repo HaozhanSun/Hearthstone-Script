@@ -59,6 +59,8 @@ try {
     $sharedDisallowed = Join-Path $sharedRoot 'Settings.json'
     $sharedUnrelated = Join-Path $sharedRoot 'unrelated.bin'
     $sharedDisappearing = Join-Path $sharedRoot 'rotation-race.log'
+    $disappearingDirectory = Join-Path $sharedRoot 'rotated-directory'
+    $parentDisappearing = Join-Path $disappearingDirectory 'parent-race.log'
     $sharedOutside = Join-Path $sharedSibling 'outside.log'
     $logRoot = Join-Path $runtimeRoot 'log'
     New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
@@ -72,14 +74,14 @@ try {
     $mouseTrace = Join-Path $runtimeRoot 'debug\mouse\old.csv'
     $otherDebug = Join-Path $runtimeRoot 'debug\other\old.png'
     $resourceImage = Join-Path $runtimeRoot 'resources\old.png'
-    foreach ($path in @($expired, $fresh, $active, $settings, $evidence, $ocr, $ocrJson, $mouseTrace, $otherDebug, $resourceImage, $sharedExpired, $sharedFresh, $sharedLocked, $sharedDisallowed, $sharedOutside, $sharedUnrelated, $sharedDisappearing)) {
+    foreach ($path in @($expired, $fresh, $active, $settings, $evidence, $ocr, $ocrJson, $mouseTrace, $otherDebug, $resourceImage, $sharedExpired, $sharedFresh, $sharedLocked, $sharedDisallowed, $sharedOutside, $sharedUnrelated, $sharedDisappearing, $parentDisappearing)) {
         New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
         [System.IO.File]::WriteAllText($path, 'test')
     }
     $localNow = [datetime]::Now
     $now = $localNow.Date.AddHours($localNow.Hour).AddMinutes(30).ToUniversalTime()
     [System.IO.File]::SetLastWriteTimeUtc($expired, $now.AddDays(-31))
-    foreach ($path in @($active, $settings, $evidence, $ocr, $ocrJson, $mouseTrace, $otherDebug, $resourceImage, $sharedExpired, $sharedLocked, $sharedDisallowed, $sharedOutside, $sharedUnrelated, $sharedDisappearing)) {
+    foreach ($path in @($active, $settings, $evidence, $ocr, $ocrJson, $mouseTrace, $otherDebug, $resourceImage, $sharedExpired, $sharedLocked, $sharedDisallowed, $sharedOutside, $sharedUnrelated, $sharedDisappearing, $parentDisappearing)) {
         [System.IO.File]::SetLastWriteTimeUtc($path, $now.AddDays(-31))
     }
 
@@ -94,7 +96,7 @@ try {
     $deniedAcl.AddAccessRule($denyRule)
     Set-Acl -LiteralPath $deniedDirectory -AclObject $deniedAcl
     try {
-        $output = & $source -Channel stable -RuntimeRoot $runtimeRoot -NowUtc $now -SharedGameLogRoot $sharedRoot -TestOnlyDisappearBeforeDeletePath $sharedDisappearing
+        $output = & $source -Channel stable -RuntimeRoot $runtimeRoot -NowUtc $now -SharedGameLogRoot $sharedRoot -TestOnlyDisappearBeforeDeletePath $sharedDisappearing -TestOnlyDisappearParentBeforeMetadataPath $parentDisappearing
     } finally {
         $lockStream.Dispose()
         $restoreAcl = Get-Acl -LiteralPath $deniedDirectory
@@ -115,6 +117,7 @@ try {
     Assert-True (Test-Path -LiteralPath $sharedFresh) 'fresh shared game logs are retained'
     Assert-True (Test-Path -LiteralPath $sharedLocked) 'open shared game logs are retained'
     Assert-True (-not (Test-Path -LiteralPath $sharedDisappearing)) 'disappearing fixture is removed only by the bounded test hook'
+    Assert-True (-not (Test-Path -LiteralPath $disappearingDirectory)) 'parent-disappearance fixture directory is removed only by the bounded test hook'
     Assert-True (Test-Path -LiteralPath $sharedUnrelated) 'unrelated non-diagnostic file remains untouched'
     Assert-True (Test-Path -LiteralPath $sharedDisallowed) 'non-log files under the shared game root are retained'
     Assert-True (Test-Path -LiteralPath $sharedOutside) 'neighboring Hearthstone directories are never scanned'
@@ -124,7 +127,7 @@ try {
     Assert-True (Test-Path -LiteralPath $summaryPath -PathType Leaf) 'manual entrypoint persists a summary under the approved runtime log root'
     Assert-True ((Get-Content -LiteralPath $summaryPath -Raw) -match 'channel=stable.*deleted=5.*errors=0') 'durable summary records deleted count and errors'
     $summaryText = Get-Content -LiteralPath $summaryPath -Raw
-    Assert-True ($summaryText -match 'DIAGNOSTIC_RETENTION_ROOT root=shared-game-logs .*locked=1 .*disappeared=1 .*errors=0') 'locked and disappearing files are visible in root skip counters'
+    Assert-True ($summaryText -match 'DIAGNOSTIC_RETENTION_ROOT root=shared-game-logs .*locked=1 .*disappeared=2 .*errors=0') 'locked and both disappearing-file races are visible in root skip counters'
     Assert-True ($summaryText -match 'DIAGNOSTIC_RETENTION_ROOT root=evidence .*errors=1') 'inaccessible directory is counted as a genuine root error'
     Assert-True ($summaryText -match 'DIAGNOSTIC_RETENTION_ERROR count=1 key=evidence\|enumerate\|System\.UnauthorizedAccessException\|0x[0-9A-F]+ samplePaths=.*denied-fixture') ('inaccessible directory is grouped by root, stage, type, HRESULT, and path: ' + ((Get-Content -LiteralPath $summaryPath | Where-Object { $_ -like 'DIAGNOSTIC_RETENTION_ERROR*' }) -join ';'))
     Assert-True ((Get-Content -LiteralPath $summaryPath -Raw) -match 'DIAGNOSTIC_RETENTION_ROOT root=shared-game-logs .*locked=1') ('production invoker reports a locked file under its exact root: ' + ((Get-Content -LiteralPath $summaryPath | Where-Object { $_ -like 'DIAGNOSTIC_RETENTION_ROOT root=shared-game-logs*' -or $_ -like 'DIAGNOSTIC_RETENTION_ERROR*' }) -join ';'))
