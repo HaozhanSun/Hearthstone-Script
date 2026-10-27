@@ -108,10 +108,25 @@ function Test-ExclusiveOpen([string]$Path) {
     }
 }
 
+function Write-DurableSummary([string]$Path, [string]$Line) {
+    $directory = Split-Path -Parent $Path
+    if (Test-ReparsePath $directory) { throw "Diagnostic summary directory is a reparse point: $directory" }
+    if ((Test-Path -LiteralPath $Path) -and (Test-ReparsePath $Path)) { throw "Diagnostic summary file is a reparse point: $Path" }
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    $normalized = ($Line -replace '[\r\n]+', ' ').Trim()
+    if ($normalized.Length -gt 2048) { $normalized = $normalized.Substring(0, 2048) }
+    if ((Test-Path -LiteralPath $Path -PathType Leaf) -and (Get-Item -LiteralPath $Path).Length -ge 262144) {
+        $tail = @(Get-Content -LiteralPath $Path -Tail 100 -ErrorAction Stop)
+        [System.IO.File]::WriteAllLines($Path, [string[]]$tail, [System.Text.UTF8Encoding]::new($false))
+    }
+    [System.IO.File]::AppendAllText($Path, $normalized + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+}
+
 function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [datetime]$Now, [int]$Limit) {
     $Root = Get-CanonicalPath $Root
     Assert-DeploymentIdentity $Root $ExpectedChannel
     $runtimeLog = Join-Path $Root 'log'
+    $summaryDirectory = $runtimeLog
     $roots = @(
         [pscustomobject]@{ Path = $runtimeLog; Scope = 'runtime' },
         [pscustomobject]@{ Path = (Join-Path $Root 'evidence'); Scope = 'evidence' },
@@ -134,6 +149,7 @@ function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [da
             $betaArtifacts = Get-HsScriptBetaArtifactRoot -Channel beta -RuntimeKey $runtimeKey -RuntimeDirectory $Root -FixedVolumes $volumes
         }
         $roots += [pscustomobject]@{ Path = (Join-Path $betaLogs 'runtime-log'); Scope = 'runtime' }
+        $summaryDirectory = Join-Path $betaLogs 'runtime-log'
         $roots += [pscustomobject]@{ Path = $betaLogs; Scope = 'external-log' }
         $active.Add((Join-Path $betaLogs 'runtime-log\hs_script.log'))
         $active.Add((Join-Path $betaLogs 'app\hs_script.log'))
@@ -145,6 +161,10 @@ function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [da
             }
         }
     }
+
+    $summaryName = 'diagnostic-retention-' + $Now.ToLocalTime().ToString('yyyyMMdd-HH') + '.log'
+    $summaryPath = Join-Path $summaryDirectory $summaryName
+    $active.Add($summaryPath)
 
     $cutoff = $Now.ToUniversalTime().AddDays(-$RetentionDays)
     $deleted = 0
@@ -184,7 +204,9 @@ function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [da
             }
         }
     }
-    Write-Output "DIAGNOSTIC_RETENTION channel=$ExpectedChannel cutoff=$($cutoff.ToString('o')) deleted=$deleted bytesDeleted=$bytes errors=$errors"
+    $summary = "DIAGNOSTIC_RETENTION channel=$ExpectedChannel time=$($Now.ToUniversalTime().ToString('o')) cutoff=$($cutoff.ToString('o')) deleted=$deleted bytesDeleted=$bytes errors=$errors"
+    Write-DurableSummary $summaryPath $summary
+    Write-Output $summary
 }
 
 function Get-TaskName([string]$TaskChannel) {
@@ -211,7 +233,7 @@ function Get-TaskDefinition([string]$TaskChannel, [string]$Root) {
         (New-ScheduledTaskTrigger -AtLogOn)
     )
     $principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType S4U -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew
+    $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew
     return New-ScheduledTask -Action $action -Trigger $triggers -Principal $principal -Settings $settings
 }
 
@@ -229,6 +251,7 @@ if ($DescribeTask) {
         TriggerCount = $definition.Triggers.Count
         DailyTriggerHours = (Get-DailyTriggerHours $definition.Triggers)
         LogonTriggerCount = @($definition.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' }).Count
+        StartWhenAvailable = [bool]$definition.Settings.StartWhenAvailable
         RunLevel = [string]$definition.Principal.RunLevel
         LogonType = [string]$definition.Principal.LogonType
     }
@@ -256,6 +279,7 @@ if ($VerifyTask -or $InstallTask) {
     if ([string]$task.Principal.LogonType -ne 'S4U' -or [string]$task.Principal.RunLevel -ne 'Limited') {
         throw "Diagnostic retention task principal is not the expected least-privilege S4U principal: $taskName"
     }
+    if (-not [bool]$task.Settings.StartWhenAvailable) { throw "Diagnostic retention task does not catch up missed runs: $taskName" }
     Write-Output "DIAGNOSTIC_RETENTION_TASK_VERIFIED name=$taskName runtime=$RuntimeRoot"
     exit 0
 }

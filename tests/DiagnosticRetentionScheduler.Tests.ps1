@@ -22,6 +22,7 @@ try {
     Assert-True ($taskPlan.Arguments -like '*-NonInteractive*diagnostic-retention.ps1*-Channel stable*') 'task runs the checked-in cleaner noninteractively for its own channel'
     Assert-True (($taskPlan.DailyTriggerHours -join ',') -eq '00:00,06:00,12:00,18:00') 'task is scheduled every six hours'
     Assert-True ($taskPlan.LogonTriggerCount -eq 1) 'task catches up at user logon'
+    Assert-True ($taskPlan.StartWhenAvailable) 'task catches up missed runs after sleep or scheduler unavailability'
     Assert-True ($taskPlan.LogonType -eq 'S4U') 'task runs as current user without storing a password'
     Assert-True ($taskPlan.RunLevel -eq 'Limited') 'task runs without elevation'
 
@@ -58,7 +59,8 @@ try {
         New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
         [System.IO.File]::WriteAllText($path, 'test')
     }
-    $now = [datetime]::UtcNow
+    $localNow = [datetime]::Now
+    $now = $localNow.Date.AddHours($localNow.Hour).AddMinutes(30).ToUniversalTime()
     [System.IO.File]::SetLastWriteTimeUtc($expired, $now.AddDays(-31))
     foreach ($path in @($active, $settings, $evidence, $ocr, $ocrJson, $mouseTrace, $otherDebug, $resourceImage)) {
         [System.IO.File]::SetLastWriteTimeUtc($path, $now.AddDays(-31))
@@ -76,6 +78,16 @@ try {
     Assert-True (Test-Path -LiteralPath $otherDebug) 'neighboring debug directories remain out of scope'
     Assert-True (Test-Path -LiteralPath $resourceImage) 'application resources remain out of scope'
     Assert-True (($output -join ' ') -match 'deleted=4') 'manual entrypoint reports its cleanup count'
+    $summaryName = 'diagnostic-retention-' + $now.ToLocalTime().ToString('yyyyMMdd-HH') + '.log'
+    $summaryPath = Join-Path $logRoot $summaryName
+    Assert-True (Test-Path -LiteralPath $summaryPath -PathType Leaf) 'manual entrypoint persists a summary under the approved runtime log root'
+    Assert-True ((Get-Content -LiteralPath $summaryPath -Raw) -match 'channel=stable.*deleted=4.*errors=0') 'durable summary records deleted count and errors'
+    Assert-True (([System.IO.Path]::GetFullPath($summaryPath)).StartsWith(([System.IO.Path]::GetFullPath($logRoot) + '\'), [System.StringComparison]::OrdinalIgnoreCase)) 'summary never writes outside its approved root'
+    $longLines = [string[]]@(1..140 | ForEach-Object { 'X' * 2048 })
+    [System.IO.File]::WriteAllLines($summaryPath, $longLines, [System.Text.UTF8Encoding]::new($false))
+    $null = & $source -Channel stable -RuntimeRoot $runtimeRoot -NowUtc ($now.AddMinutes(1))
+    Assert-True ((Get-Item -LiteralPath $summaryPath).Length -lt 262144) 'durable summary rotates at a bounded per-file size'
+    Assert-True (@(Get-Content -LiteralPath $summaryPath).Count -le 101) 'durable summary keeps only a bounded line history'
     'Diagnostic retention scheduler and entrypoint tests passed.'
 } finally {
     if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
