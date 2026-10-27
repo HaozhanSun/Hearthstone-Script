@@ -106,12 +106,13 @@ try {
     $summaryPath = Join-Path $logRoot $summaryName
     Assert-True (Test-Path -LiteralPath $summaryPath -PathType Leaf) 'manual entrypoint persists a summary under the approved runtime log root'
     Assert-True ((Get-Content -LiteralPath $summaryPath -Raw) -match 'channel=stable.*deleted=5.*errors=0') 'durable summary records deleted count and errors'
+    Assert-True ((Get-Content -LiteralPath $summaryPath -Raw) -match 'DIAGNOSTIC_RETENTION_ROOT root=shared-game-logs .*locked=1') ('production invoker reports a locked file under its exact root: ' + ((Get-Content -LiteralPath $summaryPath | Where-Object { $_ -like 'DIAGNOSTIC_RETENTION_ROOT root=shared-game-logs*' -or $_ -like 'DIAGNOSTIC_RETENTION_ERROR*' }) -join ';'))
     Assert-True (([System.IO.Path]::GetFullPath($summaryPath)).StartsWith(([System.IO.Path]::GetFullPath($logRoot) + '\'), [System.StringComparison]::OrdinalIgnoreCase)) 'summary never writes outside its approved root'
     $longLines = [string[]]@(1..140 | ForEach-Object { 'X' * 2048 })
     [System.IO.File]::WriteAllLines($summaryPath, $longLines, [System.Text.UTF8Encoding]::new($false))
     $null = & $source -Channel stable -RuntimeRoot $runtimeRoot -NowUtc ($now.AddMinutes(1))
     Assert-True ((Get-Item -LiteralPath $summaryPath).Length -lt 262144) 'durable summary rotates at a bounded per-file size'
-    Assert-True (@(Get-Content -LiteralPath $summaryPath).Count -le 101) 'durable summary keeps only a bounded line history'
+    Assert-True (@(Get-Content -LiteralPath $summaryPath).Count -le 250) 'durable summary keeps only a bounded line history including root diagnostics'
     if ($LiveTaskSchedulerProbe) {
         $liveSharedRoot = Join-Path $tempRoot 'Hearthstone\Logs'
         $liveSiblingRoot = Join-Path $tempRoot 'Hearthstone\LogsBackup'

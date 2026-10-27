@@ -102,13 +102,20 @@ function Test-ActiveFile([string]$Path, [string[]]$ActivePaths) {
 function Test-ExclusiveOpen([string]$Path) {
     $stream = $null
     try {
-        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
-        return $true
+        $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+        return [pscustomobject]@{ Opened = $true; Exception = $null }
     } catch {
-        return $false
+        $exception = $_.Exception
+        if ($exception -is [System.Management.Automation.MethodInvocationException] -and $null -ne $exception.InnerException) { $exception = $exception.InnerException }
+        return [pscustomobject]@{ Opened = $false; Exception = $exception }
     } finally {
         if ($null -ne $stream) { $stream.Dispose() }
     }
+}
+
+function Get-ErrorKey([string]$RootName, [string]$Stage, [System.Exception]$Exception) {
+    $hresult = '0x{0:X8}' -f ($Exception.HResult -band 0xffffffffL)
+    return "$RootName|$Stage|$($Exception.GetType().FullName)|$hresult"
 }
 
 function Write-DurableSummary([string]$Path, [string]$Line) {
@@ -131,11 +138,11 @@ function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [da
     $runtimeLog = Join-Path $Root 'log'
     $summaryDirectory = $runtimeLog
     $roots = @(
-        [pscustomobject]@{ Path = $runtimeLog; Scope = 'runtime' },
-        [pscustomobject]@{ Path = (Join-Path $Root 'evidence'); Scope = 'evidence' },
-        [pscustomobject]@{ Path = (Join-Path $Root 'ocr_res'); Scope = 'ocr' },
-        [pscustomobject]@{ Path = (Join-Path (Join-Path $Root 'debug') 'mouse'); Scope = 'debug-mouse' },
-        [pscustomobject]@{ Path = (Get-CanonicalPath $SharedRoot); Scope = 'shared-game-log' }
+        [pscustomobject]@{ Name = 'runtime-log'; Path = $runtimeLog; Scope = 'runtime' },
+        [pscustomobject]@{ Name = 'evidence'; Path = (Join-Path $Root 'evidence'); Scope = 'evidence' },
+        [pscustomobject]@{ Name = 'ocr'; Path = (Join-Path $Root 'ocr_res'); Scope = 'ocr' },
+        [pscustomobject]@{ Name = 'debug-mouse'; Path = (Join-Path (Join-Path $Root 'debug') 'mouse'); Scope = 'debug-mouse' },
+        [pscustomobject]@{ Name = 'shared-game-logs'; Path = (Get-CanonicalPath $SharedRoot); Scope = 'shared-game-log' }
     )
     $active = [System.Collections.Generic.List[string]]::new()
     $active.Add((Join-Path $runtimeLog 'hs_script.log'))
@@ -152,16 +159,16 @@ function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [da
             $betaLogs = Get-HsScriptBetaLogDirectory -Channel beta -RuntimeKey $runtimeKey -RuntimeDirectory $Root -FixedVolumes $volumes
             $betaArtifacts = Get-HsScriptBetaArtifactRoot -Channel beta -RuntimeKey $runtimeKey -RuntimeDirectory $Root -FixedVolumes $volumes
         }
-        $roots += [pscustomobject]@{ Path = (Join-Path $betaLogs 'runtime-log'); Scope = 'runtime' }
+        $roots += [pscustomobject]@{ Name = 'beta-runtime-log'; Path = (Join-Path $betaLogs 'runtime-log'); Scope = 'runtime' }
         $summaryDirectory = Join-Path $betaLogs 'runtime-log'
-        $roots += [pscustomobject]@{ Path = $betaLogs; Scope = 'external-log' }
+        $roots += [pscustomobject]@{ Name = 'beta-external-log'; Path = $betaLogs; Scope = 'external-log' }
         $active.Add((Join-Path $betaLogs 'runtime-log\hs_script.log'))
         $active.Add((Join-Path $betaLogs 'app\hs_script.log'))
         $active.Add((Join-Path $betaLogs 'guardian-state.json'))
         $active.Add((Join-Path $betaLogs 'launcher-selection.log'))
         if (-not [string]::IsNullOrWhiteSpace([string]$betaArtifacts)) {
             foreach ($category in $ArtifactCategories) {
-                $roots += [pscustomobject]@{ Path = (Join-Path $betaArtifacts $category); Scope = 'artifact' }
+                $roots += [pscustomobject]@{ Name = "beta-artifact-$category"; Path = (Join-Path $betaArtifacts $category); Scope = 'artifact' }
             }
         }
     }
@@ -174,20 +181,40 @@ function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [da
     $deleted = 0
     $bytes = [long]0
     $errors = 0
+    $diagnostics = [System.Collections.Generic.List[string]]::new()
+    $errorGroups = @{}
+    $rootCounts = @{}
+    function Add-RootCount([string]$Name, [string]$Field, [long]$Amount = 1) {
+        if (-not $rootCounts.ContainsKey($Name)) { $rootCounts[$Name] = @{ examined=0; expired=0; deleted=0; locked=0; disappeared=0; reparse=0; errors=0 } }
+        $rootCounts[$Name][$Field] += $Amount
+    }
+    function Add-RunError([string]$Name, [string]$Stage, [string]$Path, [System.Exception]$Exception) {
+        $errors++
+        Add-RootCount $Name 'errors'
+        $key = Get-ErrorKey $Name $Stage $Exception
+        if (-not $errorGroups.ContainsKey($key)) { $errorGroups[$key] = @{ count=0; samples=[System.Collections.Generic.List[string]]::new() } }
+        $errorGroups[$key].count++
+        if ($errorGroups[$key].samples.Count -lt 3) {
+            $relative = $Path
+            if ($Path.StartsWith($Root, [System.StringComparison]::OrdinalIgnoreCase)) { $relative = $Path.Substring($Root.Length).TrimStart('\') }
+            $errorGroups[$key].samples.Add($relative)
+        }
+    }
     foreach ($candidateRoot in $roots) {
         if ($deleted -ge $Limit -or -not (Test-Path -LiteralPath $candidateRoot.Path -PathType Container)) { continue }
         $rootPath = Get-CanonicalPath $candidateRoot.Path
-        if (Test-ReparsePath $rootPath) { continue }
+        if (Test-ReparsePath $rootPath) { Add-RootCount $candidateRoot.Name 'reparse'; continue }
         $stack = [System.Collections.Generic.Stack[string]]::new()
         $stack.Push($rootPath)
         while ($stack.Count -gt 0 -and $deleted -lt $Limit) {
             $directory = $stack.Pop()
-            try { $entries = [System.IO.Directory]::EnumerateFileSystemEntries($directory) } catch { $errors++; continue }
+            try { $entries = [System.IO.Directory]::EnumerateFileSystemEntries($directory) } catch { Add-RunError $candidateRoot.Name 'enumerate' $directory $_.Exception; continue }
             foreach ($entry in $entries) {
                 if ($deleted -ge $Limit) { break }
                 try {
+                    Add-RootCount $candidateRoot.Name 'examined'
                     $attributes = [System.IO.File]::GetAttributes($entry)
-                    if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { continue }
+                    if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { Add-RootCount $candidateRoot.Name 'reparse'; continue }
                     if (($attributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
                         $leaf = [System.IO.Path]::GetFileName($entry)
                         if ($candidateRoot.Scope -eq 'external-log' -and $directory -ieq $rootPath -and $leaf -ine 'app') { continue }
@@ -198,18 +225,38 @@ function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [da
                     if (-not (Test-AllowedDiagnostic $entry $rootPath $candidateRoot.Scope)) { continue }
                     $info = [System.IO.FileInfo]::new($entry)
                     if ($info.LastWriteTimeUtc -ge $cutoff) { continue }
+                    Add-RootCount $candidateRoot.Name 'expired'
                     if (Test-ActiveFile $entry $active.ToArray()) { continue }
-                    if (-not (Test-ExclusiveOpen $entry)) { continue }
+                    $probe = Test-ExclusiveOpen $entry
+                    if (-not $probe.Opened) {
+                        if ($probe.Exception -is [System.IO.FileNotFoundException] -or $probe.Exception -is [System.IO.DirectoryNotFoundException]) { Add-RootCount $candidateRoot.Name 'disappeared'; continue }
+                        if ($probe.Exception -is [System.UnauthorizedAccessException]) { Add-RunError $candidateRoot.Name 'open-probe' $entry $probe.Exception; continue }
+                        if ($probe.Exception -is [System.IO.IOException] -and (($probe.Exception.HResult -band 0xffffffffL) -in @(0x80070020L, 0x80070021L))) { Add-RootCount $candidateRoot.Name 'locked'; continue }
+                        Add-RunError $candidateRoot.Name 'open-probe' $entry $probe.Exception; continue
+                    }
                     $length = $info.Length
                     [System.IO.File]::Delete($entry)
                     $deleted++
+                    Add-RootCount $candidateRoot.Name 'deleted'
                     $bytes += $length
-                } catch { $errors++ }
+                } catch {
+                    if ($_.Exception -is [System.IO.FileNotFoundException] -or $_.Exception -is [System.IO.DirectoryNotFoundException]) { Add-RootCount $candidateRoot.Name 'disappeared'; continue }
+                    Add-RunError $candidateRoot.Name 'metadata-or-delete' $entry $_.Exception
+                }
             }
         }
     }
     $summary = "DIAGNOSTIC_RETENTION channel=$ExpectedChannel time=$($Now.ToUniversalTime().ToString('o')) cutoff=$($cutoff.ToString('o')) deleted=$deleted bytesDeleted=$bytes errors=$errors"
     Write-DurableSummary $summaryPath $summary
+    foreach ($name in ($rootCounts.Keys | Sort-Object)) {
+        $c = $rootCounts[$name]
+        Write-DurableSummary $summaryPath "DIAGNOSTIC_RETENTION_ROOT root=$name examined=$($c.examined) expired=$($c.expired) deleted=$($c.deleted) locked=$($c.locked) disappeared=$($c.disappeared) reparse=$($c.reparse) errors=$($c.errors)"
+    }
+    foreach ($key in ($errorGroups.Keys | Sort-Object)) {
+        $samples = @($errorGroups[$key].samples | ForEach-Object { $_ -replace '[\r\n|]+', '_' }) -join '|'
+        $diagnostics.Add("DIAGNOSTIC_RETENTION_ERROR count=$($errorGroups[$key].count) key=$key samplePaths=$samples")
+    }
+    foreach ($line in @($diagnostics | Select-Object -First 40)) { Write-DurableSummary $summaryPath $line }
     Write-Output $summary
 }
 
