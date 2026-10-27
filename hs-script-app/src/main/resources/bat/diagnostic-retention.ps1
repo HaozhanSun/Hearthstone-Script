@@ -223,7 +223,7 @@ function Get-DailyTriggerHours([object[]]$Triggers) {
 function Get-TaskDefinition([string]$TaskChannel, [string]$Root) {
     $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $script = Join-Path $Root 'diagnostic-retention.ps1'
-    $arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script`" -Channel $TaskChannel -RuntimeRoot `"$Root`""
+    $arguments = "-WindowStyle Hidden -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script`" -Channel $TaskChannel -RuntimeRoot `"$Root`""
     $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $Root
     $triggers = @(
         (New-ScheduledTaskTrigger -Daily -At '00:00'),
@@ -232,7 +232,7 @@ function Get-TaskDefinition([string]$TaskChannel, [string]$Root) {
         (New-ScheduledTaskTrigger -Daily -At '18:00'),
         (New-ScheduledTaskTrigger -AtLogOn)
     )
-    $principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType S4U -RunLevel Limited
+    $principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew
     return New-ScheduledTask -Action $action -Trigger $triggers -Principal $principal -Settings $settings
 }
@@ -254,6 +254,7 @@ if ($DescribeTask) {
         StartWhenAvailable = [bool]$definition.Settings.StartWhenAvailable
         RunLevel = [string]$definition.Principal.RunLevel
         LogonType = [string]$definition.Principal.LogonType
+        UserId = [string]$definition.Principal.UserId
     }
     exit 0
 }
@@ -276,8 +277,11 @@ if ($VerifyTask -or $InstallTask) {
         @($task.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' }).Count -lt 1) {
         throw "Diagnostic retention task cadence/logon triggers incomplete: $taskName"
     }
-    if ([string]$task.Principal.LogonType -ne 'S4U' -or [string]$task.Principal.RunLevel -ne 'Limited') {
-        throw "Diagnostic retention task principal is not the expected least-privilege S4U principal: $taskName"
+    $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    if ([string]$task.Principal.UserId -ine $currentUser -or
+        [string]$task.Principal.LogonType -ne 'Interactive' -or
+        [string]$task.Principal.RunLevel -ne 'Limited') {
+        throw "Diagnostic retention task principal is not the expected least-privilege interactive principal: $taskName"
     }
     if (-not [bool]$task.Settings.StartWhenAvailable) { throw "Diagnostic retention task does not catch up missed runs: $taskName" }
     Write-Output "DIAGNOSTIC_RETENTION_TASK_VERIFIED name=$taskName runtime=$RuntimeRoot"

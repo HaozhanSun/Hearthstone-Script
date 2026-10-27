@@ -16,14 +16,16 @@ try {
     Copy-Item -LiteralPath $source -Destination (Join-Path $runtimeRoot 'diagnostic-retention.ps1')
 
     $taskPlan = & $source -Channel stable -RuntimeRoot $runtimeRoot -DescribeTask
+    $userName = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
     $userSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     Assert-True ($taskPlan.Name -eq "HearthstoneScript.DiagnosticRetention.$userSid.stable") 'task name is isolated by user and channel'
     Assert-True ($taskPlan.Execute -like '*\powershell.exe') 'task uses Windows PowerShell without launching the app'
-    Assert-True ($taskPlan.Arguments -like '*-NonInteractive*diagnostic-retention.ps1*-Channel stable*') 'task runs the checked-in cleaner noninteractively for its own channel'
+    Assert-True ($taskPlan.Arguments -like '*-WindowStyle Hidden*-NonInteractive*diagnostic-retention.ps1*-Channel stable*') 'task runs the checked-in cleaner hidden and without an app UI'
     Assert-True (($taskPlan.DailyTriggerHours -join ',') -eq '00:00,06:00,12:00,18:00') 'task is scheduled every six hours'
     Assert-True ($taskPlan.LogonTriggerCount -eq 1) 'task catches up at user logon'
     Assert-True ($taskPlan.StartWhenAvailable) 'task catches up missed runs after sleep or scheduler unavailability'
-    Assert-True ($taskPlan.LogonType -eq 'S4U') 'task runs as current user without storing a password'
+    Assert-True ($taskPlan.LogonType -eq 'Interactive') 'task uses the current standard-user session without storing a password'
+    Assert-True ($taskPlan.UserId -eq $userName) 'task runs only as the deploying user'
     Assert-True ($taskPlan.RunLevel -eq 'Limited') 'task runs without elevation'
 
     foreach ($channelInfo in @(
