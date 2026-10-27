@@ -129,6 +129,18 @@ function Get-HsScriptProcessIdentity([int]$ProcessId) {
     }
 }
 
+function Get-HsScriptProcessStartTimeUtc([int]$ProcessId) {
+    $process = $null
+    try {
+        $process = [System.Diagnostics.Process]::GetProcessById($ProcessId)
+        return $process.StartTime.ToUniversalTime().ToString('o')
+    } catch [System.ArgumentException] {
+        return $null
+    } finally {
+        if ($null -ne $process) { $process.Dispose() }
+    }
+}
+
 function Get-HsScriptRuntimeMarkers([string]$ScriptDirectory) {
     $root = Get-HsScriptCanonicalRuntimeRoot $ScriptDirectory
     $parent = Split-Path -Parent $root

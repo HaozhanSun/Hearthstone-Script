@@ -28,6 +28,9 @@ $processWithoutPath = [pscustomobject]@{
 }
 $resolvedExecutable = Get-HsScriptExecutablePath $processWithoutPath 9901 { param($className, $filter) throw 'CIM should not be needed when MainModule resolves' }
 Assert-Equal 'C:\Java\bin\javaw.exe' $resolvedExecutable 'MainModule must resolve executable when Process.Path is absent'
+$observedSelfStart = Get-HsScriptProcessStartTimeUtc $PID
+if ([string]::IsNullOrWhiteSpace([string]$observedSelfStart)) { throw 'Process start-time-only resolver must return an independently readable timestamp' }
+$null = [DateTimeOffset]::Parse([string]$observedSelfStart)
 
 # If MainModule is inaccessible, CIM ExecutablePath is the fallback; an empty
 # result must throw instead of becoming an unverified process identity.

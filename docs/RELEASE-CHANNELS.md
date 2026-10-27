@@ -27,6 +27,16 @@ manifests, single-instance identities, and shortcuts.
   it must never be promoted to `main` merely because it compiles.
 - CI labels beta artifacts as beta and validates that the branch metadata and
   runtime identity are consistent.
+- The Beta deployment stop helper first uses the exact runtime JAR command line
+  or readable process image path. If elevation hides only the executable path,
+  its fallback requires the schema-1 Beta ownership marker, matching Java
+  process name and exact process start time, the adjacent Beta channel config,
+  and a successfully hash-validated current Beta manifest whose deployment ID
+  matches the marker. Missing/corrupt marker data, missing or mismatched
+  manifest identity, PID reuse, unreadable Java command lines without an exact
+  marker match, or unrelated process names fail closed. This
+  fallback is Beta-root-only and must not be applied to Stable or Release
+  Candidate process handling.
 
 ## Release Candidate
 

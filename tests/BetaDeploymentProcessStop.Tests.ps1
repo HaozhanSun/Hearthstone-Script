@@ -14,6 +14,37 @@ $javaPath = 'C:\Program Files\Java\jdk-25.0.4\bin\javaw.exe'
 $betaJar = Join-Path $runtimeRoot 'hs-script_v4.16.700.jar'
 $rcJar = Join-Path $otherRoot 'hs-script_v4.16.701.jar'
 $stopped = [System.Collections.Generic.List[int]]::new()
+function Write-TestBetaManifest([string]$RuntimeRoot, [string]$DeploymentId) {
+    $relativeFiles = @{
+        appJar = 'hs-script_v4.16.700.jar'
+        strategyPluginLib = 'lib\hs-script-base-strategy-plugin.jar'
+        strategyPlugin = 'plugin\hs-script-base-strategy-plugin.jar'
+        cardSdk = 'lib\hs-script-card-sdk-1.3.0.jar'
+    }
+    $hashes = @{}
+    foreach ($path in $relativeFiles.Values | Select-Object -Unique) {
+        $fullPath = Join-Path $RuntimeRoot $path
+        $parent = Split-Path -Parent $fullPath
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        $content = if ($path -match 'hs-script-base-strategy-plugin\.jar$') { 'fixture=strategy' } else { "fixture=$path" }
+        [System.IO.File]::WriteAllText($fullPath, $content)
+        $hashes[$path] = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash
+    }
+    $manifest = [ordered]@{
+        schema = 1
+        releaseChannel = 'beta'
+        runtimeDirectoryName = 'Hearthstone Script Beta'
+        appJar = $relativeFiles.appJar
+        appJarSha256 = $hashes[$relativeFiles.appJar]
+        strategyPluginLib = $relativeFiles.strategyPluginLib
+        strategyPluginSha256 = $hashes[$relativeFiles.strategyPluginLib]
+        strategyPlugin = $relativeFiles.strategyPlugin
+        cardSdk = $relativeFiles.cardSdk
+        cardSdkSha256 = $hashes[$relativeFiles.cardSdk]
+        deploymentId = $DeploymentId
+    } | ConvertTo-Json
+    [System.IO.File]::WriteAllText((Join-Path $RuntimeRoot 'deployment-manifest.json'), $manifest)
+}
 try {
     New-Item -ItemType Directory -Path $runtimeRoot, $otherRoot -Force | Out-Null
     $noProcesses = @(Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot -GetProcessRecords { @() } -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) })
@@ -33,6 +64,8 @@ try {
 
     $config = @{ channel = 'beta'; runtimeDirectoryName = 'Hearthstone Script Beta' } | ConvertTo-Json
     [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'release-channel.json'), $config)
+    $deploymentId = 'hs-script_v4.16.700.jar|fixture'
+    Write-TestBetaManifest $runtimeRoot $deploymentId
     $markerStart = '2026-10-27T19:00:00.0000000Z'
     $marker = @{
         schema = 1
@@ -42,7 +75,7 @@ try {
         processId = 105
         processStartTimeUtc = $markerStart
         executablePath = $javaPath
-        deploymentId = 'hs-script_v4.16.700.jar|fixture'
+        deploymentId = $deploymentId
     } | ConvertTo-Json
     [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'hs-script.pid.json'), $marker)
     $markerOnlyRecord = @([pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 105; CommandLine = '' })
@@ -50,6 +83,82 @@ try {
     $markerStopped = @(Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot -GetProcessRecords { $markerOnlyRecord } -GetIdentity $matchingIdentity -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) })
     Assert-Equal 1 $markerStopped.Count 'blank CommandLine can be stopped only through exact verified Beta marker identity'
     Assert-Equal 105 $markerStopped[0] 'verified marker PID selected'
+
+    # Medium-integrity fallback: executable path lookup fails, but an exact
+    # process start time, javaw name, Beta channel config, and current manifest
+    # deployment ID all agree with the marker.
+    $fallbackMarker = @{
+        schema = 1; releaseChannel = 'beta'; runtimeDirectoryName = 'Hearthstone Script Beta'
+        runtimeRoot = $runtimeRoot; processId = 107; processStartTimeUtc = $markerStart
+        executablePath = $javaPath; deploymentId = $deploymentId
+    } | ConvertTo-Json
+    [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'hs-script.pid.json'), $fallbackMarker)
+    $fallbackRecord = @([pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 107; CommandLine = '' })
+    $fallbackStopped = @(Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot `
+        -GetProcessRecords { $fallbackRecord } -GetIdentity { throw 'Access denied to elevated ExecutablePath' } `
+        -GetProcessStartTime { param($ProcessId) $markerStart } `
+        -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) })
+    Assert-Equal 1 $fallbackStopped.Count 'validated marker fallback identifies exact elevated Beta process'
+    Assert-Equal 107 $fallbackStopped[0] 'fallback PID selected'
+
+    $mismatchedStart = $false
+    try {
+        Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot -GetProcessRecords { $fallbackRecord } `
+            -GetIdentity { throw 'Access denied' } -GetProcessStartTime { param($ProcessId) '2026-10-27T15:37:59.9528539Z' } `
+            -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) } | Out-Null
+    } catch { $mismatchedStart = $_.Exception.Message -match 'cannot be verified' }
+    Assert-Equal $true $mismatchedStart 'PID reuse with a different start time is refused'
+
+    $mismatchedName = $false
+    $javaRecord = @([pscustomobject]@{ Name = 'java.exe'; ProcessId = 107; CommandLine = '' })
+    try {
+        Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot -GetProcessRecords { $javaRecord } `
+            -GetIdentity { throw 'Access denied' } -GetProcessStartTime { param($ProcessId) $markerStart } `
+            -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) } | Out-Null
+    } catch { $mismatchedName = $_.Exception.Message -match 'cannot be verified' }
+    Assert-Equal $true $mismatchedName 'java.exe cannot inherit a javaw.exe marker'
+
+    $wrongManifestMarker = $fallbackMarker.Replace($deploymentId, 'other-deployment')
+    [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'hs-script.pid.json'), $wrongManifestMarker)
+    $manifestMismatch = $false
+    try {
+        Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot -GetProcessRecords { $fallbackRecord } `
+            -GetIdentity { throw 'Access denied' } -GetProcessStartTime { param($ProcessId) $markerStart } `
+            -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) } | Out-Null
+    } catch { $manifestMismatch = $_.Exception.Message -match 'cannot be verified' }
+    Assert-Equal $true $manifestMismatch 'fallback requires marker deployment ID to match current verified Beta manifest'
+
+    [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'hs-script.pid.json'), $fallbackMarker)
+    $manifestPath = Join-Path $runtimeRoot 'deployment-manifest.json'
+    $hiddenManifestPath = "$manifestPath.test-hidden"
+    Move-Item -LiteralPath $manifestPath -Destination $hiddenManifestPath
+    $missingManifestRefused = $false
+    try {
+        Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot -GetProcessRecords { $fallbackRecord } `
+            -GetIdentity { throw 'Access denied' } -GetProcessStartTime { param($ProcessId) $markerStart } `
+            -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) } | Out-Null
+    } catch { $missingManifestRefused = $_.Exception.Message -match 'cannot be verified' }
+    Move-Item -LiteralPath $hiddenManifestPath -Destination $manifestPath
+    Assert-Equal $true $missingManifestRefused 'missing current manifest refuses fallback ownership'
+
+    [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'hs-script.pid.json'), '{"schema":')
+    $corruptMarkerRefused = $false
+    try { Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot -GetProcessRecords { $fallbackRecord } | Out-Null }
+    catch { $corruptMarkerRefused = $_.Exception.Message -match 'unreadable' }
+    Assert-Equal $true $corruptMarkerRefused 'corrupt ownership marker fails closed'
+
+    Remove-Item -LiteralPath (Join-Path $runtimeRoot 'hs-script.pid.json') -Force
+    $missingMarkerRefused = $false
+    try {
+        Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot `
+            -GetProcessRecords { @([pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 108; CommandLine = '' }) } | Out-Null
+    } catch { $missingMarkerRefused = $_.Exception.Message -match 'no Beta ownership marker' }
+    Assert-Equal $true $missingMarkerRefused 'missing marker with an unidentified JVM does not assume idle'
+
+    $unrelatedJava = @(Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot `
+        -GetProcessRecords { @([pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 109; CommandLine = 'javaw.exe -jar C:\tools\unrelated.jar' }) } `
+        -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) })
+    Assert-Equal 0 $unrelatedJava.Count 'visible unrelated Java process is not stopped'
 
     $absentMarker = @{
         schema = 1
@@ -85,7 +194,7 @@ Write-Output ("CALLER_RESUMED stoppedCount={0}" -f $result.Count)
         Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot -GetProcessRecords { $staleRecord } -GetIdentity $staleIdentity -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) } | Out-Null
     } catch { $staleRejected = $_.Exception.Message -match 'cannot be verified' }
     Assert-Equal $true $staleRejected 'reused PID without Beta command line is refused'
-    Assert-Equal 2 $stopped.Count 'stale PID is never stopped'
+    Assert-Equal 3 $stopped.Count 'stale PID is never stopped; only the three verified Beta marker/JAR PIDs are selected'
 
     $nonBetaRejected = $false
     try { Stop-ManagedHsScriptProcesses -RuntimeRoot $otherRoot -GetProcessRecords { @() } | Out-Null }
@@ -125,4 +234,4 @@ if (-not $deployScript.Contains('$betaDeploymentProcessUtilsSource = Join-Path $
     throw 'Beta process-stop helper must be loaded from the Beta source root'
 }
 
-Write-Output 'BetaDeploymentProcessStop.Tests: PASS (Beta-only ownership, no-op, marker identity, stale PID refusal, original error propagation)'
+Write-Output 'BetaDeploymentProcessStop.Tests: PASS (Beta-only ownership, exact marker fallback, PID/name/manifest refusal, missing/corrupt marker, unrelated JVM, original error propagation)'

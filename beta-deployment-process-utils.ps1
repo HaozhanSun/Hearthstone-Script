@@ -4,6 +4,7 @@ function Stop-ManagedHsScriptProcesses(
     [string]$RuntimeRoot,
     [scriptblock]$GetProcessRecords = { @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop) },
     [scriptblock]$GetIdentity = ${function:Get-HsScriptProcessIdentity},
+    [scriptblock]$GetProcessStartTime = ${function:Get-HsScriptProcessStartTimeUtc},
     [scriptblock]$StopProcess = { param($ProcessId) Stop-Process -Id ([int]$ProcessId) -Force -ErrorAction Stop }
 ) {
     $root = Get-HsScriptCanonicalRuntimeRoot $RuntimeRoot
@@ -27,6 +28,10 @@ function Stop-ManagedHsScriptProcesses(
         $processId = [int]$record.ProcessId
         if ([string]$record.CommandLine -match $jarPattern) {
             [void]$ownedProcessIds.Add($processId)
+        } elseif ([string]::IsNullOrWhiteSpace([string]$record.CommandLine) -and
+            -not (Test-Path -LiteralPath (Join-Path $root 'hs-script.pid.json') -PathType Leaf)
+        ) {
+            throw "Unidentified Java PID $processId with no command line and no Beta ownership marker; refusing to assume idle"
         }
     }
 
@@ -51,6 +56,7 @@ function Stop-ManagedHsScriptProcesses(
             -not [int]::TryParse([string]$markerData.processId, [ref]$markerPid) -or
             $markerPid -le 0 -or -not $markerStartMatch.Success -or
             [string]::IsNullOrWhiteSpace([string]$markerData.executablePath) -or
+            [string]::IsNullOrWhiteSpace([string]$markerData.deploymentId) -or
             (Get-HsScriptCanonicalRuntimeRoot ([string]$markerData.runtimeRoot)) -ine $root
         ) { throw "Beta runtime ownership marker is incomplete or mismatched; refusing to assume idle: $markerPath" }
         try { $markerStartUtc = [DateTimeOffset]::Parse($markerStartMatch.Groups['value'].Value).ToUniversalTime() }
@@ -81,9 +87,49 @@ function Stop-ManagedHsScriptProcesses(
                 ([System.IO.Path]::GetFullPath([string]$identity.ExecutablePath) -ieq [string]$marker.ExecutablePath)
             if ($markerMatches) {
                 [void]$ownedProcessIds.Add($processId)
+            } elseif (-not [string]$identity.ExecutablePath) {
+                # Medium-integrity callers may be denied the elevated process
+                # image path. Permit only the exact marker process after a
+                # separate start-time read, matching executable basename, and
+                # a fully hash-validated current Beta manifest/channel.
+                $fallbackStartText = $null
+                try { $fallbackStartText = & $GetProcessStartTime $processId } catch { }
+                $fallbackStartUtc = $null
+                try {
+                    if ([string]$fallbackStartText) {
+                        $fallbackStartUtc = [DateTimeOffset]::Parse([string]$fallbackStartText).ToUniversalTime()
+                    }
+                } catch { }
+                $expectedName = [System.IO.Path]::GetFileName($marker.ExecutablePath)
+                $startMatches = $null -ne $fallbackStartUtc -and
+                    $fallbackStartUtc.UtcDateTime.Ticks -eq $markerStartUtc.UtcDateTime.Ticks
+                $nameMatches = [string]$record.Name -ieq $expectedName -and
+                    $expectedName -in @('java.exe', 'javaw.exe')
+                $manifestMatches = $false
+                try {
+                    $deployment = Resolve-Deployment $root
+                    $manifestMatches = ([string]$deployment.Manifest.releaseChannel).ToLowerInvariant() -ceq 'beta' -and
+                        [string]$deployment.DeploymentId -ceq [string]$markerData.deploymentId
+                } catch { }
+                if ($startMatches -and $nameMatches -and $manifestMatches -and
+                    ([string]$runtimeChannel.channel).ToLowerInvariant() -ceq 'beta'
+                ) {
+                    [void]$ownedProcessIds.Add($processId)
+                } elseif ([string]$record.CommandLine -notmatch $jarPattern) {
+                    throw "Beta runtime marker PID $processId cannot be verified; refusing to stop or assume idle"
+                }
             } elseif ([string]$record.CommandLine -notmatch $jarPattern) {
                 throw "Beta runtime marker PID $processId cannot be verified; refusing to stop or assume idle"
             }
+        }
+    }
+
+    foreach ($record in $processes) {
+        if ([string]$record.Name -in @('java.exe', 'javaw.exe') -and
+            [string]::IsNullOrWhiteSpace([string]$record.CommandLine) -and
+            -not $ownedProcessIds.Contains([int]$record.ProcessId)
+        ) {
+            throw "Unidentified Java PID $($record.ProcessId) has no visible command line or exact Beta marker identity; refusing to assume idle"
         }
     }
 
