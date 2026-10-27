@@ -12,6 +12,7 @@ internal enum class DiagnosticRootScope {
     RUNTIME_EVIDENCE_TREE,
     RUNTIME_OCR_TREE,
     RUNTIME_DEBUG_MOUSE_TREE,
+    SHARED_GAME_LOG_TREE,
 }
 
 internal data class DiagnosticRetentionRoot(val channel: String, val path: Path, val scope: DiagnosticRootScope)
@@ -43,6 +44,7 @@ internal object DiagnosticRetentionPolicy {
         applicationLogDirectory: Path,
         artifactRoot: Path?,
         betaRuntimeLogRoot: Path? = null,
+        sharedGameLogRoot: Path? = null,
     ): List<DiagnosticRetentionRoot> {
         val token = channelToken(channel)
         if (token !in SUPPORTED_CHANNELS) return emptyList()
@@ -57,6 +59,9 @@ internal object DiagnosticRetentionPolicy {
                 DiagnosticRootScope.RUNTIME_DEBUG_MOUSE_TREE,
             ),
         )
+        if (sharedGameLogRoot != null) {
+            roots += DiagnosticRetentionRoot(token, sharedGameLogRoot, DiagnosticRootScope.SHARED_GAME_LOG_TREE)
+        }
         if (token == "beta") {
             if (betaRuntimeLogRoot != null &&
                 betaRuntimeLogRoot.toAbsolutePath().normalize() != runtimeLogRoot.toAbsolutePath().normalize()
@@ -113,6 +118,7 @@ internal object DiagnosticRetentionPolicy {
             DiagnosticRootScope.RUNTIME_EVIDENCE_TREE -> true
             DiagnosticRootScope.RUNTIME_OCR_TREE -> extension == "png"
             DiagnosticRootScope.RUNTIME_DEBUG_MOUSE_TREE -> extension in setOf("csv", "png")
+            DiagnosticRootScope.SHARED_GAME_LOG_TREE -> extension == "log"
         }
     }
 

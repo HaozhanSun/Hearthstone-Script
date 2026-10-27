@@ -14,6 +14,8 @@ The cleaner has an explicit root and file-type allowlist. All channels scan thei
 
 The cleaner never scans the runtime root as a whole. `config`, `data` and `statistics.db`, `plugin`, `lib`, packaged/runtime binaries, deployment manifests, rollback backups, Hearthstone's own `Power.log`/`Decks.log`/`LoadingScreen.log`, and files outside approved diagnostic roots remain outside the deletion scope.
 
+
+The shared Hearthstone client log directory `D:\Hearthstone\Logs` is an additional exact root for all three channel cleaners. Only `.log` files older than 30 days are eligible; current/fresh files and files that cannot be opened exclusively are retained. Reparse points are skipped, and no sibling such as `D:\Hearthstone\LogsBackup` or other path under `D:\Hearthstone` is scanned. Stable, Beta, and Release Candidate evidence roots remain channel-specific. Candidate inventory for this shared root is pending; no production files were inspected or removed during the source change.
 ## Channel activation and current roots
 
 Cleanup runs independently in each installed application. A Stable process cleans only `Hearthstone Script\log`; a Release Candidate process cleans only `Hearthstone Script Release Candidate\log`; a Beta process cleans its own `Hearthstone Script Beta\log`, the Beta log root selected by `hs.script.log.dir`, and the diagnostic categories selected by `hs.script.artifact-root`. This allows separate channel deployment schedules and avoids one channel modifying another channel's runtime.

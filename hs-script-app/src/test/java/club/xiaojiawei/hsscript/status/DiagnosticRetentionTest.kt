@@ -264,6 +264,42 @@ class DiagnosticRetentionTest {
         assertFalse(DiagnosticRetentionPolicy.allowsFile(root, root.path.resolve("config/config.json")))
     }
 
+    @Test
+    fun `shared Hearthstone logs are cross-channel log-only and locked-safe`() {
+        val shared = temp.resolve("Hearthstone").resolve("Logs")
+        val sibling = temp.resolve("Hearthstone").resolve("LogsBackup")
+        val expired = shared.resolve("Power.log").also(::writeOld)
+        val fresh = shared.resolve("fresh.log").also { Files.createDirectories(it.parent) }
+        Files.writeString(fresh, "fresh")
+        Files.setLastModifiedTime(fresh, FileTime.from(NOW.minus(1, ChronoUnit.DAYS)))
+        val locked = shared.resolve("LoadingScreen.log").also(::writeOld)
+        val forbidden = shared.resolve("Settings.json").also(::writeOld)
+        val outside = sibling.resolve("outside.log").also(::writeOld)
+        val gameRoot = DiagnosticRetentionRoot("stable", shared, DiagnosticRootScope.SHARED_GAME_LOG_TREE)
+        assertFalse(DiagnosticRetentionPolicy.allowsFile(gameRoot, sibling.resolve("outside.log")))
+        assertFalse(DiagnosticRetentionPolicy.allowsFile(gameRoot, shared.resolve("Settings.json")))
+        listOf("beta", "release-candidate", "stable").forEach { channel ->
+            val roots = DiagnosticRetentionPolicy.rootsForChannel(
+                channel, temp.resolve("runtime-$channel"), temp.resolve("runtime-$channel/log"), null,
+                sharedGameLogRoot = shared,
+            )
+            assertTrue(roots.any { it.path == shared && it.scope == DiagnosticRootScope.SHARED_GAME_LOG_TREE })
+        }
+        FileChannel.open(locked, StandardOpenOption.WRITE).use { channel ->
+            channel.lock().use {
+                val report = DiagnosticRetentionCleaner().clean("stable", listOf(gameRoot), NOW)
+                assertEquals(1, report.deleted)
+                assertEquals(1, report.roots.single().retainedFresh)
+                assertEquals(1, report.roots.single().skippedActiveOrLocked)
+            }
+        }
+        assertFalse(Files.exists(expired))
+        assertTrue(Files.exists(fresh))
+        assertTrue(Files.exists(locked))
+        assertTrue(Files.exists(forbidden))
+        assertTrue(Files.exists(outside))
+    }
+
     private fun writeOld(path: Path): Path {
         Files.createDirectories(path.parent)
         Files.write(path, byteArrayOf(1, 2, 3))

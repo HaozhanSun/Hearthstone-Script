@@ -3,6 +3,7 @@ param(
     [ValidateSet('stable', 'beta', 'release-candidate')]
     [string]$Channel,
     [string]$RuntimeRoot = (Split-Path -Parent $MyInvocation.MyCommand.Path),
+    [string]$SharedGameLogRoot = 'D:\Hearthstone\Logs',
     [datetime]$NowUtc = [datetime]::UtcNow,
     [int]$MaxDeletes = 25000,
     [switch]$InstallTask,
@@ -84,6 +85,7 @@ function Test-AllowedDiagnostic([string]$Path, [string]$Root, [string]$Scope) {
             return ($parts.Count -eq 2 -and $parts[0] -ieq 'app' -and $extension -eq '.log')
         }
         'artifact' { return $true }
+        'shared-game-log' { return $extension -eq '.log' }
         default { return $false }
     }
 }
@@ -122,7 +124,7 @@ function Write-DurableSummary([string]$Path, [string]$Line) {
     [System.IO.File]::AppendAllText($Path, $normalized + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
 }
 
-function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [datetime]$Now, [int]$Limit) {
+function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [datetime]$Now, [int]$Limit, [string]$SharedRoot) {
     $Root = Get-CanonicalPath $Root
     Assert-DeploymentIdentity $Root $ExpectedChannel
     $runtimeLog = Join-Path $Root 'log'
@@ -131,7 +133,8 @@ function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [da
         [pscustomobject]@{ Path = $runtimeLog; Scope = 'runtime' },
         [pscustomobject]@{ Path = (Join-Path $Root 'evidence'); Scope = 'evidence' },
         [pscustomobject]@{ Path = (Join-Path $Root 'ocr_res'); Scope = 'ocr' },
-        [pscustomobject]@{ Path = (Join-Path (Join-Path $Root 'debug') 'mouse'); Scope = 'debug-mouse' }
+        [pscustomobject]@{ Path = (Join-Path (Join-Path $Root 'debug') 'mouse'); Scope = 'debug-mouse' },
+        [pscustomobject]@{ Path = (Get-CanonicalPath $SharedRoot); Scope = 'shared-game-log' }
     )
     $active = [System.Collections.Generic.List[string]]::new()
     $active.Add((Join-Path $runtimeLog 'hs_script.log'))
@@ -230,7 +233,7 @@ function Get-TaskDefinition([string]$TaskChannel, [string]$Root) {
         (New-ScheduledTaskTrigger -Daily -At '06:00'),
         (New-ScheduledTaskTrigger -Daily -At '12:00'),
         (New-ScheduledTaskTrigger -Daily -At '18:00'),
-        (New-ScheduledTaskTrigger -AtLogOn)
+        (New-ScheduledTaskTrigger -AtLogOn -User ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name))
     )
     $principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1) -MultipleInstances IgnoreNew
@@ -251,6 +254,7 @@ if ($DescribeTask) {
         TriggerCount = $definition.Triggers.Count
         DailyTriggerHours = (Get-DailyTriggerHours $definition.Triggers)
         LogonTriggerCount = @($definition.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' }).Count
+        LogonTriggerUserIds = @($definition.Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' } | ForEach-Object { $_.UserId })
         StartWhenAvailable = [bool]$definition.Settings.StartWhenAvailable
         RunLevel = [string]$definition.Principal.RunLevel
         LogonType = [string]$definition.Principal.LogonType
@@ -288,4 +292,4 @@ if ($VerifyTask -or $InstallTask) {
     exit 0
 }
 
-Invoke-DiagnosticRetention $Channel $RuntimeRoot $NowUtc $MaxDeletes
+Invoke-DiagnosticRetention $Channel $RuntimeRoot $NowUtc $MaxDeletes $SharedGameLogRoot

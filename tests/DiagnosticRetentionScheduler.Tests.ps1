@@ -23,6 +23,7 @@ try {
     Assert-True ($taskPlan.Arguments -like '*-WindowStyle Hidden*-NonInteractive*diagnostic-retention.ps1*-Channel stable*') 'task runs the checked-in cleaner hidden and without an app UI'
     Assert-True (($taskPlan.DailyTriggerHours -join ',') -eq '00:00,06:00,12:00,18:00') 'task is scheduled every six hours'
     Assert-True ($taskPlan.LogonTriggerCount -eq 1) 'task catches up at user logon'
+    Assert-True ($taskPlan.LogonTriggerUserIds -contains $userName) 'logon trigger is scoped to the current user so a standard token can register it'
     Assert-True ($taskPlan.StartWhenAvailable) 'task catches up missed runs after sleep or scheduler unavailability'
     Assert-True ($taskPlan.LogonType -eq 'Interactive') 'task uses the current standard-user session without storing a password'
     Assert-True ($taskPlan.UserId -eq $userName) 'task runs only as the deploying user'
@@ -45,6 +46,13 @@ try {
     Assert-True ($deployText.Contains("'diagnostic-retention.ps1'")) 'release path copies the cleaner entrypoint'
     Assert-True ($deployText.Contains('-InstallTask -VerifyTask')) 'release path installs and verifies the task'
 
+    $sharedRoot = Join-Path $tempRoot 'Hearthstone\Logs'
+    $sharedSibling = Join-Path $tempRoot 'Hearthstone\LogsSibling'
+    $sharedExpired = Join-Path $sharedRoot 'Power.log'
+    $sharedFresh = Join-Path $sharedRoot 'fresh.log'
+    $sharedLocked = Join-Path $sharedRoot 'LoadingScreen.log'
+    $sharedDisallowed = Join-Path $sharedRoot 'Settings.json'
+    $sharedOutside = Join-Path $sharedSibling 'outside.log'
     $logRoot = Join-Path $runtimeRoot 'log'
     New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
     $expired = Join-Path $logRoot 'hs_script-old.log'
@@ -57,18 +65,22 @@ try {
     $mouseTrace = Join-Path $runtimeRoot 'debug\mouse\old.csv'
     $otherDebug = Join-Path $runtimeRoot 'debug\other\old.png'
     $resourceImage = Join-Path $runtimeRoot 'resources\old.png'
-    foreach ($path in @($expired, $fresh, $active, $settings, $evidence, $ocr, $ocrJson, $mouseTrace, $otherDebug, $resourceImage)) {
+    foreach ($path in @($expired, $fresh, $active, $settings, $evidence, $ocr, $ocrJson, $mouseTrace, $otherDebug, $resourceImage, $sharedExpired, $sharedFresh, $sharedLocked, $sharedDisallowed, $sharedOutside)) {
         New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
         [System.IO.File]::WriteAllText($path, 'test')
     }
     $localNow = [datetime]::Now
     $now = $localNow.Date.AddHours($localNow.Hour).AddMinutes(30).ToUniversalTime()
     [System.IO.File]::SetLastWriteTimeUtc($expired, $now.AddDays(-31))
-    foreach ($path in @($active, $settings, $evidence, $ocr, $ocrJson, $mouseTrace, $otherDebug, $resourceImage)) {
+    foreach ($path in @($active, $settings, $evidence, $ocr, $ocrJson, $mouseTrace, $otherDebug, $resourceImage, $sharedExpired, $sharedLocked, $sharedDisallowed, $sharedOutside)) {
         [System.IO.File]::SetLastWriteTimeUtc($path, $now.AddDays(-31))
     }
 
-    $output = & $source -Channel stable -RuntimeRoot $runtimeRoot -NowUtc $now
+    [System.IO.File]::SetLastWriteTimeUtc($sharedFresh, $now.AddDays(-1))
+    $lockStream = [System.IO.File]::Open($sharedLocked, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+    try {
+        $output = & $source -Channel stable -RuntimeRoot $runtimeRoot -NowUtc $now -SharedGameLogRoot $sharedRoot
+    } finally { $lockStream.Dispose() }
     Assert-True (-not (Test-Path -LiteralPath $expired)) 'manual entrypoint deletes only expired allowed diagnostics'
     Assert-True (Test-Path -LiteralPath $fresh) 'manual entrypoint retains fresh diagnostics'
     Assert-True (Test-Path -LiteralPath $active) 'manual entrypoint retains active app log'
@@ -79,11 +91,16 @@ try {
     Assert-True (Test-Path -LiteralPath $ocrJson) 'OCR root accepts PNG only'
     Assert-True (Test-Path -LiteralPath $otherDebug) 'neighboring debug directories remain out of scope'
     Assert-True (Test-Path -LiteralPath $resourceImage) 'application resources remain out of scope'
-    Assert-True (($output -join ' ') -match 'deleted=4') 'manual entrypoint reports its cleanup count'
+    Assert-True (-not (Test-Path -LiteralPath $sharedExpired)) 'expired game .log files under the exact shared root are cleaned'
+    Assert-True (Test-Path -LiteralPath $sharedFresh) 'fresh shared game logs are retained'
+    Assert-True (Test-Path -LiteralPath $sharedLocked) 'open shared game logs are retained'
+    Assert-True (Test-Path -LiteralPath $sharedDisallowed) 'non-log files under the shared game root are retained'
+    Assert-True (Test-Path -LiteralPath $sharedOutside) 'neighboring Hearthstone directories are never scanned'
+    Assert-True (($output -join ' ') -match 'deleted=5') 'manual entrypoint reports its cleanup count'
     $summaryName = 'diagnostic-retention-' + $now.ToLocalTime().ToString('yyyyMMdd-HH') + '.log'
     $summaryPath = Join-Path $logRoot $summaryName
     Assert-True (Test-Path -LiteralPath $summaryPath -PathType Leaf) 'manual entrypoint persists a summary under the approved runtime log root'
-    Assert-True ((Get-Content -LiteralPath $summaryPath -Raw) -match 'channel=stable.*deleted=4.*errors=0') 'durable summary records deleted count and errors'
+    Assert-True ((Get-Content -LiteralPath $summaryPath -Raw) -match 'channel=stable.*deleted=5.*errors=0') 'durable summary records deleted count and errors'
     Assert-True (([System.IO.Path]::GetFullPath($summaryPath)).StartsWith(([System.IO.Path]::GetFullPath($logRoot) + '\'), [System.StringComparison]::OrdinalIgnoreCase)) 'summary never writes outside its approved root'
     $longLines = [string[]]@(1..140 | ForEach-Object { 'X' * 2048 })
     [System.IO.File]::WriteAllLines($summaryPath, $longLines, [System.Text.UTF8Encoding]::new($false))

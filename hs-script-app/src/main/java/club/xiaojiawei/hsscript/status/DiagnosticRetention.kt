@@ -189,8 +189,9 @@ object DiagnosticRetentionService {
             ?.takeIf(String::isNotBlank)?.let(Path::of)
         val betaRuntimeLogRoot = System.getProperty("hs.script.beta-runtime-log-root")
             ?.takeIf(String::isNotBlank)?.let(Path::of)
+        val sharedGameLogRoot = if (Platform.isWindows()) Path.of("D:\\Hearthstone\\Logs") else null
         val roots = DiagnosticRetentionPolicy.rootsForChannel(
-            channel, runtime, logDirectory, artifactRoot, betaRuntimeLogRoot,
+            channel, runtime, logDirectory, artifactRoot, betaRuntimeLogRoot, sharedGameLogRoot,
         )
         val externalLogRoot = logDirectory.parent
         val active = buildSet {
