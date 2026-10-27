@@ -15,7 +15,7 @@ import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
-import club.xiaojiawei.hsscript.consts.ROOT_PATH
+import club.xiaojiawei.hsscript.consts.LOG_PATH
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
@@ -562,7 +562,10 @@ internal object BetaScreenRecoveryService {
         val deploymentId = System.getProperty("hs.script.deployment.id", "unknown")
             .replace(Regex("[^A-Za-z0-9_.-]"), "_")
         return GuardianRunStateReader.read(
-            path = Path.of(ROOT_PATH, "log", "guardian-state.json"),
+            path = System.getProperty("hs.script.guardian-state.path")
+                ?.takeIf(String::isNotBlank)
+                ?.let(Path::of)
+                ?: Path.of(LOG_PATH, "guardian-state.json"),
             expectedPid = process.pid(),
             expectedStartTime = processStart,
             expectedDeploymentId = deploymentId,

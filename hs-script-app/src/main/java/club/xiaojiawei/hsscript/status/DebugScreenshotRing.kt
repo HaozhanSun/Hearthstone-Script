@@ -84,7 +84,15 @@ object DebugScreenshotRing {
     ): SavedScreenshot? = runCatching {
         if (enforceCooldown && !tryAcquireCapture(event)) return null
         synchronized(writeLock) {
-            val directory = File(LOG_PATH, "debug-screenshots")
+            val legacyDirectory = File(LOG_PATH, "debug-screenshots")
+            val directory = BetaArtifactStorage.directory("debug-screenshots", legacyDirectory)
+            if (!BetaArtifactStorage.canWrite(directory)) {
+                log.warn {
+                    "DEBUG_SCREENSHOT_SKIPPED event=$event reason=artifact-volume-reserve " +
+                        "path=${directory.absolutePath}"
+                }
+                return null
+            }
             if (!directory.exists() && !directory.mkdirs()) {
                 log.warn { "DEBUG_SCREENSHOT_FAILED event=$event reason=mkdir path=${directory.absolutePath}" }
                 return null

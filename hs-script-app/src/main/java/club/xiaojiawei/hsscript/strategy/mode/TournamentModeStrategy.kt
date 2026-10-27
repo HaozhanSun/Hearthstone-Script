@@ -404,8 +404,18 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         val decision = MatchmakingInputGuardPolicy.decide(
             observedScreen = observation?.screen,
             recentActiveSearchEvidence = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
+            terminalCleanupPending = PowerLogListener.hasCurrentGameTerminalInputFence(),
         )
-        if (decision != MatchmakingInputGuardPolicy.Decision.BLOCK_ACTIVE_SEARCH) return false
+        if (decision == MatchmakingInputGuardPolicy.Decision.ALLOW_INPUT) return false
+        if (decision == MatchmakingInputGuardPolicy.Decision.ABORT_FOR_TERMINAL_CLEANUP) {
+            cancelAllEnteredTasks()
+            log.warn {
+                "MATCHMAKING_INPUT_ABORTED trace=$traceId reason=current-game-terminal-cleanup-pending " +
+                    "stage=$stage screen=${observation?.screen ?: "UNKNOWN"} " +
+                    "freshObservation=${observation != null} dispatch=false"
+            }
+            return true
+        }
         if (observation?.screen.equals("MATCHMAKING", ignoreCase = true)) {
             LifecycleTrace.markActiveMatchmakingScreenObserved()
         }

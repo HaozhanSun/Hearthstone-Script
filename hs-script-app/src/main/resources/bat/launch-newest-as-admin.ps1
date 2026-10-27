@@ -5,20 +5,32 @@ $ErrorActionPreference = 'Stop'
 $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $javaPath = 'C:\Program Files\Java\jdk-25.0.4\bin\javaw.exe'
 $logDirectory = Join-Path $scriptDirectory 'log'
-$selectionLog = Join-Path $logDirectory 'launcher-selection.log'
 . (Join-Path $scriptDirectory 'deployment-contract.ps1')
 . (Join-Path $scriptDirectory 'launcher-guardian-policy.ps1')
 . (Join-Path $scriptDirectory 'beta-temp-policy.ps1')
 $deployment = Resolve-Deployment $scriptDirectory
 if (-not (Test-Path -LiteralPath $javaPath)) { throw "javaw.exe was not found: $javaPath" }
 
-New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
 $runtimeHasher = [System.Security.Cryptography.SHA256]::Create()
 $runtimeHashBytes = $runtimeHasher.ComputeHash(
     [System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFullPath($scriptDirectory).ToLowerInvariant())
 )
 $runtimeKey = ([System.BitConverter]::ToString($runtimeHashBytes)).Replace('-', '').Substring(0, 24)
 $runtimeHasher.Dispose()
+if (([string]$deployment.Manifest.releaseChannel).ToLowerInvariant() -eq 'beta') {
+    $startupVolumes = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop |
+        Select-Object DeviceID, FreeSpace, DriveType)
+    $logDirectory = Get-HsScriptBetaLogDirectory `
+        -Channel ([string]$deployment.Manifest.releaseChannel) `
+        -RuntimeKey $runtimeKey `
+        -RuntimeDirectory $scriptDirectory `
+        -FixedVolumes $startupVolumes
+}
+$selectionLog = Join-Path $logDirectory 'launcher-selection.log'
+New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
+if (([string]$deployment.Manifest.releaseChannel).ToLowerInvariant() -eq 'beta') {
+    Add-Content -LiteralPath $selectionLog -Value ("{0} betaLogDirectory={1} minFreeBytes=5368709120" -f (Get-Date -Format o), $logDirectory)
+}
 $guardianMutexState = Enter-HsScriptGuardianMutex -RuntimeKey $runtimeKey
 if (-not $guardianMutexState.Acquired) {
     Add-Content -LiteralPath $selectionLog -Value ("{0} guardianAlreadyRunning action=NO_DUPLICATE_LAUNCH" -f (Get-Date -Format o))
@@ -35,12 +47,14 @@ function Start-HsScriptChild([object]$ResolvedDeployment, [bool]$GuardianRestart
         }
         $javaTempArgument = ''
         $betaArtifactArgument = ''
+        $betaLoggingArgument = ''
         if (([string]$ResolvedDeployment.Manifest.releaseChannel).ToLowerInvariant() -eq 'beta') {
             $fixedVolumes = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop |
                 Select-Object DeviceID, FreeSpace, DriveType)
             $javaTempDirectory = Get-HsScriptBetaJavaTempDirectory `
                 -Channel ([string]$ResolvedDeployment.Manifest.releaseChannel) `
                 -RuntimeKey $runtimeKey `
+                -RuntimeDirectory $scriptDirectory `
                 -FixedVolumes $fixedVolumes
             New-Item -ItemType Directory -Force -Path $javaTempDirectory | Out-Null
             $javaTempArgument = (Get-HsScriptJavaTempJvmArgument `
@@ -64,10 +78,15 @@ function Start-HsScriptChild([object]$ResolvedDeployment, [bool]$GuardianRestart
                 Add-Content -LiteralPath $selectionLog -Value ("{0} betaArtifactRoot={1} minFreeBytes=5368709120" -f (Get-Date -Format o), $artifactRoot)
             } else {
                 $betaArtifactArgument = '-Dhs.script.artifact-storage.disabled=true '
-                Add-Content -LiteralPath $selectionLog -Value ("{0} betaArtifactRoot=LEGACY_PATHS reason=no-volume-meets-capacity" -f (Get-Date -Format o))
+                Add-Content -LiteralPath $selectionLog -Value ("{0} betaArtifactRoot=DISABLED reason=no-non-runtime-volume-meets-capacity" -f (Get-Date -Format o))
             }
+            $betaAppLogDirectory = Join-Path $logDirectory 'app'
+            New-Item -ItemType Directory -Force -Path $betaAppLogDirectory | Out-Null
+            $guardianStatePath = Join-Path $logDirectory 'guardian-state.json'
+            $betaLoggingArgument = '-Dhs.script.log.dir="' + [System.IO.Path]::GetFullPath($betaAppLogDirectory) + '" ' +
+                '-Dhs.script.guardian-state.path="' + [System.IO.Path]::GetFullPath($guardianStatePath) + '" '
         }
-        $arguments = $javaTempArgument + $betaArtifactArgument + '-Dhs.script.launch.source=shortcut -Djna.library.path="' +
+        $arguments = $javaTempArgument + $betaArtifactArgument + $betaLoggingArgument + '-Dhs.script.launch.source=shortcut -Djna.library.path="' +
             $scriptDirectory + '" -Dhs.script.deployment.id="' + $ResolvedDeployment.DeploymentId +
             '" -Dhs.script.deployment.manifest="' + $ResolvedDeployment.ManifestPath + '" -jar "' +
             $ResolvedDeployment.AppJar + '"'
@@ -87,6 +106,7 @@ function Start-HsScriptChild([object]$ResolvedDeployment, [bool]$GuardianRestart
             executablePath = [System.IO.Path]::GetFullPath([string]$identity.ExecutablePath)
             deploymentId = $ResolvedDeployment.DeploymentId
             appJar = [string]$ResolvedDeployment.Manifest.appJar
+            processState = 'RUNNING'
             recordedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
         }
         $markerPath = Join-Path $scriptDirectory 'hs-script.pid.json'
@@ -147,7 +167,7 @@ try {
         Add-Content -LiteralPath $selectionLog -Value ("{0} guardianNotificationUnavailable={1}" -f `
             (Get-Date -Format o), $_.Exception.Message)
     }
-    $null = Invoke-HsScriptGuardianLoop -InitialRun $run `
+    $guardianResult = Invoke-HsScriptGuardianLoop -InitialRun $run `
         -StartRun {
             param($GuardianRestart)
             $currentDeployment = Resolve-Deployment $scriptDirectory
@@ -172,6 +192,14 @@ try {
             param($line)
             Add-Content -LiteralPath $selectionLog -Value ("{0} {1}" -f (Get-Date -Format o), $line)
         }
+    $finalRun = $guardianResult.FinalRun
+    $statePath = Join-Path $logDirectory 'guardian-state.json'
+    $appLogPath = Join-Path (Join-Path $logDirectory 'app') 'hs_script.log'
+    $reconciled = Set-HsScriptExitedChildState -MarkerPath (Join-Path $scriptDirectory 'hs-script.pid.json') `
+        -GuardianStatePath $statePath -Run $finalRun -Action ([string]$guardianResult.Action) `
+        -ExitCode ([int]$finalRun.Process.ExitCode) -AppLogPath $appLogPath
+    Add-Content -LiteralPath $selectionLog -Value ("{0} childExitReconciled pid={1} action={2} markerUpdated={3}" -f `
+        (Get-Date -Format o), $finalRun.Identity.ProcessId, $guardianResult.Action, $reconciled)
 } finally {
     if ($null -ne $guardianNotifier) {
         $guardianNotifier.Visible = $false

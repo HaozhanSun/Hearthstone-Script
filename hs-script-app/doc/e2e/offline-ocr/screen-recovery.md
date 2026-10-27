@@ -26,9 +26,10 @@ produce a visible HOME screen with no follow-up action.
 
 ## Retention and safety
 
-The compact ring is `log/debug-screenshots`. It is the only directory managed
-by the retention policy. Defaults are 60 files, 256 MiB total, and a 1.5 second
-write cooldown. The persistent keys are:
+The compact ring is `debug-screenshots` under Beta's selected artifact root;
+non-Beta channels retain `log/debug-screenshots`. It is the only directory
+managed by the retention policy. Defaults are 60 files, 256 MiB total, and a
+1.5 second write cooldown. The persistent keys are:
 
 - `SCREEN_RECOVERY_SCREENSHOT_MAX_FILES`
 - `SCREEN_RECOVERY_SCREENSHOT_MAX_BYTES`
@@ -40,6 +41,32 @@ so concurrent recovery/watchdog captures cannot corrupt the retention pass.
 Unknown-state archives, run ledgers, final-victory evidence, user `config`,
 `data`, `log` history outside this directory, `plugin`, and backups are outside
 this deletion boundary.
+
+## Beta result and storage recovery
+
+- A callback that first sees `FINAL_GAMEOVER` without a terminal `PLAYSTATE`
+  starts the bounded result wait. Every later `GAME_OVER` callback must reread
+  the current Power.log terminal marker; never return early solely because the
+  wait has started. A later current-player `WON`, `LOST`, or `CONCEDED` releases
+  the wait immediately. Regress the initial-UNKNOWN then final-WON callback
+  sequence and retain the timeout case.
+- A complete current-game Power.log tail may reconcile Beta from stale
+  `FILL_DECK` only when it contains current-session `PLAYSTATE`,
+  `FINAL_GAMEOVER`, and `STATE=COMPLETE`, local ownership is verified, and no
+  active war remains. This is one bounded result cleanup attempt. Unknown OCR
+  or screenshot I/O failure cannot erase that proof. A fresh positive
+  `MATCHMAKING` screen still blocks duplicate queue input; terminal proof
+  supersedes only uncertain stale search evidence. Clear previous queue
+  evidence at the terminal boundary, and allow a new queue intent to replace
+  the prior terminal input fence.
+- Canonical Beta launch selects a non-runtime fixed volume with at least 5 GiB
+  free for the main Logback file, launcher selection log, and guardian state.
+  The launcher passes the selected paths into the JVM and refuses to start if
+  no such volume exists. JVM temp and diagnostic artifacts also stay on a
+  non-runtime volume. If artifact reserve is unavailable, screenshot and OCR
+  image saves fail closed with a reason; they never fall back to C:. Existing
+  C: log and screenshot history is retained. Test the selected paths and the
+  low-space refusal with fixed-volume fixtures.
 
 ## Gotchas
 
@@ -360,3 +387,8 @@ this deletion boundary.
   and unknown-state 100-images-per-category/day retention limits remain the
   only deletion behavior; game-result and mulligan writers stop at the reserve
   without deleting history. RC and Stable must receive no Beta artifact root.
+### Beta guardian health evidence
+
+- A fresh guardian heartbeat does not prove the app is progressing. Beta guardian snapshots also record the selected `hs_script.log` path, last-write UTC time, and file age; a stale/missing app log is surfaced as `ALERT_STALE_APP_LOG` without stopping or restarting the process.
+- When the launcher observes its child exit and no restart is authorized, it must atomically reconcile only that exact PID/start-time/deployment marker to `EXITED`, record the exit code/time and last app-log write, and set the matching guardian state to `STOPPED` with unknown health. A stale PID marker must never claim `RUNNING` after observed process exit.
+- Guardian health log lines must be formatted from the actual values and tested for literal `{0}`-style placeholders. Beta app-log checks must not change RC or Stable behavior.

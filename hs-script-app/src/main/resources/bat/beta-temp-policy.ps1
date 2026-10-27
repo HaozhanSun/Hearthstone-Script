@@ -5,6 +5,7 @@ function Get-HsScriptBetaJavaTempDirectory {
     param(
         [Parameter(Mandatory = $true)][string]$Channel,
         [Parameter(Mandatory = $true)][string]$RuntimeKey,
+        [string]$RuntimeDirectory = '',
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$FixedVolumes,
         [long]$MinimumFreeBytes = 1GB
     )
@@ -13,10 +14,14 @@ function Get-HsScriptBetaJavaTempDirectory {
 
     $safeKey = $RuntimeKey -replace '[^A-Za-z0-9_-]', ''
     if ([string]::IsNullOrWhiteSpace($safeKey)) { throw 'A stable runtime key is required for Beta temp isolation' }
+    $runtimeDrive = if ([string]::IsNullOrWhiteSpace($RuntimeDirectory)) { $null } else {
+        ([System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($RuntimeDirectory))).TrimEnd('\')
+    }
 
     $selected = $FixedVolumes |
         Where-Object {
             [string]$_.DeviceID -match '^[A-Za-z]:$' -and
+            ([string]$_.DeviceID -ne $runtimeDrive) -and
             [long]$_.FreeSpace -ge $MinimumFreeBytes -and
             ([int]$_.DriveType -eq 3 -or $null -eq $_.DriveType)
         } |
@@ -58,9 +63,11 @@ function Get-HsScriptBetaArtifactRoot {
     $safeKey = $RuntimeKey -replace '[^A-Za-z0-9_-]', ''
     if ([string]::IsNullOrWhiteSpace($safeKey)) { throw 'A stable runtime key is required for Beta artifact isolation' }
 
+    $runtimeDrive = ([System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($RuntimeDirectory))).TrimEnd('\')
     $selected = $FixedVolumes |
         Where-Object {
             [string]$_.DeviceID -match '^[A-Za-z]:$' -and
+            ([string]$_.DeviceID -ne $runtimeDrive) -and
             [long]$_.FreeSpace -ge $MinimumFreeBytes -and
             ([int]$_.DriveType -eq 3 -or $null -eq $_.DriveType)
         } |
@@ -71,13 +78,44 @@ function Get-HsScriptBetaArtifactRoot {
         return Join-Path $driveRoot (Join-Path 'HearthstoneScriptArtifacts' (Join-Path 'Beta' $safeKey))
     }
 
-    $runtimeDrive = ([System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($RuntimeDirectory))).TrimEnd('\')
     $fallback = $FixedVolumes | Where-Object {
-        [string]$_.DeviceID -eq $runtimeDrive -and
+        [string]$_.DeviceID -match '^[A-Za-z]:$' -and
+        [string]$_.DeviceID -ne $runtimeDrive -and
         [long]$_.FreeSpace -ge $FallbackMinimumFreeBytes
-    } | Select-Object -First 1
+    } | Sort-Object -Property @{ Expression = { [long]$_.FreeSpace }; Descending = $true } | Select-Object -First 1
     if ($null -ne $fallback) {
-        return Join-Path $RuntimeDirectory (Join-Path 'log' 'beta-artifacts')
+        $driveRoot = ([string]$fallback.DeviceID).TrimEnd('\') + '\'
+        return Join-Path $driveRoot (Join-Path 'HearthstoneScriptArtifacts' (Join-Path 'Beta' $safeKey))
     }
     return $null
+}
+
+function Get-HsScriptBetaLogDirectory {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Channel,
+        [Parameter(Mandatory = $true)][string]$RuntimeKey,
+        [Parameter(Mandatory = $true)][string]$RuntimeDirectory,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$FixedVolumes,
+        [long]$MinimumFreeBytes = 5GB
+    )
+
+    if ($Channel.Trim().ToLowerInvariant() -ne 'beta') { return $null }
+    $safeKey = $RuntimeKey -replace '[^A-Za-z0-9_-]', ''
+    if ([string]::IsNullOrWhiteSpace($safeKey)) { throw 'A stable runtime key is required for Beta log isolation' }
+    $runtimeDrive = ([System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($RuntimeDirectory))).TrimEnd('\')
+    $selected = $FixedVolumes |
+        Where-Object {
+            [string]$_.DeviceID -match '^[A-Za-z]:$' -and
+            [string]$_.DeviceID -ne $runtimeDrive -and
+            [long]$_.FreeSpace -ge $MinimumFreeBytes -and
+            ([int]$_.DriveType -eq 3 -or $null -eq $_.DriveType)
+        } |
+        Sort-Object -Property @{ Expression = { [long]$_.FreeSpace }; Descending = $true } |
+        Select-Object -First 1
+    if ($null -eq $selected) {
+        throw "Beta requires a non-runtime fixed volume with at least $MinimumFreeBytes free bytes for logs"
+    }
+    $driveRoot = ([string]$selected.DeviceID).TrimEnd('\') + '\'
+    return Join-Path $driveRoot (Join-Path 'HearthstoneScriptLogs' (Join-Path 'Beta' $safeKey))
 }

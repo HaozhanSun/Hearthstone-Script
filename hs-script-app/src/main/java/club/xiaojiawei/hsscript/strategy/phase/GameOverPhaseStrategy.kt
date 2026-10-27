@@ -6,6 +6,7 @@ import club.xiaojiawei.hsscript.bean.log.TagChangeEntity
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.E2ETrace
+import club.xiaojiawei.hsscript.status.ResultTerminalWaitPolicy
 import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
@@ -59,8 +60,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
      * machine in GAME_OVER.  Give the authoritative read a short grace period
      * and then perform one safe cleanup so a fresh game can start.
      */
-    @Volatile
-    private var e2eResultWaitStartedAt: Long = 0L
+    private val terminalWaitPolicy = ResultTerminalWaitPolicy(E2E_RESULT_WAIT_TIMEOUT_MS)
 
     private const val E2E_RESULT_WAIT_TIMEOUT_MS = 15_000L
 
@@ -76,7 +76,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         resultScreenshotCaptured.set(false)
         resultHandlingStarted.set(false)
         replayCleanupHandled.set(false)
-        e2eResultWaitStartedAt = 0L
+        terminalWaitPolicy.reset()
     }
 
     fun forceTerminalFromScreenWatchdog(kind: ScreenWatchdogKind, evidence: String): Boolean {
@@ -116,7 +116,15 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
             )
         }
         WarEx.reset()
+        PowerLogListener.markCurrentGameResultHandled()
         return true
+    }
+
+    /** Entry point for Beta's bounded Power.log reconciliation when OCR cannot identify a stuck result screen. */
+    internal fun reconcileFromTerminalWatchdog() {
+        if (resultHandlingStarted.get() || !PowerLogListener.isCurrentGameTerminalCleanupPending()) return
+        if (PowerLogListener.currentGameTerminalForVerifiedLocalPlayer() == null) return
+        over()
     }
 
     override fun dealTagChangeThenIsOver(line: String, tagChangeEntity: TagChangeEntity): Boolean {
@@ -162,16 +170,6 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
             recordDuplicateCallback()
             return
         }
-        if (e2eResultWaitStartedAt != 0L) {
-            // GAME_OVER can be delivered more than once while the final
-            // PLAYSTATE is still being flushed.  A second callback must not
-            // run the cleanup/classification path with a different snapshot;
-            // it would race the first callback and can publish UNKNOWN even
-            // when the first callback later obtains the authoritative result.
-            recordDuplicateCallback()
-            return
-        }
-
         // A watchdog restart replays the whole Power.log so the in-memory
         // model can be rebuilt.  That file can contain several completed
         // games before the currently active one.  Treating each historical
@@ -210,25 +208,28 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         // MCTS worker submit one stale action during that same race.
         val authoritativeTerminal = readAuthoritativeTerminal()
         val authoritativeOutcome = terminalToWinOverride(authoritativeTerminal)
-        if (war.me.gameId.isNotBlank() && authoritativeOutcome == null) {
-            val now = System.currentTimeMillis()
-            val waitStartedAt = e2eResultWaitStartedAt
-            if (waitStartedAt == 0L) {
-                e2eResultWaitStartedAt = now
-                club.xiaojiawei.hsscriptbase.config.log.info {
-                    "E2E结算等待Power.log最终PLAYSTATE，最多等待${E2E_RESULT_WAIT_TIMEOUT_MS / 1000}秒"
+        if (war.me.gameId.isNotBlank()) {
+            val wait = terminalWaitPolicy.evaluate(
+                authoritativeTerminalAvailable = authoritativeTerminal != null,
+                nowMs = System.currentTimeMillis(),
+            )
+            when (wait.outcome) {
+                ResultTerminalWaitPolicy.Outcome.READY -> Unit
+                ResultTerminalWaitPolicy.Outcome.WAITING -> {
+                    if (wait.firstWait) {
+                        club.xiaojiawei.hsscriptbase.config.log.info {
+                            "E2E结算等待Power.log最终PLAYSTATE，最多等待${E2E_RESULT_WAIT_TIMEOUT_MS / 1000}秒"
+                        }
+                    }
+                    return
                 }
-                return
-            }
-            if (now - waitStartedAt < E2E_RESULT_WAIT_TIMEOUT_MS) {
-                return
-            }
-            club.xiaojiawei.hsscriptbase.config.log.warn {
-                "E2E结算等待Power.log超时，继续清理结算状态，避免卡死在游戏结束阶段"
+                ResultTerminalWaitPolicy.Outcome.TIMED_OUT -> {
+                    club.xiaojiawei.hsscriptbase.config.log.warn {
+                        "E2E结算等待Power.log超时，继续清理结算状态，避免卡死在游戏结束阶段"
+                    }
+                }
             }
         }
-
-        e2eResultWaitStartedAt = 0L
         if (!resultHandlingStarted.compareAndSet(false, true)) {
             return
         }
@@ -407,6 +408,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         }
         addGameEndTask(terminalCleanupCapability)
         WarEx.reset()
+        PowerLogListener.markCurrentGameResultHandled()
     }
 
     private fun readE2eOutcome(): Boolean? {
@@ -439,6 +441,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
             war.me.gameId,
         )
         if (powerLogTerminal != null) return powerLogTerminal
+        PowerLogListener.currentGameTerminalForVerifiedLocalPlayer()?.let { return it }
 
         // During the terminal callback the model can already contain the
         // opponent's LOST/CONCEDED id while the final Power.log marker is

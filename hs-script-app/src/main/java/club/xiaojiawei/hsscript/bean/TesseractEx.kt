@@ -3,10 +3,12 @@ package club.xiaojiawei.hsscript.bean
 import club.xiaojiawei.hsscript.consts.ROOT_PATH
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
+import club.xiaojiawei.hsscript.status.BetaArtifactStorage
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.FileUtil
 import net.sourceforge.tess4j.Tesseract
 import java.awt.image.BufferedImage
+import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.UUID
@@ -29,19 +31,28 @@ class TesseractEx : Tesseract() {
         allowEmptyProbeResult: Boolean = false,
     ): String {
         if (ConfigUtil.getBoolean(ConfigEnum.SAVE_OCR_IMG)) {
-            val ocrPath = Path(ROOT_PATH, ocrDir)
-            if (!ocrPath.exists()) {
-                ocrPath.createDirectories()
-            }
-            ocrPath.toFile().listFiles()?.let {
-                if (it.size > 20) {
-                    FileUtil.clearDirectory(ocrPath.toFile())
+            val legacyDirectory = File(ROOT_PATH, ocrDir)
+            val directory = BetaArtifactStorage.directory("ocr-res", legacyDirectory)
+            if (!BetaArtifactStorage.canWrite(directory)) {
+                club.xiaojiawei.hsscriptbase.config.log.warn {
+                    "OCR_IMAGE_SAVE_SKIPPED reason=artifact-volume-reserve path=${directory.absolutePath}"
                 }
-            }
-            p0?.let {
-                val time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy_MM_dd_HH_mm_ss"))
-                val ocrPath = ocrPath.resolve("${time}_${desc}_${UUID.randomUUID()}.png").toFile()
-                ImageIO.write(it, "png", ocrPath)
+            } else {
+                val ocrPath = Path(directory.absolutePath)
+                if (!ocrPath.exists()) ocrPath.createDirectories()
+                ocrPath.toFile().listFiles()?.let {
+                    if (it.size > 20) FileUtil.clearDirectory(ocrPath.toFile())
+                }
+                p0?.let {
+                    val time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy_MM_dd_HH_mm_ss"))
+                    val imageFile = ocrPath.resolve("${time}_${desc}_${UUID.randomUUID()}.png").toFile()
+                    runCatching { ImageIO.write(it, "png", imageFile) }
+                        .onFailure { error ->
+                            club.xiaojiawei.hsscriptbase.config.log.warn(error) {
+                                "OCR_IMAGE_SAVE_FAILED path=${imageFile.absolutePath}"
+                            }
+                        }
+                }
             }
         }
         return OcrRuntime.recognize(

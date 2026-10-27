@@ -16,6 +16,7 @@ import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PrivacyProcessAudit
 import club.xiaojiawei.hsscript.status.RuntimeContractTrace
+import club.xiaojiawei.hsscript.status.BetaLogDirectoryPolicy
 import club.xiaojiawei.hsscript.dll.CSystemDll
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
 import club.xiaojiawei.hsscript.utils.ExistingInstanceSignal
@@ -41,6 +42,8 @@ fun main(args: Array<String>) {
         System.err.println("NORMAL_USER_LAUNCH_HELPER_EXIT code=$helperExitCode pid=${ProcessHandle.current().pid()}")
         exitProcess(helperExitCode)
     }
+
+    configureBetaLogDirectory()
 
     System.setProperty("jna.library.path", "lib")
     // MESSAGE mode has a safe Java input path and must not load the legacy
@@ -161,6 +164,29 @@ fun main(args: Array<String>) {
         }
         System.err.println("E2E_LAUNCH E2E result recorded; allowing process exit pid=${ProcessHandle.current().pid()}")
     }
+}
+
+private fun configureBetaLogDirectory() {
+    if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) != "beta") return
+    val runtimeDirectory = File(System.getProperty("user.dir"))
+    val logDirectory = BetaLogDirectoryPolicy.resolve(
+        channel = BuildInfo.RELEASE_CHANNEL,
+        runtimeDirectory = runtimeDirectory,
+        configuredDirectory = System.getProperty("hs.script.log.dir"),
+        javaTempDirectory = System.getProperty("java.io.tmpdir"),
+    ) ?: run {
+        System.err.println(
+            "BETA_LOG_DIRECTORY_UNAVAILABLE runtime=$runtimeDirectory " +
+                "minimumFreeBytes=${BetaLogDirectoryPolicy.MINIMUM_FREE_BYTES}; refusing C: log fallback",
+        )
+        exitProcess(1)
+    }
+    if (!logDirectory.exists() && !logDirectory.mkdirs()) {
+        System.err.println("BETA_LOG_DIRECTORY_CREATE_FAILED path=${logDirectory.absolutePath}; refusing C: log fallback")
+        exitProcess(1)
+    }
+    System.setProperty("hs.script.log.dir", logDirectory.absolutePath)
+    System.err.println("BETA_LOG_DIRECTORY path=${logDirectory.absolutePath}")
 }
 
 private fun setLogPath() {

@@ -9,6 +9,7 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
 import kotlin.test.Test
+import kotlin.test.AfterTest
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -16,8 +17,21 @@ import javax.imageio.ImageIO
 
 class UnknownStateScreenshotTest {
 
+    private val previousArtifactRoot = System.getProperty("hs.script.artifact-root")
+
+    @AfterTest
+    fun restoreArtifactRoot() {
+        if (previousArtifactRoot == null) System.clearProperty("hs.script.artifact-root")
+        else System.setProperty("hs.script.artifact-root", previousArtifactRoot)
+    }
+
+    private fun enableIsolatedTestArtifactStorage() {
+        System.setProperty("hs.script.artifact-root", System.getProperty("java.io.tmpdir"))
+    }
+
     @Test
     fun `diagnostic lines are rendered outside the marked ROI`() {
+        enableIsolatedTestArtifactStorage()
         val root = Files.createTempDirectory("rank-diagnostic-panel-").toFile()
         try {
             val image = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
@@ -75,6 +89,7 @@ class UnknownStateScreenshotTest {
 
     @Test
     fun `dummy e2e saves timestamped annotated screenshot in dated folder`() {
+        enableIsolatedTestArtifactStorage()
         val configuredOutput = System.getProperty("hs.script.unknown-state.test-output")
         val root = configuredOutput?.let(::File) ?: Files.createTempDirectory("unknown-state-e2e-").toFile()
         val shouldClean = configuredOutput == null
@@ -130,6 +145,7 @@ class UnknownStateScreenshotTest {
 
     @Test
     fun `dummy e2e captures fatal error in its own category`() {
+        enableIsolatedTestArtifactStorage()
         val configuredOutput = System.getProperty("hs.script.unknown-state.test-output")
         val root = configuredOutput?.let(::File) ?: Files.createTempDirectory("fatal-state-e2e-").toFile()
         val shouldClean = configuredOutput == null

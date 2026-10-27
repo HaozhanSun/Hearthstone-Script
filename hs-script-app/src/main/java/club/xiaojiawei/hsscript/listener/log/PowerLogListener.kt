@@ -5,6 +5,8 @@ import club.xiaojiawei.hsscript.bean.DiskLogFile
 import club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME
 import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
+import club.xiaojiawei.hsscript.status.E2ETrace
+import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.RuntimeFaultBackoff
 import club.xiaojiawei.hsscript.status.ScriptStatus
@@ -20,6 +22,8 @@ import club.xiaojiawei.hsscript.utils.PowerLogUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.enums.GameLogModeEnum
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.StepEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
@@ -27,6 +31,7 @@ import club.xiaojiawei.hsscriptcardsdk.status.WAR
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 对局日志监听器
@@ -59,6 +64,14 @@ object PowerLogListener :
     @Volatile
     private var terminalTailFence = false
     private val currentGamePowerLogTerminalTracker = CurrentGamePowerLogTerminalTracker()
+    private val terminalResultRecoveryAttempted = AtomicBoolean(false)
+    private val terminalQueueEvidenceCleared = AtomicBoolean(false)
+    @Volatile
+    private var currentGameResultHandled = false
+    @Volatile
+    private var terminalInputFenceSupersededByNewQueue = false
+    @Volatile
+    private var latestObservedCreateGameTimestamp: String? = null
     private val currentGameTerminalReconciler = CurrentGameTerminalReconciler(
         tracker = currentGamePowerLogTerminalTracker,
         onAccepted = { evidence ->
@@ -72,6 +85,70 @@ object PowerLogListener :
     /** True only when this CREATE_GAME has terminal PLAYSTATE and complete-game markers. */
     fun hasCurrentGameCompleteTerminalPowerLogEvidence(): Boolean =
         currentGamePowerLogTerminalTracker.hasCompleteTerminalEvidence()
+
+    fun isCurrentGameTerminalCleanupPending(): Boolean =
+        BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta" &&
+            hasCurrentGameCompleteTerminalPowerLogEvidence() &&
+            !currentGameResultHandled
+
+    fun hasCurrentGameTerminalInputFence(): Boolean =
+        BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta" &&
+            hasCurrentGameCompleteTerminalPowerLogEvidence() &&
+            !terminalInputFenceSupersededByNewQueue
+
+    fun markNewMatchmakingInputAfterTerminalResult() {
+        if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta" &&
+            hasCurrentGameCompleteTerminalPowerLogEvidence()
+        ) {
+            terminalInputFenceSupersededByNewQueue = true
+        }
+    }
+
+    fun markCurrentGameResultHandled() {
+        currentGameResultHandled = true
+    }
+
+    fun currentGameTerminalForVerifiedLocalPlayer(): E2ETrace.PowerLogTerminal? {
+        if (!currentGamePowerLogTerminalTracker.hasCompleteTerminalEvidence()) return null
+        val evidence = currentGamePowerLogTerminalTracker.currentGameSurrenderEvidence(
+            WarEx.war.me.gameId,
+            WarEx.war.rival.gameId,
+        ) ?: return null
+        return when (evidence.ownPlayState) {
+            "WON" -> E2ETrace.PowerLogTerminal.WON
+            "LOST" -> E2ETrace.PowerLogTerminal.LOST
+            "CONCEDED" -> E2ETrace.PowerLogTerminal.CONCEDED
+            else -> null
+        }
+    }
+
+    /** Recover one missed live result callback from a complete current-game terminal tail. */
+    @Synchronized
+    fun reconcileStaleTerminalResultForBeta(): Boolean {
+        if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) != "beta" ||
+            WarEx.inWar || WarEx.war.currentPhase != WarPhaseEnum.FILL_DECK ||
+            !isCurrentGameTerminalCleanupPending()
+        ) return false
+        val terminal = currentGameTerminalForVerifiedLocalPlayer()
+        if (terminal == null) {
+            if (terminalResultRecoveryAttempted.compareAndSet(false, true)) {
+                log.warn {
+                    "BETA_TERMINAL_RESULT_RECONCILIATION_SKIPPED reason=local-owner-terminal-unverified " +
+                        "phase=${WarEx.war.currentPhase} inWar=${WarEx.inWar}"
+                }
+            }
+            return false
+        }
+        if (!terminalResultRecoveryAttempted.compareAndSet(false, true)) return false
+        log.warn {
+            "BETA_TERMINAL_RESULT_RECONCILIATION source=current-game-power-log " +
+                "phase=${WarEx.war.currentPhase} terminal=$terminal action=bounded-result-cleanup"
+        }
+        WarEx.war.currentPhase = WarPhaseEnum.GAME_OVER
+        WarEx.war.currentTurnStep = StepEnum.FINAL_GAMEOVER
+        club.xiaojiawei.hsscript.strategy.phase.GameOverPhaseStrategy.reconcileFromTerminalWatchdog()
+        return true
+    }
 
     /** Identity and owner states from the current live CREATE_GAME segment. */
     fun currentGameSurrenderIdentity(ownEntityId: String): String? =
@@ -94,10 +171,25 @@ object PowerLogListener :
 
     /** Observe raw lines consumed by a phase handler's bounded tail reader. */
     fun observeCurrentGameTerminalEvidenceLine(line: String) {
+        if (line.contains("CREATE_GAME")) {
+            val timestamp = Regex("^D\\s+(\\d{2}:\\d{2}:\\d{2}\\.\\d+)").find(line)?.groupValues?.get(1)
+            if (timestamp == null || timestamp != latestObservedCreateGameTimestamp) {
+                latestObservedCreateGameTimestamp = timestamp
+                currentGameResultHandled = false
+                terminalInputFenceSupersededByNewQueue = false
+                terminalResultRecoveryAttempted.set(false)
+                terminalQueueEvidenceCleared.set(false)
+            }
+        }
         currentGamePowerLogTerminalTracker.observeLine(
             line,
             currentSessionEvidence = !replayingExistingLog || replayingVerifiedCurrentSessionGame,
         )
+        if (currentGamePowerLogTerminalTracker.hasCompleteTerminalEvidence() &&
+            terminalQueueEvidenceCleared.compareAndSet(false, true)
+        ) {
+            LifecycleTrace.clearActiveMatchmakingScreenObserved("current-game-terminal-evidence")
+        }
         reconcileLateMandatoryRankSurrenderTerminalProof()
         currentGameTerminalEvidencePosition = logFile?.getPosition() ?: currentGameTerminalEvidencePosition
     }
@@ -211,6 +303,11 @@ object PowerLogListener :
         terminalTailFence = false
         currentGamePowerLogTerminalTracker.reset()
         currentGameTerminalEvidencePosition = null
+        latestObservedCreateGameTimestamp = null
+        currentGameResultHandled = false
+        terminalInputFenceSupersededByNewQueue = false
+        terminalResultRecoveryAttempted.set(false)
+        terminalQueueEvidenceCleared.set(false)
 
         logFile?.let {
             val unfinishedGameStart = unfinishedGameStartOffset(it.path())

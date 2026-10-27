@@ -5,8 +5,9 @@ import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil
-import club.xiaojiawei.hsscript.consts.ROOT_PATH
+import club.xiaojiawei.hsscript.consts.LOG_PATH
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
@@ -40,6 +41,9 @@ object LifecycleTrace {
     private var stateRecoveryFingerprint = ""
     private var stateRecoveryAttemptAt = 0L
     private val stateRecoveryInFlight = AtomicBoolean(false)
+    private val terminalRecoveryInFlight = AtomicBoolean(false)
+    @Volatile
+    private var terminalRecoveryLatched = false
 
     @Volatile
     private var activeMatchmakingScreenObservedAt = 0L
@@ -56,6 +60,7 @@ object LifecycleTrace {
             var lastState = ""
             while (running) {
                 detectStuckGameOver()
+                detectStuckTerminalResult()
                 detectStuckStateRecovery()
                 val state = snapshot()
                 writeGuardianState()
@@ -118,13 +123,22 @@ object LifecycleTrace {
                         hasRecentMatchmakingInputIntent(),
                 )
             }.getOrNull()
-            val directory = Path.of(ROOT_PATH, "log")
+            val statePath = System.getProperty("hs.script.guardian-state.path")
+                ?.takeIf(String::isNotBlank)
+                ?.let(Path::of)
+                ?: Path.of(LOG_PATH, "guardian-state.json")
+            val appLogPath = Path.of(LOG_PATH, "hs_script.log")
+            val appLogWriteAt = runCatching {
+                Files.getLastModifiedTime(appLogPath).toInstant()
+            }.getOrNull()
+            val appLogAgeMs = appLogWriteAt?.let { java.time.Duration.between(it, java.time.Instant.now()).toMillis().coerceAtLeast(0) }
+            val directory = statePath.parent ?: Path.of(LOG_PATH)
             Files.createDirectories(directory)
-            val target = directory.resolve("guardian-state.json")
+            val target = statePath
             val temporary = directory.resolve("guardian-state.${ProcessHandle.current().pid()}.tmp")
             val deploymentId = System.getProperty("hs.script.deployment.id", "unknown").replace(Regex("[^A-Za-z0-9_.-]"), "_")
             val processStart = ProcessHandle.current().info().startInstant().orElse(java.time.Instant.EPOCH)
-            val json = """{"schema":2,"pid":${ProcessHandle.current().pid()},"processStartTimeUtc":"$processStart","deploymentId":"$deploymentId","releaseChannel":"${BuildInfo.RELEASE_CHANNEL}","intent":"$intent","working":$working,"paused":${PauseStatus.isPause},"pauseOrigin":"${PauseStatus.pauseOrigin}","gameAlive":${healthSnapshot?.gameAlive ?: false},"activeGame":${healthSnapshot?.activeGame ?: false},"activeMatchmaking":${healthSnapshot?.activeMatchmaking ?: false},"healthSnapshotKnown":${healthSnapshot != null},"heartbeatAtUtc":"${java.time.Instant.now()}","reason":"${reason.replace(Regex("[^A-Za-z0-9_. -]"), "_")}"}"""
+            val json = """{"schema":3,"pid":${ProcessHandle.current().pid()},"processStartTimeUtc":"$processStart","deploymentId":"$deploymentId","releaseChannel":"${BuildInfo.RELEASE_CHANNEL}","intent":"$intent","working":$working,"paused":${PauseStatus.isPause},"pauseOrigin":"${PauseStatus.pauseOrigin}","gameAlive":${healthSnapshot?.gameAlive ?: false},"activeGame":${healthSnapshot?.activeGame ?: false},"activeMatchmaking":${healthSnapshot?.activeMatchmaking ?: false},"healthSnapshotKnown":${healthSnapshot != null},"appLogPath":"${appLogPath.toAbsolutePath().toString().replace("\\", "\\\\")}","lastAppLogWriteAtUtc":${appLogWriteAt?.let { "\"$it\"" } ?: "null"},"appLogAgeMs":${appLogAgeMs ?: "null"},"heartbeatAtUtc":"${java.time.Instant.now()}","reason":"${reason.replace(Regex("[^A-Za-z0-9_. -]"), "_")}"}"""
             Files.writeString(temporary, json)
             try {
                 Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
@@ -193,6 +207,39 @@ object LifecycleTrace {
         }
     }
 
+    /** Prefer complete current-game Power.log proof over stale queue evidence or OCR on Beta. */
+    private fun detectStuckTerminalResult() {
+        val terminalPending = PowerLogListener.isCurrentGameTerminalCleanupPending()
+        if (!terminalPending) {
+            terminalRecoveryLatched = false
+            return
+        }
+        if (!BetaTerminalResultReconciliationPolicy.shouldReconcile(
+                channel = BuildInfo.RELEASE_CHANNEL,
+                phase = WarEx.war.currentPhase.name,
+                activeGame = WarEx.inWar,
+                completeCurrentGameTerminal = PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence(),
+                resultAlreadyHandled = false,
+            ) || terminalRecoveryLatched || !terminalRecoveryInFlight.compareAndSet(false, true)
+        ) return
+
+        terminalRecoveryLatched = true
+        log.warn {
+            "BETA_TERMINAL_RESULT_RECONCILIATION_SCHEDULED " +
+                "phase=${WarEx.war.currentPhase} inWar=${WarEx.inWar} source=current-game-power-log " +
+                "action=bounded-result-cleanup"
+        }
+        EXTRA_THREAD_POOL.execute {
+            try {
+                PowerLogListener.reconcileStaleTerminalResultForBeta()
+            } catch (error: Throwable) {
+                log.error(error) { "BETA_TERMINAL_RESULT_RECONCILIATION_FAILED" }
+            } finally {
+                terminalRecoveryInFlight.set(false)
+            }
+        }
+    }
+
     /**
      * LoadingScreen.log can stop emitting transitions while the client is
      * still showing a usable page. If the state machine has not changed for
@@ -203,7 +250,7 @@ object LifecycleTrace {
      */
     private fun detectStuckStateRecovery() {
         if (!WorkTimeListener.working || PauseStatus.isPause || WarEx.inWar ||
-            PowerLogListener.replayingExistingLog
+            PowerLogListener.replayingExistingLog || terminalRecoveryInFlight.get()
         ) {
             stateRecoverySince = 0L
             stateRecoveryFingerprint = ""
@@ -300,12 +347,14 @@ object LifecycleTrace {
     /** A freshly confirmed deck-selection destination ends the prior queue-search evidence window. */
     fun clearActiveMatchmakingScreenObserved(reason: String) {
         activeMatchmakingScreenObservedAt = 0L
+        matchmakingInputIntentAt = 0L
         mark("active-matchmaking-evidence-cleared reason=$reason")
     }
 
     /** A recent Start dispatch permits capture while the new queue has no Power.log yet. */
     fun markMatchmakingInputDispatched(now: Long = System.currentTimeMillis()) {
         matchmakingInputIntentAt = now
+        PowerLogListener.markNewMatchmakingInputAfterTerminalResult()
         mark("matchmaking-input-dispatched; pre-session capture enabled for ${MATCHMAKING_INPUT_INTENT_WINDOW_MS}ms")
     }
 

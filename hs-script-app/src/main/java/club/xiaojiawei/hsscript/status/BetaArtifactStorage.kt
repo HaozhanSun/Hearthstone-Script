@@ -11,18 +11,44 @@ internal object BetaArtifactStorage {
     private const val ROOT_PROPERTY = "hs.script.artifact-root"
 
     fun directory(category: String, legacy: File): File {
-        if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) != "beta") return legacy
-        val root = System.getProperty(ROOT_PROPERTY)?.takeIf(String::isNotBlank) ?: return legacy
+        return directoryForChannel(
+            channel = BuildInfo.RELEASE_CHANNEL,
+            artifactRoot = System.getProperty(ROOT_PROPERTY),
+            category = category,
+            legacy = legacy,
+        )
+    }
+
+    internal fun directoryForChannel(channel: String, artifactRoot: String?, category: String, legacy: File): File {
+        if (BuildChannel.identityToken(channel) != "beta") return legacy
+        val root = artifactRoot?.takeIf(String::isNotBlank) ?: return legacy
         return File(root, category)
     }
 
     fun canWrite(directory: File): Boolean {
         if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) != "beta") return true
-        if (System.getProperty("hs.script.artifact-storage.disabled") == "true") return false
-        if (System.getProperty(ROOT_PROPERTY).isNullOrBlank()) return true
+        return canWriteForChannel(
+            channel = BuildInfo.RELEASE_CHANNEL,
+            disabled = System.getProperty("hs.script.artifact-storage.disabled") == "true",
+            artifactRootConfigured = !System.getProperty(ROOT_PROPERTY).isNullOrBlank(),
+            usableSpace = usableSpace(directory),
+        )
+    }
+
+    internal fun canWriteForChannel(
+        channel: String,
+        disabled: Boolean,
+        artifactRootConfigured: Boolean,
+        usableSpace: Long,
+    ): Boolean {
+        if (BuildChannel.identityToken(channel) != "beta") return true
+        if (disabled || !artifactRootConfigured) return false
+        return usableSpace >= MINIMUM_FREE_BYTES
+    }
+
+    private fun usableSpace(directory: File): Long {
         var existing = directory
         while (!existing.exists() && existing.parentFile != null) existing = existing.parentFile
-        val usable = runCatching { Files.getFileStore(existing.toPath()).usableSpace }.getOrDefault(0L)
-        return usable >= MINIMUM_FREE_BYTES
+        return runCatching { Files.getFileStore(existing.toPath()).usableSpace }.getOrDefault(0L)
     }
 }

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration debug="false">
     <property  name="logLevel" value="info"/>
-    <property  name="logPath" value="log"/>
+    <property  name="logPath" value="${hs.script.log.dir:-log}"/>
     <!--控制台日志格式-->
     <property name="log_pattern_console"
               value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%boldYellow(%thread)] \(%file:%line\) %highlight(%-5level) %msg%n"/>

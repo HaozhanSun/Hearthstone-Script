@@ -11,6 +11,7 @@ import kotlin.test.assertTrue
 class GameResultScreenshotTest {
 
     private val previousDirectory = System.getProperty("hs.script.result-screenshot.dir")
+    private val previousArtifactRoot = System.getProperty("hs.script.artifact-root")
 
     @AfterTest
     fun restoreProperties() {
@@ -19,12 +20,15 @@ class GameResultScreenshotTest {
         } else {
             System.setProperty("hs.script.result-screenshot.dir", previousDirectory)
         }
+        if (previousArtifactRoot == null) System.clearProperty("hs.script.artifact-root")
+        else System.setProperty("hs.script.artifact-root", previousArtifactRoot)
     }
 
     @Test
     fun `result evidence filename preserves the reserved completed game ordinal`() {
         val directory = Files.createTempDirectory("game-result-screenshot-").toFile()
         System.setProperty("hs.script.result-screenshot.dir", directory.absolutePath)
+        System.setProperty("hs.script.artifact-root", directory.absolutePath)
 
         val file = GameResultScreenshot.save(
             BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB),

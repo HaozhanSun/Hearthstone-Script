@@ -10,14 +10,21 @@ internal object MatchmakingInputGuardPolicy {
     enum class Decision {
         ALLOW_INPUT,
         BLOCK_ACTIVE_SEARCH,
+        ABORT_FOR_TERMINAL_CLEANUP,
     }
 
-    fun decide(observedScreen: String?, recentActiveSearchEvidence: Boolean): Decision {
-        if (observedScreen.equals("MATCHMAKING", ignoreCase = true) ||
-            (recentActiveSearchEvidence && isUncertain(observedScreen))
-        ) {
+    fun decide(
+        observedScreen: String?,
+        recentActiveSearchEvidence: Boolean,
+        terminalCleanupPending: Boolean = false,
+    ): Decision {
+        if (observedScreen.equals("MATCHMAKING", ignoreCase = true)) {
             return Decision.BLOCK_ACTIVE_SEARCH
         }
+        if (terminalCleanupPending && isUncertain(observedScreen)) {
+            return Decision.ABORT_FOR_TERMINAL_CLEANUP
+        }
+        if (recentActiveSearchEvidence && isUncertain(observedScreen)) return Decision.BLOCK_ACTIVE_SEARCH
         return Decision.ALLOW_INPUT
     }
 
