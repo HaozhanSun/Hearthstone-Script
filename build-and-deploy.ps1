@@ -54,6 +54,7 @@ $launcherVbsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\ba
 $launcherPsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-newest-as-admin.ps1'
 $launcherGuardianPolicySource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launcher-guardian-policy.ps1'
 $betaTempPolicySource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\beta-temp-policy.ps1'
+$diagnosticRetentionSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\diagnostic-retention.ps1'
 $deploymentContractSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\deployment-contract.ps1'
 $paddleXConfigUtilsSource = Join-Path $projectRoot 'paddlex-config-utils.ps1'
 $betaDeploymentProcessUtilsSource = Join-Path $projectRoot 'beta-deployment-process-utils.ps1'
@@ -61,7 +62,7 @@ $manifestPath = Join-Path $runtimeRoot 'deployment-manifest.json'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 . (Join-Path $projectRoot 'build-version-utils.ps1')
 
-foreach ($requiredSource in @($deploymentContractSource, $launcherGuardianPolicySource, $betaTempPolicySource, $paddleXConfigUtilsSource, $betaDeploymentProcessUtilsSource)) {
+foreach ($requiredSource in @($deploymentContractSource, $launcherGuardianPolicySource, $betaTempPolicySource, $diagnosticRetentionSource, $paddleXConfigUtilsSource, $betaDeploymentProcessUtilsSource)) {
     if (-not (Test-Path -LiteralPath $requiredSource -PathType Leaf)) {
         throw "Required deployment source is missing: $requiredSource"
     }
@@ -317,6 +318,7 @@ try {
     Copy-Item -LiteralPath $launcherPsSource -Destination (Join-Path $runtimeRoot 'launch-newest-as-admin.ps1') -Force
     Copy-Item -LiteralPath $launcherGuardianPolicySource -Destination (Join-Path $runtimeRoot 'launcher-guardian-policy.ps1') -Force
     Copy-Item -LiteralPath $betaTempPolicySource -Destination (Join-Path $runtimeRoot 'beta-temp-policy.ps1') -Force
+    Copy-Item -LiteralPath $diagnosticRetentionSource -Destination (Join-Path $runtimeRoot 'diagnostic-retention.ps1') -Force
     Copy-Item -LiteralPath $deploymentContractSource -Destination (Join-Path $runtimeRoot 'deployment-contract.ps1') -Force
     Copy-Item -LiteralPath $channelConfigPath -Destination (Join-Path $runtimeRoot 'release-channel.json') -Force
 } finally {
@@ -416,6 +418,14 @@ $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -En
 & (Join-Path $projectRoot 'sync-shortcuts.ps1') -RuntimeRoot $runtimeRoot -ShortcutName $ShortcutName `
     -IconPath $iconPath -Description ([string]$channelConfig.displayName) -Channel $Channel
 if (-not $?) { throw "Shortcut synchronization failed" }
+
+# Keep channel diagnostics within retention age even while the app is closed.
+# The checked-in entrypoint binds each task to this deployment's manifest and
+# exact runtime root; this release path installs and verifies, but does not run,
+# the scheduled cleanup.
+$retentionEntrypoint = Join-Path $runtimeRoot 'diagnostic-retention.ps1'
+& $retentionEntrypoint -Channel $Channel -RuntimeRoot $runtimeRoot -InstallTask -VerifyTask
+if (-not $?) { throw 'Diagnostic retention task installation or verification failed' }
 
 Exit-HsScriptRuntimeGate $runtimeGate
 $runtimeGate = $null

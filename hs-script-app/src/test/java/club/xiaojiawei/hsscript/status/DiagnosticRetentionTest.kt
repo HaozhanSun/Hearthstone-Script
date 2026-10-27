@@ -61,9 +61,11 @@ class DiagnosticRetentionTest {
 
         listOf("release-candidate", "stable").forEach { channel ->
             val roots = DiagnosticRetentionPolicy.rootsForChannel(channel, runtime, appLogs, artifacts)
-            assertEquals(1, roots.size)
-            assertEquals(runtime.resolve("log"), roots.single().path)
-            assertEquals(DiagnosticRootScope.RUNTIME_LOG_TREE, roots.single().scope)
+            assertEquals(4, roots.size)
+            assertTrue(roots.any { it.path == runtime.resolve("log") && it.scope == DiagnosticRootScope.RUNTIME_LOG_TREE })
+            assertTrue(roots.any { it.path == runtime.resolve("evidence") && it.scope == DiagnosticRootScope.RUNTIME_EVIDENCE_TREE })
+            assertTrue(roots.any { it.path == runtime.resolve("ocr_res") && it.scope == DiagnosticRootScope.RUNTIME_OCR_TREE })
+            assertTrue(roots.any { it.path == runtime.resolve("debug/mouse") && it.scope == DiagnosticRootScope.RUNTIME_DEBUG_MOUSE_TREE })
         }
         assertTrue(DiagnosticRetentionPolicy.rootsForChannel("unknown-channel", runtime, appLogs, artifacts).isEmpty())
         assertEquals("release-candidate", DiagnosticRetentionPolicy.channelToken("Release Candidate"))
@@ -81,7 +83,8 @@ class DiagnosticRetentionTest {
         val protectedLogData = logRoot.resolve("config").resolve("config.json")
         val oldJpeg = logRoot.resolve("game-results").resolve("old.jpeg")
         listOf(oldLog, oldScreenshot, outsideConfig, outsideStatistics, protectedLogData, oldJpeg).forEach(::writeOld)
-        val root = DiagnosticRetentionPolicy.rootsForChannel("stable", runtime, logRoot, null).single()
+        val root = DiagnosticRetentionPolicy.rootsForChannel("stable", runtime, logRoot, null)
+            .single { it.path == logRoot && it.scope == DiagnosticRootScope.RUNTIME_LOG_TREE }
 
         val report = DiagnosticRetentionCleaner(isOpenOrLocked = { false })
             .clean("stable", listOf(root), NOW)
@@ -93,6 +96,32 @@ class DiagnosticRetentionTest {
         assertTrue(Files.exists(outsideConfig))
         assertTrue(Files.exists(outsideStatistics))
         assertTrue(Files.exists(protectedLogData))
+    }
+
+    @Test
+    fun `outside-log diagnostic roots are explicit and keep neighboring runtime folders out of scope`() {
+        val runtime = temp.resolve("stable-runtime")
+        val evidenceRoot = runtime.resolve("evidence")
+        val ocrRoot = runtime.resolve("ocr_res")
+        val mouseRoot = runtime.resolve("debug").resolve("mouse")
+        val evidenceFile = evidenceRoot.resolve("e2e").resolve("old.png").also(::writeOld)
+        val ocrFile = ocrRoot.resolve("old.png").also(::writeOld)
+        val forbiddenOcrJson = ocrRoot.resolve("state.json").also(::writeOld)
+        val mouseTrace = mouseRoot.resolve("old.csv").also(::writeOld)
+        val neighboringDebug = runtime.resolve("debug").resolve("other").resolve("old.png").also(::writeOld)
+        val resourceImage = runtime.resolve("resources").resolve("old.png").also(::writeOld)
+        val roots = DiagnosticRetentionPolicy.rootsForChannel("stable", runtime, runtime.resolve("log"), null)
+            .filter { it.scope != DiagnosticRootScope.RUNTIME_LOG_TREE }
+
+        val report = DiagnosticRetentionCleaner(isOpenOrLocked = { false }).clean("stable", roots, NOW)
+
+        assertEquals(3, report.deleted)
+        assertFalse(Files.exists(evidenceFile))
+        assertFalse(Files.exists(ocrFile))
+        assertFalse(Files.exists(mouseTrace))
+        assertTrue(Files.exists(forbiddenOcrJson))
+        assertTrue(Files.exists(neighboringDebug))
+        assertTrue(Files.exists(resourceImage))
     }
 
     @Test
