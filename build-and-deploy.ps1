@@ -172,6 +172,13 @@ if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
     $zoneName = if ([System.TimeZoneInfo]::Local.IsDaylightSavingTime($now)) { 'PDT' } else { 'PST' }
     $releaseMetadata = Get-ReleaseBuildMetadata $currentVersion $deployedVersion $now $zoneName
     $nextVersion = $releaseMetadata.Version
+    if ($Channel -eq 'beta') {
+        $collisionSafeVersion = Get-BetaCollisionSafeArtifactVersion $nextVersion $now $targetRoot
+        if ($collisionSafeVersion -cne $nextVersion) {
+            Write-Output "BETA_ARTIFACT_COLLISION_BUMP=$nextVersion->$collisionSafeVersion"
+            $nextVersion = $collisionSafeVersion
+        }
+    }
     $buildTimestampPacific = $releaseMetadata.BuildTimestampPacific
 
 if (-not [string]::IsNullOrWhiteSpace($deployedVersion)) {

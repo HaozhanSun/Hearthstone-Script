@@ -54,6 +54,18 @@ function Get-ReleaseBuildMetadata(
     }
 }
 
+function Get-BetaCollisionSafeArtifactVersion([string]$CandidateVersion, [datetime]$Now, [string]$TargetRoot) {
+    $version = $CandidateVersion
+    while ($true) {
+        $jarPath = Join-Path $TargetRoot "hs-script_$version.jar"
+        $zipPath = Join-Path $TargetRoot "hs-script_$version.zip"
+        if (-not (Test-Path -LiteralPath $jarPath) -and -not (Test-Path -LiteralPath $zipPath)) {
+            return $version
+        }
+        $version = Get-NextApplicationVersion $version $version $Now
+    }
+}
+
 function Set-PomBuildTimestampPacific([string]$PomText, [string]$BuildTimestampPacific) {
     $pattern = '(?s)(<local-build-timestamp-pacific>)[^<]*(</local-build-timestamp-pacific>)'
     if (-not [regex]::IsMatch($PomText, $pattern)) {

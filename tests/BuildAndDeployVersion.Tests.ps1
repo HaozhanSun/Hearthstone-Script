@@ -38,6 +38,24 @@ Assert-Equal $buildTimestamp $noManifestMetadata.BuildTimestampPacific 'first-de
 $pstMetadata = Get-ReleaseBuildMetadata 'v4.16.504' 'v4.16.503' ([datetime]'2026-01-04T03:11:22') 'PST'
 Assert-Equal '2026-01-04 03:11:22 PST' $pstMetadata.BuildTimestampPacific 'standard-time build timestamp'
 
+$collisionTarget = Join-Path ([System.IO.Path]::GetTempPath()) ("beta-artifact-collision-" + [guid]::NewGuid().ToString('N'))
+try {
+    New-Item -ItemType Directory -Path $collisionTarget | Out-Null
+    $retryVersion = 'v4.16.680-local-20261027-034150PDT'
+    [System.IO.File]::WriteAllText((Join-Path $collisionTarget "hs-script_$retryVersion.jar"), 'preserve existing artifact')
+    [System.IO.File]::WriteAllText((Join-Path $collisionTarget "hs-script_$retryVersion.zip"), 'preserve existing artifact')
+    Assert-Equal 'v4.16.681-local-20261027-034200PDT' `
+        (Get-BetaCollisionSafeArtifactVersion $retryVersion ([datetime]'2026-10-27T03:42:00') $collisionTarget) `
+        'Beta retry bumps patch when prior target JAR and ZIP exist'
+    Assert-Equal 'preserve existing artifact' ([System.IO.File]::ReadAllText((Join-Path $collisionTarget "hs-script_$retryVersion.jar"))) 'collision detection leaves prior JAR intact'
+    Assert-Equal 'preserve existing artifact' ([System.IO.File]::ReadAllText((Join-Path $collisionTarget "hs-script_$retryVersion.zip"))) 'collision detection leaves prior ZIP intact'
+    Assert-Equal 'v4.16.681-local-20261027-034200PDT' `
+        (Get-BetaCollisionSafeArtifactVersion 'v4.16.681-local-20261027-034200PDT' ([datetime]'2026-10-27T03:42:00') $collisionTarget) `
+        'Beta retry accepts a fresh artifact version'
+} finally {
+    if (Test-Path -LiteralPath $collisionTarget) { Remove-Item -LiteralPath $collisionTarget -Recurse -Force }
+}
+
 $pomFixture = '<project><local-build-timestamp-pacific>old</local-build-timestamp-pacific></project>'
 $stampedPom = Set-PomBuildTimestampPacific $pomFixture $buildTimestamp
 if ($stampedPom -notmatch '<local-build-timestamp-pacific>2026-10-01 10:08:00 PDT</local-build-timestamp-pacific>') {
@@ -51,6 +69,12 @@ $metadataCall = $deployScript.IndexOf('$releaseMetadata = Get-ReleaseBuildMetada
 $deployedVersionGuard = $deployScript.IndexOf('if (-not [string]::IsNullOrWhiteSpace($deployedVersion))', [System.StringComparison]::Ordinal)
 if ($metadataCall -lt 0 -or $deployedVersionGuard -lt 0 -or $metadataCall -gt $deployedVersionGuard) {
     throw 'Build timestamp/version metadata must be resolved before the optional deployed-version branch'
+}
+$betaCollisionGuard = $deployScript.IndexOf("if (`$Channel -eq 'beta')", [System.StringComparison]::Ordinal)
+$collisionHelperCall = $deployScript.IndexOf('Get-BetaCollisionSafeArtifactVersion', [System.StringComparison]::Ordinal)
+$collisionVersionAssignment = $deployScript.IndexOf('$nextVersion = $collisionSafeVersion', [System.StringComparison]::Ordinal)
+if ($betaCollisionGuard -lt 0 -or $collisionHelperCall -lt $betaCollisionGuard -or $collisionVersionAssignment -lt $collisionHelperCall) {
+    throw 'Artifact collision avoidance must be limited to Beta and applied before packaging'
 }
 if ($deployScript -notmatch 'buildTimestampPacific\s*=\s*\$buildTimestampPacific') {
     throw 'Deployment manifest must record the exact artifact buildTimestampPacific value'
