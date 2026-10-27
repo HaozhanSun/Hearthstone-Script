@@ -1,3 +1,6 @@
+[CmdletBinding()]
+param([switch]$LiveTaskSchedulerProbe)
+
 $ErrorActionPreference = 'Stop'
 function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw "ASSERTION_FAILED: $Message" }
@@ -14,6 +17,7 @@ try {
     $manifest = [ordered]@{ releaseChannel = 'stable'; runtimeDirectoryName = 'Hearthstone Script' }
     $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runtimeRoot 'deployment-manifest.json') -Encoding UTF8
     Copy-Item -LiteralPath $source -Destination (Join-Path $runtimeRoot 'diagnostic-retention.ps1')
+    $sourceText = Get-Content -LiteralPath $source -Raw
 
     $taskPlan = & $source -Channel stable -RuntimeRoot $runtimeRoot -DescribeTask
     $userName = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -27,6 +31,7 @@ try {
     Assert-True ($taskPlan.StartWhenAvailable) 'task catches up missed runs after sleep or scheduler unavailability'
     Assert-True ($taskPlan.LogonType -eq 'Interactive') 'task uses the current standard-user session without storing a password'
     Assert-True ($taskPlan.UserId -eq $userName) 'task runs only as the deploying user'
+    Assert-True ($sourceText -match 'Resolve-TaskAccountSid' -and $sourceText -match 'Export-ScheduledTask') 'live verifier resolves normalized principal names and reads scoped logon identity from task XML'
     Assert-True ($taskPlan.RunLevel -eq 'Limited') 'task runs without elevation'
 
     foreach ($channelInfo in @(
@@ -107,6 +112,54 @@ try {
     $null = & $source -Channel stable -RuntimeRoot $runtimeRoot -NowUtc ($now.AddMinutes(1))
     Assert-True ((Get-Item -LiteralPath $summaryPath).Length -lt 262144) 'durable summary rotates at a bounded per-file size'
     Assert-True (@(Get-Content -LiteralPath $summaryPath).Count -le 101) 'durable summary keeps only a bounded line history'
+    if ($LiveTaskSchedulerProbe) {
+        $liveSharedRoot = Join-Path $tempRoot 'Hearthstone\Logs'
+        $liveSiblingRoot = Join-Path $tempRoot 'Hearthstone\LogsBackup'
+        $liveExpired = Join-Path $liveSharedRoot 'Power.log'
+        $liveOutside = Join-Path $liveSiblingRoot 'outside.log'
+        foreach ($path in @($liveExpired, $liveOutside)) {
+            New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+            [System.IO.File]::WriteAllText($path, 'disposable task probe')
+            [System.IO.File]::SetLastWriteTimeUtc($path, [datetime]::UtcNow.AddDays(-31))
+        }
+        $probeTaskName = 'CodexProbe.DiagnosticRetention.' + [guid]::NewGuid().ToString('N')
+        try {
+            $verifyOutput = & $source -Channel stable -RuntimeRoot $runtimeRoot -SharedGameLogRoot $liveSharedRoot `
+                -TaskNameOverride $probeTaskName -InstallTask -VerifyTask
+            $liveTask = Get-ScheduledTask -TaskName $probeTaskName -ErrorAction Stop
+            $livePrincipalSid = ([System.Security.Principal.NTAccount]::new([string]$liveTask.Principal.UserId)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+            Assert-True ($livePrincipalSid -eq $userSid) 'actual Scheduler principal (including normalized short username) resolves to the current SID'
+            $normalizedUser = [string]$liveTask.Principal.UserId
+            if ($userName.Contains('\') -and -not $normalizedUser.Contains('\')) {
+                Assert-True ($normalizedUser -ieq $userName.Split('\')[-1]) 'DESKTOP\yzjsh normalization keeps the same username before SID comparison'
+            }
+            $taskXml = [xml](Export-ScheduledTask -TaskName $probeTaskName -ErrorAction Stop)
+            $xmlNamespaces = [System.Xml.XmlNamespaceManager]::new($taskXml.NameTable)
+            $xmlNamespaces.AddNamespace('task', 'http://schemas.microsoft.com/windows/2004/02/mit/task')
+            $xmlLogonUsers = @($taskXml.SelectNodes('//task:LogonTrigger/task:UserId', $xmlNamespaces) | ForEach-Object { $_.InnerText.Trim() })
+            Assert-True ($xmlLogonUsers.Count -eq 1 -and $xmlLogonUsers[0] -eq $userName) 'actual task XML contains exactly the current user logon trigger'
+            Assert-True (($verifyOutput -join ' ') -match "principalSid=$userSid.*logonTriggerSid=$userSid") 'production verifier accepts the queried task only after both identities resolve to the current SID'
+
+            $summary = Join-Path (Join-Path $runtimeRoot 'log') ('diagnostic-retention-' + (Get-Date).ToString('yyyyMMdd-HH') + '.log')
+            if (Test-Path -LiteralPath $summary) { Remove-Item -LiteralPath $summary -Force }
+            Start-ScheduledTask -TaskName $probeTaskName
+            for ($attempt = 0; $attempt -lt 40 -and (-not (Test-Path -LiteralPath $summary) -or (Test-Path -LiteralPath $liveExpired)); $attempt++) { Start-Sleep -Milliseconds 500 }
+            Assert-True (Test-Path -LiteralPath $summary) 'disposable scheduled cleanup executed and wrote a summary under its isolated runtime'
+            Assert-True (-not (Test-Path -LiteralPath $liveExpired)) 'disposable task cleaned only the expired log in its injected shared-root fixture'
+            Assert-True (Test-Path -LiteralPath $liveOutside) 'disposable task did not scan the neighboring fixture directory'
+            Assert-True ((Get-Content -LiteralPath $summary -Raw) -match 'channel=stable.*deleted=[1-9][0-9]*.*errors=0') ('executed disposable task recorded its isolated deletion; summary=' + (Get-Content -LiteralPath $summary -Raw))
+        } finally {
+            $probeTask = Get-ScheduledTask -TaskName $probeTaskName -ErrorAction SilentlyContinue
+            if ($null -ne $probeTask -and [string]$probeTask.State -eq 'Running') { Stop-ScheduledTask -TaskName $probeTaskName -ErrorAction SilentlyContinue }
+            for ($attempt = 0; $attempt -lt 20; $attempt++) {
+                $probeTask = Get-ScheduledTask -TaskName $probeTaskName -ErrorAction SilentlyContinue
+                if ($null -eq $probeTask -or [string]$probeTask.State -ne 'Running') { break }
+                Start-Sleep -Milliseconds 250
+            }
+            Unregister-ScheduledTask -TaskName $probeTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        }
+    }
+
     'Diagnostic retention scheduler and entrypoint tests passed.'
 } finally {
     if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }

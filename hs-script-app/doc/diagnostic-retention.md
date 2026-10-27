@@ -49,6 +49,6 @@ The external Beta log root currently has `app`, `guardian-state.json`, and `laun
 ## Prevention / review gotchas
 
 - Add diagnostic outputs only inside an explicitly listed log/artifact root and use a retained diagnostic extension; do not put configs, databases, plugin state, or runtime files beneath those roots.
-- Keep channel runtime, external log, and artifact roots distinct. Beta must retain its deployment-specific runtime key so one Beta installation cannot clean another's evidence.
+- Keep channel runtime, external log, and artifact roots distinct. The Task Scheduler may normalize a domain-qualified principal name to a short account name; verify the principal and logon trigger by resolving both to the current account SID, reading the trigger user from exported task XML. Beta must retain its deployment-specific runtime key so one Beta installation cannot clean another's evidence.
 - Before changing roots or retention behavior, test the exact 30-day boundary, active-file skip, deletion retry, missing-root path, and reparse-point fence. Never use an unrestricted recursive delete over a channel runtime.
 - The retention hook only takes effect in an installed channel after that channel receives the new build and starts. No existing files are removed by source checkout, compile, or test execution.

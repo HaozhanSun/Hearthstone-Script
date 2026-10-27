@@ -4,6 +4,7 @@ param(
     [string]$Channel,
     [string]$RuntimeRoot = (Split-Path -Parent $MyInvocation.MyCommand.Path),
     [string]$SharedGameLogRoot = 'D:\Hearthstone\Logs',
+    [string]$TaskNameOverride = '',
     [datetime]$NowUtc = [datetime]::UtcNow,
     [int]$MaxDeletes = 25000,
     [switch]$InstallTask,
@@ -217,16 +218,32 @@ function Get-TaskName([string]$TaskChannel) {
     return "$TaskPrefix$sid.$TaskChannel"
 }
 
+function Resolve-TaskAccountSid([string]$Identity) {
+    $identity = $Identity.Trim()
+    if ($identity -match '^S-\d-') {
+        return ([System.Security.Principal.SecurityIdentifier]::new($identity)).Value
+    }
+    return ([System.Security.Principal.NTAccount]::new($identity)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+}
+
+function Get-LogonTriggerUserIds([string]$TaskName) {
+    $xmlText = Export-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+    [xml]$taskXml = $xmlText
+    $namespaces = [System.Xml.XmlNamespaceManager]::new($taskXml.NameTable)
+    $namespaces.AddNamespace('task', 'http://schemas.microsoft.com/windows/2004/02/mit/task')
+    return @($taskXml.SelectNodes('//task:LogonTrigger/task:UserId', $namespaces) | ForEach-Object { $_.InnerText.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
 function Get-DailyTriggerHours([object[]]$Triggers) {
     return @($Triggers | Where-Object { $_.CimClass.CimClassName -eq 'MSFT_TaskDailyTrigger' } |
         ForEach-Object { ([datetimeoffset]::Parse([string]$_.StartBoundary)).ToLocalTime().ToString('HH:mm') } |
         Sort-Object -Unique)
 }
 
-function Get-TaskDefinition([string]$TaskChannel, [string]$Root) {
+function Get-TaskDefinition([string]$TaskChannel, [string]$Root, [string]$SharedRoot) {
     $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $script = Join-Path $Root 'diagnostic-retention.ps1'
-    $arguments = "-WindowStyle Hidden -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script`" -Channel $TaskChannel -RuntimeRoot `"$Root`""
+    $arguments = "-WindowStyle Hidden -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script`" -Channel $TaskChannel -RuntimeRoot `"$Root`" -SharedGameLogRoot `"$SharedRoot`""
     $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $Root
     $triggers = @(
         (New-ScheduledTaskTrigger -Daily -At '00:00'),
@@ -243,10 +260,17 @@ function Get-TaskDefinition([string]$TaskChannel, [string]$Root) {
 if ([string]::IsNullOrWhiteSpace($Channel)) { throw 'Channel is required.' }
 $RuntimeRoot = Get-CanonicalPath $RuntimeRoot
 Assert-DeploymentIdentity $RuntimeRoot $Channel
-$taskName = Get-TaskName $Channel
+if ([string]::IsNullOrWhiteSpace($TaskNameOverride)) {
+    $taskName = Get-TaskName $Channel
+} else {
+    if ($TaskNameOverride -notmatch '^CodexProbe\.DiagnosticRetention\.[0-9a-fA-F]{32}$') {
+        throw 'TaskNameOverride is restricted to unique CodexProbe diagnostic-retention test tasks.'
+    }
+    $taskName = $TaskNameOverride
+}
 
 if ($DescribeTask) {
-    $definition = Get-TaskDefinition $Channel $RuntimeRoot
+    $definition = Get-TaskDefinition $Channel $RuntimeRoot $SharedGameLogRoot
     [pscustomobject]@{
         Name = $taskName
         Execute = $definition.Actions[0].Execute
@@ -263,7 +287,7 @@ if ($DescribeTask) {
     exit 0
 }
 if ($InstallTask) {
-    $definition = Get-TaskDefinition $Channel $RuntimeRoot
+    $definition = Get-TaskDefinition $Channel $RuntimeRoot $SharedGameLogRoot
     Register-ScheduledTask -TaskName $taskName -InputObject $definition -Force | Out-Null
 }
 if ($VerifyTask -or $InstallTask) {
@@ -282,13 +306,22 @@ if ($VerifyTask -or $InstallTask) {
         throw "Diagnostic retention task cadence/logon triggers incomplete: $taskName"
     }
     $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-    if ([string]$task.Principal.UserId -ine $currentUser -or
+    $currentUserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    try {
+        $principalSid = Resolve-TaskAccountSid ([string]$task.Principal.UserId)
+        $logonTriggerUsers = @(Get-LogonTriggerUserIds $taskName)
+        $logonTriggerSids = @($logonTriggerUsers | ForEach-Object { Resolve-TaskAccountSid $_ } | Sort-Object -Unique)
+    } catch {
+        throw "Diagnostic retention task identity could not be resolved: $taskName ($($_.Exception.Message))"
+    }
+    if ($principalSid -ne $currentUserSid -or
         [string]$task.Principal.LogonType -ne 'Interactive' -or
-        [string]$task.Principal.RunLevel -ne 'Limited') {
-        throw "Diagnostic retention task principal is not the expected least-privilege interactive principal: $taskName"
+        [string]$task.Principal.RunLevel -ne 'Limited' -or
+        $logonTriggerUsers.Count -ne 1 -or $logonTriggerSids.Count -ne 1 -or $logonTriggerSids[0] -ne $currentUserSid) {
+        throw "Diagnostic retention task principal/logon trigger is not scoped to the current least-privilege user: $taskName"
     }
     if (-not [bool]$task.Settings.StartWhenAvailable) { throw "Diagnostic retention task does not catch up missed runs: $taskName" }
-    Write-Output "DIAGNOSTIC_RETENTION_TASK_VERIFIED name=$taskName runtime=$RuntimeRoot"
+    Write-Output "DIAGNOSTIC_RETENTION_TASK_VERIFIED name=$taskName runtime=$RuntimeRoot principalSid=$currentUserSid logonTriggerSid=$($logonTriggerSids[0])"
     exit 0
 }
 
