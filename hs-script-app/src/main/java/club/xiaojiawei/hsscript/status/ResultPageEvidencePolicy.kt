@@ -5,6 +5,35 @@ import java.util.Locale
 /** Conservative text contract for identifying a terminal result screen. */
 internal object ResultPageEvidencePolicy {
     private const val RESULT_CONTINUE_GRAY_LIGHT_MIN = 0.025
+
+    data class FastVisualObservation(
+        val resultVisible: Boolean?,
+        val rankProgressVisible: Boolean,
+        val continueControlVisible: Boolean,
+    )
+
+    fun continueControlVisible(continueGrayLightRatio: Double): Boolean =
+        continueGrayLightRatio >= RESULT_CONTINUE_GRAY_LIGHT_MIN
+
+    fun fastVisualObservation(
+        continueGrayLightRatio: Double,
+        bannerLowSaturationRatio: Double,
+        centerDarkRatio: Double,
+        bannerWarmRatio: Double,
+    ): FastVisualObservation? {
+        if (!continueControlVisible(continueGrayLightRatio)) return null
+        val rank = looksLikeRankProgressContinuationVisual(
+            continueGrayLightRatio, bannerLowSaturationRatio, centerDarkRatio, bannerWarmRatio,
+        )
+        val result = looksLikeResultVisual(
+            continueGrayLightRatio, bannerLowSaturationRatio, centerDarkRatio, bannerWarmRatio,
+        )
+        return FastVisualObservation(
+            resultVisible = if (rank || result) true else null,
+            rankProgressVisible = rank,
+            continueControlVisible = true,
+        )
+    }
     private val outcomeTerms = listOf(
         "胜利", "胜出", "失败", "败北", "战败", "本局结果", "对战结束", "游戏结束",
         "victory", "defeat", "game over", "match over", "you win", "you lose",

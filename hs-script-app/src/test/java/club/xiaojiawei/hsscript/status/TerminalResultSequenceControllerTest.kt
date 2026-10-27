@@ -37,7 +37,7 @@ class TerminalResultSequenceControllerTest {
             maxDurationMillis = 30_000L,
             observe = {
                 coordinator.nextProbe(ticket)
-                ResultScreenObservation(resultVisible = null, captureAuthorized = false)
+                ResultScreenObservation(resultVisible = null, captureAuthorized = true, continueControlVisible = true)
             },
             terminalProofValid = { true },
             paused = { false },
@@ -66,7 +66,7 @@ class TerminalResultSequenceControllerTest {
     }
 
     @Test
-    fun `fixture-backed dispatch clock continues while observer is delayed and stops at destination`() {
+    fun `fixture-backed sequence waits for a fresh post input observation and stops at destination`() {
         val defeatFrame = loadImage("/offline-ocr/result-flow/incident-defeat-20261021-124129.png")
         val rankFrame = loadImage("/offline-ocr/result-flow/incident-rank-progress-1-20261021-124134.png")
         val defeatKind = ScreenStateRecovery.classifyImageForResultFixture(defeatFrame)
@@ -83,6 +83,7 @@ class TerminalResultSequenceControllerTest {
         val done = CountDownLatch(1)
         val observerEnteredSlowCall = CountDownLatch(1)
         val releaseObserver = CountDownLatch(1)
+        val secondDispatch = CountDownLatch(1)
         val dispatches = mutableListOf<Pair<TerminalResultSequenceController.Page, Long>>()
         val observersActive = AtomicInteger()
         val maxObserversActive = AtomicInteger()
@@ -109,8 +110,8 @@ class TerminalResultSequenceControllerTest {
                             1 -> observationForFixture(defeatKind!!)
                             2 -> {
                                 observerEnteredSlowCall.countDown()
-                                // Simulate a 20-second OCR/capture stall. The independent
-                                // input lane must send attempt two before this is released.
+                                // Simulate a delayed OCR/capture call. The second input must
+                                // wait until this post-click observation is released and fresh.
                                 releaseObserver.await(20, TimeUnit.SECONDS)
                                 observationForFixture(rankKind!!)
                             }
@@ -119,7 +120,7 @@ class TerminalResultSequenceControllerTest {
                                 captureAuthorized = true,
                                 destinationScreen = "DECK_SELECTION",
                                 destinationConfidence = 95,
-                            )
+                            ).also { secondDispatch.await(12, TimeUnit.SECONDS) }
                         }
                     } finally {
                         observersActive.decrementAndGet()
@@ -136,6 +137,7 @@ class TerminalResultSequenceControllerTest {
                         dispatches += page to System.nanoTime()
                     }
                     markDispatch()
+                    if (attempt == 2) secondDispatch.countDown()
                     true // OS dispatch attempt made; not interpreted as UI acceptance.
                 },
                 stopped = { _, _ -> done.countDown() },
@@ -145,20 +147,22 @@ class TerminalResultSequenceControllerTest {
 
             assertTrue(observerEnteredSlowCall.await(1, TimeUnit.SECONDS))
             val before = System.nanoTime()
-            while (synchronized(dispatches) { dispatches.size } < 2 &&
+            while (synchronized(dispatches) { dispatches.size } < 1 &&
                 TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - before) < 15L
             ) Thread.sleep(5)
-            val capturedDispatches = synchronized(dispatches) { dispatches.toList() }
-            assertEquals(2, capturedDispatches.size, "two fixed Continue attempts proceed while OCR is still blocked")
-            assertEquals(TerminalResultSequenceController.Page.DEFEAT, capturedDispatches[0].first)
-            assertEquals(TerminalResultSequenceController.Page.RANK_PROGRESS, capturedDispatches[1].first)
-            assertEquals(1L, releaseObserver.count, "the observer must still be blocked when the second click is sent")
-            val actualGapMs = TimeUnit.NANOSECONDS.toMillis(capturedDispatches[1].second - capturedDispatches[0].second)
-            assertTrue(actualGapMs in 4_900L..7_999L, "actual dispatch gap=$actualGapMs ms; expected 5–7s and <8s")
-            println("TERMINAL_RESULT_SEQUENCE_DISPATCH_GAP_MS=$actualGapMs observerBlocked=true intervalMs=5000")
+            assertEquals(1, synchronized(dispatches) { dispatches.size }, "only the first click may use the pre-click frame")
+            assertEquals(1L, releaseObserver.count, "second click waits while the observer has no post-click frame")
             assertEquals(1, maxObserversActive.get(), "observation remains serial while the input clock runs independently")
 
             releaseObserver.countDown()
+            val freshFrameWaitStarted = System.nanoTime()
+            while (synchronized(dispatches) { dispatches.size } < 2 &&
+                TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - freshFrameWaitStarted) < 10L
+            ) Thread.sleep(5)
+            val capturedDispatches = synchronized(dispatches) { dispatches.toList() }
+            assertEquals(2, capturedDispatches.size, "a fresh rank-progress observation permits the bounded second click")
+            assertEquals(TerminalResultSequenceController.Page.DEFEAT, capturedDispatches[0].first)
+            assertEquals(TerminalResultSequenceController.Page.RANK_PROGRESS, capturedDispatches[1].first)
             assertTrue(done.await(2, TimeUnit.SECONDS), "fresh deck selection must stop the sequence")
             assertEquals(1, terminalConfirms.get())
             assertEquals(TerminalPageCleanupCoordinator.State.COMPLETED, coordinator.snapshot().state)

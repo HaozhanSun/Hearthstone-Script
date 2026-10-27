@@ -151,6 +151,8 @@ internal data class ResultScreenObservation(
     val captureAuthorized: Boolean,
     val visualOnlyResultEvidence: Boolean = false,
     val rankProgressVisible: Boolean = false,
+    val continueControlVisible: Boolean = false,
     val destinationScreen: String? = null,
     val destinationConfidence: Int = 0,
+    val capturedAtNanos: Long = System.nanoTime(),
 )

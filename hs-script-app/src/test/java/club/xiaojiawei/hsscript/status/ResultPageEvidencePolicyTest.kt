@@ -45,4 +45,13 @@ class ResultPageEvidencePolicyTest {
         assertFalse(ResultPageEvidencePolicy.looksLikeResultVisual(0.010, 0.486, 0.261, 0.427))
         assertFalse(ResultPageEvidencePolicy.looksLikeResultVisual(0.040, 0.486, 0.401, 0.427))
     }
+
+    @Test
+    fun `victory Continue band skips OCR classification while keeping outcome unknown`() {
+        val observation = ResultPageEvidencePolicy.fastVisualObservation(0.040, 0.372, 0.363, 0.500)
+        assertTrue(observation != null)
+        assertTrue(observation!!.continueControlVisible)
+        kotlin.test.assertNull(observation.resultVisible)
+        assertFalse(observation.rankProgressVisible)
+    }
 }

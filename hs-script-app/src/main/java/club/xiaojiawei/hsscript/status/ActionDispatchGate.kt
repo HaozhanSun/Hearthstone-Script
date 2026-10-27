@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
 import club.xiaojiawei.hsscriptbase.config.log
+import club.xiaojiawei.hsscript.utils.GameUtil
 
 /**
  * The last, process-wide gate before an action can reach the desktop.  Phase
@@ -20,6 +21,14 @@ object ActionDispatchGate {
         terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
         rankSurrenderCapability: MulliganRankDispatchBarrier.SurrenderCapability? = null,
     ): Boolean {
+        if (action.startsWith("startup.")) {
+            val gameAlive = runCatching { GameUtil.isAliveOfGame() }.getOrDefault(true)
+            val acceptedProof = !MandatoryRankSurrenderGuard.isPending() &&
+                MandatoryRankSurrenderGuard.isTerminalCleanupPending()
+            if (reconcileMissingGameTerminalCleanupFence(gameAlive, acceptedProof)) {
+                log.warn { "MISSING_GAME_TERMINAL_CLEANUP_FENCE_RELEASED proof=accepted-terminal gameAlive=false action=$action" }
+            }
+        }
         val paused = PauseStatus.isPause
         val working = WorkTimeListener.working
         val mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending()
@@ -47,6 +56,12 @@ object ActionDispatchGate {
         }
         return true
     }
+
+    internal fun reconcileMissingGameTerminalCleanupFence(gameAlive: Boolean, acceptedTerminalProof: Boolean): Boolean =
+        MandatoryRankSurrenderGuard.reconcileMissingProcessAfterTerminalProof(
+            completeCurrentGameTerminalProof = acceptedTerminalProof,
+            gameProcessAlive = gameAlive,
+        )
 
     internal fun allowForState(
         action: String,

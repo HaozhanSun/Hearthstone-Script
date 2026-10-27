@@ -75,6 +75,17 @@ object MandatoryRankSurrenderGuard {
     /** Terminal proof releases the rank barrier while keeping only result-screen dismissal enabled. */
     fun isTerminalCleanupPending(): Boolean = terminalCleanupPending
 
+    /** A process exit after accepted terminal proof cannot display a result screen; release only that stale fence. */
+    @Synchronized
+    fun reconcileMissingProcessAfterTerminalProof(
+        completeCurrentGameTerminalProof: Boolean,
+        gameProcessAlive: Boolean,
+    ): Boolean {
+        if (gameProcessAlive || !completeCurrentGameTerminalProof || pending || !terminalCleanupPending) return false
+        completePendingSurrender()
+        return true
+    }
+
     fun markRecoveryUncertain() {
         if (pending) recoveryUncertain = true
     }

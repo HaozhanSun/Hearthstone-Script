@@ -6,6 +6,7 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Keeps terminal-page Continue inputs on an independent retry clock while one
@@ -45,6 +46,7 @@ internal class TerminalResultSequenceController(
         const val DEFAULT_OBSERVER_INTERVAL_MS = MIN_OBSERVER_INTERVAL_MS
         const val DEFAULT_MONITOR_INTERVAL_MS = 50L
         const val DEFAULT_MAX_DURATION_MS = 120_000L
+        const val MAX_AUTHORIZED_FRAME_AGE_MS = 25_000L
     }
 
     private val lock = Any()
@@ -52,6 +54,8 @@ internal class TerminalResultSequenceController(
     private val destinationDetected = AtomicBoolean(false)
     private val inputCount = AtomicInteger(initialInputCount.coerceAtLeast(0))
     private val probeCount = AtomicInteger(0)
+    @Volatile private var latestObservation: ResultScreenObservation? = null
+    private val lastInputAtNanos = AtomicLong(Long.MIN_VALUE)
     private val scheduledTasks = CopyOnWriteArrayList<ScheduledFuture<*>>()
 
     @Volatile private var page = Page.DEFEAT
@@ -106,6 +110,7 @@ internal class TerminalResultSequenceController(
         }
         val observation = runCatching(observe).getOrElse { return }
         if (stopped.get()) return
+        latestObservation = observation
         val destinationConfirmed = FreshPostResultDestinationPolicy.isConfirmed(
             observation.destinationScreen,
             observation.destinationConfidence,
@@ -152,6 +157,18 @@ internal class TerminalResultSequenceController(
             if (next > MAX_CONTINUE_INPUTS) return
             next
         }
+        val observed = latestObservation
+        val frameAgeMs = observed?.let {
+            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - it.capturedAtNanos)
+        } ?: Long.MAX_VALUE
+        if (observed?.captureAuthorized != true ||
+            !(observed.resultVisible == true || observed.rankProgressVisible || observed.continueControlVisible) ||
+            frameAgeMs !in 0..MAX_AUTHORIZED_FRAME_AGE_MS ||
+            observed.capturedAtNanos <= lastInputAtNanos.get()
+        ) {
+            scheduleInput(MIN_OBSERVER_INTERVAL_MS, retryIntervalMillis().coerceAtLeast(1L))
+            return
+        }
         when {
             stopped.get() || destinationDetected.get() -> return
             paused() -> return stop("paused", destinationConfirmed = false)
@@ -174,6 +191,7 @@ internal class TerminalResultSequenceController(
         }.getOrDefault(false)
         if (!dispatched) return stop("continue-dispatch-failed", destinationConfirmed = false)
         val actualDispatchAt = markedDispatchAtNanos ?: dispatchStartedAtNanos
+        lastInputAtNanos.set(actualDispatchAt)
         synchronized(lock) {
             if (stopped.get() || destinationDetected.get()) return
             inputCount.set(attempt)

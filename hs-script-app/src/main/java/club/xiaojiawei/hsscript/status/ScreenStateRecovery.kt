@@ -127,6 +127,7 @@ object ScreenStateRecovery {
         val visual: VisualSignature,
         val gameRectKnown: Boolean,
         val gameWindowKnown: Boolean,
+        val capturedAtNanos: Long = System.nanoTime(),
     )
 
     private data class OcrEvidence(
@@ -1424,6 +1425,12 @@ object ScreenStateRecovery {
             if (!ScreenRecoveryRuntime.isCurrent(token)) {
                 return@runCatching ResultScreenObservation(null, captureAuthorized = false)
             }
+            val fast = ResultPageEvidencePolicy.fastVisualObservation(capture.visual.resultContinueGrayLightRatio,
+                capture.visual.resultBannerLowSaturationRatio, capture.visual.loadingCentralDarkRatio,
+                capture.visual.resultBannerWarmRatio)
+            if (fast != null) return@runCatching ResultScreenObservation(fast.resultVisible, true,
+                fast.resultVisible == true && !fast.rankProgressVisible, fast.rankProgressVisible,
+                continueControlVisible = true, capturedAtNanos = capture.capturedAtNanos)
             val detection = detect(runOCR(capture), capture.visual)
             if (!ScreenRecoveryRuntime.isCurrent(token)) {
                 return@runCatching ResultScreenObservation(null, captureAuthorized = false)
@@ -1433,8 +1440,10 @@ object ScreenStateRecovery {
                 captureAuthorized = true,
                 visualOnlyResultEvidence = detection?.evidence == "result-fixed-continue-visual",
                 rankProgressVisible = detection?.kind == ScreenKind.RANK_PROGRESS_CONTINUATION,
+                continueControlVisible = ResultPageEvidencePolicy.continueControlVisible(capture.visual.resultContinueGrayLightRatio),
                 destinationScreen = detection?.kind?.code?.takeIf { it in POST_RESULT_DESTINATIONS.map(ScreenKind::code) },
                 destinationConfidence = detection?.confidence ?: 0,
+                capturedAtNanos = capture.capturedAtNanos,
             )
         }.getOrElse { error ->
             if (ScreenRecoveryRuntime.isCurrent(token)) {

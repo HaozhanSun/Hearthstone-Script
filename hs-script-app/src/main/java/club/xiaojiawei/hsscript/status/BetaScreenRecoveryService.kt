@@ -9,6 +9,7 @@ import club.xiaojiawei.hsscript.ocr.OcrProviderKind
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.starter.GameStartupHandoffPolicy
 import club.xiaojiawei.hsscript.starter.GameStartupRecoveryPolicy
+import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.status.ScriptStatus
@@ -258,8 +259,10 @@ internal object BetaScreenRecoveryService {
         val powerLogAge = sessionLog?.let { (now - it.lastModified()).coerceAtLeast(0L) } ?: Long.MAX_VALUE
         val powerLogIsCurrentSession = sessionLog != null
         val phase = WarEx.war.currentPhase
-        val terminal = phase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState()
-        val liveMatch = WarEx.inWar || phase == WarPhaseEnum.REPLACE_CARD
+        val acceptedCleanupProof = pid == null && !MandatoryRankSurrenderGuard.isPending() &&
+            MandatoryRankSurrenderGuard.isTerminalCleanupPending()
+        val terminal = !acceptedCleanupProof && (phase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState())
+        val liveMatch = pid != null && (WarEx.inWar || phase == WarPhaseEnum.REPLACE_CARD)
         val dialog = WindowsApplicationErrorDialogProbe.detect()?.asPolicyEvidence()
         val hwnd = ScriptStatus.gameHWND
         val windowMatchesPid = pid != null && hwnd != null &&
@@ -357,9 +360,12 @@ internal object BetaScreenRecoveryService {
         if (!startupFailureDispatchInFlight.compareAndSet(false, true)) return
         EXTRA_THREAD_POOL.execute {
             try {
-                val terminalState = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER ||
-                    GameUtil.isTerminalGameState()
-                val liveMatch = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD
+                val gameAlive = GameUtil.isAliveOfGame()
+                val acceptedCleanupProof = !gameAlive && !MandatoryRankSurrenderGuard.isPending() &&
+                    MandatoryRankSurrenderGuard.isTerminalCleanupPending()
+                val terminalState = !acceptedCleanupProof && (WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER ||
+                    GameUtil.isTerminalGameState())
+                val liveMatch = gameAlive && (WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD)
                 val allowsPersistentDialog = decision.reason in setOf(
                     "persistent-application-error-dialog-close",
                     "persistent-application-error-dialog-hard-restart",

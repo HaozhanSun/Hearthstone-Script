@@ -86,6 +86,7 @@ object UpstreamScreenStateRecovery {
         val visual: VisualSignature,
         val gameRectKnown: Boolean,
         val gameWindowKnown: Boolean,
+        val capturedAtNanos: Long = System.nanoTime(),
     )
 
     private data class AuthorizedCapture(
@@ -879,14 +880,22 @@ object UpstreamScreenStateRecovery {
     internal fun observeResultScreenForRecovery(): ResultScreenObservation = runCatching {
         val authorizedCapture = captureVerifiedGameScreen()
             ?: return@runCatching ResultScreenObservation(null, captureAuthorized = false)
+        val visual = authorizedCapture.capture.visual
+        val fast = ResultPageEvidencePolicy.fastVisualObservation(visual.resultContinueGrayLightRatio,
+            visual.resultBannerLowSaturationRatio, visual.loadingCentralDarkRatio, visual.resultBannerWarmRatio)
+        if (fast != null) return@runCatching ResultScreenObservation(fast.resultVisible, true,
+            fast.resultVisible == true && !fast.rankProgressVisible, fast.rankProgressVisible,
+            continueControlVisible = true, capturedAtNanos = authorizedCapture.capture.capturedAtNanos)
         val detection = detect(runOCR(authorizedCapture.capture), authorizedCapture.capture.visual)
         ResultScreenObservation(
             resultVisible = resultPageVisibility(detection),
             captureAuthorized = true,
             visualOnlyResultEvidence = detection?.evidence == "result-fixed-continue-visual",
             rankProgressVisible = detection?.kind?.code == "RANK_PROGRESS_CONTINUATION",
+            continueControlVisible = ResultPageEvidencePolicy.continueControlVisible(visual.resultContinueGrayLightRatio),
             destinationScreen = detection?.kind?.code?.takeIf { code -> POST_RESULT_DESTINATIONS.any { it.code == code } },
             destinationConfidence = detection?.confidence ?: 0,
+            capturedAtNanos = authorizedCapture.capture.capturedAtNanos,
         )
     }.getOrElse { error ->
         log.warn(error) { "SCREEN_RECOVERY_RESULT_POSTCHECK_FAILED" }

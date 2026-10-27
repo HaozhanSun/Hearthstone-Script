@@ -17,6 +17,24 @@ import org.junit.jupiter.api.Test
 class ActionDispatchGateTest {
 
     @Test
+    fun `missing process releases accepted terminal cleanup but retains live or unproven state`() {
+        MandatoryRankSurrenderGuard.resetForTest()
+        try {
+            MandatoryRankSurrenderGuard.begin("test-game:self")
+            val capability = MandatoryRankSurrenderGuard.authorizeTerminalCleanup(testTerminalEvidence())
+            assertTrue(capability != null)
+            assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", capability))
+            assertFalse(ActionDispatchGate.reconcileMissingGameTerminalCleanupFence(true, true), "live game remains fenced")
+            assertFalse(ActionDispatchGate.reconcileMissingGameTerminalCleanupFence(false, false), "proof is required")
+            assertTrue(ActionDispatchGate.reconcileMissingGameTerminalCleanupFence(false, true))
+            assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+        } finally {
+            MandatoryRankSurrenderGuard.resetForTest()
+            MulliganRankDispatchBarrier.resetForTest()
+        }
+    }
+
+    @Test
     fun `startup handoff dispatch is blocked by manual or automatic pause`() {
         assertFalse(ActionDispatchGate.allowForState("startup.handoff", paused = true, working = true))
         assertFalse(ActionDispatchGate.allowForState("startup.handoff", paused = true, working = false))

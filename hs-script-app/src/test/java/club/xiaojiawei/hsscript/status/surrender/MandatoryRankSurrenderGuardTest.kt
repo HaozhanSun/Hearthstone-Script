@@ -49,6 +49,22 @@ class MandatoryRankSurrenderGuardTest {
     }
 
     @Test
+    fun `missing process releases only previously accepted terminal cleanup and never pending surrender`() {
+        MandatoryRankSurrenderGuard.begin("test-game:self")
+        val capability = MandatoryRankSurrenderGuard.authorizeTerminalCleanup(terminalEvidence("test-game:self"))
+        assertTrue(capability != null)
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", capability))
+        assertFalse(MandatoryRankSurrenderGuard.reconcileMissingProcessAfterTerminalProof(false, false))
+        assertFalse(MandatoryRankSurrenderGuard.reconcileMissingProcessAfterTerminalProof(true, true))
+        assertTrue(MandatoryRankSurrenderGuard.reconcileMissingProcessAfterTerminalProof(true, false))
+        assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+
+        MandatoryRankSurrenderGuard.begin("still-pending:self")
+        assertFalse(MandatoryRankSurrenderGuard.reconcileMissingProcessAfterTerminalProof(true, false))
+        assertTrue(MandatoryRankSurrenderGuard.isPending())
+    }
+
+    @Test
     fun `fresh deck selection plus current terminal capability releases cleanup and next game still needs rank ticket`() {
         val wasWorking = WorkTimeListener.working
         val wasPaused = PauseStatus.isPause
