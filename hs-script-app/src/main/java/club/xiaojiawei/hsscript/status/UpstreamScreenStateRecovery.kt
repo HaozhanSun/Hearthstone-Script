@@ -1524,9 +1524,15 @@ object UpstreamScreenStateRecovery {
     ): Boolean {
         if (!FreshPostResultDestinationPolicy.isConfirmed(screenKind, confidence, freshCaptureAuthorized)) return false
         val guard = club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
-        if (!guard.isTerminalCleanupPending()) return true
-        val capability = guard.existingTerminalCleanupCapability() ?: return false
-        return guard.confirmCompleted("SCREEN_MATCHMAKING", capability)
+        if (guard.isTerminalCleanupPending()) {
+            val capability = guard.existingTerminalCleanupCapability() ?: return false
+            if (!guard.confirmCompleted("SCREEN_MATCHMAKING", capability)) return false
+        }
+        return club.xiaojiawei.hsscript.listener.log.PowerLogListener.confirmCurrentGameTerminalDestination(
+            screenKind = screenKind,
+            confidence = confidence,
+            freshCaptureAuthorized = freshCaptureAuthorized,
+        )
     }
 
     /**
@@ -1819,6 +1825,18 @@ object UpstreamScreenStateRecovery {
                         "SCREEN_RECOVERY_DECK_SELECTION_BLOCKED reason=terminal-cleanup-proof-or-freshness " +
                             "confidence=${detection.confidence} evidence=${detection.evidence} " +
                             "dispatch=false"
+                    }
+                    return false
+                }
+                if (!club.xiaojiawei.hsscript.listener.log.PowerLogListener.confirmCurrentGameTerminalDestination(
+                        screenKind = detection.kind.code,
+                        confidence = detection.confidence,
+                        freshCaptureAuthorized = true,
+                    )
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_DECK_SELECTION_BLOCKED reason=current-game-terminal-input-fence " +
+                            "confidence=${detection.confidence} dispatch=false"
                     }
                     return false
                 }

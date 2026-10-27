@@ -19,6 +19,8 @@ import club.xiaojiawei.hsscript.utils.MouseUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import com.sun.jna.platform.win32.WinDef
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
@@ -2200,7 +2202,8 @@ object ScreenStateRecovery {
         recoveryToken: Long,
         currentSessionReady: Boolean,
     ): Boolean {
-        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return false
+        val observationIsCurrent = ScreenRecoveryRuntime.isCurrent(recoveryToken)
+        if (!observationIsCurrent) return false
         // A strongly identified cannot-reconnect modal is authoritative over a
         // stale in-game flag: that match can no longer be resumed in-place.
         if (WarEx.inWar && currentSessionReady && detection.kind !in setOf(
@@ -2245,7 +2248,6 @@ object ScreenStateRecovery {
                 )
             }
             ScreenKind.DECK_SELECTION -> {
-                val observationIsCurrent = ScreenRecoveryRuntime.isCurrent(recoveryToken)
                 if (!FreshDeckSelectionConfirmationPolicy.isConfirmed(
                         screenKind = detection.kind.code,
                         confidence = detection.confidence,
@@ -2329,6 +2331,18 @@ object ScreenStateRecovery {
                     }
                     return false
                 }
+                if (!PowerLogListener.confirmCurrentGameTerminalDestination(
+                        screenKind = detection.kind.code,
+                        confidence = detection.confidence,
+                        freshCaptureAuthorized = observationIsCurrent,
+                    )
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_DECK_SELECTION_BLOCKED reason=current-game-terminal-input-fence " +
+                            "confidence=${detection.confidence} freshObservation=$observationIsCurrent dispatch=false"
+                    }
+                    return false
+                }
                 if (DeckStrategyManager.currentDeckStrategy == null ||
                     DeckStrategyManager.currentRunMode == null
                 ) {
@@ -2393,6 +2407,19 @@ object ScreenStateRecovery {
             }
 
             ScreenKind.MATCHMAKING -> {
+                if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta" &&
+                    !UpstreamScreenStateRecovery.confirmPendingTerminalCleanupAtMatchmaking(
+                        screenKind = detection.kind.code,
+                        confidence = detection.confidence,
+                        freshCaptureAuthorized = observationIsCurrent,
+                    )
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_MATCHMAKING_BLOCKED reason=terminal-cleanup-or-input-fence " +
+                            "confidence=${detection.confidence} freshObservation=$observationIsCurrent dispatch=false"
+                    }
+                    return false
+                }
                 Mode.recover(ModeEnum.TOURNAMENT, "visible-matchmaking-screen", enterStrategy = false)
                 log.info { "SCREEN_RECOVERY_ACTION_REQUESTED screen=MATCHMAKING action=WAIT_FOR_GAMEPLAY" }
             }

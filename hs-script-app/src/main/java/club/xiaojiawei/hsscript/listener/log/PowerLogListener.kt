@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.RuntimeFaultBackoff
 import club.xiaojiawei.hsscript.status.ScriptStatus
+import club.xiaojiawei.hsscript.status.FreshPostResultDestinationPolicy
 import club.xiaojiawei.hsscript.status.surrender.CurrentGamePowerLogTerminalTracker
 import club.xiaojiawei.hsscript.status.surrender.CurrentGameSurrenderTerminalEvidence
 import club.xiaojiawei.hsscript.status.surrender.CurrentGameTerminalReconciler
@@ -92,7 +93,13 @@ object PowerLogListener :
             !currentGameResultHandled
 
     fun hasCurrentGameTerminalInputFence(): Boolean =
-        BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta" &&
+        hasCurrentGameTerminalInputFenceForChannel(BuildInfo.RELEASE_CHANNEL)
+
+    internal fun hasCurrentGameTerminalInputFenceForTest(channel: String): Boolean =
+        hasCurrentGameTerminalInputFenceForChannel(channel)
+
+    private fun hasCurrentGameTerminalInputFenceForChannel(channel: String): Boolean =
+        BuildChannel.identityToken(channel) == "beta" &&
             hasCurrentGameCompleteTerminalPowerLogEvidence() &&
             !terminalInputFenceSupersededByNewQueue
 
@@ -102,6 +109,66 @@ object PowerLogListener :
         ) {
             terminalInputFenceSupersededByNewQueue = true
         }
+    }
+
+    /**
+     * A fresh, authorized deck or queue screen completes the visual half of
+     * terminal recovery. Release only the queue-input fence; stale Power.log
+     * tail parsing remains fenced until the next CREATE_GAME.
+     */
+    fun confirmCurrentGameTerminalDestination(
+        screenKind: String,
+        confidence: Int,
+        freshCaptureAuthorized: Boolean,
+    ): Boolean = confirmCurrentGameTerminalDestinationForChannel(
+        screenKind = screenKind,
+        confidence = confidence,
+        freshCaptureAuthorized = freshCaptureAuthorized,
+        channel = BuildInfo.RELEASE_CHANNEL,
+    )
+
+    internal fun confirmCurrentGameTerminalDestinationForTest(
+        screenKind: String,
+        confidence: Int,
+        freshCaptureAuthorized: Boolean,
+        channel: String,
+    ): Boolean = confirmCurrentGameTerminalDestinationForChannel(
+        screenKind = screenKind,
+        confidence = confidence,
+        freshCaptureAuthorized = freshCaptureAuthorized,
+        channel = channel,
+    )
+
+    private fun confirmCurrentGameTerminalDestinationForChannel(
+        screenKind: String,
+        confidence: Int,
+        freshCaptureAuthorized: Boolean,
+        channel: String,
+    ): Boolean {
+        if (BuildChannel.identityToken(channel) != "beta") return true
+        if (!FreshPostResultDestinationPolicy.isConfirmed(screenKind, confidence, freshCaptureAuthorized)) {
+            return false
+        }
+        if (!currentGamePowerLogTerminalTracker.hasCompleteTerminalEvidence()) return true
+        if (WarEx.inWar || MandatoryRankSurrenderGuard.isPending() ||
+            MandatoryRankSurrenderGuard.isTerminalCleanupPending()
+        ) return false
+        if (!terminalInputFenceSupersededByNewQueue) {
+            terminalInputFenceSupersededByNewQueue = true
+            log.info {
+                "BETA_TERMINAL_INPUT_FENCE_RELEASED evidence=fresh-authorized-$screenKind " +
+                    "confidence=$confidence rankPreflight=POST_MULLIGAN stalePowerLogTail=FENCED " +
+                    "queueInputAllowed=true"
+            }
+        }
+        return true
+    }
+
+    internal fun resetTerminalInputFenceForTest() {
+        currentGamePowerLogTerminalTracker.reset()
+        terminalInputFenceSupersededByNewQueue = false
+        currentGameResultHandled = false
+        latestObservedCreateGameTimestamp = null
     }
 
     fun markCurrentGameResultHandled() {

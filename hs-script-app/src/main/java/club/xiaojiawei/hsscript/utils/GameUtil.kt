@@ -2269,11 +2269,16 @@ object GameUtil {
             confirmDestination = { observation ->
                 val confirmed = terminalPageCleanupCoordinator.confirmDestination(ticket)
                 val completionEvidence = if (observation.destinationScreen == "DECK_SELECTION") {
-                    confirmed && MandatoryRankSurrenderGuard.confirmAtFreshDeckSelection(
+                    val deckConfirmed = confirmed && MandatoryRankSurrenderGuard.confirmAtFreshDeckSelection(
+                            screenKind = observation.destinationScreen,
+                            confidence = observation.destinationConfidence,
+                            visualEvidence = "fresh-authorized-screen",
+                            freshObservation = observation.captureAuthorized,
+                        )
+                    deckConfirmed && PowerLogListener.confirmCurrentGameTerminalDestination(
                         screenKind = observation.destinationScreen,
                         confidence = observation.destinationConfidence,
-                        visualEvidence = "fresh-authorized-screen",
-                        freshObservation = observation.captureAuthorized,
+                        freshCaptureAuthorized = observation.captureAuthorized,
                     )
                 } else confirmed && MandatoryRankSurrenderGuard.confirmCompleted(
                     "SCREEN_RESULT_DISMISSED",

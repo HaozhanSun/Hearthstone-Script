@@ -53,6 +53,12 @@ this deletion boundary.
   Beta startup paths must stop the bounded platform retry stage without
   pausing; show the repair action and wait for an explicit Start retry. Keep
   path validation, backup recovery, and retry stopping Beta-only.
+- After complete current-game terminal proof, a fresh authorized
+  `DECK_SELECTION` or `MATCHMAKING` observation may clear the Beta queue-input
+  fence only after the mandatory surrender and terminal-cleanup guards are
+  clear and no game is active. Keep the Power.log terminal-tail fence until a
+  new `CREATE_GAME`; clearing queue-input recovery must not release stale-tail
+  parsing or add a pre-mulligan rank gate.
 
 - A callback that first sees `FINAL_GAMEOVER` without a terminal `PLAYSTATE`
   starts the bounded result wait. Every later `GAME_OVER` callback must reread

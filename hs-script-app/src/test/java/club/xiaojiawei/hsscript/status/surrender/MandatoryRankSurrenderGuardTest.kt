@@ -3,11 +3,13 @@ package club.xiaojiawei.hsscript.status.surrender
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
+import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.TerminalCleanupQueueResumePolicy
 import club.xiaojiawei.hsscript.status.UpstreamScreenStateRecovery
+import club.xiaojiawei.hsscript.strategy.mode.MatchmakingInputGuardPolicy
 import club.xiaojiawei.hsscript.utils.PowerLogUtil
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.AfterEach
@@ -24,6 +26,7 @@ class MandatoryRankSurrenderGuardTest {
     fun cleanup() {
         MandatoryRankSurrenderGuard.resetForTest()
         MulliganRankDispatchBarrier.resetForTest()
+        PowerLogListener.resetTerminalInputFenceForTest()
     }
 
     @Test
@@ -801,6 +804,119 @@ class MandatoryRankSurrenderGuardTest {
                 else -> PauseStatus.setManualPause(true)
             }
         }
+    }
+
+    @Test
+    fun `fresh deck selection releases terminal input fence and preserves post-mulligan rank preflight`() {
+        PowerLogListener.observeCurrentGameTerminalEvidenceLine("D 08:47:05.772 CREATE_GAME")
+        PowerLogListener.observeCurrentGameTerminalEvidenceLine(
+            "TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=CONCEDED",
+        )
+        PowerLogListener.observeCurrentGameTerminalEvidenceLine(
+            "TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER",
+        )
+        PowerLogListener.observeCurrentGameTerminalEvidenceLine(
+            "TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE",
+        )
+        assertTrue(PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence())
+        assertTrue(PowerLogListener.hasCurrentGameTerminalInputFenceForTest(channel = "beta"))
+
+        val gameIdentity = "terminal-fence-test:laz#12793"
+        val gameTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+        assertTrue(MulliganRankDispatchBarrier.requireSurrender(gameTicket) != null)
+        MandatoryRankSurrenderGuard.begin(gameIdentity)
+        val terminalEvidence = CurrentGameSurrenderTerminalEvidence(
+            gameIdentity = gameIdentity,
+            ownEntityId = "laz#12793",
+            opponentEntityId = "FwHLRB#3332",
+            ownPlayState = "CONCEDED",
+            opponentPlayState = "WON",
+            finalGameOver = true,
+            complete = true,
+        )
+        val capability = MandatoryRankSurrenderGuard.authorizeTerminalCleanup(terminalEvidence)
+        assertTrue(capability != null)
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", capability))
+
+        assertFalse(
+            PowerLogListener.confirmCurrentGameTerminalDestinationForTest(
+                screenKind = "DECK_SELECTION",
+                confidence = 100,
+                freshCaptureAuthorized = false,
+                channel = "beta",
+            ),
+            "stale screen evidence must not release the terminal input fence",
+        )
+        assertFalse(
+            PowerLogListener.confirmCurrentGameTerminalDestinationForTest(
+                screenKind = "UNKNOWN",
+                confidence = 100,
+                freshCaptureAuthorized = true,
+                channel = "beta",
+            ),
+            "unknown screens must not release the terminal input fence",
+        )
+        assertTrue(
+            PowerLogListener.confirmCurrentGameTerminalDestinationForTest(
+                screenKind = "DECK_SELECTION",
+                confidence = 100,
+                freshCaptureAuthorized = true,
+                channel = "release-candidate",
+            ),
+            "non-Beta channels preserve their prior no-op behavior",
+        )
+        assertTrue(PowerLogListener.hasCurrentGameTerminalInputFenceForTest(channel = "beta"))
+        assertEquals(
+            MatchmakingInputGuardPolicy.Decision.ABORT_FOR_TERMINAL_CLEANUP,
+            MatchmakingInputGuardPolicy.decide(
+                observedScreen = "UNKNOWN",
+                recentActiveSearchEvidence = false,
+                terminalCleanupPending = PowerLogListener.hasCurrentGameTerminalInputFenceForTest(channel = "beta"),
+            ),
+        )
+
+        assertTrue(
+            MandatoryRankSurrenderGuard.confirmAtFreshDeckSelection(
+                screenKind = "DECK_SELECTION",
+                confidence = 100,
+                visualEvidence = "deck-selection-title",
+                freshObservation = true,
+            ),
+        )
+        assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+        assertTrue(
+            PowerLogListener.confirmCurrentGameTerminalDestinationForTest(
+                screenKind = "DECK_SELECTION",
+                confidence = 100,
+                freshCaptureAuthorized = true,
+                channel = "beta",
+            ),
+        )
+        assertFalse(PowerLogListener.hasCurrentGameTerminalInputFenceForTest(channel = "beta"))
+        assertTrue(PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence())
+        assertEquals(
+            MatchmakingInputGuardPolicy.Decision.ALLOW_INPUT,
+            MatchmakingInputGuardPolicy.decide(
+                observedScreen = "DECK_SELECTION",
+                recentActiveSearchEvidence = false,
+                terminalCleanupPending = PowerLogListener.hasCurrentGameTerminalInputFenceForTest(channel = "beta"),
+            ),
+        )
+
+        MulliganRankDispatchBarrier.beginCurrentGame()
+        assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
+        assertTrue(
+            ActionDispatchGate.allowForState(
+                action = "matchmaking.start",
+                paused = false,
+                working = true,
+                mandatoryRankSurrenderPending = false,
+                terminalCleanupPending = false,
+                rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+                currentSessionReady = true,
+            ),
+            "rank preflight remains post-mulligan and does not re-block the queue start",
+        )
     }
 
     private fun terminalEvidence(gameIdentity: String) = CurrentGameSurrenderTerminalEvidence(
