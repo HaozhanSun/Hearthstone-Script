@@ -714,20 +714,37 @@ object GameUtil {
      * 如果战网不在运行则相当于启动战网，如果战网已经运行则为启动炉石
      */
     @Suppress("DEPRECATION")
-    fun launchPlatformAndGame() {
+    fun launchPlatformAndGame(): Boolean {
         try {
-            val platformPath = ConfigUtil.getString(ConfigEnum.PLATFORM_PATH)
+            var platformPath = ConfigUtil.getString(ConfigEnum.PLATFORM_PATH)
+            var gamePath = ConfigUtil.getString(ConfigEnum.GAME_PATH)
             if (platformPath.isBlank()) {
                 log.error { PLATFORM_CN_NAME + "路径为空" }
-                return
+                return false
+            }
+            if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta") {
+                val validation = BetaStartupPathPolicy.resolve(gamePath, platformPath)
+                val rejection = validation.rejection
+                if (rejection != null) {
+                    log.error {
+                        "BETA_GAME_STARTUP_CONFIG_INVALID field=${rejection.field} reason=${rejection.reason} " +
+                            "dispatch=false action=repair-config-paths"
+                    }
+                    return false
+                }
+                validation.paths?.let { paths ->
+                    gamePath = paths.gamePath
+                    platformPath = paths.platformPath
+                }
             }
             val forceNormalUser = RuntimeSafety.safeNative
             val preventAdminLaunch = ConfigUtil.getBoolean(ConfigEnum.PREVENT_ADMIN_LAUNCH_GAME)
+            val runtimeChannel = AppRuntimeChannelDetector.installedChannel()
             val platformArguments = buildPlatformCommand(
                 platformPath = platformPath,
                 launchGame = true,
-                runtimeChannel = AppRuntimeChannelDetector.installedChannel(),
-                gamePath = ConfigUtil.getString(ConfigEnum.GAME_PATH),
+                runtimeChannel = runtimeChannel,
+                gamePath = gamePath,
             ).drop(1)
             if (NormalUserPlatformLaunch.shouldUseHelper(preventAdminLaunch)) {
                 log.info {
@@ -750,8 +767,10 @@ object GameUtil {
                         "acceptance=awaiting-game-process-window"
                 }
             }
+            return true
         } catch (e: IOException) {
-            log.error(e) { "启动${PLATFORM_CN_NAME}及${GAME_CN_NAME}异常" }
+            log.error(e) { "GAME_STARTUP_PLATFORM_DISPATCH_FAILED error=${e.message}" }
+            return false
         }
     }
 

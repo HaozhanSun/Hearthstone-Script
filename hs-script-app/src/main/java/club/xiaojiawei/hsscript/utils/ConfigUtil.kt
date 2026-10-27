@@ -3,12 +3,12 @@ package club.xiaojiawei.hsscript.utils
 import club.xiaojiawei.hsscript.consts.CONFIG_PATH
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscriptbase.config.log
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.util.isFalse
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
-import org.ini4j.Config
 import org.ini4j.Ini
 import java.io.File
 import java.nio.file.Path
@@ -39,12 +39,18 @@ object ConfigUtil {
             configFile.createNewFile()
             log.info { "已创建配置文件【${configFile.absolutePath}】" }
         }
-        val ini = Ini(configFile)
-        val cfg = Config()
-        // Windows paths are stored as forward-slash values. Backslash escape
-        // parsing would consume separators in paths copied into script.ini.
-        cfg.isEscape = false
-        ini.config = cfg
+        val ini = BetaConfigPathRecovery.load(configFile, BuildInfo.RELEASE_CHANNEL)
+        val recoveredPaths = BetaConfigPathRecovery.recoverFromBackup(
+            currentFile = configFile,
+            current = ini,
+            channel = BuildInfo.RELEASE_CHANNEL,
+        )
+        if (recoveredPaths != null) {
+            log.warn {
+                "BETA_CONFIG_PATH_RECOVERED source=${recoveredPaths.sourceFileName} " +
+                    "gamePathRestored=true platformPathRestored=true"
+            }
+        }
         checkConfig(ini)
         ini
     }

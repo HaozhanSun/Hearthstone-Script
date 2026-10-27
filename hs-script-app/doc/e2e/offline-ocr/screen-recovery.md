@@ -44,6 +44,16 @@ this deletion boundary.
 
 ## Beta result and storage recovery
 
+- For Beta `script.ini`, configure ini4j escaping before loading the file, then
+  keep its backing file attached for the normal store cycle. Windows path
+  separators and spaces must survive read/store/reload unchanged. If either
+  startup path is invalid, recover only `GAME_PATH` and `PLATFORM_PATH` from a
+  single unambiguous legacy backup pair whose game directory and platform
+  executable both exist. Never infer separators from damaged values. Invalid
+  Beta startup paths must stop the bounded platform retry stage without
+  pausing; show the repair action and wait for an explicit Start retry. Keep
+  path validation, backup recovery, and retry stopping Beta-only.
+
 - A callback that first sees `FINAL_GAMEOVER` without a terminal `PLAYSTATE`
   starts the bounded result wait. Every later `GAME_OVER` callback must reread
   the current Power.log terminal marker; never return early solely because the

@@ -24,6 +24,7 @@ import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.LAUNCH_PROGRAM_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import club.xiaojiawei.hsscriptbase.util.isFalse
@@ -326,13 +327,28 @@ class GameStarter : AbstractStarter() {
                 "configuredMode=${selection.configuredMode.name} mode=${selection.mode.name} " +
                 "fallbackApplied=${selection.fallbackApplied} acceptance=awaiting-game-process-window"
         }
-        runCatching { selection.mode.exec() }
-            .onFailure { error ->
-                log.warn(error) {
-                    "GAME_STARTUP_HANDOFF_DISPATCH_FAILED attempt=${selection.attempt} " +
-                        "mode=${selection.mode.name}"
-                }
+        val dispatch = runCatching { selection.mode.exec() }
+        val error = dispatch.exceptionOrNull()
+        if (error != null) {
+            log.warn(error) {
+                "GAME_STARTUP_HANDOFF_DISPATCH_FAILED attempt=${selection.attempt} " +
+                    "mode=${selection.mode.name}"
             }
+            return
+        }
+        if (BetaStartupPathPolicy.shouldStopRetry(
+                channel = BuildInfo.RELEASE_CHANNEL,
+                mode = selection.mode.name,
+                dispatchSucceeded = dispatch.getOrDefault(false),
+            )
+        ) {
+            log.error {
+                "GAME_STARTUP_RETRY_STOPPED reason=beta-platform-path-or-executable-invalid " +
+                    "mode=${selection.mode.name} attempt=${selection.attempt} " +
+                    "action=repair-config-and-click-start-to-retry"
+            }
+            stopStageWithoutPausing()
+        }
     }
 
 

@@ -3,6 +3,8 @@ package club.xiaojiawei.hsscript.starter
 import club.xiaojiawei.hsscript.consts.PLATFORM_CN_NAME
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.utils.GameUtil
+import club.xiaojiawei.hsscript.utils.BetaStartupPathPolicy
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscript.utils.getBoolean
 import club.xiaojiawei.hsscriptbase.config.LAUNCH_PROGRAM_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
@@ -25,7 +27,16 @@ class PlatformStarter : AbstractStarter() {
 //            GameUtil.hidePlatformWindow()
         } else {
             log.info { "启动$PLATFORM_CN_NAME" }
-            GameUtil.launchPlatformAndGame()
+            val dispatched = GameUtil.launchPlatformAndGame()
+            if (BetaStartupPathPolicy.shouldStopRetry(
+                    channel = BuildInfo.RELEASE_CHANNEL,
+                    mode = "PLATFORM_ARG",
+                    dispatchSucceeded = dispatched,
+                )
+            ) {
+                stopStageWithoutPausing()
+                return
+            }
         }
 
         var startTime = System.currentTimeMillis()
@@ -36,7 +47,16 @@ class PlatformStarter : AbstractStarter() {
                     GameUtil.killPlatform()
                     GameUtil.killLoginPlatform()
                     log.info { "${PLATFORM_CN_NAME}可能被关闭，启动中" }
-                    GameUtil.launchPlatformAndGame()
+                    val dispatched = GameUtil.launchPlatformAndGame()
+                    if (BetaStartupPathPolicy.shouldStopRetry(
+                            channel = BuildInfo.RELEASE_CHANNEL,
+                            mode = "PLATFORM_ARG",
+                            dispatchSucceeded = dispatched,
+                        )
+                    ) {
+                        stopStageWithoutPausing()
+                        return@scheduleWithFixedDelay
+                    }
                 }
                 next()
             }, 1, 50, TimeUnit.MILLISECONDS)

@@ -18,7 +18,7 @@ import kotlin.io.path.exists
  * @author 肖嘉威
  * @date 2025/10/7 15:48
  */
-enum class GameStartupModeEnum(val comment: String, val introduction: String, val exec: () -> Unit) {
+enum class GameStartupModeEnum(val comment: String, val introduction: String, val exec: () -> Boolean) {
 
 //    GAME_ARG(
 //        GAME_CN_NAME,
@@ -48,14 +48,14 @@ enum class GameStartupModeEnum(val comment: String, val introduction: String, va
                 !com.sun.jna.platform.win32.User32.INSTANCE.GetClientRect(platformHWND, clientRect)
             ) {
                 log.warn { "PLATFORM_MESSAGE_STARTUP_BLOCKED reason=launcher-client-rect-unavailable hwnd=$platformHWND" }
-                return@startup
+                return@startup false
             }
             val width = clientRect.right - clientRect.left
             val height = clientRect.bottom - clientRect.top
             val point = PlatformMessageStartupDispatch.startButtonPoint(width, height)
             if (point == null) {
                 log.warn { "PLATFORM_MESSAGE_STARTUP_BLOCKED reason=launcher-client-size-invalid client=${width}x$height" }
-                return@startup
+                return@startup false
             }
             val queued = PlatformMessageStartupDispatch.dispatch(
                 point = point,
@@ -67,6 +67,7 @@ enum class GameStartupModeEnum(val comment: String, val introduction: String, va
                     "client=${width}x$height point=(${point.x},${point.y}) messagesQueued=$queued " +
                     "acceptance=awaiting-game-process-window"
             }
+            queued
         }),
 
     ;
