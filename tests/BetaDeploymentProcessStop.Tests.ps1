@@ -51,6 +51,33 @@ try {
     Assert-Equal 1 $markerStopped.Count 'blank CommandLine can be stopped only through exact verified Beta marker identity'
     Assert-Equal 105 $markerStopped[0] 'verified marker PID selected'
 
+    $absentMarker = @{
+        schema = 1
+        releaseChannel = 'beta'
+        runtimeDirectoryName = 'Hearthstone Script Beta'
+        runtimeRoot = $runtimeRoot
+        processId = 106
+        processStartTimeUtc = $markerStart
+        executablePath = $javaPath
+        deploymentId = 'hs-script_v4.16.700.jar|stale-fixture'
+    } | ConvertTo-Json
+    [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'hs-script.pid.json'), $absentMarker)
+    $continuationProbe = Join-Path $tempRoot 'stale-marker-continuation-probe.ps1'
+    @'
+param([string]$ProjectRoot, [string]$RuntimeRoot)
+. (Join-Path $ProjectRoot 'hs-script-app/src/main/resources/bat/deployment-contract.ps1')
+. (Join-Path $ProjectRoot 'beta-deployment-process-utils.ps1')
+$result = @(Stop-ManagedHsScriptProcesses -RuntimeRoot $RuntimeRoot -GetProcessRecords { @() } -StopProcess { param($ProcessId) throw "unexpected stop $ProcessId" })
+Write-Output ("CALLER_RESUMED stoppedCount={0}" -f $result.Count)
+'@ | Set-Content -LiteralPath $continuationProbe -Encoding UTF8
+    $probeOutput = @(& (Join-Path $PSHOME 'pwsh.exe') -NoProfile -File $continuationProbe $root $runtimeRoot 2>&1)
+    $probeExitCode = $LASTEXITCODE
+    Assert-Equal 0 $probeExitCode 'absent marker PID returns normally from the helper'
+    if (-not (($probeOutput -join "`n") -match 'CALLER_RESUMED stoppedCount=0')) {
+        throw "Caller did not resume after stale marker handling: $($probeOutput -join ' | ')"
+    }
+    [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'hs-script.pid.json'), $marker)
+
     $staleRecord = @([pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 105; CommandLine = '' })
     $staleIdentity = { param($ProcessId) [pscustomobject]@{ ProcessId = $ProcessId; ProcessStartTimeUtc = '2026-10-27T18:00:00.0000000Z'; ExecutablePath = $javaPath } }
     $staleRejected = $false

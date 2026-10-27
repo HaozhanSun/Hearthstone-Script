@@ -62,24 +62,28 @@ function Stop-ManagedHsScriptProcesses(
             ExecutablePath = [System.IO.Path]::GetFullPath([string]$markerData.executablePath)
         }
         $processId = [int]$marker.ProcessId
-        if (-not $recordsByPid.ContainsKey($processId)) { continue }
-        $record = $recordsByPid[$processId]
-        if ([string]$record.Name -notin @('java.exe', 'javaw.exe')) {
-            throw "Beta runtime marker PID $processId is owned by a non-Java process; refusing to stop it"
-        }
-        $identity = $null
-        try { $identity = & $GetIdentity $processId } catch { }
-        $identityStartUtc = if ($null -ne $identity -and [string]$identity.ProcessStartTimeUtc) {
-            [DateTimeOffset]::Parse([string]$identity.ProcessStartTimeUtc).ToUniversalTime()
-        } else { $null }
-        $markerMatches = $null -ne $identityStartUtc -and
-            [string]$identity.ExecutablePath -and
-            [Math]::Abs(($identityStartUtc - $markerStartUtc).TotalMilliseconds) -le 1000 -and
-            ([System.IO.Path]::GetFullPath([string]$identity.ExecutablePath) -ieq [string]$marker.ExecutablePath)
-        if ($markerMatches) {
-            [void]$ownedProcessIds.Add($processId)
-        } elseif ([string]$record.CommandLine -notmatch $jarPattern) {
-            throw "Beta runtime marker PID $processId cannot be verified; refusing to stop or assume idle"
+        # A stale marker is safe to ignore only after the process snapshot proves
+        # that PID is absent. Do not use `continue` here: this code is in the
+        # function body, outside a loop, where PowerShell can terminate its caller.
+        if ($recordsByPid.ContainsKey($processId)) {
+            $record = $recordsByPid[$processId]
+            if ([string]$record.Name -notin @('java.exe', 'javaw.exe')) {
+                throw "Beta runtime marker PID $processId is owned by a non-Java process; refusing to stop it"
+            }
+            $identity = $null
+            try { $identity = & $GetIdentity $processId } catch { }
+            $identityStartUtc = if ($null -ne $identity -and [string]$identity.ProcessStartTimeUtc) {
+                [DateTimeOffset]::Parse([string]$identity.ProcessStartTimeUtc).ToUniversalTime()
+            } else { $null }
+            $markerMatches = $null -ne $identityStartUtc -and
+                [string]$identity.ExecutablePath -and
+                [Math]::Abs(($identityStartUtc - $markerStartUtc).TotalMilliseconds) -le 1000 -and
+                ([System.IO.Path]::GetFullPath([string]$identity.ExecutablePath) -ieq [string]$marker.ExecutablePath)
+            if ($markerMatches) {
+                [void]$ownedProcessIds.Add($processId)
+            } elseif ([string]$record.CommandLine -notmatch $jarPattern) {
+                throw "Beta runtime marker PID $processId cannot be verified; refusing to stop or assume idle"
+            }
         }
     }
 
