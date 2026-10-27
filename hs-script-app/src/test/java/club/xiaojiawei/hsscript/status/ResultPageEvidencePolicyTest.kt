@@ -7,6 +7,22 @@ import kotlin.test.assertTrue
 
 class ResultPageEvidencePolicyTest {
     @Test
+    fun `v4 16 679 defeat screenshot signature is recognized before OCR`() {
+        val observation = requireNotNull(
+            ResultPageEvidencePolicy.fastVisualObservation(
+                continueGrayLightRatio = 0.040,
+                bannerLowSaturationRatio = 0.492,
+                centerDarkRatio = 0.277,
+                bannerWarmRatio = 0.402,
+            ),
+        )
+
+        assertTrue(observation.resultVisible == true)
+        assertTrue(observation.continueControlVisible)
+        assertFalse(observation.rankProgressVisible)
+    }
+
+    @Test
     fun `generic continue OCR on gameplay is not terminal evidence`() {
         assertFalse(ResultPageEvidencePolicy.looksLikeResultText(":字XX示盾>|||||-二于7.扣击继续"))
         assertFalse(ResultPageEvidencePolicy.looksLikeResultText("点击继续"))

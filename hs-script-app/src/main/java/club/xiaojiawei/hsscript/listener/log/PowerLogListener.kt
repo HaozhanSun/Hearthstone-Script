@@ -61,7 +61,10 @@ object PowerLogListener :
     private val currentGamePowerLogTerminalTracker = CurrentGamePowerLogTerminalTracker()
     private val currentGameTerminalReconciler = CurrentGameTerminalReconciler(
         tracker = currentGamePowerLogTerminalTracker,
-        onAccepted = { ReplaceCardPhaseStrategy.onAuthoritativeTerminalProofAccepted() },
+        onAccepted = { evidence ->
+            ReplaceCardPhaseStrategy.onAuthoritativeTerminalProofAccepted()
+            GameUtil.onLateCurrentGameTerminalProofAccepted(evidence)
+        },
     )
     @Volatile
     private var currentGameTerminalEvidencePosition: Long? = null

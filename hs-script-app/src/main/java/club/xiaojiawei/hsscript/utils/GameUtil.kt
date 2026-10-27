@@ -32,6 +32,8 @@ import club.xiaojiawei.hsscript.status.PostResultRankProgressPolicy
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TerminalCleanupQueueResumePolicy
 import club.xiaojiawei.hsscript.status.TerminalCleanupTaskPromotionPolicy
+import club.xiaojiawei.hsscript.status.BetaTerminalResultCleanupPolicy
+import club.xiaojiawei.hsscript.status.surrender.CurrentGameSurrenderTerminalEvidence
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderRecoveryPolicy
@@ -43,6 +45,8 @@ import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil.CHOOSE_ONE_RECTS
 import club.xiaojiawei.hsscript.utils.SystemUtil.delay
 import club.xiaojiawei.hsscriptbase.bean.LRunnable
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
@@ -89,6 +93,7 @@ import javafx.beans.value.ChangeListener
 object GameUtil {
 
     private val e2eWindowDiscoveryLogGate = E2EWindowDiscoveryLogGate()
+    private val betaTerminalCleanupProbeInFlight = AtomicBoolean(false)
 
     /**
      * Keep the executable path and its arguments as separate values. The
@@ -1471,6 +1476,82 @@ object GameUtil {
             (0 until 3).forEach { _ ->
                 END_TURN_RECT.lClick()
                 SystemUtil.delayShort()
+            }
+        }
+    }
+
+    /**
+     * A late, complete same-game Power.log terminal proof may arrive after the
+     * ordinary result handler already started its unprivileged recovery loop.
+     * On Beta, immediately inspect the verified current client and promote to
+     * the bounded Continue-only worker when the fresh frame still shows the
+     * result page. The worker performs its own fresh postcheck before input.
+     */
+    internal fun onLateCurrentGameTerminalProofAccepted(
+        evidence: CurrentGameSurrenderTerminalEvidence,
+    ) {
+        if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) != "beta" ||
+            !betaTerminalCleanupProbeInFlight.compareAndSet(false, true)
+        ) return
+
+        EXTRA_THREAD_POOL.execute {
+            try {
+                val capability = MandatoryRankSurrenderGuard.existingTerminalCleanupCapability()
+                val currentSessionIdentity = PowerLogListener.currentGameSurrenderIdentity(evidence.ownEntityId)
+                val processId = findGameProcessIdForDiagnostics()
+                val hwnd = ScriptStatus.gameHWND
+                val currentWindowBound = processId != null && hwnd != null &&
+                    isVerifiedCurrentGameWindow(hwnd, processId)
+                val observation = if (WorkTimeListener.working && !PauseStatus.isPause) {
+                    ScreenStateRecovery.observeResultScreenForRecovery()
+                } else {
+                    ResultScreenObservation(null, captureAuthorized = false)
+                }
+                val captureAgeMs = TimeUnit.NANOSECONDS.toMillis(
+                    (System.nanoTime() - observation.capturedAtNanos).coerceAtLeast(0L),
+                )
+                val rankFencePending = MandatoryRankSurrenderGuard.isPending() ||
+                    MulliganRankDispatchBarrier.currentState() != MulliganRankDispatchBarrier.State.IDLE
+                val decision = BetaTerminalResultCleanupPolicy.allows(
+                    BetaTerminalResultCleanupPolicy.Evidence(
+                        channel = BuildInfo.RELEASE_CHANNEL,
+                        action = BetaTerminalResultCleanupPolicy.CONTINUE_ACTION,
+                        working = WorkTimeListener.working,
+                        paused = PauseStatus.isPause,
+                        gameProcessAlive = processId != null,
+                        currentWindowBoundToGame = currentWindowBound,
+                        currentPowerLogHasCompleteTerminalProof =
+                            PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence(),
+                        proofIdentity = evidence.gameIdentity,
+                        currentSessionIdentity = currentSessionIdentity,
+                        mandatoryRankSurrenderPending = rankFencePending,
+                        terminalCleanupPending = MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+                        terminalCleanupCapabilityValid =
+                            MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(capability),
+                        captureAuthorized = observation.captureAuthorized,
+                        resultPageVisible = observation.resultVisible,
+                        continueControlVisible = observation.continueControlVisible,
+                        captureAgeMs = captureAgeMs,
+                    ),
+                )
+                log.info {
+                    "BETA_TERMINAL_RESULT_FAST_RECOVERY decision=${if (decision) "START" else "HOLD"} " +
+                        "gameIdentity=${evidence.gameIdentity} sameSession=${evidence.gameIdentity == currentSessionIdentity} " +
+                        "pid=${processId ?: "none"} windowBound=$currentWindowBound " +
+                        "captureAuthorized=${observation.captureAuthorized} result=${observation.resultVisible ?: "UNKNOWN"} " +
+                        "continueVisible=${observation.continueControlVisible} captureAgeMs=$captureAgeMs " +
+                        "rankFencePending=$rankFencePending terminalCleanupPending=${MandatoryRankSurrenderGuard.isTerminalCleanupPending()}"
+                }
+                if (decision && capability != null) {
+                    dismissStaleGameEndScreen(
+                        resultAlreadyObserved = true,
+                        terminalCleanupCapability = capability,
+                    )
+                }
+            } catch (error: Throwable) {
+                log.warn(error) { "BETA_TERMINAL_RESULT_FAST_RECOVERY_FAILED action=HOLD" }
+            } finally {
+                betaTerminalCleanupProbeInFlight.set(false)
             }
         }
     }
