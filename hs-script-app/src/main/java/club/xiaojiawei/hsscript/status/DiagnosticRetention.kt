@@ -102,13 +102,17 @@ internal class DiagnosticRetentionCleaner(
                         }
                         result.examined++
                         val key = file.toAbsolutePath().normalize().toString().lowercase(Locale.ROOT)
-                        if (key in active || isOpenOrLocked(file)) {
+                        if (key in active) {
                             result.skippedActiveOrLocked++
                             return FileVisitResult.CONTINUE
                         }
                         val modified = attrs.lastModifiedTime().toInstant()
                         if (!DiagnosticRetentionPolicy.isExpired(modified, cutoff)) {
                             result.retainedFresh++
+                            return FileVisitResult.CONTINUE
+                        }
+                        if (isOpenOrLocked(file)) {
+                            result.skippedActiveOrLocked++
                             return FileVisitResult.CONTINUE
                         }
                         val size = attrs.size()
@@ -152,7 +156,7 @@ internal class DiagnosticRetentionCleaner(
     }
 }
 
-/** Startup plus once-daily background cleanup; all traversal stays off startup/UI threads. */
+/** Startup plus bounded background cleanup; all traversal stays off startup/UI threads. */
 object DiagnosticRetentionService {
     private val started = AtomicBoolean(false)
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { task ->

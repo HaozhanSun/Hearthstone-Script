@@ -16,7 +16,7 @@ internal data class DiagnosticRetentionRoot(val channel: String, val path: Path,
 /** Explicit roots and file types that contain disposable diagnostics only. */
 internal object DiagnosticRetentionPolicy {
     const val RETENTION_DAYS = 30L
-    const val PERIODIC_INTERVAL_HOURS = 24L
+    const val PERIODIC_INTERVAL_HOURS = 6L
     const val MAX_DELETIONS_PER_RUN = 25_000
 
     private val retainedDiagnosticExtensions = setOf(

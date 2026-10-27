@@ -28,6 +28,24 @@ class DiagnosticRetentionTest {
     }
 
     @Test
+    fun `fresh files are retained without probing locks and cleanup repeats within six hours`() {
+        val logRoot = temp.resolve("fresh-log")
+        val fresh = logRoot.resolve("hs_script-fresh.png")
+        Files.createDirectories(logRoot)
+        Files.write(fresh, byteArrayOf(1))
+        Files.setLastModifiedTime(fresh, FileTime.from(NOW.minus(1, ChronoUnit.DAYS)))
+        val root = DiagnosticRetentionRoot("beta", logRoot, DiagnosticRootScope.RUNTIME_LOG_TREE)
+        val cleaner = DiagnosticRetentionCleaner(isOpenOrLocked = { error("fresh files must not be lock-probed") })
+
+        val report = cleaner.clean("beta", listOf(root), NOW)
+
+        assertEquals(6L, DiagnosticRetentionPolicy.PERIODIC_INTERVAL_HOURS)
+        assertEquals(1, report.roots.single().retainedFresh)
+        assertEquals(0, report.roots.single().skippedActiveOrLocked)
+        assertTrue(Files.exists(fresh))
+    }
+
+    @Test
     fun `planner uses isolated roots for beta release candidate and stable`() {
         val runtime = temp.resolve("runtime")
         val appLogs = temp.resolve("external-beta-logs").resolve("key").resolve("app")
