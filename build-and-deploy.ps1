@@ -55,24 +55,27 @@ $launcherPsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat
 $launcherGuardianPolicySource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launcher-guardian-policy.ps1'
 $deploymentContractSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\deployment-contract.ps1'
 $paddleXConfigUtilsSource = Join-Path $projectRoot 'paddlex-config-utils.ps1'
+$betaDeploymentProcessUtilsSource = Join-Path $projectRoot 'beta-deployment-process-utils.ps1'
 $manifestPath = Join-Path $runtimeRoot 'deployment-manifest.json'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 . (Join-Path $projectRoot 'build-version-utils.ps1')
 
-foreach ($requiredSource in @($deploymentContractSource, $launcherGuardianPolicySource, $paddleXConfigUtilsSource)) {
+foreach ($requiredSource in @($deploymentContractSource, $launcherGuardianPolicySource, $paddleXConfigUtilsSource, $betaDeploymentProcessUtilsSource)) {
     if (-not (Test-Path -LiteralPath $requiredSource -PathType Leaf)) {
         throw "Required deployment source is missing: $requiredSource"
     }
 }
 . $deploymentContractSource
 . $paddleXConfigUtilsSource
+. $betaDeploymentProcessUtilsSource
 $runtimeGate = $null
 trap {
+    $originalError = $_
     if ($null -ne $runtimeGate) {
         try { Exit-HsScriptRuntimeGate $runtimeGate } catch { }
         $runtimeGate = $null
     }
-    throw
+    throw $originalError.Exception
 }
 $runtimeGate = Enter-HsScriptRuntimeGate $runtimeRoot
 if (-not $runtimeExists -and $Channel -ne 'stable') {

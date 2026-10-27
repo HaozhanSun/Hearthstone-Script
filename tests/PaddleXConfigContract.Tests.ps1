@@ -112,7 +112,7 @@ foreach ($required in @(
 )) {
     if (-not $deployScript.Contains($required)) { throw "Build/deploy safety hook is missing: $required" }
 }
-if (-not $deployScript.Contains('foreach ($requiredSource in @($deploymentContractSource, $launcherGuardianPolicySource, $paddleXConfigUtilsSource))')) {
+if (-not $deployScript.Contains('foreach ($requiredSource in @($deploymentContractSource, $launcherGuardianPolicySource, $paddleXConfigUtilsSource, $betaDeploymentProcessUtilsSource))')) {
     throw 'Build/deploy must fail before mutation when a launcher or PaddleX helper source is missing'
 }
 $gatePosition = $deployScript.IndexOf('$runtimeGate = Enter-HsScriptRuntimeGate $runtimeRoot', [System.StringComparison]::Ordinal)
