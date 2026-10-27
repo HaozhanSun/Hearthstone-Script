@@ -83,6 +83,12 @@ this deletion boundary.
   image saves fail closed with a reason; they never fall back to C:. Existing
   C: log and screenshot history is retained. Test the selected paths and the
   low-space refusal with fixed-volume fixtures.
+- Artifact-producing tests use `BetaArtifactStorage.usableSpaceOverrideForTest`
+  to provide deterministic reserve evidence while still writing and checking
+  real PNGs in isolated temporary directories. The override defaults to null,
+  so production always checks the real FileStore. Restore it after each test;
+  never lower the production 5 GiB threshold or rely on incidental free space
+  in `java.io.tmpdir`.
 
 ## Gotchas
 

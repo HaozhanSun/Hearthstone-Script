@@ -738,12 +738,15 @@ class SurrenderPolicyTest {
         val originalBridgeFactory = OcrRuntime.paddleXBridgeFactory
         val originalOutput = System.getProperty("hs.script.unknown-state.dir")
         val originalArtifactRoot = System.getProperty("hs.script.artifact-root")
+        val originalUsableSpaceOverride = club.xiaojiawei.hsscript.status.BetaArtifactStorage.usableSpaceOverrideForTest
         val root = Files.createTempDirectory("rank-evidence-regression-").toFile()
         try {
             // Beta screenshot writes require the launcher's artifact-root capability
             // in addition to a category-specific output directory.
             System.setProperty("hs.script.artifact-root", root.absolutePath)
             System.setProperty("hs.script.unknown-state.dir", root.absolutePath)
+            club.xiaojiawei.hsscript.status.BetaArtifactStorage.usableSpaceOverrideForTest =
+                club.xiaojiawei.hsscript.status.BetaArtifactStorage.MINIMUM_FREE_BYTES
             var ocrText = "10"
             OcrRuntime.settingsProvider = {
                 PaddleXOcrSettings(
@@ -795,6 +798,7 @@ class SurrenderPolicyTest {
             } else {
                 System.setProperty("hs.script.artifact-root", originalArtifactRoot)
             }
+            club.xiaojiawei.hsscript.status.BetaArtifactStorage.usableSpaceOverrideForTest = originalUsableSpaceOverride
             root.deleteRecursively()
         }
     }

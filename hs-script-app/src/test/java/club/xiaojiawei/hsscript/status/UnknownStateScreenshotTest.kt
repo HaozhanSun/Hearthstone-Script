@@ -18,15 +18,18 @@ import javax.imageio.ImageIO
 class UnknownStateScreenshotTest {
 
     private val previousArtifactRoot = System.getProperty("hs.script.artifact-root")
+    private val previousUsableSpaceOverride = BetaArtifactStorage.usableSpaceOverrideForTest
 
     @AfterTest
     fun restoreArtifactRoot() {
         if (previousArtifactRoot == null) System.clearProperty("hs.script.artifact-root")
         else System.setProperty("hs.script.artifact-root", previousArtifactRoot)
+        BetaArtifactStorage.usableSpaceOverrideForTest = previousUsableSpaceOverride
     }
 
     private fun enableIsolatedTestArtifactStorage() {
         System.setProperty("hs.script.artifact-root", System.getProperty("java.io.tmpdir"))
+        BetaArtifactStorage.usableSpaceOverrideForTest = BetaArtifactStorage.MINIMUM_FREE_BYTES
     }
 
     @Test

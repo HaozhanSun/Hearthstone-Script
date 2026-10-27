@@ -10,6 +10,10 @@ internal object BetaArtifactStorage {
     const val MINIMUM_FREE_BYTES: Long = 5L * 1024L * 1024L * 1024L
     private const val ROOT_PROPERTY = "hs.script.artifact-root"
 
+    /** Test seam for volume-reserve behavior; production leaves this null and uses FileStore. */
+    @Volatile
+    internal var usableSpaceOverrideForTest: Long? = null
+
     fun directory(category: String, legacy: File): File {
         return directoryForChannel(
             channel = BuildInfo.RELEASE_CHANNEL,
@@ -31,7 +35,7 @@ internal object BetaArtifactStorage {
             channel = BuildInfo.RELEASE_CHANNEL,
             disabled = System.getProperty("hs.script.artifact-storage.disabled") == "true",
             artifactRootConfigured = !System.getProperty(ROOT_PROPERTY).isNullOrBlank(),
-            usableSpace = usableSpace(directory),
+            usableSpace = usableSpaceOverrideForTest ?: usableSpace(directory),
         )
     }
 
