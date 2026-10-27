@@ -99,6 +99,7 @@ object UpstreamScreenStateRecovery {
         val gameWindowKnown: Boolean,
         val purpose: ScreenRecoveryCapturePurpose,
         val capturedAtNanos: Long,
+        val resultProbeTimings: ResultProbeCaptureTimings = ResultProbeCaptureTimings(),
     )
 
     private data class AuthorizedCapture(
@@ -185,8 +186,23 @@ object UpstreamScreenStateRecovery {
             return false
         }
 
+        val probeId = ResultScreenProbeTelemetry.nextProbeId()
+        val probeStartedAt = System.nanoTime()
+        val captureStartedAt = System.nanoTime()
+        var captureTimings = ResultProbeCaptureTimings()
+        var ocrTimings = ResultProbeOcrTimings()
+        var decisionMs = 0L
         val authorizedCapture = captureVerifiedGameScreen(stuckForMs, startupProbe)
         if (authorizedCapture == null) {
+            captureTimings = ResultProbeCaptureTimings(
+                authorizedCaptureMs = ResultScreenProbeTelemetry.elapsedMs(captureStartedAt),
+            )
+            log.info {
+                "SCREEN_RECOVERY_PROBE_TIMING " + ResultScreenProbeTelemetry.formatScreenRecovery(
+                    probeId, captureTimings, ocrTimings, decisionMs,
+                    ResultScreenProbeTelemetry.elapsedMs(probeStartedAt), null, 0, null, false,
+                )
+            }
             log.warn {
                 "SCREEN_RECOVERY_FAILED reason=verified-game-capture-unavailable stuckForMs=$stuckForMs " +
                     "state=$stateFingerprint"
@@ -194,6 +210,7 @@ object UpstreamScreenStateRecovery {
             return false
         }
         val capture = authorizedCapture.capture
+        captureTimings = capture.resultProbeTimings
 
         log.warn {
             "SCREEN_RECOVERY_TRIGGER stuckForMs=$stuckForMs state=$stateFingerprint " +
@@ -202,12 +219,27 @@ object UpstreamScreenStateRecovery {
                 "visual=${capture.visual}"
         }
 
-        val ocrText = runOCR(capture)
+        val ocrText = runOCR(capture, File(TESS_DATA_PATH)) { ocrTimings = it }
         if (!stateStillCurrent()) {
+            log.info {
+                "SCREEN_RECOVERY_PROBE_TIMING " + ResultScreenProbeTelemetry.formatScreenRecovery(
+                    probeId, captureTimings, ocrTimings, decisionMs,
+                    ResultScreenProbeTelemetry.elapsedMs(probeStartedAt), null, 0, null, true,
+                ) + " path=STATE_CHANGED"
+            }
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-during-inspection state=$stateFingerprint" }
             return false
         }
+        val decisionStartedAt = System.nanoTime()
         val detection = detect(ocrText, capture.visual)
+        decisionMs = ResultScreenProbeTelemetry.elapsedMs(decisionStartedAt)
+        log.info {
+            "SCREEN_RECOVERY_PROBE_TIMING " + ResultScreenProbeTelemetry.formatScreenRecovery(
+                probeId, captureTimings, ocrTimings, decisionMs,
+                ResultScreenProbeTelemetry.elapsedMs(probeStartedAt), detection?.kind?.code,
+                detection?.confidence ?: 0, detection?.evidence, true,
+            ) + " purpose=${authorizedCapture.purpose}"
+        }
         if (detection != null) unknownStartupRestartPolicy.reset()
         if (detection?.kind in setOf(
                 ScreenKind.DECK_SELECTION,
@@ -679,33 +711,53 @@ object UpstreamScreenStateRecovery {
         purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
         staleForMs: Long = 0L,
     ): Capture? {
+        val captureStartedAt = System.nanoTime()
         val authorizedFrame = ScreenRecoveryWindowCapture.capture(hwnd, purpose = purpose, staleForMs = staleForMs) ?: return null
+        val authorizedCaptureMs = ResultScreenProbeTelemetry.elapsedMs(captureStartedAt)
         val image = authorizedFrame.image
+        val screenshotStartedAt = System.nanoTime()
         val saved = DebugScreenshotRing.save(image, "screen-recovery", "stale-screen")
+        val screenshotSaveMs = ResultScreenProbeTelemetry.elapsedMs(screenshotStartedAt)
+        val visualStartedAt = System.nanoTime()
+        val visual = visualSignature(image)
+        val visualAnalysisMs = ResultScreenProbeTelemetry.elapsedMs(visualStartedAt)
         return Capture(
             image,
             authorizedFrame.bounds,
             saved?.file,
-            visualSignature(image),
+            visual,
             gameRectKnown = true,
             gameWindowKnown = true,
             purpose = purpose,
             capturedAtNanos = System.nanoTime(),
+            resultProbeTimings = ResultProbeCaptureTimings(
+                authorizedCaptureMs = authorizedCaptureMs,
+                screenshotSaveMs = screenshotSaveMs,
+                visualAnalysisMs = visualAnalysisMs,
+            ),
         )
     }
 
     private fun runOCR(capture: Capture): String = runOCR(capture, File(TESS_DATA_PATH))
 
-    private fun runOCR(capture: Capture, tessData: File): String {
+    private fun runOCR(
+        capture: Capture,
+        tessData: File,
+        onTimings: ((ResultProbeOcrTimings) -> Unit)? = null,
+    ): String {
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
         if (!chiSim.isFile) {
             log.info {
                 "SCREEN_RECOVERY_OCR_SKIPPED provider=LEGACY reason=missing-tessdata " +
                     "path=${chiSim.absolutePath}"
             }
+            onTimings?.invoke(ResultProbeOcrTimings(path = "SKIPPED_MISSING_TESSDATA"))
             return ""
         }
-        return runCatching {
+        var targetedMs = 0L
+        var secondaryMs = 0L
+        var path = "FAILED"
+        val result = runCatching {
             // ScreenStateRoiSelector no longer has the former broad
             // screen-state-center crop. Probe the same narrow, capture-local
             // anchors as beta recovery so the upstream fallback cannot turn
@@ -729,13 +781,38 @@ object UpstreamScreenStateRecovery {
                     setVariable("user_defined_dpi", if (targeted) "180" else "160")
                 }.doOCR(image).replace(Regex("\\s+"), "")
             }
-            val targetedText = targetedRois.joinToString(separator = "") { recognize(it, targeted = true) }
-            if (detect(targetedText, capture.visual) != null) return@runCatching targetedText
-            targetedText + secondaryRois.joinToString(separator = "") { recognize(it, targeted = false) }
+            val targetedStartedAt = System.nanoTime()
+            val targetedText = try {
+                targetedRois.joinToString(separator = "") { recognize(it, targeted = true) }
+            } finally {
+                targetedMs = ResultScreenProbeTelemetry.elapsedMs(targetedStartedAt)
+            }
+            if (detect(targetedText, capture.visual) != null) {
+                path = "TARGETED_ONLY"
+                return@runCatching targetedText
+            }
+            val secondaryStartedAt = System.nanoTime()
+            val secondaryText = try {
+                secondaryRois.joinToString(separator = "") { recognize(it, targeted = false) }
+            } finally {
+                secondaryMs = ResultScreenProbeTelemetry.elapsedMs(secondaryStartedAt)
+            }
+            path = "TARGETED_PLUS_SECONDARY"
+            targetedText + secondaryText
         }.getOrElse { error ->
             log.warn(error) { "SCREEN_RECOVERY_OCR_FAILED" }
             ""
         }
+        onTimings?.invoke(
+            ResultProbeOcrTimings(
+                targetedMs = targetedMs,
+                secondaryMs = secondaryMs,
+                provider = "LEGACY_TESSERACT",
+                path = path,
+                totalMs = targetedMs + secondaryMs,
+            ),
+        )
+        return result
     }
 
     private fun screenRecoveryOcrRois(
@@ -1494,10 +1571,46 @@ object UpstreamScreenStateRecovery {
      * post-result destination; a live board, transitional screen, or
      * inconclusive capture returns null and cannot release the rank barrier.
      */
-    internal fun observeResultScreenForRecovery(): ResultScreenObservation = runCatching {
+    internal fun observeResultScreenForRecovery(): ResultScreenObservation {
+        val probeId = ResultScreenProbeTelemetry.nextProbeId()
+        val probeStartedAt = System.nanoTime()
+        var captureTimings = ResultProbeCaptureTimings()
+        var ocrTimings = ResultProbeOcrTimings()
+        var decisionMs = 0L
+        var decisionPath = "CAPTURE_UNAVAILABLE"
+        fun report(observation: ResultScreenObservation): ResultScreenObservation {
+            log.info {
+                "SCREEN_RECOVERY_RESULT_PROBE_TIMING " +
+                    ResultScreenProbeTelemetry.format(
+                        probeId = probeId,
+                        windowResolveMs = 0L,
+                        capture = captureTimings,
+                        ocr = ocrTimings,
+                        decisionMs = decisionMs,
+                        totalMs = ResultScreenProbeTelemetry.elapsedMs(probeStartedAt),
+                        resultVisible = observation.resultVisible,
+                        rankProgressVisible = observation.rankProgressVisible,
+                        destinationScreen = observation.destinationScreen,
+                        captureAuthorized = observation.captureAuthorized,
+                        continueControlVisible = observation.continueControlVisible,
+                    ) + " path=$decisionPath implementation=UPSTREAM"
+            }
+            return observation
+        }
+        return runCatching {
+        val captureStartedAt = System.nanoTime()
         val authorizedCapture = captureVerifiedGameScreen()
-            ?: return@runCatching ResultScreenObservation(null, captureAuthorized = false)
+        if (authorizedCapture == null) {
+            captureTimings = ResultProbeCaptureTimings(
+                authorizedCaptureMs = ResultScreenProbeTelemetry.elapsedMs(captureStartedAt),
+            )
+            return@runCatching report(ResultScreenObservation(null, captureAuthorized = false))
+        }
+        captureTimings = authorizedCapture.capture.resultProbeTimings.copy(
+            authorizedCaptureMs = ResultScreenProbeTelemetry.elapsedMs(captureStartedAt),
+        )
         val visual = authorizedCapture.capture.visual
+        val visualDecisionStartedAt = System.nanoTime()
         val fastVisual = ResultPageEvidencePolicy.fastVisualObservation(
             visual.resultContinueGrayLightRatio,
             visual.resultBannerLowSaturationRatio,
@@ -1505,21 +1618,27 @@ object UpstreamScreenStateRecovery {
             visual.resultBannerWarmRatio,
         )
         if (fastVisual != null) {
+            decisionMs = ResultScreenProbeTelemetry.elapsedMs(visualDecisionStartedAt)
+            decisionPath = "FAST_VISUAL"
             log.info {
                 "SCREEN_RECOVERY_RESULT_FAST_VISUAL result=${fastVisual.resultVisible ?: "UNKNOWN"} " +
                     "rankProgress=${fastVisual.rankProgressVisible} continueBand=true ocr=skipped"
             }
-            return@runCatching ResultScreenObservation(
+            return@runCatching report(ResultScreenObservation(
                 resultVisible = fastVisual.resultVisible,
                 captureAuthorized = true,
                 visualOnlyResultEvidence = fastVisual.resultVisible == true && !fastVisual.rankProgressVisible,
                 rankProgressVisible = fastVisual.rankProgressVisible,
                 continueControlVisible = fastVisual.continueControlVisible,
                 capturedAtNanos = authorizedCapture.capture.capturedAtNanos,
-            )
+            ))
         }
-        val detection = detect(runOCR(authorizedCapture.capture), authorizedCapture.capture.visual)
-        ResultScreenObservation(
+        val ocrText = runOCR(authorizedCapture.capture, File(TESS_DATA_PATH)) { ocrTimings = it }
+        val decisionStartedAt = System.nanoTime()
+        val detection = detect(ocrText, authorizedCapture.capture.visual)
+        decisionMs = ResultScreenProbeTelemetry.elapsedMs(decisionStartedAt)
+        decisionPath = if (detection == null) "OCR_UNKNOWN" else "OCR_${detection.kind.code}"
+        report(ResultScreenObservation(
             resultVisible = resultPageVisibility(detection),
             captureAuthorized = true,
             visualOnlyResultEvidence = detection?.evidence == "result-fixed-continue-visual",
@@ -1530,10 +1649,12 @@ object UpstreamScreenStateRecovery {
             destinationScreen = detection?.kind?.code?.takeIf { code -> POST_RESULT_DESTINATIONS.any { it.code == code } },
             destinationConfidence = detection?.confidence ?: 0,
             capturedAtNanos = authorizedCapture.capture.capturedAtNanos,
-        )
-    }.getOrElse { error ->
-        log.warn(error) { "SCREEN_RECOVERY_RESULT_POSTCHECK_FAILED" }
-        ResultScreenObservation(null, captureAuthorized = false)
+        ))
+        }.getOrElse { error ->
+            log.warn(error) { "SCREEN_RECOVERY_RESULT_POSTCHECK_FAILED" }
+            decisionPath = "FAILED"
+            report(ResultScreenObservation(null, captureAuthorized = false))
+        }
     }
 
     private fun resultPageVisibility(detection: Detection?): Boolean? =

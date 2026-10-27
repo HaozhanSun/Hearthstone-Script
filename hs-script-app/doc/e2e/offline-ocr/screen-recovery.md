@@ -335,3 +335,14 @@ this deletion boundary.
   `src/test/resources/offline-ocr/result-flow/rc-v705-terminal-recovery/incident-evidence.txt`;
   the original Victory PNG was not present in the integration checkout, so this
   is a measurement-level regression, not a pixel screenshot replay.
+- Tess4J writes intermediate TIFF images through the JVM's `java.io.tmpdir`.
+  Keep Beta's canonical launcher passing a private `-Djava.io.tmpdir` on a
+  fixed volume with at least 1 GiB free, selected before the JVM starts; record
+  that path in `launcher-selection.log`. This policy must be conditional on the
+  Beta manifest so RC and Stable retain their existing temp configuration. Do
+  not treat OCR `I/O error writing TIFF` as an empty classification: record
+  capture/save, targeted OCR, secondary OCR, decision, and total durations even
+  when OCR throws. Retain the bounded visual matchmaking detector and queue
+  preservation if OCR or screenshot persistence fails. Regress Beta/RC channel
+  separation and the no-capacity fail-closed case in
+  `tests/BetaTempDirectoryPolicy.Tests.ps1`.

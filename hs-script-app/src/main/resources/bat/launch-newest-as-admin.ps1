@@ -8,6 +8,7 @@ $logDirectory = Join-Path $scriptDirectory 'log'
 $selectionLog = Join-Path $logDirectory 'launcher-selection.log'
 . (Join-Path $scriptDirectory 'deployment-contract.ps1')
 . (Join-Path $scriptDirectory 'launcher-guardian-policy.ps1')
+. (Join-Path $scriptDirectory 'beta-temp-policy.ps1')
 $deployment = Resolve-Deployment $scriptDirectory
 if (-not (Test-Path -LiteralPath $javaPath)) { throw "javaw.exe was not found: $javaPath" }
 
@@ -32,7 +33,21 @@ function Start-HsScriptChild([object]$ResolvedDeployment, [bool]$GuardianRestart
         if (-not $GuardianRestart) {
             $idle = Assert-HsScriptRuntimeIdle $scriptDirectory
         }
-        $arguments = '-Dhs.script.launch.source=shortcut -Djna.library.path="' +
+        $javaTempArgument = ''
+        if (([string]$ResolvedDeployment.Manifest.releaseChannel).ToLowerInvariant() -eq 'beta') {
+            $fixedVolumes = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop |
+                Select-Object DeviceID, FreeSpace, DriveType)
+            $javaTempDirectory = Get-HsScriptBetaJavaTempDirectory `
+                -Channel ([string]$ResolvedDeployment.Manifest.releaseChannel) `
+                -RuntimeKey $runtimeKey `
+                -FixedVolumes $fixedVolumes
+            New-Item -ItemType Directory -Force -Path $javaTempDirectory | Out-Null
+            $javaTempArgument = (Get-HsScriptJavaTempJvmArgument `
+                -Channel ([string]$ResolvedDeployment.Manifest.releaseChannel) `
+                -Directory $javaTempDirectory) + ' '
+            Add-Content -LiteralPath $selectionLog -Value ("{0} betaJavaTempDirectory={1}" -f (Get-Date -Format o), $javaTempDirectory)
+        }
+        $arguments = $javaTempArgument + '-Dhs.script.launch.source=shortcut -Djna.library.path="' +
             $scriptDirectory + '" -Dhs.script.deployment.id="' + $ResolvedDeployment.DeploymentId +
             '" -Dhs.script.deployment.manifest="' + $ResolvedDeployment.ManifestPath + '" -jar "' +
             $ResolvedDeployment.AppJar + '"'

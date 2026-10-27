@@ -53,6 +53,7 @@ $debugRunnerHardCapSource = Join-Path $projectRoot 'hs-script-app\src\main\resou
 $launcherVbsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-as-admin.vbs'
 $launcherPsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-newest-as-admin.ps1'
 $launcherGuardianPolicySource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launcher-guardian-policy.ps1'
+$betaTempPolicySource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\beta-temp-policy.ps1'
 $deploymentContractSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\deployment-contract.ps1'
 $paddleXConfigUtilsSource = Join-Path $projectRoot 'paddlex-config-utils.ps1'
 $betaDeploymentProcessUtilsSource = Join-Path $projectRoot 'beta-deployment-process-utils.ps1'
@@ -60,7 +61,7 @@ $manifestPath = Join-Path $runtimeRoot 'deployment-manifest.json'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 . (Join-Path $projectRoot 'build-version-utils.ps1')
 
-foreach ($requiredSource in @($deploymentContractSource, $launcherGuardianPolicySource, $paddleXConfigUtilsSource, $betaDeploymentProcessUtilsSource)) {
+foreach ($requiredSource in @($deploymentContractSource, $launcherGuardianPolicySource, $betaTempPolicySource, $paddleXConfigUtilsSource, $betaDeploymentProcessUtilsSource)) {
     if (-not (Test-Path -LiteralPath $requiredSource -PathType Leaf)) {
         throw "Required deployment source is missing: $requiredSource"
     }
@@ -315,6 +316,7 @@ try {
     Copy-Item -LiteralPath $launcherVbsSource -Destination (Join-Path $runtimeRoot 'launch-as-admin.vbs') -Force
     Copy-Item -LiteralPath $launcherPsSource -Destination (Join-Path $runtimeRoot 'launch-newest-as-admin.ps1') -Force
     Copy-Item -LiteralPath $launcherGuardianPolicySource -Destination (Join-Path $runtimeRoot 'launcher-guardian-policy.ps1') -Force
+    Copy-Item -LiteralPath $betaTempPolicySource -Destination (Join-Path $runtimeRoot 'beta-temp-policy.ps1') -Force
     Copy-Item -LiteralPath $deploymentContractSource -Destination (Join-Path $runtimeRoot 'deployment-contract.ps1') -Force
     Copy-Item -LiteralPath $channelConfigPath -Destination (Join-Path $runtimeRoot 'release-channel.json') -Force
 } finally {

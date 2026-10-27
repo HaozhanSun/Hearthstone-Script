@@ -1,6 +1,8 @@
 package club.xiaojiawei.hsscriptcardsdk.mcts
 
 import club.xiaojiawei.hsscriptbase.config.log
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.enums.CardTypeEnum
@@ -11,6 +13,7 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 /**
  * Durable, machine-readable evidence for MCTS decisions.
@@ -26,6 +29,8 @@ object MctsReplayTrace {
 
     private val lock = Any()
     private val nextSequence = ConcurrentHashMap<String, Long>()
+    private val writeFailureBackoff = ConcurrentHashMap<String, Long>()
+    private val betaFailureRetryNanos = TimeUnit.SECONDS.toNanos(60)
     private var fallbackGameKey = "session-${System.currentTimeMillis()}"
     @Volatile
     private var visualSnapshotter: ((War, String, Int, String?, String, String) -> String?)? = null
@@ -86,9 +91,13 @@ object MctsReplayTrace {
         rootDirectory: File? = null,
     ): Path? {
         return synchronized(lock) {
+            val beta = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
             runCatching {
                 val directory = gameDirectory(war, rootDirectory)
                 val key = directory.absolutePath
+                val now = System.nanoTime()
+                val retryAt = writeFailureBackoff[key]
+                if (beta && retryAt != null && now - retryAt < 0L) return@synchronized null
                 val sequence = (nextSequence[key] ?: 0L) + 1L
                 nextSequence[key] = sequence
                 val record = linkedMapOf<String, Any?>(
@@ -116,9 +125,21 @@ object MctsReplayTrace {
                     StandardOpenOption.WRITE,
                     StandardOpenOption.APPEND,
                 )
+                if (beta) writeFailureBackoff.remove(key)
                 file
             }.onFailure { error ->
-                log.warn(error) { "MCTS回放记录失败 event=$event reason=$reason" }
+                if (beta) {
+                    val key = runCatching { gameDirectory(war, rootDirectory).absolutePath }.getOrNull()
+                    if (key != null) {
+                        val retryAt = System.nanoTime() + betaFailureRetryNanos
+                        val previous = writeFailureBackoff.put(key, retryAt)
+                        if (previous == null || System.nanoTime() - previous >= 0L) {
+                            log.warn { "MCTS回放记录写入失败；Beta将暂停重试60秒 event=$event reason=$reason error=${error.javaClass.simpleName}" }
+                        }
+                    }
+                } else {
+                    log.warn(error) { "MCTS回放记录失败 event=$event reason=$reason" }
+                }
             }.getOrNull()
         }
     }
