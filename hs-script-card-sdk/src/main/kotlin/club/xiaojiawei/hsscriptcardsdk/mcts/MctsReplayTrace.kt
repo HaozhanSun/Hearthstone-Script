@@ -92,6 +92,11 @@ object MctsReplayTrace {
     ): Path? {
         return synchronized(lock) {
             val beta = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
+            val artifactRoot = System.getProperty("hs.script.artifact-root")
+            if (beta && System.getProperty("hs.script.artifact-storage.disabled") == "true") return@synchronized null
+            if (beta && !artifactRoot.isNullOrBlank() && !hasArtifactReserve(File(artifactRoot))) {
+                return@synchronized null
+            }
             runCatching {
                 val directory = gameDirectory(war, rootDirectory)
                 val key = directory.absolutePath
@@ -142,6 +147,13 @@ object MctsReplayTrace {
                 }
             }.getOrNull()
         }
+    }
+
+    private fun hasArtifactReserve(directory: File): Boolean {
+        var existing = directory
+        while (!existing.exists() && existing.parentFile != null) existing = existing.parentFile
+        val usable = runCatching { Files.getFileStore(existing.toPath()).usableSpace }.getOrDefault(0L)
+        return usable >= 5L * 1024L * 1024L * 1024L
     }
 
     /** Returns the durable directory for one game and applies 50-game FIFO. */

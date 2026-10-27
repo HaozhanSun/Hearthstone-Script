@@ -164,6 +164,10 @@ object UnknownStateScreenshot {
         val now = ZonedDateTime.now(clock)
         val date = dateFormatter.format(now)
         val safeCategory = sanitizePathComponent(category).ifBlank { CATEGORY_SCREEN_RECOVERY_UNRESOLVED }
+        if (!BetaArtifactStorage.canWrite(rootDirectory)) {
+            log.warn { "UNKNOWN_STATE_SCREENSHOT_SKIPPED category=$safeCategory trigger=$trigger reason=artifact-volume-reserve path=${rootDirectory.absolutePath}" }
+            return null
+        }
         val categoryDirectory = File(rootDirectory, safeCategory)
         val dateDirectory = File(categoryDirectory, date)
         if (!dateDirectory.exists() && !dateDirectory.mkdirs()) {

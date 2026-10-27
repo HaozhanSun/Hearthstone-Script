@@ -34,6 +34,7 @@ function Start-HsScriptChild([object]$ResolvedDeployment, [bool]$GuardianRestart
             $idle = Assert-HsScriptRuntimeIdle $scriptDirectory
         }
         $javaTempArgument = ''
+        $betaArtifactArgument = ''
         if (([string]$ResolvedDeployment.Manifest.releaseChannel).ToLowerInvariant() -eq 'beta') {
             $fixedVolumes = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop |
                 Select-Object DeviceID, FreeSpace, DriveType)
@@ -46,8 +47,27 @@ function Start-HsScriptChild([object]$ResolvedDeployment, [bool]$GuardianRestart
                 -Channel ([string]$ResolvedDeployment.Manifest.releaseChannel) `
                 -Directory $javaTempDirectory) + ' '
             Add-Content -LiteralPath $selectionLog -Value ("{0} betaJavaTempDirectory={1}" -f (Get-Date -Format o), $javaTempDirectory)
+
+            $artifactRoot = Get-HsScriptBetaArtifactRoot `
+                -Channel ([string]$ResolvedDeployment.Manifest.releaseChannel) `
+                -RuntimeKey $runtimeKey `
+                -RuntimeDirectory $scriptDirectory `
+                -FixedVolumes $fixedVolumes
+            if (-not [string]::IsNullOrWhiteSpace([string]$artifactRoot)) {
+                New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+                $artifactRoot = [System.IO.Path]::GetFullPath($artifactRoot)
+                $betaArtifactArgument = '-Dhs.script.artifact-root="' + $artifactRoot + '" ' +
+                    '-Dhs.script.mcts-replay.dir="' + (Join-Path $artifactRoot 'mcts-replay') + '" ' +
+                    '-Dhs.script.unknown-state.dir="' + (Join-Path $artifactRoot 'unknown-states') + '" ' +
+                    '-Dhs.script.result-screenshot.dir="' + (Join-Path $artifactRoot 'game-results') + '" ' +
+                    '-Dhs.script.mulligan-screenshot.dir="' + (Join-Path $artifactRoot 'mulligan') + '" '
+                Add-Content -LiteralPath $selectionLog -Value ("{0} betaArtifactRoot={1} minFreeBytes=5368709120" -f (Get-Date -Format o), $artifactRoot)
+            } else {
+                $betaArtifactArgument = '-Dhs.script.artifact-storage.disabled=true '
+                Add-Content -LiteralPath $selectionLog -Value ("{0} betaArtifactRoot=LEGACY_PATHS reason=no-volume-meets-capacity" -f (Get-Date -Format o))
+            }
         }
-        $arguments = $javaTempArgument + '-Dhs.script.launch.source=shortcut -Djna.library.path="' +
+        $arguments = $javaTempArgument + $betaArtifactArgument + '-Dhs.script.launch.source=shortcut -Djna.library.path="' +
             $scriptDirectory + '" -Dhs.script.deployment.id="' + $ResolvedDeployment.DeploymentId +
             '" -Dhs.script.deployment.manifest="' + $ResolvedDeployment.ManifestPath + '" -jar "' +
             $ResolvedDeployment.AppJar + '"'

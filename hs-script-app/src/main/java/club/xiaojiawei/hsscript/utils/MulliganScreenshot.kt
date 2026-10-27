@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.utils
 
 import club.xiaojiawei.hsscriptbase.config.log
+import club.xiaojiawei.hsscript.status.BetaArtifactStorage
 import java.awt.GraphicsEnvironment
 import java.awt.Point
 import java.awt.Rectangle
@@ -278,12 +279,16 @@ object MulliganScreenshot {
                 log.warn { "MULLIGAN_SCREENSHOT_SKIPPED stage=$stage reason=headless" }
                 return null
             }
-            val directory = File(
+            val directory = BetaArtifactStorage.directory("mulligan", File(
                 System.getProperty(
                     "hs.script.mulligan-screenshot.dir",
                     File("log", "mulligan").path,
                 ),
-            )
+            ))
+            if (!BetaArtifactStorage.canWrite(directory)) {
+                log.warn { "MULLIGAN_SCREENSHOT_SKIPPED stage=$stage reason=artifact-volume-reserve path=${directory.absolutePath}" }
+                return null
+            }
             if (!directory.exists() && !directory.mkdirs()) {
                 log.warn {
                     "MULLIGAN_SCREENSHOT_FAILED stage=$stage reason=mkdir path=${directory.absolutePath}"

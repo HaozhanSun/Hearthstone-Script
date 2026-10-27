@@ -346,3 +346,17 @@ this deletion boundary.
   preservation if OCR or screenshot persistence fails. Regress Beta/RC channel
   separation and the no-capacity fail-closed case in
   `tests/BetaTempDirectoryPolicy.Tests.ps1`.
+- Keep Beta's bulky diagnostic image and replay artifacts separate from its
+  canonical runtime tree: the launcher selects a fixed volume with at least
+  20 GiB free and uses `HearthstoneScriptArtifacts\Beta\<runtime-key>` for
+  `mcts-replay`, `unknown-states`, `game-results`, and `mulligan`. The runtime
+  key isolates separate Beta installs. Never migrate, delete, or overwrite the
+  existing C: history as part of this routing. If no volume meets the primary
+  threshold, use `<runtime>\log\beta-artifacts` only when its volume has at
+  least 5 GiB free; otherwise mark artifact writing disabled for the new
+  process and keep application logs and runtime data on their usual paths.
+  Every routed writer must preserve a 5 GiB free-space reserve so artifact
+  growth stops before exhausting the selected volume. Existing MCTS 50-game
+  and unknown-state 100-images-per-category/day retention limits remain the
+  only deletion behavior; game-result and mulligan writers stop at the reserve
+  without deleting history. RC and Stable must receive no Beta artifact root.

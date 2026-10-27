@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.utils
 
 import club.xiaojiawei.hsscriptbase.config.log
+import club.xiaojiawei.hsscript.status.BetaArtifactStorage
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
 import java.awt.Robot
@@ -45,12 +46,16 @@ object GameResultScreenshot {
 
     fun save(image: java.awt.image.BufferedImage, outcome: String, gameNumber: Int): File? {
         return runCatching {
-            val screenshotDirectory = File(
+            val screenshotDirectory = BetaArtifactStorage.directory("game-results", File(
                 System.getProperty(
                     "hs.script.result-screenshot.dir",
                     File("log", "game-results").path,
                 ),
-            )
+            ))
+            if (!BetaArtifactStorage.canWrite(screenshotDirectory)) {
+                log.warn { "GAME_RESULT_SCREENSHOT_SKIPPED reason=artifact-volume-reserve path=${screenshotDirectory.absolutePath}" }
+                return null
+            }
             if (!screenshotDirectory.exists() && !screenshotDirectory.mkdirs()) {
                 log.warn { "GAME_RESULT_SCREENSHOT_FAILED reason=mkdir path=${screenshotDirectory.absolutePath}" }
                 return null

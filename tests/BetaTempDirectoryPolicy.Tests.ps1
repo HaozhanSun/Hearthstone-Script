@@ -30,4 +30,23 @@ Assert-Throws {
         -FixedVolumes @([pscustomobject]@{ DeviceID = 'C:'; FreeSpace = 0L; DriveType = 3 })
 } 'Beta fails closed when all fixed volumes lack reserved headroom'
 
-Write-Output 'BetaTempDirectoryPolicy.Tests.ps1: 3 cases passed'
+$artifact = Get-HsScriptBetaArtifactRoot -Channel 'beta' -RuntimeKey 'abc123' -RuntimeDirectory 'C:\BetaRuntime' -FixedVolumes @(
+    [pscustomobject]@{ DeviceID = 'C:'; FreeSpace = 1GB; DriveType = 3 },
+    [pscustomobject]@{ DeviceID = 'D:'; FreeSpace = 700GB; DriveType = 3 }
+)
+Assert-Equal 'D:\HearthstoneScriptArtifacts\Beta\abc123' $artifact 'Beta artifacts select a sufficiently free fixed volume'
+
+$fallback = Get-HsScriptBetaArtifactRoot -Channel 'beta' -RuntimeKey 'abc123' -RuntimeDirectory 'C:\BetaRuntime' -FixedVolumes @(
+    [pscustomobject]@{ DeviceID = 'C:'; FreeSpace = 6GB; DriveType = 3 },
+    [pscustomobject]@{ DeviceID = 'D:'; FreeSpace = 8GB; DriveType = 3 }
+)
+Assert-Equal 'C:\BetaRuntime\log\beta-artifacts' $fallback 'Beta artifacts fall back to runtime log storage'
+
+$none = Get-HsScriptBetaArtifactRoot -Channel 'beta' -RuntimeKey 'abc123' -RuntimeDirectory 'C:\BetaRuntime' -FixedVolumes @(
+    [pscustomobject]@{ DeviceID = 'C:'; FreeSpace = 1GB; DriveType = 3 },
+    [pscustomobject]@{ DeviceID = 'D:'; FreeSpace = 8GB; DriveType = 3 }
+)
+Assert-Equal $null $none 'Beta artifacts disable new evidence when no volume clears thresholds'
+Assert-Equal $null (Get-HsScriptBetaArtifactRoot -Channel 'release-candidate' -RuntimeKey 'abc123' -RuntimeDirectory 'C:\BetaRuntime' -FixedVolumes @()) 'RC receives no Beta artifact root'
+
+Write-Output 'BetaTempDirectoryPolicy.Tests.ps1: 7 cases passed'

@@ -22,8 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object LifecycleTrace {
     private const val GAME_OVER_STUCK_TIMEOUT_MS = 30_000L
-    private const val STATE_RECOVERY_TIMEOUT_MS = 30_000L
-    private const val STATE_RECOVERY_RETRY_INTERVAL_MS = 30_000L
+    private const val STATE_RECOVERY_TIMEOUT_MS = StuckStateRecoveryCadencePolicy.STATE_TIMEOUT_MS
     private const val MATCHMAKING_SCREEN_RECOVERY_SUPPRESSION_MS = 120_000L
     private const val MATCHMAKING_INPUT_INTENT_WINDOW_MS = 15 * 60_000L
 
@@ -239,8 +238,13 @@ object LifecycleTrace {
         if (stateRecoverySince == 0L) stateRecoverySince = now
 
         val stuckFor = now - stateRecoverySince
-        if (stuckFor < STATE_RECOVERY_TIMEOUT_MS ||
-            now - stateRecoveryAttemptAt < STATE_RECOVERY_RETRY_INTERVAL_MS ||
+        if (!StuckStateRecoveryCadencePolicy.shouldProbe(
+                channel = BuildInfo.RELEASE_CHANNEL,
+                stillStuck = true,
+                stuckForMs = stuckFor,
+                lastAttemptAtMs = stateRecoveryAttemptAt,
+                nowMs = now,
+            ) ||
             !stateRecoveryInFlight.compareAndSet(false, true)
         ) {
             return
