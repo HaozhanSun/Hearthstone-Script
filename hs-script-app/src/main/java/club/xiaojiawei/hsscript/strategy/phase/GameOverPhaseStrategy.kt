@@ -5,7 +5,6 @@ import club.xiaojiawei.hsscript.bean.log.ExtraEntity
 import club.xiaojiawei.hsscript.bean.log.TagChangeEntity
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
-import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
@@ -348,11 +347,17 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
             resultOutcome?.let { GameResultScreenshot.save(image, it, completedGameNumber) }
         }
         val accessFile = PowerLogListener.logFile
-        if (MandatoryRankSurrenderGuard.isPending()) {
+        val rankBarrierBeforeTerminal =
+            club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier.currentState()
+        if (MandatoryRankSurrenderGuard.isPending() ||
+            rankBarrierBeforeTerminal != club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier.State.IDLE ||
+            club.xiaojiawei.hsscript.utils.GameUtil.isTerminalGameState()
+        ) {
             // PLAYSTATE can synchronously move WAR into GAME_OVER before the
             // outer listener consumes the rest of the same Power.log block.
-            // Drain that bounded current-game tail before seeking the shared
-            // cursor to EOF or evaluating the mandatory-surrender proof.
+            // Drain that bounded current-game tail for stale rank barriers too;
+            // dismissal must not depend on the surrender executor remembering
+            // its per-game identity.
             PowerLogListener.drainCurrentGameTerminalEvidence()
         }
         accessFile?.seek(accessFile.length())
@@ -363,7 +368,7 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
         val surrenderTerminalEvidence = if (completeCurrentGamePowerLogTerminal) {
             PowerLogListener.currentGameSurrenderTerminalEvidence(ownEntityId, opponentEntityId)
         } else null
-        val terminalCleanupCapability = MandatoryRankSurrenderGuard.authorizeTerminalCleanup(
+        val terminalCleanupCapability = MandatoryRankSurrenderGuard.authorizeCurrentGameResultCleanup(
             surrenderTerminalEvidence,
         )
         if (MandatoryRankSurrenderGuard.isPending()) {
@@ -378,28 +383,30 @@ object GameOverPhaseStrategy : AbstractPhaseStrategy() {
                     "playerTerminal=${authoritativeTerminal ?: "UNKNOWN"}"
             }
         }
-        if (terminalCleanupCapability != null &&
-            MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", terminalCleanupCapability)
-        ) {
+        val terminalProofAccepted = terminalCleanupCapability != null &&
+            (!MandatoryRankSurrenderGuard.isPending() ||
+                MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", terminalCleanupCapability))
+        if (terminalProofAccepted) {
             ReplaceCardPhaseStrategy.onAuthoritativeTerminalProofAccepted()
             club.xiaojiawei.hsscriptbase.config.log.info {
-                "RANK_SURRENDER_TERMINAL_RECONCILED barrier=cleared " +
-                    "terminalUiCleanup=pending ordinaryDispatch=false"
+                "CURRENT_GAME_TERMINAL_CLEANUP_AUTHORIZED barrier=cleared " +
+                    "terminalUiCleanup=pending ordinaryDispatch=false " +
+                    "mandatoryRecovery=${MandatoryRankSurrenderGuard.isPending()}"
+            }
+        }
+        if (rankBarrierBeforeTerminal !=
+            club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier.State.IDLE
+        ) {
+            club.xiaojiawei.hsscriptbase.config.log.info {
+                "MULLIGAN_RANK_TERMINAL_CLEANUP " +
+                    "proof=${if (terminalProofAccepted) "ACCEPTED" else "REJECTED"} " +
+                    "barrierBefore=$rankBarrierBeforeTerminal " +
+                    "barrierAfter=${club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier.currentState()} " +
+                    "terminalDismissalOnly=$terminalProofAccepted ordinaryGameplay=false"
             }
         }
         addGameEndTask(terminalCleanupCapability)
         WarEx.reset()
-        if (System.getProperty("hs.script.e2e") == "true" &&
-            E2ETrace.resultRecorded &&
-            System.getProperty("hs.script.e2e.pause-after-result") == "true"
-        ) {
-            // Pausing after a result is opt-in for a deliberately single-game
-            // test. Normal E2E and normal user sessions remain continuous.
-            club.xiaojiawei.hsscriptbase.config.log.info {
-                "E2E单局开关已启用：结果截图已保存，暂停在结算后的状态"
-            }
-            PauseStatus.asyncSetPause(true)
-        }
     }
 
     private fun readE2eOutcome(): Boolean? {

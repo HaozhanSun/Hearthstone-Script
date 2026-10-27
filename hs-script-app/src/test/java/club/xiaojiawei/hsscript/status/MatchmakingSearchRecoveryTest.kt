@@ -1,6 +1,8 @@
 package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
+import club.xiaojiawei.hsscript.starter.StartupScreenProbeRetryPolicy
+import club.xiaojiawei.hsscript.utils.RobotInputDispatchBoundary
 import club.xiaojiawei.hsscript.status.surrender.CurrentGameSurrenderTerminalEvidence
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
@@ -47,7 +49,12 @@ class MatchmakingSearchRecoveryTest {
             )
             assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
             assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCapability))
-            assertTrue(ActionDispatchGate.allow("matchmaking.start"))
+            assertTrue(ActionDispatchGate.allowForState(
+                action = "matchmaking.start",
+                paused = false,
+                working = true,
+                currentSessionReady = true,
+            ))
             assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
         } finally {
             MandatoryRankSurrenderGuard.resetForTest()
@@ -182,6 +189,293 @@ class MatchmakingSearchRecoveryTest {
     }
 
     @Test
+    fun `same current frame with HUB chooser geometry and menu OCR cannot be MATCHMAKING`() {
+        val hubFrame = syntheticHubChooserOverQueueColors()
+        assertTrue(MatchmakingSearchVisualPolicy.isVisible(hubFrame), "fixture reproduces the red/dark false-positive")
+        assertTrue(HubModeChooserVisualPolicy.isVisible(hubFrame), "four stacked HUB buttons identify the chooser")
+        assertEquals("TOURNAMENT", UpstreamScreenStateRecovery.classifyImageForTest("传统对战 酒馆战棋 竞技模式 其他模式", hubFrame))
+        assertEquals(
+            "hub-mode-chooser-visual-and-text",
+            UpstreamScreenStateRecovery.classificationEvidenceForImageTest("传统对战 酒馆战棋 竞技模式 其他模式", hubFrame),
+        )
+
+        // Exercise the actual startup chain: frame classification -> policy ->
+        // process/window-bound proof -> final dispatch action. This catches the
+        // old failure where TournamentModeStrategy silently fell back to the
+        // generic mouse.left tag and the last hard gate rejected the click.
+        val ocr = "传统对战 酒馆战棋 竞技模式 其他模式"
+        val evidence = UpstreamScreenStateRecovery.classificationEvidenceForImageTest(ocr, hubFrame)
+        assertTrue(
+            StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
+                purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                currentSessionReady = false,
+                screenKind = UpstreamScreenStateRecovery.classifyImageForTest(ocr, hubFrame),
+                confidence = 96,
+                evidence = evidence,
+                currentMode = "HUB",
+                modalVisible = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                trustedCurrentWindow = true,
+            ),
+        )
+        // Startup's first capture can be a loading/ad frame. It must neither
+        // mint readiness nor stop the bounded probe before the chooser settles.
+        val initialLoadingFrame = BufferedImage(1280, 720, BufferedImage.TYPE_INT_RGB).apply {
+            createGraphics().also { graphics ->
+                graphics.color = Color(128, 128, 128)
+                graphics.fillRect(0, 0, width, height)
+                graphics.dispose()
+            }
+        }
+        assertNull(UpstreamScreenStateRecovery.classifyImageForTest("", initialLoadingFrame))
+        StartupInputReadiness.invalidate(101, "hwnd-a")
+        assertFalse(StartupInputReadiness.isHubTraditionalBattleSelectionReady(101, "hwnd-a", "HUB", 30_000L))
+        assertTrue(StartupScreenProbeRetryPolicy.shouldContinue(30_000L, paused = false))
+        assertFalse(ActionDispatchGate.allowForState(
+            action = StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION,
+            paused = false,
+            working = true,
+            currentSessionReady = false,
+            startupTraditionalBattleSelectionReady = false,
+        ), "initial UNKNOWN observation cannot authorize the mode click")
+
+        val now = 70_000L
+        StartupInputReadiness.recordHubModeChooser(101, "hwnd-a", now)
+        val exactProof = StartupInputReadiness.isHubTraditionalBattleSelectionReady(101, "hwnd-a", "HUB", now + 1)
+        val dispatched = java.util.concurrent.atomic.AtomicInteger()
+        if (ActionDispatchGate.allowForState(
+                action = StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION,
+                paused = false,
+                working = true,
+                currentSessionReady = false,
+                startupTraditionalBattleSelectionReady = exactProof,
+            )
+        ) dispatched.incrementAndGet()
+        assertEquals(1, dispatched.get(), "exact Traditional Battle action reaches dispatch")
+        assertFalse(ActionDispatchGate.allowForState(
+            action = "mouse.left",
+            paused = false,
+            working = true,
+            currentSessionReady = false,
+            startupTraditionalBattleSelectionReady = exactProof,
+        ), "untyped generic click remains blocked")
+        assertFalse(StartupScreenProbeRetryPolicy.shouldContinue(90_000L, paused = false))
+    }
+
+    @Test
+    fun `notice postcheck preserves exact HUB chooser proof and idle probe can refresh it`() {
+        StartupInputReadiness.resetForTest()
+        try {
+            val frame = syntheticHubChooserOverQueueColors()
+            val ocr = "传统对战 酒馆战棋 竞技模式 其他模式"
+            val screen = UpstreamScreenStateRecovery.classifyImageForTest(ocr, frame)
+            val evidence = UpstreamScreenStateRecovery.classificationEvidenceForImageTest(ocr, frame)
+            assertEquals("TOURNAMENT", screen)
+            assertEquals("hub-mode-chooser-visual-and-text", evidence)
+
+            val postcheckProof = StartupNoticePostcheckProofPolicy.choose(
+                purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                currentSessionReady = false,
+                screenKind = screen,
+                confidence = 96,
+                evidence = evidence,
+                currentMode = "HUB",
+                modalVisible = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                terminalState = false,
+                trustedCurrentWindow = true,
+            )
+            assertEquals(StartupNoticePostcheckProofPolicy.Proof.HUB_MODE_CHOOSER, postcheckProof)
+            StartupInputReadiness.recordHubModeChooser(48336, "native@0x40a0728", now = 90_000L)
+            val chooserReady = StartupInputReadiness.isHubTraditionalBattleSelectionReady(
+                48336, "native@0x40a0728", "HUB", now = 90_001L,
+            )
+            assertTrue(chooserReady, "chooser proof is keyed to the exact process, HWND, mode, and fresh observation")
+            assertFalse(
+                StartupInputReadiness.isMenuReady(48336, "native@0x40a0728", "HUB"),
+                "a chooser observation must not become broad online-menu readiness",
+            )
+            assertTrue(ActionDispatchGate.allowForState(
+                action = StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION,
+                paused = false,
+                working = true,
+                currentSessionReady = false,
+                startupTraditionalBattleSelectionReady = chooserReady,
+            ))
+
+            val idleProbeProof = StartupNoticePostcheckProofPolicy.choose(
+                purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+                currentSessionReady = false,
+                screenKind = screen,
+                confidence = 96,
+                evidence = evidence,
+                currentMode = "HUB",
+                modalVisible = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                terminalState = false,
+                trustedCurrentWindow = true,
+            )
+            assertEquals(
+                StartupNoticePostcheckProofPolicy.Proof.HUB_MODE_CHOOSER,
+                idleProbeProof,
+                "a fresh idle probe may refresh only this exact chooser proof",
+            )
+            assertEquals(
+                StartupNoticePostcheckProofPolicy.Proof.NONE,
+                StartupNoticePostcheckProofPolicy.choose(
+                    purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+                    currentSessionReady = false,
+                    screenKind = screen,
+                    confidence = 96,
+                    evidence = evidence,
+                    currentMode = "HUB",
+                    modalVisible = false,
+                    activeGame = false,
+                    activeMatchmaking = true,
+                    terminalState = false,
+                    trustedCurrentWindow = true,
+                ),
+                "active queue evidence blocks chooser proof",
+            )
+        } finally {
+            StartupInputReadiness.resetForTest()
+        }
+    }
+
+    @Test
+    fun `delayed HUB chooser proof reaches final robot boundary and sends only exact traditional action`() {
+        val action = StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION
+        StartupInputReadiness.resetForTest()
+        try {
+            var sentAction: String? = null
+            var authorizedAction: String? = null
+            var sends = 0
+            val noProofSent = RobotInputDispatchBoundary.dispatchIfAuthorized(
+                action = action,
+                authorize = { candidate ->
+                    authorizedAction = candidate
+                    ActionDispatchGate.allowForState(
+                        action = candidate,
+                        paused = false,
+                        working = true,
+                        currentSessionReady = false,
+                        startupTraditionalBattleSelectionReady = false,
+                    )
+                },
+            ) { sends++; sentAction = authorizedAction }
+            assertFalse(noProofSent)
+            assertEquals(0, sends)
+
+            assertTrue(StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
+                purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                currentSessionReady = false,
+                screenKind = "TOURNAMENT",
+                confidence = 96,
+                evidence = "hub-mode-chooser-visual-and-text",
+                currentMode = "HUB",
+                modalVisible = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                trustedCurrentWindow = true,
+            ))
+            StartupInputReadiness.recordHubModeChooser(47756, "native@0xa6906f4", now = 70_000L)
+            val proof = StartupInputReadiness.isHubTraditionalBattleSelectionReady(
+                47756,
+                "native@0xa6906f4",
+                "HUB",
+                now = 70_001L,
+            )
+            assertTrue(proof)
+
+            val sent = RobotInputDispatchBoundary.dispatchIfAuthorized(
+                action = action,
+                authorize = { candidate ->
+                    authorizedAction = candidate
+                    ActionDispatchGate.allowForState(
+                        action = candidate,
+                        paused = false,
+                        working = true,
+                        currentSessionReady = false,
+                        startupTraditionalBattleSelectionReady = proof,
+                    )
+                },
+            ) { sends++; sentAction = authorizedAction }
+            assertTrue(sent)
+            assertEquals(1, sends, "accepted final Robot boundary invokes the input sink exactly once")
+            assertEquals(action, sentAction)
+
+            val genericSent = RobotInputDispatchBoundary.dispatchIfAuthorized(
+                action = "mouse.robot",
+                authorize = { candidate -> ActionDispatchGate.allowForState(
+                    action = candidate,
+                    paused = false,
+                    working = true,
+                    currentSessionReady = false,
+                    startupTraditionalBattleSelectionReady = proof,
+                ) },
+            ) { sends++ }
+            assertFalse(genericSent, "chooser proof cannot authorize a generic Robot click")
+            assertEquals(1, sends)
+        } finally {
+            StartupInputReadiness.resetForTest()
+        }
+    }
+
+    @Test
+    fun `conflicting menu text prevents visual queue false positive without chooser geometry`() {
+        val redOrnamentFrame = syntheticSearchScreen()
+        assertTrue(MatchmakingSearchVisualPolicy.isVisible(redOrnamentFrame))
+        assertFalse(HubModeChooserVisualPolicy.isVisible(redOrnamentFrame))
+        assertNull(UpstreamScreenStateRecovery.classifyImageForTest("OCR噪声 传统对战", redOrnamentFrame))
+    }
+
+    @Test
+    fun `deck selection fixture clears prior search guard while genuine search still blocks`() {
+        val deckPath = "/offline-ocr/screen-recovery/deck-selection-screen.png"
+        val deckImage = requireNotNull(javaClass.getResourceAsStream(deckPath)) { "missing fixture $deckPath" }
+            .use(ImageIO::read)
+        assertFalse(
+            ScreenStateRecovery.looksLikeAmazonAppstoreSunsetNoticeVisual(deckImage),
+            "the warm deck-selection screen must not be mistaken for the Amazon notice",
+        )
+        val deckScreen = UpstreamScreenStateRecovery.classifyImageForTest("狂野对战 选择套牌", deckImage)
+        assertEquals("DECK_SELECTION", deckScreen)
+
+        LifecycleTrace.markActiveMatchmakingScreenObserved()
+        assertTrue(LifecycleTrace.hasRecentActiveMatchmakingScreen())
+        LifecycleTrace.clearActiveMatchmakingScreenObserved("fresh-deck-selection-test")
+        assertFalse(LifecycleTrace.hasRecentActiveMatchmakingScreen())
+        assertEquals(
+            MatchmakingInputGuardPolicy.Decision.ALLOW_INPUT,
+            MatchmakingInputGuardPolicy.decide(
+                observedScreen = deckScreen,
+                recentActiveSearchEvidence = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
+            ),
+        )
+        assertEquals(
+            MatchmakingInputGuardPolicy.Decision.ALLOW_INPUT,
+            MatchmakingInputGuardPolicy.decide(
+                observedScreen = "UNKNOWN",
+                recentActiveSearchEvidence = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
+            ),
+            "cleared evidence must not turn an unavailable watchdog screenshot into a false active-search block",
+        )
+
+        val searchScreen = UpstreamScreenStateRecovery.classifyImageForTest("", syntheticSearchScreen())
+        assertEquals("MATCHMAKING", searchScreen)
+        assertEquals(
+            MatchmakingInputGuardPolicy.Decision.BLOCK_ACTIVE_SEARCH,
+            MatchmakingInputGuardPolicy.decide(
+                observedScreen = searchScreen,
+                recentActiveSearchEvidence = false,
+            ),
+        )
+    }
+
+    @Test
     fun `fresh queue observation suppresses stale FILL_DECK lifecycle recovery during normal search`() {
         assertTrue(LifecycleTrace.shouldSuppressStateRecoveryForMatchmaking(observedAt = 10_000, now = 10_001))
         assertTrue(LifecycleTrace.shouldSuppressStateRecoveryForMatchmaking(observedAt = 10_000, now = 129_999))
@@ -259,4 +553,14 @@ class MatchmakingSearchRecoveryTest {
                 graphics.dispose()
             }
         }
+
+    private fun syntheticHubChooserOverQueueColors(): BufferedImage = syntheticSearchScreen().apply {
+        createGraphics().also { graphics ->
+            graphics.color = Color(232, 218, 194)
+            listOf(.285, .365, .445, .495).forEach { y ->
+                graphics.fillRect((width * .39).toInt(), (height * y).toInt(), (width * .22).toInt(), (height * .035).toInt())
+            }
+            graphics.dispose()
+        }
+    }
 }

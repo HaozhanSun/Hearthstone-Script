@@ -29,7 +29,6 @@ object FriendlyModeStrategy : AbstractModeStrategy<Any?>() {
             } ?: let {
                 SystemUtil.notice("未配置卡组策略")
                 log.warn { "未配置卡组策略" }
-                PauseStatus.isPause = true
             }
         }
     }

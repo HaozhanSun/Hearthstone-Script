@@ -457,7 +457,7 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
                 mandatoryRankSurrenderPending = true,
             ),
         )
-        assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
+        assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
         assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("UNKNOWN"))
         assertTrue(MandatoryRankSurrenderGuard.isPending())
     }

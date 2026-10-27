@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
+import club.xiaojiawei.hsscript.status.StartupInputReadiness
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
 import club.xiaojiawei.hsscript.status.TerminalCleanupQueueResumePolicy
@@ -88,8 +89,29 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                     if (PauseStatus.isPause) {
                         cancelAllWantEnterTasks()
                     } else if (Mode.currMode == ModeEnum.HUB) {
-                        log.info { "点击传统对战入口" }
-                        TOURNAMENT_MODE_RECT.lClick()
+                        val gameWindow = ScriptStatus.gameHWND
+                        val gamePid = GameUtil.findGameProcessIdForDiagnostics()?.toInt()
+                        val startupSelectionReady = gameWindow != null && gamePid != null &&
+                            StartupInputReadiness.isHubTraditionalBattleSelectionReady(
+                                gamePid,
+                                gameWindow.toString(),
+                                Mode.currMode?.name,
+                            )
+                        if (!startupSelectionReady) {
+                            log.info {
+                                "STARTUP_MODE_ENTRY_WAITING_FOR_PROOF pid=${gamePid ?: "none"} " +
+                                    "hwnd=${gameWindow ?: "none"} action=NO_INPUT"
+                            }
+                            return@LRunnable
+                        }
+                        log.info {
+                            "STARTUP_MODE_ENTRY_ACTION_REQUEST action=${StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION}"
+                        }
+                        TOURNAMENT_MODE_RECT.lClick(
+                            isCancel = false,
+                            dispatchAction = StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION,
+                        )
+                        ScreenStateRecovery.scheduleStartupMenuReprobeAfterModeSelection()
                     } else if (Mode.currMode == ModeEnum.GAME_MODE) {
                         cancelAllWantEnterTasks()
                         BACK_RECT.lClick()
@@ -110,7 +132,6 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
             if (deckStrategy == null) {
                 SystemUtil.notice("未配置卡组策略")
                 log.warn { "未配置卡组策略" }
-                PauseStatus.isPause = true
                 return
             }
             val runMode = DeckStrategyManager.currentRunMode
@@ -215,6 +236,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
             log.warn { "DECK_SELECTION_RECOVERY_SKIPPED reason=missing-runtime-selection" }
             return
         }
+        LifecycleTrace.clearActiveMatchmakingScreenObserved("fresh-deck-selection")
         val slot = expectedDeckSlot(deckStrategy)
         log.warn {
             "DECK_SELECTION_RECOVERY_APPLY mode=${runMode.name} strategy=${deckStrategy.id()} " +
@@ -259,7 +281,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
 //        }
         log.info { "选择套牌" }
 
-        PREV_DECK_PAGE.lClick()
+        PREV_DECK_PAGE.lClick(isCancel = false, dispatchAction = "matchmaking.select-deck")
         SystemUtil.delayTiny()
         log.info { "选择套牌槽位 strategy=${deckStrategy.id()} name=${deckStrategy.name()} deckSlot=$deckSlot" }
         GameUtil.lClickDeckSlot(deckSlot)
@@ -295,12 +317,9 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
             return
         }
         log.info { "开始匹配 trace=$traceId" }
-        val mandatoryRankSurrenderPending =
-            club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending()
         val dispatchMatchmaking = MatchmakingGuardPolicy.runtimeAllowsInput(
             working = WorkTimeListener.working,
             paused = PauseStatus.isPause,
-            mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
         )
         log.info {
             "MATCHMAKING_GATE stage=PRE_MATCH rankPolicy=POST_MULLIGAN " +
@@ -309,14 +328,13 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                 "decision=${if (dispatchMatchmaking) "ALLOW" else "DENY"} " +
                 "reason=${when {
                     dispatchMatchmaking -> "runtime-active"
-                    mandatoryRankSurrenderPending -> "mandatory-rank-surrender-pending"
                     else -> "runtime-not-active"
                 }}"
         }
         if (!dispatchMatchmaking) {
             log.warn {
                 "MATCHMAKING_BLOCKED trace=$traceId " +
-                    "reason=${if (mandatoryRankSurrenderPending) "mandatory-rank-surrender-pending" else "runtime-not-active"} " +
+                    "reason=runtime-not-active " +
                     "action=NO_QUEUE_INPUT"
             }
             return
@@ -444,7 +462,11 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
             "MATCHMAKING_INPUT_DISPATCH mode=normal pos=(${pos.x},${pos.y}) " +
                 "gameHwnd=${ScriptStatus.gameHWND}"
         }
-        MouseUtil.leftButtonClick(pos, ScriptStatus.gameHWND)
+        MouseUtil.leftButtonClick(
+            pos,
+            ScriptStatus.gameHWND,
+            dispatchActionOverride = "matchmaking.start",
+        )
         return true
     }
 

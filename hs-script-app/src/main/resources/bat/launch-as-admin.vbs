@@ -15,4 +15,6 @@ End If
 ' Elevate the helper itself. It replaces only an older hs-script JVM before
 ' starting the newest deployed JAR; Hearthstone.exe is never touched.
 arguments = "-NoProfile -ExecutionPolicy Bypass -File """ & helperPath & """"
-shell.ShellExecute "powershell.exe", arguments, scriptDirectory, "runas", 1
+' The elevated helper stays hidden while it supervises the JVM. The app itself
+' remains visible through its normal JavaFX window and tray icon.
+shell.ShellExecute "powershell.exe", arguments, scriptDirectory, "runas", 0

@@ -29,7 +29,7 @@ class TournamentModeConfirmationTest {
         assertEquals("observed-different-mode", result.reason)
         appendEvidence(
             "TOURNAMENT_MODE_CONFIRMATION expectedMode=WILD observedMode=${result.observedMode} " +
-                "strategy=${result.strategyName} deckSlot=${result.deckSlot} action=PAUSE_BEFORE_DECK_SELECTION",
+                "strategy=${result.strategyName} deckSlot=${result.deckSlot} action=BLOCK_DECK_SELECTION_NO_PAUSE",
         )
     }
 
@@ -124,7 +124,8 @@ class TournamentModeConfirmationTest {
         assertTrue(tournament.contains("GameUtil.lClickDeckSlot(deckSlot)"))
         assertFalse(tournament.contains("GameUtil.lClickDeckPos(deckSlot)"))
         assertTrue(tournament.contains("MATCHMAKING_INPUT_DISPATCH mode=normal"))
-        assertTrue(tournament.contains("MouseUtil.leftButtonClick(pos, ScriptStatus.gameHWND)"))
+        assertTrue(tournament.contains("MouseUtil.leftButtonClick("))
+        assertTrue(tournament.contains("dispatchActionOverride = \"matchmaking.start\""))
         assertFalse(tournament.contains("leftButtonClickForRecovery(rect.getCenterClickPos())"))
         assertTrue(tournament.contains("MATCHMAKING_TIMEOUT_ERROR_DIALOG_CLICK_SKIPPED reason=exact-dialog-watchdog-only"))
         assertTrue(tournament.contains("scheduleMatchmakingDialogRecovery(traceId)"))

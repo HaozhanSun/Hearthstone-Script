@@ -6,7 +6,7 @@ internal class ReconnectFailureRecoveryPolicy(
     private val retryCooldownMs: Long = DEFAULT_RETRY_COOLDOWN_MS,
     private val attemptWindowMs: Long = DEFAULT_ATTEMPT_WINDOW_MS,
 ) {
-    enum class Decision { RESTART_CLIENT, WAIT_FOR_RESTART, PAUSE_AUTOMATION }
+    enum class Decision { RESTART_CLIENT, WAIT_FOR_RESTART, ALERT_OPERATOR }
 
     data class Evaluation(val decision: Decision, val attempt: Int)
 
@@ -25,7 +25,7 @@ internal class ReconnectFailureRecoveryPolicy(
             return Evaluation(Decision.WAIT_FOR_RESTART, restartAttempts)
         }
         if (restartAttempts >= maxRestarts) {
-            return Evaluation(Decision.PAUSE_AUTOMATION, restartAttempts)
+            return Evaluation(Decision.ALERT_OPERATOR, restartAttempts)
         }
         restartAttempts++
         lastRestartAt = nowMs

@@ -12,28 +12,45 @@ internal object ResultPageEvidencePolicy {
         val continueControlVisible: Boolean,
     )
 
-    fun continueControlVisible(continueGrayLightRatio: Double): Boolean =
-        continueGrayLightRatio >= RESULT_CONTINUE_GRAY_LIGHT_MIN
-
+    /**
+     * Use the already-authorized frame's cheap regional measurements before
+     * OCR. Full-page OCR can take 20-30 seconds; the calibrated Continue band
+     * is already an input allowlist and the same result/reward signatures keep
+     * rank progression distinct. A null return means no fast-path control was
+     * found, so the caller should OCR to identify a post-result destination.
+     */
     fun fastVisualObservation(
         continueGrayLightRatio: Double,
         bannerLowSaturationRatio: Double,
         centerDarkRatio: Double,
         bannerWarmRatio: Double,
     ): FastVisualObservation? {
-        if (!continueControlVisible(continueGrayLightRatio)) return null
-        val rank = looksLikeRankProgressContinuationVisual(
-            continueGrayLightRatio, bannerLowSaturationRatio, centerDarkRatio, bannerWarmRatio,
+        val continueVisible = continueControlVisible(continueGrayLightRatio)
+        if (!continueVisible) return null
+        val rankProgress = looksLikeRankProgressContinuationVisual(
+            continueGrayLightRatio,
+            bannerLowSaturationRatio,
+            centerDarkRatio,
+            bannerWarmRatio,
         )
         val result = looksLikeResultVisual(
-            continueGrayLightRatio, bannerLowSaturationRatio, centerDarkRatio, bannerWarmRatio,
+            continueGrayLightRatio,
+            bannerLowSaturationRatio,
+            centerDarkRatio,
+            bannerWarmRatio,
         )
         return FastVisualObservation(
-            resultVisible = if (rank || result) true else null,
-            rankProgressVisible = rank,
+            resultVisible = when {
+                rankProgress || result -> true
+                else -> null
+            },
+            rankProgressVisible = rankProgress,
             continueControlVisible = true,
         )
     }
+
+    fun continueControlVisible(continueGrayLightRatio: Double): Boolean =
+        continueGrayLightRatio >= RESULT_CONTINUE_GRAY_LIGHT_MIN
     private val outcomeTerms = listOf(
         "胜利", "胜出", "失败", "败北", "战败", "本局结果", "对战结束", "游戏结束",
         "victory", "defeat", "game over", "match over", "you win", "you lose",
@@ -148,9 +165,34 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.52..0.56 &&
             centerDarkRatio in 0.25..0.29 &&
             bannerWarmRatio in 0.06..0.10
+        // v4.16.695's saved rank-9 continuation frame was repeatedly
+        // classified UNKNOWN despite its explicit centered badge/ribbon and
+        // Continue control. Preserve its measured four-region signature
+        // narrowly so it can authorize only the result-page retry path.
+        val liveRankNineRewardSignature = continueGrayLightRatio in 0.040..0.050 &&
+            bannerLowSaturationRatio in 0.125..0.150 &&
+            centerDarkRatio in 0.190..0.215 &&
+            bannerWarmRatio in 0.175..0.220
+        // Oct 26 v4.16.695 rank-9 capture (08:54:02): the client rendered the
+        // same centered Diamond 9 medal with a cooler, brighter blurred board.
+        // Keep this incident cluster narrow so a generic board Continue label
+        // cannot authorize the result-page retry path.
+        val liveRankNineCoolBoardSignature = continueGrayLightRatio in 0.045..0.055 &&
+            bannerLowSaturationRatio in 0.135..0.155 &&
+            centerDarkRatio in 0.17..0.19 &&
+            bannerWarmRatio in 0.25..0.28
+        // v4.16.698 rank-10 continuation (2026-10-26 09:33): the exact
+        // screenshot had a cool blurred board and warm central medal/ribbon.
+        // This bounded cluster captures that changed backdrop while retaining
+        // the lower-center Continue band and three independent banner signals.
+        val liveRankTenCoolBoardSignature = continueGrayLightRatio in 0.043..0.052 &&
+            bannerLowSaturationRatio in 0.155..0.170 &&
+            centerDarkRatio in 0.170..0.190 &&
+            bannerWarmRatio in 0.320..0.350
         return capturedRankProgressSignature || establishedRankProgressSignature ||
             coolBoardGoldRewardSignature || largeGoldMedalRewardSignature ||
-            incidentCoolBoardRewardSignature || incidentWarmBannerRewardSignature
+            incidentCoolBoardRewardSignature || incidentWarmBannerRewardSignature ||
+            liveRankNineRewardSignature || liveRankNineCoolBoardSignature || liveRankTenCoolBoardSignature
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */

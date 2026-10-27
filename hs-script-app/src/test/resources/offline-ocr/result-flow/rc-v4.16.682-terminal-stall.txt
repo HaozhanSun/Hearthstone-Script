@@ -1,0 +1,11 @@
+source=Release Candidate v4.16.682, deployment hs-script_v4.16.682-local-20261024-204437PDT.jar|8bd38415f9809f38
+sourceScreenshot=rc-v4.16.682-terminal-stall.png
+powerLog=Hearthstone_2026_10_24_20_55_52/Power.log
+terminalResult=23:41:31.598 own=CONCEDED opponent=WON complete=true
+screen=defeat-result continue-prompt-visible
+firstVisibleBlockedAction=00:07:33 action=recovery.left reason=terminal-result-cleanup-pending pause=false working=true dispatch=false repeatedSuppressed=15
+secondVisibleBlockedAction=00:07:48 action=recovery.left reason=terminal-result-cleanup-pending pause=false working=true dispatch=false repeatedSuppressed=15
+screenshotBlockedAction=00:08:04 action=recovery.left reason=terminal-result-cleanup-pending pause=false working=true dispatch=false repeatedSuppressed=15
+idleProbe=00:07:53 reason=uncertain-screen screen=UNKNOWN attempt=3/3 idleForMs=1582213
+manualPause=00:08:14.222 F2 accepted; pause active at 00:08:14.251
+latestBlockedAction=00:12:21 action=recovery.left reason=terminal-result-cleanup-pending dispatch=false

@@ -41,6 +41,9 @@ object ConfigUtil {
         }
         val ini = Ini(configFile)
         val cfg = Config()
+        // Windows paths are stored as forward-slash values. Backslash escape
+        // parsing would consume separators in paths copied into script.ini.
+        cfg.isEscape = false
         ini.config = cfg
         checkConfig(ini)
         ini

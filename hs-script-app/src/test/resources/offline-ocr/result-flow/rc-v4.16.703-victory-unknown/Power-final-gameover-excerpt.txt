@@ -1,0 +1,5 @@
+D 15:03:14.9974427 GameState.DebugPrintPower() - CREATE_GAME
+D 15:11:26.1246360 GameState.DebugPrintPower() - TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=WON
+D 15:11:26.1246360 GameState.DebugPrintPower() - TAG_CHANGE Entity=Abel#13628 tag=PLAYSTATE value=LOST
+D 15:11:26.1246360 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER
+D 15:11:26.1246360 GameState.DebugPrintPower() - TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE

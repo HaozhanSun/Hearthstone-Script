@@ -54,6 +54,28 @@ class CurrentGamePowerLogTerminalTrackerTest {
     }
 
     @Test
+    fun `complete local win terminal proof authorizes cleanup without surrendering the current game`() {
+        val tracker = CurrentGamePowerLogTerminalTracker()
+        tracker.observeLine("CREATE_GAME gameId=rank-10-game")
+        tracker.observeLine("TAG_CHANGE Entity=player-self#1 tag=PLAYSTATE value=WON")
+        tracker.observeLine("TAG_CHANGE Entity=player-opponent#2 tag=PLAYSTATE value=CONCEDED")
+        tracker.observeLine("TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER")
+        tracker.observeLine("TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE")
+
+        val proof = tracker.currentGameSurrenderEvidence("player-self#1", "player-opponent#2")
+        assertTrue(CurrentGameResultCleanupEvidence.authorizes(proof))
+        assertFalse(MandatorySurrenderTerminalEvidence.authorizes("1:player-self#1", proof))
+
+        tracker.observeLine("CREATE_GAME gameId=next-game")
+        assertFalse(
+            CurrentGameResultCleanupEvidence.authorizes(
+                tracker.currentGameSurrenderEvidence("player-self#1", "player-opponent#2"),
+            ),
+            "a later CREATE_GAME invalidates the previous terminal cleanup proof",
+        )
+    }
+
+    @Test
     fun `replayed log tail cannot authorize current-game cleanup`() {
         val tracker = CurrentGamePowerLogTerminalTracker()
         tracker.observeLine("CREATE_GAME gameId=historical", currentSessionEvidence = false)

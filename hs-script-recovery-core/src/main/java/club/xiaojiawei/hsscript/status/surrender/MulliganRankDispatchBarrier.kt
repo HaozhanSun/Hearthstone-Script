@@ -40,6 +40,15 @@ object MulliganRankDispatchBarrier {
         true
     }
 
+    /** Complete any rank preflight state after the current game's local terminal result is proven. */
+    fun completeForCurrentTerminalResult(): Boolean = synchronized(lock) {
+        if (state == State.IDLE) return true
+        state = State.IDLE
+        surrenderCapability = null
+        surrenderCapabilityConsumed = false
+        true
+    }
+
     fun completeSurrender(): Boolean = synchronized(lock) {
         if (state != State.SURRENDER_REQUIRED) return false
         state = State.IDLE

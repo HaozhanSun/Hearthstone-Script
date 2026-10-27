@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
+import club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
@@ -20,6 +21,7 @@ import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import com.sun.jna.platform.win32.WinDef
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
+import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import java.awt.Rectangle
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
@@ -55,6 +57,9 @@ object ScreenStateRecovery {
         val pid: Long,
         val hwnd: String,
         val screenshot: String?,
+        val perceptualFingerprint: Long,
+        val currentSessionReady: Boolean,
+        val noActiveMatchmakingEvidence: Boolean,
     )
 
     /** Use the configured PaddleX deadline so cold pipeline initialization isn't cut off at 4 seconds. */
@@ -71,9 +76,10 @@ object ScreenStateRecovery {
      * The client displays a distinct slow-connection warning only after a
      * reconnect attempt. A fresh script can attach after that click, so its
      * first observation of the same exact warning also starts this timer.
-     * Give it two minutes before using the established client restart path.
+     * Give it one minute before using the established client restart path.
      */
-    private const val STALLED_RECONNECT_LOADING_RESTART_MS = 120_000L
+    private const val STALLED_RECONNECT_RESTART_MS = IndefiniteReconnectRestartPolicy.DEFAULT_THRESHOLD_MS
+    private const val STALLED_LOADING_RESTART_MS = 120_000L
     private val reconnectAttemptAt = AtomicLong(0L)
     private val reconnectAcceptedAt = AtomicLong(0L)
     private val reconnectProbeGeneration = AtomicLong(0L)
@@ -87,6 +93,7 @@ object ScreenStateRecovery {
      */
     private val loadingObservedAt = AtomicLong(0L)
     private val startGameErrorProbeInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val startupMenuReprobeInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
@@ -99,6 +106,7 @@ object ScreenStateRecovery {
         RECONNECT("RECONNECT"),
         RECONNECT_FAILURE("RECONNECT_FAILURE"),
         RECONNECT_SPINNER("RECONNECT_SPINNER"),
+        SERVER_UNAVAILABLE("SERVER_UNAVAILABLE"),
         LOGIN("LOGIN"),
         GAME_MODE("GAME_MODE"),
         COLLECTION("COLLECTION"),
@@ -127,7 +135,9 @@ object ScreenStateRecovery {
         val visual: VisualSignature,
         val gameRectKnown: Boolean,
         val gameWindowKnown: Boolean,
-        val capturedAtNanos: Long = System.nanoTime(),
+        val purpose: ScreenRecoveryCapturePurpose,
+        val evidence: ScreenRecoveryCaptureEvidence,
+        val capturedAtNanos: Long,
     )
 
     private data class OcrEvidence(
@@ -144,6 +154,7 @@ object ScreenStateRecovery {
         val resultBannerLowSaturationRatio: Double,
         val resultBannerWarmRatio: Double = 0.0,
         val centeredModalPanelVisual: Boolean = false,
+        val reconnectDialogVisual: Boolean = false,
         val matchmakingSearchVisual: Boolean = false,
     ) {
         override fun toString(): String =
@@ -155,6 +166,7 @@ object ScreenStateRecovery {
                 "resultBannerLowSaturation=${"%.3f".format(Locale.ROOT, resultBannerLowSaturationRatio)} " +
                 "resultBannerWarm=${"%.3f".format(Locale.ROOT, resultBannerWarmRatio)} " +
                 "centeredModalPanel=$centeredModalPanelVisual " +
+                "reconnectDialogVisual=$reconnectDialogVisual " +
                 "matchmakingSearchVisual=$matchmakingSearchVisual"
     }
 
@@ -163,6 +175,7 @@ object ScreenStateRecovery {
         val lowSaturationRatio: Double,
         val darkRatio: Double,
         val warmRatio: Double,
+        val blueRatio: Double = 0.0,
     )
 
     private data class Detection(
@@ -213,7 +226,7 @@ object ScreenStateRecovery {
     }
 
     /** Read-only, fresh screenshot observation for the Beta no-progress guard. */
-    internal fun observeFreshScreenForWatchdog(): FreshScreenObservation? {
+    internal fun observeFreshScreenForWatchdog(stuckForMs: Long = 0L): FreshScreenObservation? {
         val recoveryToken = ScreenRecoveryRuntime.tokenOrNull() ?: return null
         val initialPid = GameUtil.findGameProcessIdForDiagnostics() ?: return null
         val gameWindow = resolveLiveGameWindow() ?: return null
@@ -225,7 +238,16 @@ object ScreenStateRecovery {
             ) {
                 null
             } else {
-                captureScreen(currentWindow, purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_SEARCH)
+                val currentSessionReady = currentSessionModelReady()
+                val purpose = if (
+                    !currentSessionReady &&
+                    stuckForMs >= ScreenRecoveryCapturePurposePolicy.IDLE_CLIENT_PROBE_AFTER_MS
+                ) {
+                    ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE
+                } else {
+                    stateRecoveryCapturePurpose(stuckForMs)
+                }
+                captureScreen(currentWindow, purpose = purpose, staleForMs = stuckForMs)
             }
         }
         if (!ScreenRecoveryRuntime.isCurrent(recoveryToken) || !captureResult.foregroundConfirmed) return null
@@ -233,23 +255,74 @@ object ScreenStateRecovery {
         if (GameUtil.findGameProcessIdForDiagnostics() != initialPid ||
             !GameUtil.isVerifiedCurrentGameWindow(gameWindow)
         ) return null
-        val detection = detect(runOCR(capture), capture.visual)
-            ?.takeIf { it.confidence >= 85 }
-            ?: return null
+        val ocrEvidence = runOCR(capture)
+        val detection = detect(ocrEvidence, capture.visual)?.takeIf { it.confidence >= 85 }
+        val currentSessionReady = capture.evidence.currentSessionReady
+        val queueVisible = capture.visual.matchmakingSearchVisual || looksLikeMatchmakingText(ocrEvidence.text)
+        val queueLifecycleActive = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+            LifecycleTrace.hasRecentMatchmakingInputIntent()
+        val noActiveMatchmakingEvidence = !queueVisible && !queueLifecycleActive
         val observation = FreshScreenObservation(
-            screen = detection.kind.code,
-            confidence = detection.confidence,
+            screen = detection?.kind?.code ?: "UNKNOWN",
+            confidence = detection?.confidence ?: 0,
             pid = initialPid,
             hwnd = gameWindow.toString(),
             screenshot = capture.file?.absolutePath,
+            perceptualFingerprint = perceptualFingerprint(capture.image),
+            currentSessionReady = currentSessionReady,
+            noActiveMatchmakingEvidence = noActiveMatchmakingEvidence,
         )
         log.info {
             "SCREEN_RECOVERY_FRESH_OBSERVATION detected=${observation.screen} " +
                 "confidence=${observation.confidence} pid=${observation.pid} hwnd=${observation.hwnd} " +
+                "perceptualFingerprint=${java.lang.Long.toUnsignedString(observation.perceptualFingerprint, 16)} " +
+                "currentSessionReady=${observation.currentSessionReady} " +
+                "noActiveMatchmakingEvidence=${observation.noActiveMatchmakingEvidence} " +
                 "screenshot=${observation.screenshot ?: "not-saved"}"
         }
         return observation
     }
+
+    private fun perceptualFingerprint(image: BufferedImage): Long {
+        var fingerprint = 0L
+        var bit = 0
+        for (row in 0 until 8) {
+            val y = ((row + 0.5) * image.height / 8.0).toInt().coerceIn(0, image.height - 1)
+            for (column in 0 until 8) {
+                val leftX = ((column + 0.5) * image.width / 9.0).toInt().coerceIn(0, image.width - 1)
+                val rightX = ((column + 1.5) * image.width / 9.0).toInt().coerceIn(0, image.width - 1)
+                val left = image.getRGB(leftX, y)
+                val right = image.getRGB(rightX, y)
+                val leftLuma = 299 * (left shr 16 and 0xff) + 587 * (left shr 8 and 0xff) + 114 * (left and 0xff)
+                val rightLuma = 299 * (right shr 16 and 0xff) + 587 * (right shr 8 and 0xff) + 114 * (right and 0xff)
+                if (leftLuma > rightLuma) fingerprint = fingerprint or (1L shl bit)
+                bit++
+            }
+        }
+        return fingerprint
+    }
+
+    /** Read-only process/log boundary used to distinguish an explicit rearm from a healthy heartbeat. */
+    internal fun isCurrentGameSessionReadyForStart(): Boolean = currentSessionModelReady()
+
+    /** Re-observe the same verified client after the single authorized HUB entry click. */
+    fun scheduleStartupMenuReprobeAfterModeSelection() {
+        if (!startupMenuReprobeInFlight.compareAndSet(false, true)) return
+        EXTRA_THREAD_POOL.schedule({
+            try {
+                if (!WorkTimeListener.working || PauseStatus.isPause || WarEx.inWar) return@schedule
+                inspectAndRecover(
+                    stuckForMs = 0L,
+                    stateFingerprint = "STARTUP_MODE_ENTRY_POSTCHECK",
+                    startupProbe = true,
+                )
+            } finally {
+                startupMenuReprobeInFlight.set(false)
+            }
+        }, STARTUP_MODE_ENTRY_REPROBE_DELAY_MS, TimeUnit.MILLISECONDS)
+    }
+
+    private const val STARTUP_MODE_ENTRY_REPROBE_DELAY_MS = 800L
 
     /** Optional Beta-specific recovery pipeline; never used for baseline OFF behavior. */
     internal fun inspectBetaAndRecover(
@@ -260,14 +333,16 @@ object ScreenStateRecovery {
     ): InspectionResult {
         val recoveryToken = ScreenRecoveryRuntime.tokenOrNull()
             ?: return InspectionResult.DISABLED
+        val sessionReadyBeforeCapture = currentSessionModelReady()
         if ((!WorkTimeListener.working && !PauseStatus.isAutomaticPause) ||
             !PauseStatus.canRunAutomaticRecovery() ||
-            WarEx.inWar
+            (WarEx.inWar && sessionReadyBeforeCapture)
         ) {
             log.info {
                 "SCREEN_RECOVERY_SKIPPED reason=unsafe " +
                     "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} " +
-                    "automaticPause=${PauseStatus.isAutomaticPause} inWar=${WarEx.inWar}"
+                    "automaticPause=${PauseStatus.isAutomaticPause} inWar=${WarEx.inWar} " +
+                    "currentSessionReady=$sessionReadyBeforeCapture"
             }
             return InspectionResult.NO_ACTION
         }
@@ -294,10 +369,21 @@ object ScreenStateRecovery {
                 // replacing the startup coordinate sentinel. Resolve it
                 // again inside the foreground lease so capture and focus use
                 // the same live window.
-                captureScreen(ScriptStatus.gameHWND ?: gameWindow)
+                captureScreen(
+                    ScriptStatus.gameHWND ?: gameWindow,
+                    purpose = stateRecoveryCapturePurpose(stuckForMs, startupProbe),
+                    staleForMs = stuckForMs,
+                )
             }
         } else {
-            MouseUtil.RecoveryForegroundResult(true, captureScreen(gameWindow))
+            MouseUtil.RecoveryForegroundResult(
+                true,
+                captureScreen(
+                    gameWindow,
+                    purpose = stateRecoveryCapturePurpose(stuckForMs, startupProbe),
+                    staleForMs = stuckForMs,
+                ),
+            )
         }
         if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return InspectionResult.DISABLED
         val powerLog = PowerLogListener.logFile
@@ -339,6 +425,20 @@ object ScreenStateRecovery {
             return InspectionResult.NO_ACTION
         }
         val detection = detect(ocrEvidence, capture.visual)
+        if (detection?.kind in setOf(
+                ScreenKind.RECONNECT,
+                ScreenKind.RECONNECT_FAILURE,
+                ScreenKind.RECONNECT_SPINNER,
+                ScreenKind.SERVER_UNAVAILABLE,
+                ScreenKind.LOGIN,
+                ScreenKind.LOADING,
+            )
+        ) {
+            StartupInputReadiness.invalidate(
+                capture.evidence.target?.processId,
+                ScriptStatus.gameHWND?.toString(),
+            )
+        }
         if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return InspectionResult.DISABLED
         log.info {
             "SCREEN_RECOVERY_OBSERVATION " +
@@ -418,8 +518,61 @@ object ScreenStateRecovery {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-before-apply state=$stateFingerprint" }
             return InspectionResult.NO_ACTION
         }
+        if (capture.purpose == ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE) {
+            val captureTarget = capture.evidence.target
+            val currentHwnd = ScriptStatus.gameHWND?.toString().orEmpty()
+            val cleanOnlineMenu = captureTarget != null && currentHwnd.isNotBlank() && !WarEx.inWar &&
+                !capture.visual.centeredModalPanelVisual &&
+                ScreenRecoveryCapturePurposePolicy.allowsStartupOnlineMenu(detection.kind.code)
+            if (cleanOnlineMenu) {
+                StartupInputReadiness.recordOnlineMenu(
+                    pid = captureTarget!!.processId,
+                    hwnd = currentHwnd,
+                    screen = detection.kind.code,
+                    modalVisible = false,
+                )
+                log.warn {
+                    "STARTUP_INPUT_READINESS_CONFIRMED screen=${detection.kind.code} " +
+                        "pid=${captureTarget.processId} hwnd=$currentHwnd " +
+                        "evidence=${detection.evidence} action=ALLOW_MODE_STRATEGIES"
+                }
+            } else {
+                StartupInputReadiness.invalidate(captureTarget?.processId, currentHwnd)
+            }
+            val startupRecoveryScreen = cleanOnlineMenu || detection.kind in setOf(
+                ScreenKind.RECONNECT,
+                ScreenKind.RECONNECT_FAILURE,
+                ScreenKind.RECONNECT_SPINNER,
+                ScreenKind.SERVER_UNAVAILABLE,
+            )
+            if (!startupRecoveryScreen) {
+                log.warn {
+                    "SCREEN_RECOVERY_STARTUP_CLASSIFICATION_ONLY screen=${detection.kind.code} " +
+                        "modalVisible=${capture.visual.centeredModalPanelVisual} inWar=${WarEx.inWar} " +
+                        "action=NO_INPUT_NO_READINESS"
+                }
+                return InspectionResult.NO_ACTION
+            }
+        } else if (capture.purpose == ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE &&
+            !ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery(detection.kind.code)
+        ) {
+            log.warn {
+                "SCREEN_RECOVERY_STALE_PROBE_CLASSIFICATION_ONLY screen=${detection.kind.code} " +
+                "action=NO_INPUT reason=pre-session-classification-only"
+            }
+            return InspectionResult.NO_ACTION
+        }
+        if (capture.purpose == ScreenRecoveryCapturePurpose.STARTUP_YOGG_PROBE &&
+            detection.kind != ScreenKind.SERVER_UNAVAILABLE
+        ) {
+            log.warn {
+                "SCREEN_RECOVERY_STARTUP_YOGG_CLASSIFICATION_ONLY screen=${detection.kind.code} " +
+                    "action=NO_INPUT reason=purpose-allows-server-unavailable-only"
+            }
+            return InspectionResult.NO_ACTION
+        }
         val sourcePid = GameUtil.findGameProcessIdForDiagnostics()
-        if (!apply(detection, recoveryToken)) return InspectionResult.NO_ACTION
+        if (!apply(detection, recoveryToken, sessionReadyBeforeCapture)) return InspectionResult.NO_ACTION
         val verified = confirmRecoveryTransition(detection, recoveryToken, sourcePid)
         log.info {
             "SCREEN_RECOVERY_POSTCHECK screen=${detection.kind.code} " +
@@ -608,8 +761,9 @@ object ScreenStateRecovery {
     private fun captureScreen(
         hwnd: WinDef.HWND?,
         purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+        staleForMs: Long = 0L,
     ): Capture? {
-        val authorizedFrame = ScreenRecoveryWindowCapture.capture(hwnd, purpose) ?: return null
+        val authorizedFrame = ScreenRecoveryWindowCapture.capture(hwnd, purpose, staleForMs) ?: return null
         val image = authorizedFrame.image
         val bounds = authorizedFrame.bounds
         val saved = DebugScreenshotRing.save(image, "screen-recovery", "stale-screen")
@@ -621,11 +775,123 @@ object ScreenStateRecovery {
             visualSignature(image),
             gameRectKnown = true,
             gameWindowKnown = true,
+            purpose = purpose,
+            evidence = authorizedFrame.evidence,
+            capturedAtNanos = System.nanoTime(),
         )
     }
 
-    private fun runOCR(capture: Capture): OcrEvidence {
-        val tessData = File(TESS_DATA_PATH)
+    private fun stateRecoveryCapturePurpose(
+        stuckForMs: Long,
+        startupProbe: Boolean = false,
+    ): ScreenRecoveryCapturePurpose {
+        val warModelAuthoritative = currentSessionModelReady()
+        return ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
+            tournamentMode = Mode.currMode === ModeEnum.TOURNAMENT,
+            // Mode/WAR can remain stale after the current Power.log is lost or
+            // empty. Such data may fence input only after a fresh session is
+            // ready; the pre-session path is capture-only until classified.
+            nonGameplayScreen = true,
+            activeGame = WarEx.inWar,
+            mulligan = warModelAuthoritative && WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+            terminal = warModelAuthoritative && GameUtil.isTerminalGameState(),
+            recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
+            stuckForMs = stuckForMs,
+            warModelAuthoritative = warModelAuthoritative,
+            startupProbe = startupProbe,
+            noActiveQueueEvidence = !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+                !LifecycleTrace.hasRecentMatchmakingInputIntent(),
+        )
+    }
+
+    private fun currentSessionModelReady(): Boolean {
+        val gameWindow = resolveLiveGameWindow() ?: return false
+        val attachedPowerLog = PowerLogListener.logFile
+        val currentPowerLog = GameUtil.getLatestLogDir()?.resolve(GAME_WAR_LOG_NAME)
+        return CurrentGameScreenReadinessPolicy.isReady(
+            gameWindowVerified = GameUtil.isVerifiedCurrentGameWindow(gameWindow),
+            attachedPowerLogPath = attachedPowerLog?.path(),
+            currentSessionPowerLogPath = currentPowerLog?.absolutePath,
+            powerLogLength = attachedPowerLog?.length() ?: 0L,
+        )
+    }
+
+    /** Re-capture a pre-session reconnect prompt immediately before granting its single button click. */
+    private fun confirmFreshReconnectPrompt(
+        recoveryToken: Long,
+        expectedPid: Int,
+        expectedHwnd: com.sun.jna.platform.win32.WinDef.HWND,
+    ): Boolean {
+        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken) || WarEx.inWar ||
+            GameUtil.isTerminalGameState() || LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+            LifecycleTrace.hasRecentMatchmakingInputIntent()
+        ) return false
+        val currentHwnd = resolveLiveGameWindow() ?: return false
+        if (currentHwnd.toString() != expectedHwnd.toString() ||
+            ScriptStatus.gameHWND?.toString() != expectedHwnd.toString() ||
+            GameUtil.findGameProcessIdForDiagnostics() != expectedPid.toLong() ||
+            !GameUtil.isVerifiedCurrentGameWindow(expectedHwnd)
+        ) return false
+
+        val result = MouseUtil.withRecoveryForeground(expectedHwnd) {
+            val recheckedWindow = resolveLiveGameWindow()
+            if (recheckedWindow == null || recheckedWindow.toString() != expectedHwnd.toString() ||
+                GameUtil.findGameProcessIdForDiagnostics() != expectedPid.toLong()
+            ) {
+                null
+            } else {
+                captureScreen(expectedHwnd, purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE)
+            }
+        }
+        if (!result.foregroundConfirmed || !ScreenRecoveryRuntime.isCurrent(recoveryToken)) return false
+        val capture = result.value ?: return false
+        if (capture.evidence.target?.processId != expectedPid ||
+            !GameUtil.isVerifiedCurrentGameWindow(expectedHwnd) ||
+            GameUtil.findGameProcessIdForDiagnostics() != expectedPid.toLong()
+        ) return false
+        val detection = detect(runOCR(capture), capture.visual)
+        val freshReconnectPrompt = detection?.kind == ScreenKind.RECONNECT &&
+            detection.confidence >= 94 && detection.evidence in setOf(
+                "reconnect-dialog-roi",
+                "reconnect-disconnected-text",
+                "reconnect-dialog-structural-visual",
+            )
+        val positivelyIdentified = StartupInputAuthorizationPolicy.mayIssuePreSessionReconnectPermit(
+            screenKind = if (freshReconnectPrompt) "RECONNECT" else detection?.kind?.code.orEmpty(),
+            currentSessionReady = currentSessionModelReady(),
+            activeGame = WarEx.inWar || GameUtil.isTerminalGameState(),
+            activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                LifecycleTrace.hasRecentMatchmakingInputIntent(),
+            freshCapture = true,
+            exactWindowAndForeground = result.foregroundConfirmed &&
+                capture.evidence.target?.processId == expectedPid &&
+                GameUtil.findGameProcessIdForDiagnostics() == expectedPid.toLong() &&
+                GameUtil.isVerifiedCurrentGameWindow(expectedHwnd),
+        )
+        if (!positivelyIdentified) {
+            log.warn {
+                "SCREEN_RECOVERY_PRESESSION_RECONNECT_BLOCKED reason=fresh-modal-not-confirmed " +
+                    "screen=${detection?.kind?.code ?: "UNKNOWN"} confidence=${detection?.confidence ?: 0} " +
+                    "evidence=${detection?.evidence ?: "none"} pid=$expectedPid hwnd=$expectedHwnd " +
+                    "action=NO_INPUT"
+            }
+            return false
+        }
+        log.warn {
+            "SCREEN_RECOVERY_PRESESSION_RECONNECT_CONFIRMED screen=RECONNECT " +
+                "evidence=${detection?.evidence ?: "none"} pid=$expectedPid hwnd=$expectedHwnd " +
+                "screenshot=${capture.file?.absolutePath ?: "not-saved"}"
+        }
+        return true
+    }
+
+    private fun runOCR(capture: Capture): OcrEvidence = runOCR(capture.image, File(TESS_DATA_PATH), capture.visual)
+
+    private fun runOCR(
+        image: BufferedImage,
+        tessData: File,
+        visual: VisualSignature = visualSignature(image),
+    ): OcrEvidence {
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
         if (!chiSim.isFile) {
             log.info {
@@ -640,16 +906,26 @@ object ScreenStateRecovery {
             // screens without OCR-ing the full client. Only when neither
             // target matches do we use the smaller secondary bands below.
             val targeted = ScreenStateRoiSelector
-                .selectTargeted(capture.image.width, capture.image.height)
+                .selectTargeted(image.width, image.height)
                 .associate { roi ->
                     log.info {
                         "SCREEN_RECOVERY_OCR_ROI name=${roi.name} " +
                             "x=${roi.bounds.x} y=${roi.bounds.y} " +
                             "w=${roi.bounds.width} h=${roi.bounds.height} space=capture-local"
                     }
-                    roi.name to ocrScreenRoi(crop(capture.image, roi.bounds), tessData, targeted = true)
+                    val language = if (roi.name == ScreenStateRoiSelector.YOGG_SERVER_UNAVAILABLE_ROI) {
+                        "eng"
+                    } else {
+                        CHI_SIM_DATA
+                    }
+                    roi.name to ocrScreenRoi(
+                        crop(image, roi.bounds),
+                        tessData,
+                        targeted = true,
+                        language = language,
+                    )
                 }
-            if (targetedScreenDetection(targeted, capture.visual) != null) {
+            if (targetedScreenDetection(targeted, visual) != null) {
                 return@runCatching OcrEvidence(targeted.values.joinToString(separator = ""), targeted)
             }
 
@@ -658,14 +934,14 @@ object ScreenStateRecovery {
             // dedicated anchor while keeping the recovery path bounded and
             // excluding the script window on the right.
             val secondary = ScreenStateRoiSelector
-                .selectSecondary(capture.image.width, capture.image.height)
+                .selectSecondary(image.width, image.height)
                 .associate { roi ->
                     log.info {
                         "SCREEN_RECOVERY_OCR_ROI name=${roi.name} " +
                             "x=${roi.bounds.x} y=${roi.bounds.y} " +
                             "w=${roi.bounds.width} h=${roi.bounds.height} space=capture-local"
                     }
-                    roi.name to ocrScreenRoi(crop(capture.image, roi.bounds), tessData, targeted = false)
+                    roi.name to ocrScreenRoi(crop(image, roi.bounds), tessData, targeted = false)
                 }
             OcrEvidence(secondary.values.joinToString(separator = ""), targeted + secondary)
         }.getOrElse { error ->
@@ -674,12 +950,17 @@ object ScreenStateRecovery {
         }
     }
 
-    private fun ocrScreenRoi(image: BufferedImage, tessData: File, targeted: Boolean): String {
+    private fun ocrScreenRoi(
+        image: BufferedImage,
+        tessData: File,
+        targeted: Boolean,
+        language: String = CHI_SIM_DATA,
+    ): String {
         val ocrImage = if (targeted) enlargeTargetedOcr(image) else resizeForOcr(image)
         return Tesseract().apply {
             setDatapath(tessData.absolutePath)
-            setLanguage(CHI_SIM_DATA)
-            setPageSegMode(if (targeted) 7 else 11)
+            setLanguage(language)
+            setPageSegMode(if (targeted && language == "eng") 6 else if (targeted) 7 else 11)
             setVariable("user_defined_dpi", "180")
         }.doOCR(ocrImage).replace(Regex("\\s+"), "")
     }
@@ -778,6 +1059,7 @@ object ScreenStateRecovery {
                 darkRatio = reconnectDialogPanelSignal.darkRatio,
                 warmRatio = reconnectDialogPanelSignal.warmRatio,
             ),
+            reconnectDialogVisual = looksLikeReconnectDialogVisual(image),
             matchmakingSearchVisual = MatchmakingSearchVisualPolicy.isVisible(image),
         )
     }
@@ -798,6 +1080,7 @@ object ScreenStateRecovery {
         var lowSaturation = 0
         var dark = 0
         var warm = 0
+        var blue = 0
         var y = y0
         while (y < y1) {
             var x = x0
@@ -813,6 +1096,7 @@ object ScreenStateRecovery {
                 if (maximum - minimum <= 35 && average >= 180) grayLight++
                 if (average < 70) dark++
                 if (r > 70 && r > g * 1.12 && r > b * 1.12) warm++
+                if (b > 80 && b > r * 1.18 && b > g * 1.05) blue++
                 samples++
                 x += 2
             }
@@ -823,6 +1107,7 @@ object ScreenStateRecovery {
             grayLightRatio = grayLight.toDouble() / samples,
             lowSaturationRatio = lowSaturation.toDouble() / samples,
             darkRatio = dark.toDouble() / samples,
+            blueRatio = blue.toDouble() / samples,
             warmRatio = warm.toDouble() / samples,
         )
     }
@@ -840,11 +1125,20 @@ object ScreenStateRecovery {
         // More specific screens must win before generic home/login words.
         // A reconnect/error dialog can leave the deck-selection title visible
         // behind it. The dialog must therefore win before DECK_SELECTION.
+        if (looksLikeServerUnavailableText(text) &&
+            !visual.matchmakingSearchVisual &&
+            !looksLikeMatchmakingText(text)
+        ) {
+            return Detection(ScreenKind.SERVER_UNAVAILABLE, ModeEnum.STARTUP, 100, "server-unavailable-text")
+        }
         if (looksLikeReconnectFailureText(text)) {
             return Detection(ScreenKind.RECONNECT_FAILURE, ModeEnum.LOGIN, 97, "reconnect-failure-text")
         }
         if (looksLikeReconnectText(text)) {
             return Detection(ScreenKind.RECONNECT, ModeEnum.LOGIN, 96, "reconnect-disconnected-text")
+        }
+        if (visual.reconnectDialogVisual) {
+            return Detection(ScreenKind.RECONNECT, ModeEnum.LOGIN, 94, "reconnect-dialog-structural-visual")
         }
         if (looksLikeReconnectSpinnerText(text)) {
             return Detection(ScreenKind.RECONNECT_SPINNER, ModeEnum.STARTUP, 96, "reconnect-spinner-text")
@@ -962,6 +1256,10 @@ object ScreenStateRecovery {
     }
 
     private fun targetedScreenDetection(targeted: Map<String, String>, visual: VisualSignature): Detection? {
+        val yoggMessage = targeted[ScreenStateRoiSelector.YOGG_SERVER_UNAVAILABLE_ROI].orEmpty()
+        if (looksLikeServerUnavailableText(yoggMessage) && !visual.matchmakingSearchVisual) {
+            return Detection(ScreenKind.SERVER_UNAVAILABLE, ModeEnum.STARTUP, 100, "yogg-message-roi-eng")
+        }
         val reconnectDialogText = listOf(
             targeted[ScreenStateRoiSelector.RECONNECT_DIALOG_TITLE_ROI].orEmpty(),
             targeted[ScreenStateRoiSelector.RECONNECT_DIALOG_STATUS_ROI].orEmpty(),
@@ -972,6 +1270,9 @@ object ScreenStateRecovery {
         }
         if (looksLikeReconnectDialogRoiText(reconnectDialogText)) {
             return Detection(ScreenKind.RECONNECT, ModeEnum.LOGIN, 100, "reconnect-dialog-roi")
+        }
+        if (visual.reconnectDialogVisual) {
+            return Detection(ScreenKind.RECONNECT, ModeEnum.LOGIN, 94, "reconnect-dialog-structural-visual")
         }
 
         // A label is only authoritative when it came from its own ROI. This
@@ -1056,6 +1357,33 @@ object ScreenStateRecovery {
         darkRatio: Double,
         warmRatio: Double,
     ): Boolean = lowSaturationRatio >= 0.82 && darkRatio >= 0.74 && warmRatio <= 0.10
+
+    /** OCR-independent structural signature for the fixed offline reconnect dialog. */
+    internal fun looksLikeReconnectDialogVisual(image: BufferedImage): Boolean {
+        val panel = sampleRegion(image, 0.32, 0.68, 0.39, 0.62)
+        val header = sampleRegion(image, 0.37, 0.63, 0.19, 0.28)
+        val emblem = sampleRegion(image, 0.43, 0.57, 0.30, 0.51)
+        val leftButton = sampleRegion(image, 0.34, 0.50, 0.70, 0.81)
+        val rightButton = sampleRegion(image, 0.50, 0.67, 0.70, 0.81)
+        return looksLikeCenteredModalPanelVisual(panel.lowSaturationRatio, panel.darkRatio, panel.warmRatio) &&
+            header.lowSaturationRatio >= 0.78 && header.darkRatio >= 0.55 &&
+            emblem.warmRatio >= 0.18 && leftButton.warmRatio >= 0.36 && rightButton.warmRatio >= 0.36
+    }
+
+    /** OCR-independent signature for the centered Amazon Appstore sunset notice. */
+    internal fun looksLikeAmazonAppstoreSunsetNoticeVisual(image: BufferedImage): Boolean {
+        if (image.width < 800 || image.height < 450) return false
+        val card = sampleRegion(image, 0.29, 0.71, 0.20, 0.79)
+        val emblem = sampleRegion(image, 0.32, 0.44, 0.37, 0.57)
+        val closeButton = sampleRegion(image, 0.47, 0.55, 0.69, 0.77)
+        val moreButton = sampleRegion(image, 0.59, 0.72, 0.57, 0.69)
+        return card.warmRatio >= 0.12 &&
+            emblem.blueRatio >= 0.08 &&
+            emblem.warmRatio >= 0.55 &&
+            closeButton.warmRatio >= 0.12 &&
+            moreButton.warmRatio >= 0.60 &&
+            !looksLikeReconnectDialogVisual(image)
+    }
 
     private fun normalizedScreenText(ocrText: String): String =
         ocrText.lowercase(Locale.ROOT).replace(Regex("[\\s，。、“”‘’：:！!？?]"), "")
@@ -1155,6 +1483,23 @@ object ScreenStateRecovery {
             text.contains("cannotlogintoblizzardbattle.netservice")
     }
 
+    internal fun looksLikeServerUnavailableText(ocrText: String): Boolean {
+        // The English game font is decorative, and the deployed incident OCR
+        // substituted two glyphs (`Yog¢` / `checR`). Keep this tolerant check
+        // scoped to the dedicated outage phrase: all semantic anchors must be
+        // present in the same bounded text ROI.
+        val text = ocrText.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]"), "")
+        return text.contains("yog") && text.contains("devoured") && text.contains("server") &&
+            text.contains("again") && text.contains("please") && text.contains("chec") &&
+            text.contains("backlater")
+    }
+
+    internal fun classifyCapturedImageForTest(image: BufferedImage, tessData: File): String? =
+        detect(runOCR(image, tessData), visualSignature(image))?.kind?.code
+
+    internal fun hasCenteredModalPanel(image: BufferedImage): Boolean =
+        visualSignature(image).centeredModalPanelVisual
+
     internal fun looksLikeLoadingText(ocrText: String): Boolean {
         val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
         return text.contains("正在加载") ||
@@ -1187,11 +1532,11 @@ object ScreenStateRecovery {
 
     private fun shouldRestartStalledReconnect(reconnectStartedAt: Long, now: Long): Boolean =
         reconnectStartedAt > 0L && now >= reconnectStartedAt &&
-            now - reconnectStartedAt >= STALLED_RECONNECT_LOADING_RESTART_MS
+            now - reconnectStartedAt >= STALLED_RECONNECT_RESTART_MS
 
     private fun shouldRestartStalledLoading(loadingStartedAt: Long, now: Long): Boolean =
         loadingStartedAt > 0L && now >= loadingStartedAt &&
-            now - loadingStartedAt >= STALLED_RECONNECT_LOADING_RESTART_MS
+            now - loadingStartedAt >= STALLED_LOADING_RESTART_MS
 
     private fun stalledReconnectAnchor(
         acceptedReconnectAt: Long,
@@ -1317,6 +1662,7 @@ object ScreenStateRecovery {
                 detection.kind != ScreenKind.RECONNECT &&
                 detection.kind != ScreenKind.RECONNECT_FAILURE &&
                 detection.kind != ScreenKind.RECONNECT_SPINNER &&
+                detection.kind != ScreenKind.SERVER_UNAVAILABLE &&
                 detection.kind != ScreenKind.RANK_PROGRESS_CONTINUATION &&
                 detection.kind != ScreenKind.LOADING,
             action = when (detection.kind) {
@@ -1336,6 +1682,7 @@ object ScreenStateRecovery {
                 ScreenKind.RECONNECT -> "CLICK_RECONNECT"
                 ScreenKind.RECONNECT_FAILURE -> "RESTART_CLIENT"
                 ScreenKind.RECONNECT_SPINNER -> "WAIT_OR_CANCEL_RECONNECT"
+                ScreenKind.SERVER_UNAVAILABLE -> "CLASSIFY_NON_GAME_NO_INPUT_NO_RESTART"
                 ScreenKind.LOADING -> "WAIT_FOR_CLIENT"
             },
         )
@@ -1355,6 +1702,7 @@ object ScreenStateRecovery {
             enterStrategy = detection.kind != ScreenKind.DECK_SELECTION &&
                 detection.kind != ScreenKind.HOME_TASK_OVERLAY &&
                 detection.kind != ScreenKind.RECONNECT_FAILURE &&
+                detection.kind != ScreenKind.SERVER_UNAVAILABLE &&
                 detection.kind != ScreenKind.RANK_PROGRESS_CONTINUATION,
             action = when (detection.kind) {
                 ScreenKind.HOME_TASK_OVERLAY -> "DISMISS_HOME_TASK_OVERLAY"
@@ -1406,6 +1754,9 @@ object ScreenStateRecovery {
             "centerDark=${visual.loadingCentralDarkRatio} modal=${visual.centeredModalPanelVisual}"
     }
 
+    internal fun continueControlVisibleForFixture(image: BufferedImage): Boolean =
+        ResultPageEvidencePolicy.continueControlVisible(visualSignature(image).resultContinueGrayLightRatio)
+
     /**
      * Re-check the actual desktop after a result-page input was sent.
      *
@@ -1425,12 +1776,26 @@ object ScreenStateRecovery {
             if (!ScreenRecoveryRuntime.isCurrent(token)) {
                 return@runCatching ResultScreenObservation(null, captureAuthorized = false)
             }
-            val fast = ResultPageEvidencePolicy.fastVisualObservation(capture.visual.resultContinueGrayLightRatio,
-                capture.visual.resultBannerLowSaturationRatio, capture.visual.loadingCentralDarkRatio,
-                capture.visual.resultBannerWarmRatio)
-            if (fast != null) return@runCatching ResultScreenObservation(fast.resultVisible, true,
-                fast.resultVisible == true && !fast.rankProgressVisible, fast.rankProgressVisible,
-                continueControlVisible = true, capturedAtNanos = capture.capturedAtNanos)
+            val fastVisual = ResultPageEvidencePolicy.fastVisualObservation(
+                capture.visual.resultContinueGrayLightRatio,
+                capture.visual.resultBannerLowSaturationRatio,
+                capture.visual.loadingCentralDarkRatio,
+                capture.visual.resultBannerWarmRatio,
+            )
+            if (fastVisual != null) {
+                log.info {
+                    "SCREEN_RECOVERY_RESULT_FAST_VISUAL result=${fastVisual.resultVisible ?: "UNKNOWN"} " +
+                        "rankProgress=${fastVisual.rankProgressVisible} continueBand=true ocr=skipped"
+                }
+                return@runCatching ResultScreenObservation(
+                    resultVisible = fastVisual.resultVisible,
+                    captureAuthorized = true,
+                    visualOnlyResultEvidence = fastVisual.resultVisible == true && !fastVisual.rankProgressVisible,
+                    rankProgressVisible = fastVisual.rankProgressVisible,
+                    continueControlVisible = fastVisual.continueControlVisible,
+                    capturedAtNanos = capture.capturedAtNanos,
+                )
+            }
             val detection = detect(runOCR(capture), capture.visual)
             if (!ScreenRecoveryRuntime.isCurrent(token)) {
                 return@runCatching ResultScreenObservation(null, captureAuthorized = false)
@@ -1440,7 +1805,9 @@ object ScreenStateRecovery {
                 captureAuthorized = true,
                 visualOnlyResultEvidence = detection?.evidence == "result-fixed-continue-visual",
                 rankProgressVisible = detection?.kind == ScreenKind.RANK_PROGRESS_CONTINUATION,
-                continueControlVisible = ResultPageEvidencePolicy.continueControlVisible(capture.visual.resultContinueGrayLightRatio),
+                continueControlVisible = ResultPageEvidencePolicy.continueControlVisible(
+                    capture.visual.resultContinueGrayLightRatio,
+                ),
                 destinationScreen = detection?.kind?.code?.takeIf { it in POST_RESULT_DESTINATIONS.map(ScreenKind::code) },
                 destinationConfidence = detection?.confidence ?: 0,
                 capturedAtNanos = capture.capturedAtNanos,
@@ -1534,11 +1901,9 @@ object ScreenStateRecovery {
     }
 
     private fun shouldAttemptReconnect(now: Long): Boolean {
-        while (true) {
-            val previous = reconnectAttemptAt.get()
-            if (previous > 0L && now - previous < RECONNECT_RETRY_INTERVAL_MS) return false
-            if (reconnectAttemptAt.compareAndSet(previous, now)) return true
-        }
+        // Exact RECONNECT classification grants only a bounded observation
+        // grace followed by client restart. Never dispatch dialog input.
+        return false
     }
 
     /**
@@ -1621,19 +1986,24 @@ object ScreenStateRecovery {
                 return@schedule
             }
             if (probeAttempts >= STARTUP_QUEST_OVERLAY_MAX_PROBES) {
-                PauseStatus.setAutomaticPause(true)
                 log.error {
-                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_PAUSED reason=probe-limit " +
-                        "probes=$probeAttempts dispatches=$dismissDispatches action=NO_INPUT"
+                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_ALERT reason=probe-limit " +
+                        "probes=$probeAttempts dispatches=$dismissDispatches action=NO_INPUT_NO_AUTO_PAUSE"
                 }
+                SystemUtil.notice(
+                    "The Hearthstone overlay could not be verified after bounded checks. No input was sent and automation was not paused; inspect the client.",
+                )
                 return@schedule
             }
 
             val sourcePid = GameUtil.findGameProcessIdForDiagnostics()
             val hwnd = resolveLiveGameWindow()
             if (sourcePid == null || hwnd == null) {
-                PauseStatus.setAutomaticPause(true)
-                log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=game-window-unavailable action=PAUSE" }
+                log.warn {
+                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=game-window-unavailable " +
+                        "action=NO_INPUT_NO_AUTO_PAUSE"
+                }
+                SystemUtil.notice("Hearthstone's window is unavailable during recovery. Inspect the client and click Start to retry.")
                 return@schedule
             }
             val frameResult = MouseUtil.withRecoveryForeground(hwnd) {
@@ -1650,12 +2020,12 @@ object ScreenStateRecovery {
                 GameUtil.findGameProcessIdForDiagnostics() == sourcePid &&
                 GameUtil.isVerifiedCurrentGameWindow(hwnd)
             if (!captureTrusted) {
-                PauseStatus.setAutomaticPause(true)
                 log.warn {
                     "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=trusted-capture-unavailable " +
                         "foregroundConfirmed=${frameResult.foregroundConfirmed} capture=${capture != null} " +
-                        "probe=${probeAttempts + 1} action=PAUSE"
+                        "probe=${probeAttempts + 1} action=NO_INPUT_NO_AUTO_PAUSE"
                 }
+                SystemUtil.notice("The game window could not be verified for overlay recovery. No input was sent; inspect Hearthstone and click Start to retry.")
                 return@schedule
             }
 
@@ -1708,26 +2078,38 @@ object ScreenStateRecovery {
                     scheduleHomeTaskOverlayRecovery(recoveryToken, dismissDispatches, probeAttempts + 1, 900L)
                 }
                 StartupQuestOverlayPolicy.Action.BLOCK_UNTRUSTED -> {
-                    PauseStatus.setAutomaticPause(true)
-                    log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=provenance-changed action=PAUSE" }
+                    log.warn {
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=provenance-changed " +
+                            "action=NO_INPUT_NO_AUTO_PAUSE"
+                    }
+                    SystemUtil.notice("The game window changed during overlay recovery. No further input was sent; click Start to retry.")
                 }
                 StartupQuestOverlayPolicy.Action.EXHAUSTED -> {
-                    PauseStatus.setAutomaticPause(true)
                     log.error {
                         "SCREEN_RECOVERY_HOME_TASK_OVERLAY_EXHAUSTED dismissDispatches=$dismissDispatches " +
-                            "state=HUB strategyStarted=false action=PAUSE"
+                            "state=HUB strategyStarted=false action=NO_AUTO_PAUSE"
                     }
+                    SystemUtil.notice("The overlay remains unresolved after bounded recovery. Inspect Hearthstone and click Start to retry.")
                 }
             }
         }, delayMs, TimeUnit.MILLISECONDS)
         ScreenRecoveryRuntime.track(recoveryToken, task)
     }
 
-    private fun apply(detection: Detection, recoveryToken: Long): Boolean {
+    private fun apply(
+        detection: Detection,
+        recoveryToken: Long,
+        currentSessionReady: Boolean,
+    ): Boolean {
         if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return false
         // A strongly identified cannot-reconnect modal is authoritative over a
         // stale in-game flag: that match can no longer be resumed in-place.
-        if (WarEx.inWar && detection.kind != ScreenKind.RECONNECT_FAILURE) {
+        if (WarEx.inWar && currentSessionReady && detection.kind !in setOf(
+                ScreenKind.RECONNECT,
+                ScreenKind.RECONNECT_SPINNER,
+                ScreenKind.RECONNECT_FAILURE,
+            )
+        ) {
             log.warn { "SCREEN_RECOVERY_SKIPPED reason=war-started detected=${detection.kind.code}" }
             return false
         }
@@ -1780,6 +2162,26 @@ object ScreenStateRecovery {
                     return false
                 }
                 val guard = club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+                if (!guard.isPending() && guard.isTerminalCleanupPending()) {
+                    if (!guard.confirmAtFreshDeckSelection(
+                            screenKind = detection.kind.code,
+                            confidence = detection.confidence,
+                            visualEvidence = detection.evidence,
+                            freshObservation = observationIsCurrent,
+                        )
+                    ) {
+                        log.warn {
+                            "SCREEN_RECOVERY_DECK_SELECTION_BLOCKED reason=terminal-cleanup-proof-or-freshness " +
+                                "confidence=${detection.confidence} evidence=${detection.evidence} dispatch=false"
+                        }
+                        return false
+                    }
+                    log.info {
+                        "TERMINAL_CLEANUP_FENCE_RELEASED evidence=fresh-authorized-DECK_SELECTION " +
+                            "confidence=${detection.confidence} visualEvidence=${detection.evidence} " +
+                            "rankPreflightRequired=true"
+                    }
+                }
                 val surrenderCompletion =
                     club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderDeckSelectionRecovery
                         .completeIfRequired(
@@ -1813,6 +2215,20 @@ object ScreenStateRecovery {
                             "terminalCleanupAuthorized=true confidence=${detection.confidence} " +
                             "visualEvidence=${detection.evidence} requeueAllowed=true rankPreflightRequired=true"
                     }
+                }
+                if (!guard.confirmAtFreshDeckSelection(
+                        screenKind = detection.kind.code,
+                        confidence = detection.confidence,
+                        visualEvidence = detection.evidence,
+                        freshObservation = observationIsCurrent,
+                    )
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_DECK_SELECTION_BLOCKED reason=terminal-cleanup-proof-or-freshness " +
+                            "confidence=${detection.confidence} evidence=${detection.evidence} " +
+                            "dispatch=false"
+                    }
+                    return false
                 }
                 if (DeckStrategyManager.currentDeckStrategy == null ||
                     DeckStrategyManager.currentRunMode == null
@@ -1924,6 +2340,23 @@ object ScreenStateRecovery {
             }
 
             ScreenKind.RECONNECT -> {
+                val activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                    LifecycleTrace.hasRecentMatchmakingInputIntent()
+                val terminalState = GameUtil.isTerminalGameState() ||
+                    club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+                        .isTerminalCleanupPending()
+                if (!ReconnectRestartSafetyPolicy.mayRestart(
+                        exactReconnectVisible = true,
+                        activeMatchmaking = activeMatchmaking,
+                        terminalState = terminalState,
+                    )
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_RECONNECT_DEFERRED reason=${if (terminalState) "terminal" else "active-matchmaking"} " +
+                            "action=NO_INPUT_NO_RESTART"
+                    }
+                    return false
+                }
                 Mode.recover(ModeEnum.LOGIN, "visible-reconnect-screen", enterStrategy = false)
                 val now = System.currentTimeMillis()
                 val reconnectDecision = offlineReconnectRecovery.observe(
@@ -1943,14 +2376,14 @@ object ScreenStateRecovery {
                     log.warn {
                         "SCREEN_RECOVERY_ACTION_REQUESTED screen=RECONNECT action=RESTART_CLIENT " +
                             "reason=stalled-reconnect elapsedMs=${now - acceptedReconnectAt} " +
-                            "thresholdMs=$STALLED_RECONNECT_LOADING_RESTART_MS"
+                            "thresholdMs=$STALLED_RECONNECT_RESTART_MS"
                     }
                     // Some client builds leave the original disconnect dialog
                     // visible after consuming the reconnect click.  Do not
                     // wait for the optional slow-loading warning: once the
                     // confirmed reconnect attempt has been stuck for the
                     // recovery threshold, restart the client directly.
-                    if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) Core.restart()
+                    if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) Core.restartFromIdleWatchdog()
                 } else if (acceptedReconnectAt <= 0L &&
                     reconnectDecision.action == OfflineReconnectRecovery.Action.FOCUS_AND_CLICK_RECONNECT &&
                     shouldAttemptReconnect(now)
@@ -1965,15 +2398,38 @@ object ScreenStateRecovery {
                             log.info { "SCREEN_RECOVERY_RECONNECT_SKIPPED reason=terminal-pause-fence" }
                         } else if ((WorkTimeListener.working || PauseStatus.isAutomaticPause) &&
                             PauseStatus.canRunAutomaticRecovery() &&
-                            !WarEx.inWar && Mode.currMode == ModeEnum.LOGIN
+                            Mode.currMode == ModeEnum.LOGIN &&
+                            (!currentSessionReady || !GameUtil.isTerminalGameState())
                         ) {
                             // This is the upstream reconnect input primitive;
                             // skip the pre-click right-click because the
                             // offline page is not a card/targeting state.
-                            ScriptStatus.gameHWND?.let(MouseUtil::focusWindowForInput)
-                            val accepted = MouseUtil.leftButtonClickForRecovery(
-                                GameUtil.RECONNECT_RECT.getCenterClickPos(),
-                            )
+                            val point = GameUtil.RECONNECT_RECT.getCenterClickPos()
+                            val liveHwnd = resolveLiveGameWindow()
+                            val livePid = GameUtil.findGameProcessIdForDiagnostics()?.toInt()
+                            val preSessionReconnect = !currentSessionModelReady()
+                            val freshOfflinePrompt = if (preSessionReconnect) {
+                                liveHwnd != null && livePid != null && !WarEx.inWar &&
+                                    !GameUtil.isTerminalGameState() &&
+                                    !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+                                    !LifecycleTrace.hasRecentMatchmakingInputIntent() &&
+                                    confirmFreshReconnectPrompt(
+                                        recoveryToken = recoveryToken,
+                                        expectedPid = livePid,
+                                        expectedHwnd = liveHwnd,
+                                    ) && StartupInputReadiness.issueReconnectPermit(
+                                        pid = livePid,
+                                        hwnd = liveHwnd.toString(),
+                                        point = point,
+                                        now = System.currentTimeMillis(),
+                                    )
+                            } else true
+                            val accepted = if (freshOfflinePrompt) {
+                                MouseUtil.leftButtonClickForRecovery(
+                                    point,
+                                    preSessionReconnect = preSessionReconnect,
+                                )
+                            } else false
                             val result = offlineReconnectRecovery.reportReconnectDispatched(
                                 System.currentTimeMillis(),
                                 accepted,
@@ -1983,6 +2439,14 @@ object ScreenStateRecovery {
                                     "accepted=$accepted state=${result.state} action=${result.action}"
                             }
                             if (accepted) {
+                                if (preSessionReconnect && livePid != null && liveHwnd != null) {
+                                    StartupInputReadiness.consumeReconnectPermit(
+                                        livePid,
+                                        liveHwnd.toString(),
+                                        point,
+                                        System.currentTimeMillis(),
+                                    )
+                                }
                                 reconnectAcceptedAt.set(System.currentTimeMillis())
                                 scheduleReconnectSpinnerProbe(recoveryToken)
                                 if (PauseStatus.resumeAutomaticPause("reconnect-click-accepted")) {
@@ -1995,6 +2459,14 @@ object ScreenStateRecovery {
                             log.info { "SCREEN_RECOVERY_RECONNECT_SKIPPED reason=state-changed" }
                         }
                     }, 300, TimeUnit.MILLISECONDS)
+                } else if (acceptedReconnectAt <= 0L &&
+                    reconnectDecision.action == OfflineReconnectRecovery.Action.ESCALATE
+                ) {
+                    log.error {
+                        "SCREEN_RECOVERY_RECONNECT_EXHAUSTED reason=${reconnectDecision.reason} " +
+                            "attempt=${reconnectDecision.attempt} action=RESTART_CLIENT_NO_PAUSE"
+                    }
+                    if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) Core.restartFromIdleWatchdog()
                 } else {
                     log.info {
                         "SCREEN_RECOVERY_RECONNECT_THROTTLED " +
@@ -2024,21 +2496,23 @@ object ScreenStateRecovery {
                                         "reason=cannot-reconnect-dialog attempt=${recovery.attempt} " +
                                         "maxAttempts=${ReconnectFailureRecoveryPolicy.DEFAULT_MAX_RESTARTS}"
                                 }
-                                if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) Core.restart()
+                                if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) Core.restartFromIdleWatchdog()
                             }
                             ReconnectFailureRecoveryPolicy.Decision.WAIT_FOR_RESTART -> log.info {
                                 "SCREEN_RECOVERY_RECONNECT_FAILURE_WAIT reason=restart-cooldown " +
                                     "attempt=${recovery.attempt} " +
                                     "cooldownMs=${ReconnectFailureRecoveryPolicy.DEFAULT_RETRY_COOLDOWN_MS}"
                             }
-                            ReconnectFailureRecoveryPolicy.Decision.PAUSE_AUTOMATION -> {
-                                PauseStatus.setAutomaticPause(true)
+                            ReconnectFailureRecoveryPolicy.Decision.ALERT_OPERATOR -> {
                                 log.error {
-                                    "SCREEN_RECOVERY_RECONNECT_FAILURE_PAUSED " +
-                                        "reason=restart-attempts-exhausted " +
-                                        "attempts=${recovery.attempt} " +
-                                        "windowMs=${ReconnectFailureRecoveryPolicy.DEFAULT_ATTEMPT_WINDOW_MS}"
+                                    "SCREEN_RECOVERY_RECONNECT_FAILURE_ALERT " +
+                                        "reason=restart-attempts-exhausted attempts=${recovery.attempt} " +
+                                        "paused=${PauseStatus.isPause} action=NO_AUTO_PAUSE"
                                 }
+                                SystemUtil.notice(
+                                    "Hearthstone could not reconnect after bounded restarts. Check the game client " +
+                                        "or click Start to retry; automation was not paused.",
+                                )
                             }
                         }
                     } else {
@@ -2048,6 +2522,24 @@ object ScreenStateRecovery {
             }
 
             ScreenKind.RECONNECT_SPINNER -> {
+                val activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                    LifecycleTrace.hasRecentMatchmakingInputIntent()
+                val terminalState = GameUtil.isTerminalGameState() ||
+                    club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+                        .isTerminalCleanupPending()
+                if (!ReconnectRestartSafetyPolicy.mayRestart(
+                        exactReconnectVisible = true,
+                        activeMatchmaking = activeMatchmaking,
+                        terminalState = terminalState,
+                    )
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_RECONNECT_DEFERRED screen=RECONNECT_SPINNER " +
+                            "reason=${if (terminalState) "terminal" else "active-matchmaking"} " +
+                            "action=NO_INPUT_NO_RESTART"
+                    }
+                    return false
+                }
                 Mode.recover(ModeEnum.STARTUP, "visible-reconnect-spinner", enterStrategy = false)
                 val now = System.currentTimeMillis()
                 val decision = offlineReconnectRecovery.observe(
@@ -2059,43 +2551,29 @@ object ScreenStateRecovery {
                         "attempt=${decision.attempt} reason=${decision.reason} result=spinner-detected"
                 }
                 when (decision.action) {
-                    OfflineReconnectRecovery.Action.FOCUS_AND_CLICK_CANCEL -> EXTRA_THREAD_POOL.schedule({
-                        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@schedule
-                        if (LifecycleTrace.recoveryCascadeSuppressed()) {
-                            log.info { "SCREEN_RECOVERY_RECONNECT_CANCEL_SKIPPED reason=terminal-pause-fence" }
-                        } else if ((WorkTimeListener.working || PauseStatus.isAutomaticPause) &&
-                            PauseStatus.canRunAutomaticRecovery() && !WarEx.inWar
-                        ) {
-                            ScriptStatus.gameHWND?.let(MouseUtil::focusWindowForInput)
-                            val accepted = MouseUtil.leftButtonClickForRecovery(
-                                GameUtil.CANCEL_CONNECT_RECT.getCenterClickPos(),
-                            )
-                            val result = offlineReconnectRecovery.reportCancelDispatched(
-                                System.currentTimeMillis(),
-                                accepted,
-                            )
-                            log.warn {
-                                "SCREEN_RECOVERY_RECONNECT_CANCEL_DISPATCHED accepted=$accepted " +
-                                    "state=${result.state} action=${result.action}"
-                            }
-                            if (accepted) scheduleReconnectSpinnerProbe(recoveryToken)
-                            if (result.action == OfflineReconnectRecovery.Action.ESCALATE) {
-                if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) PauseStatus.isPause = true
-                            }
-                        } else {
-                            log.info { "SCREEN_RECOVERY_RECONNECT_CANCEL_SKIPPED reason=state-changed" }
-                        }
-                    }, 300, TimeUnit.MILLISECONDS)
+                    OfflineReconnectRecovery.Action.WAIT_FOR_SPINNER ->
+                        scheduleReconnectSpinnerProbe(recoveryToken)
 
                     OfflineReconnectRecovery.Action.ESCALATE -> {
                         log.error {
                             "SCREEN_RECOVERY_RECONNECT_ESCALATED state=${decision.state} " +
-                                "reason=${decision.reason} result=spinner-still-visible"
+                                "reason=${decision.reason} result=spinner-still-visible " +
+                                "action=RESTART_CLIENT_NO_CANCEL_NO_PAUSE"
                         }
-                        if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) PauseStatus.isPause = true
+                        if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) {
+                            Core.restartFromIdleWatchdog()
+                        }
                     }
 
                     else -> Unit
+                }
+            }
+
+            ScreenKind.SERVER_UNAVAILABLE -> {
+                Mode.recover(ModeEnum.STARTUP, "visible-server-unavailable-page", enterStrategy = false)
+                log.warn {
+                    "SCREEN_RECOVERY_CLASSIFIED screen=SERVER_UNAVAILABLE action=NO_INPUT_NO_RESTART " +
+                        "currentSessionReady=$currentSessionReady"
                 }
             }
 
@@ -2125,19 +2603,19 @@ object ScreenStateRecovery {
                         "SCREEN_RECOVERY_ACTION_REQUESTED screen=LOADING action=RESTART_CLIENT " +
                             "reason=${if (slowReconnectStalled) "stalled-reconnect-loading" else "stale-loading"} " +
                             "elapsedMs=${now - if (slowReconnectStalled) reconnectStartedAt else loadingStartedAt} " +
-                            "thresholdMs=$STALLED_RECONNECT_LOADING_RESTART_MS"
+                            "thresholdMs=${if (slowReconnectStalled) STALLED_RECONNECT_RESTART_MS else STALLED_LOADING_RESTART_MS}"
                     }
                     // Reuse the fatal-error recovery primitive. It pauses
                     // input, launches a fresh client, then lets the starter
                     // rediscover that window. This also covers a reconnect
                     // dialog whose text OCR was missed and was classified
                     // only by the loading visual.
-                    if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) Core.restart()
+                    if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) Core.restartFromIdleWatchdog()
                 } else {
                     log.info {
                         "SCREEN_RECOVERY_ACTION_REQUESTED screen=LOADING action=WAIT_FOR_CLIENT " +
                             "loadingObservedForMs=${now - loadingStartedAt} " +
-                            "restartThresholdMs=$STALLED_RECONNECT_LOADING_RESTART_MS"
+                            "restartThresholdMs=${if (detection.evidence == "reconnect-slow-loading-text") STALLED_RECONNECT_RESTART_MS else STALLED_LOADING_RESTART_MS}"
                     }
                 }
             }

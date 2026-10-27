@@ -14,6 +14,11 @@ class MatchmakingGuardPolicyTest {
         assertEquals(true, MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = false))
         assertEquals(false, MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = true))
         assertEquals(false, MatchmakingGuardPolicy.runtimeAllowsInput(working = false, paused = false))
+        assertEquals(true, MatchmakingGuardPolicy.runtimeAllowsInput(
+            working = true,
+            paused = false,
+            mandatoryRankSurrenderPending = true,
+        ), "pre-match rank policy does not block matchmaking; current-game surrender begins after game start")
     }
 
     @Test

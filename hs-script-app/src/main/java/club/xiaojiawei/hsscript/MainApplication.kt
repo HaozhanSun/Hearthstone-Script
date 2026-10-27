@@ -626,6 +626,7 @@ class MainApplication : Application() {
                 }
                 go {
                     Thread.sleep(5000)
+                    LifecycleTrace.markGuardianStopped("unsupported-aot-native-mode")
                     exitProcess(0)
                 }
             } else if (aoting) {

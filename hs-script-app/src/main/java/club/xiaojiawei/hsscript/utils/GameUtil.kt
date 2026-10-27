@@ -31,6 +31,7 @@ import club.xiaojiawei.hsscript.status.ResultScreenObservation
 import club.xiaojiawei.hsscript.status.PostResultRankProgressPolicy
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TerminalCleanupQueueResumePolicy
+import club.xiaojiawei.hsscript.status.TerminalCleanupTaskPromotionPolicy
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderRecoveryPolicy
@@ -636,7 +637,7 @@ object GameUtil {
             return
         }
         log.info { "DECK_POSITION_SELECTION source=explicit-strategy-slot selected=$deckSlot" }
-        rect.lClick()
+        rect.lClick(isCancel = false, dispatchAction = "matchmaking.select-deck")
         SystemUtil.delayTiny()
     }
 
@@ -686,11 +687,13 @@ object GameUtil {
     fun leftButtonClick(
         point: Point,
         recoveryCapability: MandatoryRankSurrenderGuard.RecoveryCapability? = null,
+        dispatchAction: String? = null,
     ) =
         MouseUtil.leftButtonClick(
             point,
             ScriptStatus.gameHWND,
             recoveryCapability = recoveryCapability,
+            dispatchActionOverride = dispatchAction,
         )
 
     fun rightButtonClick(point: Point) = MouseUtil.rightButtonClick(point, ScriptStatus.gameHWND)
@@ -1002,10 +1005,20 @@ object GameUtil {
                             return@scheduleWithFixedDelay
                         }
                         val postClickProbe = mandatoryPostClickProbe.shouldBypassCooldown()
+                        val settingsOverlayProbe = mandatoryPostClickProbe.settingsOverlayProbeTiming()
+                        if (settingsOverlayProbe != null && !settingsOverlayProbe.shouldInspect) {
+                            log.info {
+                                "RANK_SURRENDER_RECOVERY_WAIT reason=${settingsOverlayProbe.reason} " +
+                                    "ordinaryInput=false requeue=false pause=false"
+                            }
+                            return@scheduleWithFixedDelay
+                        }
+                        val settingsOverlayProbeDue = settingsOverlayProbe?.shouldInspect == true
                         val watchdogTiming = ScreenWatchdog.shouldInspect(
                             startedAt = surrenderStartedAt,
                             attempts = surrenderAttempts + 1,
-                            bypassCooldownForMandatorySurrenderPostClick = postClickProbe,
+                            bypassThresholdForMandatorySurrenderInitial = surrenderAttempts == 0 || settingsOverlayProbeDue,
+                            bypassCooldownForMandatorySurrenderPostClick = postClickProbe || settingsOverlayProbeDue,
                         )
                         if (!watchdogTiming.shouldInspect) {
                             log.info {
@@ -1040,6 +1053,11 @@ object GameUtil {
                             return@scheduleWithFixedDelay
                         }
                         val decision = MandatoryRankSurrenderRecoveryPolicy.decide(observation.kind)
+                        if (settingsOverlayProbeDue) {
+                            mandatoryPostClickProbe.finishSettingsOverlayProbe(
+                                settingsConfirmed = observation.kind == ScreenWatchdogKind.SETTINGS,
+                            )
+                        }
                         val unknownObservationOrdinal = if (
                             decision.action == MandatoryRankSurrenderRecoveryPolicy.Action.OBSERVE_ONLY
                         ) {
@@ -1068,7 +1086,7 @@ object GameUtil {
                             MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SETTINGS -> {
                                 if (ActionDispatchGate.allow("surrender.retry.open-settings", recoveryCapability)) {
                                     lClickSettingsForMandatoryRankSurrender(recoveryCapability)
-                                    mandatoryPostClickProbe.markClickDispatched()
+                                    mandatoryPostClickProbe.markSettingsClickDispatched()
                                 }
                             }
                             MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SURRENDER -> {
@@ -1425,6 +1443,17 @@ object GameUtil {
                             cancelGameEndTask()
                         } else {
                             if (isE2ERun()) {
+                                // Terminal proof can be authorized after this legacy task
+                                // was scheduled. Promote it on the next tick so a blocked
+                                // generic recovery click cannot retry forever.
+                                val terminalCapability = TerminalCleanupTaskPromotionPolicy.capabilityForTick(
+                                    e2eRun = true,
+                                    capability = MandatoryRankSurrenderGuard.existingTerminalCleanupCapability(),
+                                )
+                                if (terminalCapability != null) {
+                                    addGameEndTask(terminalCapability)
+                                    return@LRunnable
+                                }
                                 log.info { "结算页：使用前台确认的真实输入点击继续，清理上一局结算状态" }
                                 MouseUtil.leftButtonClickForRecovery(GAME_END_CONTINUE_RECT.getCenterClickPos())
                             } else {
@@ -2089,6 +2118,7 @@ object GameUtil {
                         "RESULT_PAGE_SEQUENCE_OBSERVATION probe=$probe durationMs=$durationMs " +
                             "screen=${observation.resultVisible ?: "UNKNOWN"} " +
                             "rankProgress=${observation.rankProgressVisible} " +
+                            "continueBand=${observation.continueControlVisible} " +
                             "destination=${observation.destinationScreen ?: "UNKNOWN"} " +
                             "captureAuthorized=${observation.captureAuthorized} " +
                             "inputs=${terminalPageCleanupCoordinator.snapshot().inputs}"
@@ -2105,7 +2135,7 @@ object GameUtil {
                 if (PauseStatus.isPause || WarEx.warCount != startingWarCount ||
                     !MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(capability)
                 ) {
-                    false
+                    TerminalResultSequenceController.DispatchOutcome(attempted = false, dispatchAccepted = false)
                 } else {
                     val reserved = terminalPageCleanupCoordinator.reserveInput(ticket)
                     if (reserved == null) {
@@ -2113,7 +2143,7 @@ object GameUtil {
                             "RESULT_PAGE_SEQUENCE_INPUT_BLOCKED reason=shared-input-budget-exhausted " +
                                 "attempt=$attempt page=$page dispatch=false"
                         }
-                        false
+                        TerminalResultSequenceController.DispatchOutcome(attempted = false, dispatchAccepted = false)
                     } else {
                         val accepted = MouseUtil.leftButtonClickForRecovery(
                             GAME_END_CONTINUE_RECT.getCenterClickPos(),
@@ -2127,18 +2157,29 @@ object GameUtil {
                                 "dispatchGapMs=${dispatchGapMs ?: "first"} " +
                                 "plannedGapMs=$plannedIntervalMs " +
                                 "dispatchMonotonicNanos=${System.nanoTime()} " +
-                                "acceptance=awaiting-screen-observation"
+                                "inputAttempted=true clientAccepted=awaiting-fresh-screen-observation"
                         }
-                        true
+                        TerminalResultSequenceController.DispatchOutcome(
+                            attempted = true,
+                            dispatchAccepted = accepted,
+                        )
                     }
                 }
             },
             confirmDestination = { observation ->
                 val confirmed = terminalPageCleanupCoordinator.confirmDestination(ticket)
-                val completed = confirmed && MandatoryRankSurrenderGuard.confirmCompleted(
+                val completionEvidence = if (observation.destinationScreen == "DECK_SELECTION") {
+                    confirmed && MandatoryRankSurrenderGuard.confirmAtFreshDeckSelection(
+                        screenKind = observation.destinationScreen,
+                        confidence = observation.destinationConfidence,
+                        visualEvidence = "fresh-authorized-screen",
+                        freshObservation = observation.captureAuthorized,
+                    )
+                } else confirmed && MandatoryRankSurrenderGuard.confirmCompleted(
                     "SCREEN_RESULT_DISMISSED",
                     capability,
                 )
+                val completed = completionEvidence
                 if (completed) {
                     confirmedDestination.set(observation.destinationScreen)
                     log.info {

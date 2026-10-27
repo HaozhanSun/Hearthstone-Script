@@ -5,6 +5,20 @@ import kotlin.test.assertEquals
 
 class GameStartupRecoveryPolicyTest {
     @Test
+    fun `explicit start resets bounded startup failure budget`() {
+        GameStartupFailureBudget.reset()
+        repeat(GameStartupRecoveryPolicy.MAX_CONSECUTIVE_HANDOFF_FAILURES) {
+            GameStartupFailureBudget.recordFailure()
+        }
+        assertEquals(GameStartupRecoveryPolicy.MAX_CONSECUTIVE_HANDOFF_FAILURES, GameStartupFailureBudget.current())
+        assertEquals(true, GameStartupFailureBudget.markVisibleFailureNotified())
+        assertEquals(false, GameStartupFailureBudget.markVisibleFailureNotified())
+        GameStartupFailureBudget.reset()
+        assertEquals(0, GameStartupFailureBudget.current())
+        assertEquals(true, GameStartupFailureBudget.markVisibleFailureNotified())
+    }
+
+    @Test
     fun `a short lived game retries through the existing launcher handoff`() {
         assertEquals(
             GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF,
@@ -72,7 +86,7 @@ class GameStartupRecoveryPolicyTest {
     }
 
     @Test
-    fun `repeated timed out handoffs remain retryable with a capped delay instead of pausing`() {
+    fun `repeated timed out handoffs retry a bounded number then require visible failure`() {
         assertEquals(
             GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF,
             GameStartupRecoveryPolicy.decide(
@@ -80,7 +94,30 @@ class GameStartupRecoveryPolicyTest {
                 startupConfirmed = false,
                 now = 20_000L,
                 lastLaunchAt = 1_000L,
+                consecutiveFailures = GameStartupRecoveryPolicy.MAX_CONSECUTIVE_HANDOFF_FAILURES - 1,
             ),
+        )
+        assertEquals(
+            GameStartupRecoveryPolicy.Decision.VISIBLE_FAILURE,
+            GameStartupRecoveryPolicy.decide(
+                gameAlive = false,
+                startupConfirmed = false,
+                now = 20_000L,
+                lastLaunchAt = 1_000L,
+                consecutiveFailures = GameStartupRecoveryPolicy.MAX_CONSECUTIVE_HANDOFF_FAILURES,
+            ),
+        )
+        assertEquals(300_000L, GameStartupRecoveryPolicy.VISIBLE_FAILURE_RETRY_INTERVAL_MS)
+        assertEquals(
+            GameStartupRecoveryPolicy.Decision.WAIT_FOR_HANDOFF,
+            GameStartupRecoveryPolicy.decide(
+                gameAlive = true,
+                startupConfirmed = false,
+                now = 20_000L,
+                lastLaunchAt = 1_000L,
+                consecutiveFailures = GameStartupRecoveryPolicy.MAX_CONSECUTIVE_HANDOFF_FAILURES,
+            ),
+            "a live game process is reattached rather than treated as a terminal launch failure",
         )
         assertEquals(6_000L, GameStartupRecoveryPolicy.retryDelayMs(20_000L, 1_000L, consecutiveFailures = 3))
         assertEquals(

@@ -9,11 +9,13 @@ import club.xiaojiawei.hsscript.ocr.OcrProviderKind
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.starter.GameStartupHandoffPolicy
 import club.xiaojiawei.hsscript.starter.GameStartupRecoveryPolicy
-import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.status.ScriptStatus
+import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.utils.GameUtil
+import club.xiaojiawei.hsscript.utils.SystemUtil
+import club.xiaojiawei.hsscript.consts.ROOT_PATH
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
@@ -28,6 +30,8 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import java.io.File
+import java.nio.file.Path
+import java.time.Instant
 
 /**
  * Beta recovery orchestration. The upstream lifecycle loop remains the owner
@@ -40,6 +44,7 @@ internal object BetaScreenRecoveryService {
     private val noProgressWatchdog = NoProgressWatchdog()
     private val startupHandoffActivity = StartupHandoffActivityTracker()
     private val startupFailurePolicy = BetaStartupFailureRecoveryPolicy()
+    private val missingGameRecoveryDispatchInFlight = AtomicBoolean(false)
     private val recoveryCascadeGuard = RecoveryCascadeGuard()
     private val foregroundFailureCount = AtomicInteger(0)
     private val foregroundRecoveryPending = AtomicBoolean(false)
@@ -54,6 +59,8 @@ internal object BetaScreenRecoveryService {
     private val startupFailureGeneration = AtomicLong(0L)
     @Volatile private var startupRecoveryGraceUntil = 0L
     private val startupRecoveryScheduled = AtomicBoolean(false)
+    @Volatile private var missingGameRecoveryState = LiveMissingGameRecoveryPolicy.State()
+    @Volatile private var missingGameExhaustionNotified = false
 
     fun scheduleStartupHandoffWatchdog(
         startupHandshakeConfirmed: () -> Boolean,
@@ -164,6 +171,8 @@ internal object BetaScreenRecoveryService {
         startupFailurePolicy.reset()
         startupFailureSinceMs = 0L
         lastObservedGamePid = null
+        missingGameRecoveryState = LiveMissingGameRecoveryPolicy.State()
+        missingGameExhaustionNotified = false
     }
 
     internal fun onFeatureChanged(enabled: Boolean) {
@@ -226,6 +235,7 @@ internal object BetaScreenRecoveryService {
 
         val now = System.currentTimeMillis()
         val pid = GameUtil.findGameProcessIdForDiagnostics()
+        if (pid != null) startupHandoffActivity.reset()
         val processStartedAt = pid?.let { gamePid ->
             runCatching { GameUtil.findProcessStartedAtForDiagnostics(gamePid) }.getOrNull()
         }
@@ -259,10 +269,21 @@ internal object BetaScreenRecoveryService {
         val powerLogAge = sessionLog?.let { (now - it.lastModified()).coerceAtLeast(0L) } ?: Long.MAX_VALUE
         val powerLogIsCurrentSession = sessionLog != null
         val phase = WarEx.war.currentPhase
+        val terminal = phase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState()
+        // Global mode/phase and screen latches outlive the client process.
+        // They describe a live game only while that exact game process exists.
+        val liveMatch = pid != null && (WarEx.inWar || phase == WarPhaseEnum.REPLACE_CARD)
+        // A queue click is a useful safety fence while a game may still be
+        // launching. Once the current-session Power.log segment has complete
+        // terminal proof, that old queue intent cannot veto restoring a game
+        // process which is now absent.
         val acceptedCleanupProof = pid == null && !MandatoryRankSurrenderGuard.isPending() &&
             MandatoryRankSurrenderGuard.isTerminalCleanupPending()
-        val terminal = !acceptedCleanupProof && (phase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState())
-        val liveMatch = pid != null && (WarEx.inWar || phase == WarPhaseEnum.REPLACE_CARD)
+        val authoritativeTerminalPowerLog =
+            PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence() || acceptedCleanupProof
+        val activeMatchmakingScreen = pid != null && LifecycleTrace.hasRecentActiveMatchmakingScreen()
+        val recentMatchmakingIntent = LifecycleTrace.hasRecentMatchmakingInputIntent()
+        val activeOrRecentMatchmaking = activeMatchmakingScreen || recentMatchmakingIntent
         val dialog = WindowsApplicationErrorDialogProbe.detect()?.asPolicyEvidence()
         val hwnd = ScriptStatus.gameHWND
         val windowMatchesPid = pid != null && hwnd != null &&
@@ -292,6 +313,39 @@ internal object BetaScreenRecoveryService {
             powerLogPath = sessionLog?.absolutePath,
         )
         val startupChainActive = startupHandoffActivity.shouldDeferNoProgress(handoffContext, now)
+        if (LiveMissingGameRecoveryPolicy.shouldWaitForMissingGameEvidence(
+                gameAlive = pid != null,
+                activeGame = liveMatch,
+                activeMatchmaking = activeMatchmakingScreen,
+                terminalState = terminal,
+                recentMatchmakingIntent = recentMatchmakingIntent,
+                authoritativeTerminalProof = authoritativeTerminalPowerLog,
+            )
+        ) {
+            missingGameRecoveryState = LiveMissingGameRecoveryPolicy.State()
+            log.info {
+                "BETA_MISSING_GAME_RECOVERY action=WAIT reason=active-or-terminal-evidence " +
+                    "terminal=$terminal liveMatch=$liveMatch activeOrRecentMatchmaking=$activeOrRecentMatchmaking " +
+                    "dispatch=false"
+            }
+            return
+        }
+        if (pid == null && dialog == null) {
+            handleMissingGameRecovery(
+                recoveryGeneration = recoveryGeneration,
+                state = missingGameRecoveryState,
+                startupChainActive = startupChainActive,
+                activeGame = liveMatch,
+                activeMatchmaking = activeMatchmakingScreen,
+                terminalState = terminal,
+                authoritativeTerminalProof = authoritativeTerminalPowerLog,
+                recentMatchmakingIntent = recentMatchmakingIntent,
+                now = now,
+            )
+            return
+        }
+        missingGameRecoveryState = LiveMissingGameRecoveryPolicy.State()
+        missingGameExhaustionNotified = false
         if (shouldDeferStartupFailureRecovery(startupChainActive, dialog != null)) {
             log.debug {
                 "BETA_STARTUP_RECOVERY action=WAIT reason=startup-chain-active " +
@@ -322,6 +376,198 @@ internal object BetaScreenRecoveryService {
         if (decision.action != BetaStartupFailureRecoveryPolicy.Action.WAIT) {
             dispatchStartupFailureRecovery(recoveryGeneration, decision, pid)
         }
+    }
+
+    private fun handleMissingGameRecovery(
+        recoveryGeneration: Long,
+        state: LiveMissingGameRecoveryPolicy.State,
+        startupChainActive: Boolean,
+        activeGame: Boolean,
+        activeMatchmaking: Boolean,
+        terminalState: Boolean,
+        authoritativeTerminalProof: Boolean,
+        recentMatchmakingIntent: Boolean,
+        now: Long,
+    ) {
+        val guardian = readCurrentGuardianRunState(Instant.ofEpochMilli(now))
+        val evaluation = LiveMissingGameRecoveryPolicy.evaluate(
+            state,
+            LiveMissingGameRecoveryPolicy.Evidence(
+                identityMatches = guardian?.identityMatches == true &&
+                    System.getProperty("hs.script.launch.source") == "shortcut",
+                heartbeatAgeMs = guardian?.heartbeatAgeMs ?: Long.MAX_VALUE,
+                runningIntent = guardian?.intent == "RUNNING",
+                working = WorkTimeListener.working && guardian?.working == true,
+                paused = PauseStatus.isPause || guardian?.paused != false,
+                gameAlive = GameUtil.isAliveOfGame(),
+                activeGame = activeGame,
+                activeMatchmaking = activeMatchmaking,
+                terminalState = terminalState,
+                authoritativeTerminalProof = authoritativeTerminalProof,
+                recentMatchmakingIntent = recentMatchmakingIntent,
+                startupChainActive = startupChainActive,
+                nowMs = now,
+            ),
+        )
+        missingGameRecoveryState = evaluation.state
+        when (evaluation.decision) {
+            LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN ->
+                dispatchMissingGameRecovery(recoveryGeneration, evaluation.state)
+            LiveMissingGameRecoveryPolicy.Decision.EXHAUSTED -> if (!missingGameExhaustionNotified) {
+                missingGameExhaustionNotified = true
+                log.error {
+                    "BETA_MISSING_GAME_RECOVERY_EXHAUSTED attempts=${evaluation.state.attempts} " +
+                        "limit=${LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS} " +
+                        "action=ALERT_AND_KEEP_JAVA_ALIVE"
+                }
+                SystemUtil.notice(
+                    "Hearthstone is still not running after bounded recovery. The script remains alive; " +
+                        "check Battle.net or use Start to retry.",
+                )
+            }
+            else -> log.debug {
+                "BETA_MISSING_GAME_RECOVERY action=${evaluation.decision} " +
+                    "attempts=${evaluation.state.attempts} identityMatches=${guardian?.identityMatches == true} " +
+                    "heartbeatAgeMs=${guardian?.heartbeatAgeMs ?: "unknown"} " +
+                    "startupChainActive=$startupChainActive"
+            }
+        }
+    }
+
+    /**
+     * A minted terminal-cleanup capability records that this game's complete
+     * terminal proof was accepted. Preserve that evidence after process exit,
+     * when the old Power.log can no longer bind as the current process session.
+     */
+    private fun hasCompleteTerminalProofForMissingProcess(): Boolean {
+        val gameAlive = GameUtil.isAliveOfGame()
+        return PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence() ||
+            (!gameAlive && !MandatoryRankSurrenderGuard.isPending() &&
+                MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+    }
+
+    /** Lifecycle screen telemetry is authoritative only while its client exists. */
+    private fun hasActiveMatchmakingForLiveProcess(): Boolean = GameUtil.isAliveOfGame() &&
+        LifecycleTrace.hasRecentActiveMatchmakingScreen()
+
+    private fun dispatchMissingGameRecovery(
+        recoveryGeneration: Long,
+        state: LiveMissingGameRecoveryPolicy.State,
+    ) {
+        if (!missingGameRecoveryDispatchInFlight.compareAndSet(false, true)) return
+        try {
+            EXTRA_THREAD_POOL.execute {
+            var chainAttempted = false
+            try {
+                val terminalProof = hasCompleteTerminalProofForMissingProcess()
+                if (!isStartupFailureGenerationCurrent(recoveryGeneration) || !WorkTimeListener.working ||
+                    PauseStatus.isPause || GameUtil.isAliveOfGame() ||
+                    !LiveMissingGameRecoveryPolicy.mayRecoverPastReplaceCard(
+                        phaseIsReplaceCard = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+                        authoritativeTerminalProof = terminalProof,
+                    ) ||
+                    (GameUtil.isTerminalGameState() && !terminalProof) ||
+                    hasActiveMatchmakingForLiveProcess() ||
+                    (!terminalProof &&
+                        LifecycleTrace.hasRecentMatchmakingInputIntent()) ||
+                    System.getProperty("hs.script.launch.source") != "shortcut"
+                ) {
+                    log.info {
+                        "BETA_MISSING_GAME_RECOVERY_SUPPRESSED reason=state-changed-before-dispatch " +
+                            "dispatch=false pause=${PauseStatus.isPause} gameAlive=${GameUtil.isAliveOfGame()} " +
+                            "inWar=${WarEx.inWar}"
+                    }
+                    return@execute
+                }
+                val authorized = {
+                    val latestGuardian = readCurrentGuardianRunState()
+                    isStartupFailureGenerationCurrent(recoveryGeneration) && WorkTimeListener.working &&
+                        !PauseStatus.isPause && !GameUtil.isAliveOfGame() &&
+                        LiveMissingGameRecoveryPolicy.mayRecoverPastReplaceCard(
+                            phaseIsReplaceCard = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+                            authoritativeTerminalProof = terminalProof,
+                        ) &&
+                        (!GameUtil.isTerminalGameState() || terminalProof) &&
+                        !hasActiveMatchmakingForLiveProcess() &&
+                        (terminalProof ||
+                            !LifecycleTrace.hasRecentMatchmakingInputIntent()) &&
+                        latestGuardian?.identityMatches == true && latestGuardian.intent == "RUNNING" &&
+                        latestGuardian.working && !latestGuardian.paused &&
+                        latestGuardian.heartbeatAgeMs in 0..GuardianRunStateReader.MAX_HEARTBEAT_AGE_MS &&
+                        ActionDispatchGate.allow("startup.missing-game-recovery")
+                }
+                if (!authorized()) {
+                    val latestGuardian = readCurrentGuardianRunState()
+                    log.warn {
+                        "BETA_MISSING_GAME_RECOVERY_SUPPRESSED reason=guardian-or-action-gate " +
+                            "dispatch=false identityMatches=${latestGuardian?.identityMatches == true} " +
+                            "heartbeatAgeMs=${latestGuardian?.heartbeatAgeMs ?: "unknown"}"
+                    }
+                    return@execute
+                }
+                val result = LiveMissingGameRecoveryDispatch.dispatch(
+                    decision = LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+                    stillAuthorized = authorized,
+                    recoverModeToStartup = {
+                        Mode.recover(ModeEnum.STARTUP, "beta-missing-game-recovery", enterStrategy = false)
+                    },
+                    startConfiguredStarterChain = {
+                        chainAttempted = true
+                        missingGameRecoveryState = LiveMissingGameRecoveryPolicy.recordDispatch(
+                            state,
+                            System.currentTimeMillis(),
+                        )
+                        missingGameExhaustionNotified = false
+                        log.warn {
+                            "BETA_MISSING_GAME_RECOVERY_DISPATCH action=START_CONFIGURED_STARTER_CHAIN " +
+                                "attempt=${missingGameRecoveryState.attempts} " +
+                                "limit=${LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS} " +
+                                "acceptance=awaiting-game-process-window"
+                        }
+                        StarterConfig.starter.start()
+                    },
+                )
+                when (result) {
+                    LiveMissingGameRecoveryDispatch.Result.STARTER_CHAIN_DISPATCHED -> {
+                        log.info {
+                            "BETA_MISSING_GAME_RECOVERY_CHAIN_DISPATCHED " +
+                                "attempt=${missingGameRecoveryState.attempts} " +
+                                "acceptance=awaiting-authoritative-game-process"
+                        }
+                    }
+                    LiveMissingGameRecoveryDispatch.Result.BLOCKED -> log.warn {
+                        "BETA_MISSING_GAME_RECOVERY_CHAIN_BLOCKED reason=state-changed dispatch=false"
+                    }
+                    LiveMissingGameRecoveryDispatch.Result.NO_ACTION -> Unit
+                }
+            } catch (error: Throwable) {
+                log.error(error) {
+                    "BETA_MISSING_GAME_RECOVERY_DISPATCH_FAILED chainAttempted=$chainAttempted " +
+                        "attempts=${missingGameRecoveryState.attempts} watchdog=RETAINED"
+                }
+            } finally {
+                missingGameRecoveryDispatchInFlight.set(false)
+            }
+            }
+        } catch (error: Throwable) {
+            missingGameRecoveryDispatchInFlight.set(false)
+            log.error(error) { "BETA_MISSING_GAME_RECOVERY_SUBMISSION_FAILED watchdog=RETAINED" }
+        }
+    }
+
+    private fun readCurrentGuardianRunState(now: Instant = Instant.now()): GuardianRunStateReader.Snapshot? {
+        if (System.getProperty("hs.script.launch.source") != "shortcut") return null
+        val process = ProcessHandle.current()
+        val processStart = process.info().startInstant().orElse(null) ?: return null
+        val deploymentId = System.getProperty("hs.script.deployment.id", "unknown")
+            .replace(Regex("[^A-Za-z0-9_.-]"), "_")
+        return GuardianRunStateReader.read(
+            path = Path.of(ROOT_PATH, "log", "guardian-state.json"),
+            expectedPid = process.pid(),
+            expectedStartTime = processStart,
+            expectedDeploymentId = deploymentId,
+            now = now,
+        )
     }
 
     internal fun shouldDeferStartupFailureRecovery(
@@ -360,12 +606,9 @@ internal object BetaScreenRecoveryService {
         if (!startupFailureDispatchInFlight.compareAndSet(false, true)) return
         EXTRA_THREAD_POOL.execute {
             try {
-                val gameAlive = GameUtil.isAliveOfGame()
-                val acceptedCleanupProof = !gameAlive && !MandatoryRankSurrenderGuard.isPending() &&
-                    MandatoryRankSurrenderGuard.isTerminalCleanupPending()
-                val terminalState = !acceptedCleanupProof && (WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER ||
-                    GameUtil.isTerminalGameState())
-                val liveMatch = gameAlive && (WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD)
+                val terminalState = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER ||
+                    GameUtil.isTerminalGameState()
+                val liveMatch = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD
                 val allowsPersistentDialog = decision.reason in setOf(
                     "persistent-application-error-dialog-close",
                     "persistent-application-error-dialog-hard-restart",
@@ -494,6 +737,9 @@ internal object BetaScreenRecoveryService {
 
     fun markStartupRequested(reason: String, now: Long) {
         if (!ScreenRecoveryRuntime.isEnabled()) return
+        missingGameRecoveryState = LiveMissingGameRecoveryPolicy.State()
+        missingGameExhaustionNotified = false
+        startupHandoffActivity.reset()
         startupRecoveryGraceUntil = now + STARTUP_RECOVERY_GRACE_MS
         LifecycleTrace.mark("startup-recovery-grace reason=$reason until=$startupRecoveryGraceUntil")
     }
@@ -542,10 +788,9 @@ internal object BetaScreenRecoveryService {
         ) {
             log.error {
                 "NO_PROGRESS_FOREGROUND_RECOVERY_PENDING count=$count " +
-                    "reason=foreground-mismatch-persistent action=PAUSE_AND_RECOVER"
+                    "reason=foreground-mismatch-persistent action=CANCEL_UNSAFE_TASKS_AND_RECOVER_NO_PAUSE"
             }
             AbstractModeStrategy.cancelAllTask()
-            PauseStatus.isPause = true
         }
     }
 
@@ -561,7 +806,6 @@ internal object BetaScreenRecoveryService {
         log.error { "NO_PROGRESS_ACTION_RECOVERY_REQUESTED reason=$reason dispatch=false" }
         if (foregroundRecoveryPending.compareAndSet(false, true)) {
             AbstractModeStrategy.cancelAllTask()
-            PauseStatus.isPause = true
         }
     }
 

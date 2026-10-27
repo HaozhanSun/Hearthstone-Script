@@ -50,20 +50,21 @@ class StartupHandoffActivityTrackerTest {
     }
 
     @Test
-    fun `repeated retries may cross the watchdog threshold but have a total deferral cap`() {
+    fun `retry gaps do not reset hard processless startup deferral cap`() {
         val tracker = StartupHandoffActivityTracker(
             activeWindowMs = 90_000L,
             maxContinuousActivityMs = 300_000L,
         )
         val context = startupContext()
 
-        listOf(0L, 60_000L, 120_000L).forEach(tracker::recordAttempt)
-        assertTrue(tracker.shouldDeferNoProgress(context, 150_000L))
-        listOf(180_000L, 240_000L).forEach(tracker::recordAttempt)
+        listOf(0L, 60_000L, 120_000L, 210_000L, 290_000L).forEach(tracker::recordAttempt)
         assertTrue(tracker.shouldDeferNoProgress(context, 299_999L))
         assertFalse(tracker.shouldDeferNoProgress(context, 300_000L))
         tracker.recordAttempt(300_000L)
         assertFalse(tracker.shouldDeferNoProgress(context, 300_001L))
+        tracker.reset()
+        tracker.recordAttempt(310_000L)
+        assertTrue(tracker.shouldDeferNoProgress(context, 310_001L), "explicit new startup episode rearms bounded grace")
     }
 
     @Test

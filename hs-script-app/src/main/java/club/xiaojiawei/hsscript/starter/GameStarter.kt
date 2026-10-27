@@ -7,12 +7,14 @@ import club.xiaojiawei.hsscript.dll.CSystemDll
 import club.xiaojiawei.hsscript.dll.User32ExDll
 import club.xiaojiawei.hsscript.dll.User32ExDll.Companion.HWND_BOTTOM
 import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.enums.WindowEnum
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
+import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.status.CurrentGameScreenReadinessPolicy
 import club.xiaojiawei.hsscript.status.BetaScreenRecoveryService
 import club.xiaojiawei.hsscript.utils.*
@@ -63,10 +65,6 @@ class GameStarter : AbstractStarter() {
 
     private var handoffState = GameStartupHandoffPolicy.State()
 
-    /** Kept across starter-chain retries so a dead client cannot cause an unbounded loop. */
-    @Volatile
-    private var startupFailureAttempts = 0
-
     /** Rotate launch methods across the starter-chain retries; never pin to the configured last method. */
     @Volatile
     private var startupModeDispatches = 0
@@ -104,21 +102,37 @@ class GameStarter : AbstractStarter() {
             next(it)
             return
         }
+        if (!GameUtil.isAliveOfGame()) {
+            MandatoryRankSurrenderGuard.resetForNoGameProcess(gameProcessAlive = false)
+            log.info {
+                "GAME_STARTUP_RANK_STATE_RESET reason=no-game-process " +
+                    "rankBarrier=${club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier.currentState()}"
+            }
+        }
         var startTime = System.currentTimeMillis()
         addTask(
             LAUNCH_PROGRAM_THREAD_POOL.scheduleWithFixedDelay(
                 {
                     do {
                         if (startTime == -1L) break
+                        if (PauseStatus.isPause || !WorkTimeListener.working) {
+                            log.info {
+                                "GAME_STARTUP_HANDOFF_STOPPED reason=${if (PauseStatus.isPause) "paused" else "not-working"} " +
+                                    "dispatch=false"
+                            }
+                            stopTask()
+                            break
+                        }
                         val diffTime = System.currentTimeMillis() - startTime
                         if (diffTime > 30_000 && !GameUtil.isAliveOfGame()) {
                             val now = System.currentTimeMillis()
-                            startupFailureAttempts++
+                            val startupFailureAttempts = GameStartupFailureBudget.recordFailure()
                             val decision = GameStartupRecoveryPolicy.decide(
                                 gameAlive = false,
                                 startupConfirmed = false,
                                 now = now,
                                 lastLaunchAt = lastGameLaunchAt,
+                                consecutiveFailures = startupFailureAttempts,
                             )
                             log.warn {
                                 "GAME_STARTUP_HANDOFF_FAILED attempt=$startupFailureAttempts " +
@@ -127,11 +141,32 @@ class GameStarter : AbstractStarter() {
                                     "powerLogLength=${PowerLogListener.logFile?.length() ?: 0L}"
                             }
                             startTime = -1L
-                            val retryDelay = GameStartupRecoveryPolicy.retryDelayMs(
-                                now,
-                                lastGameLaunchAt,
-                                startupFailureAttempts,
-                            )
+                            if (decision == GameStartupRecoveryPolicy.Decision.VISIBLE_FAILURE) {
+                                if (GameStartupFailureBudget.markVisibleFailureNotified()) {
+                                    log.error {
+                                    "GAME_STARTUP_RECOVERY_EXHAUSTED reason=handoff-failure-limit-exceeded " +
+                                        "attempt=$startupFailureAttempts limit=${GameStartupRecoveryPolicy.MAX_CONSECUTIVE_HANDOFF_FAILURES} " +
+                                        "gameAlive=false platformAlive=${GameUtil.isAliveOfPlatform()} " +
+                                        "stalePowerLogIgnored=${PowerLogListener.logFile != null} " +
+                                        "action=ALERT_AND_CONTINUE_SUPERVISOR working=${WorkTimeListener.working} " +
+                                        "paused=${PauseStatus.isPause} retryIntervalMs=${GameStartupRecoveryPolicy.VISIBLE_FAILURE_RETRY_INTERVAL_MS}"
+                                    }
+                                    runUI {
+                                        WindowUtil.showStage(WindowEnum.MAIN)
+                                        WindowUtil.createAlert(
+                                            headerText = "Hearthstone did not start",
+                                            contentText = "The game process was not detected after " +
+                                                "${GameStartupRecoveryPolicy.MAX_CONSECUTIVE_HANDOFF_FAILURES} launch attempts. " +
+                                                "Recovery will continue every five minutes. Check Battle.net or click Start to retry now.",
+                                            windowEnum = WindowEnum.MAIN,
+                                            okText = "Close",
+                                        ).show()
+                                    }
+                                }
+                            }
+                            val retryDelay = if (decision == GameStartupRecoveryPolicy.Decision.VISIBLE_FAILURE) {
+                                GameStartupRecoveryPolicy.VISIBLE_FAILURE_RETRY_INTERVAL_MS
+                            } else GameStartupRecoveryPolicy.retryDelayMs(now, lastGameLaunchAt, startupFailureAttempts)
                             log.warn {
                                 "GAME_STARTUP_RETRY action=RESTART_STARTER_CHAIN reason=handoff-not-confirmed " +
                                     "platformPreserved=true attempt=$startupFailureAttempts retryDelayMs=$retryDelay"
@@ -139,6 +174,10 @@ class GameStarter : AbstractStarter() {
                             EXTRA_THREAD_POOL.schedule({
                                 // The launcher's existing process is reused by PlatformStarter. Do not kill a
                                 // late-starting client during the retry delay.
+                                if (PauseStatus.isPause || !WorkTimeListener.working) {
+                                    log.info { "GAME_STARTUP_RETRY_SUPPRESSED reason=manual-pause-or-not-working" }
+                                    return@schedule
+                                }
                                 when (
                                     GameStartupRecoveryPolicy.retryAction(
                                         startupConfirmed = startupHandshakeConfirmed(),
@@ -255,6 +294,13 @@ class GameStarter : AbstractStarter() {
     }
 
     private fun dispatchStartupMode(lane: String) {
+        if (GameUtil.isAliveOfGame()) {
+            log.info {
+                "GAME_STARTUP_HANDOFF_SKIPPED reason=game-process-already-alive " +
+                    "lane=$lane action=REATTACH_NO_DUPLICATE_LAUNCH"
+            }
+            return
+        }
         val selection = GameStartupModeSequencePolicy.select(
             configuredModes = ConfigExUtil.getGameStartupMode(),
             attemptIndex = startupModeDispatches,
@@ -293,6 +339,7 @@ class GameStarter : AbstractStarter() {
     private fun next(gameHWND: HWND) {
         handoffState = GameStartupHandoffPolicy.State()
         startupModeDispatches = 0
+        GameStartupFailureBudget.reset()
         updateGameMsg(gameHWND)
         scheduleStartupHandoffWatchdog()
         scheduleStartupScreenProbe()
@@ -335,11 +382,8 @@ class GameStarter : AbstractStarter() {
     private fun scheduleStartupHandoffWatchdog() {
         BetaScreenRecoveryService.scheduleStartupHandoffWatchdog(
             startupHandshakeConfirmed = ::startupHandshakeConfirmed,
-            nextFailureAttempt = {
-                startupFailureAttempts++
-                startupFailureAttempts
-            },
-            clearFailureAttempts = { startupFailureAttempts = 0 },
+            nextFailureAttempt = { GameStartupFailureBudget.recordFailure() },
+            clearFailureAttempts = { GameStartupFailureBudget.reset() },
             lastGameLaunchAt = { lastGameLaunchAt },
             retryStarterChain = { StarterConfig.starter.start() },
         )
@@ -361,13 +405,18 @@ class GameStarter : AbstractStarter() {
         }
         EXTRA_THREAD_POOL.execute {
             var attempt = 0
+            var recoveryApplied = false
             try {
                 // The starter chain discovers Hearthstone before the log listeners
-                // attach. Give those listeners a short head start, but do not wait
-                // for the 30-second stale-screen fallback.
+                // attach. Give those listeners a short head start, then keep a
+                // bounded read-only probe alive while loading/HUB UI settles.
                 Thread.sleep(2_500L)
-                val deadline = System.currentTimeMillis() + 15_000L
-                while (System.currentTimeMillis() < deadline && !PauseStatus.isPause) {
+                val probeStartedAt = System.currentTimeMillis()
+                while (StartupScreenProbeRetryPolicy.shouldContinue(
+                        System.currentTimeMillis() - probeStartedAt,
+                        PauseStatus.isPause,
+                    )
+                ) {
                     attempt++
                     val gameWindow = ScriptStatus.gameHWND
                     val gameWindowVerified = gameWindow != null &&
@@ -396,7 +445,28 @@ class GameStarter : AbstractStarter() {
                                 "currentPowerLog=${currentSessionPowerLog?.absolutePath ?: "none"} " +
                                 "powerLogLength=$powerLogLength"
                         }
-                        Thread.sleep(1_000L)
+                        if (gameWindowVerified) {
+                            val staleSessionProbe = runCatching {
+                                ScreenStateRecovery.inspectAndRecover(
+                                    stuckForMs = 0L,
+                                    stateFingerprint = "STARTUP_PROBE_NO_CURRENT_SESSION:$reason",
+                                    startupProbe = true,
+                                )
+                            }.onFailure { error ->
+                                log.warn(error) {
+                                    "STARTUP_SCREEN_PROBE_FAILED attempt=$attempt " +
+                                        "reason=no-current-session"
+                                }
+                            }.getOrDefault(false)
+                            LifecycleTrace.mark(
+                                "startup-screen-probe-no-session attempt=$attempt applied=$staleSessionProbe",
+                            )
+                            if (staleSessionProbe) {
+                                recoveryApplied = true
+                                return@execute
+                            }
+                        }
+                        Thread.sleep(StartupScreenProbeRetryPolicy.RETRY_DELAY_MS)
                         continue
                     }
                     log.info {
@@ -419,16 +489,34 @@ class GameStarter : AbstractStarter() {
                     }.onFailure { error ->
                         log.warn(error) { "STARTUP_SCREEN_PROBE_FAILED attempt=$attempt" }
                     }
-                    if (applied) return@execute
-                    Thread.sleep(2_000L)
+                    if (applied) {
+                        recoveryApplied = true
+                        return@execute
+                    }
+                    Thread.sleep(StartupScreenProbeRetryPolicy.RETRY_DELAY_MS)
                 }
             } catch (error: InterruptedException) {
                 Thread.currentThread().interrupt()
                 log.info { "STARTUP_SCREEN_PROBE_INTERRUPTED attempts=$attempt" }
             } finally {
+                val readyAtExit = runCatching { ScreenStateRecovery.isCurrentGameSessionReadyForStart() }
+                    .getOrDefault(false)
                 log.info {
                     "STARTUP_SCREEN_PROBE_FINISHED attempts=$attempt " +
-                        "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+                        "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} " +
+                        "currentSessionReady=$readyAtExit maxDurationMs=${StartupScreenProbeRetryPolicy.MAX_DURATION_MS}"
+                }
+                if (!readyAtExit && !recoveryApplied && attempt > 0 &&
+                    WorkTimeListener.working && !PauseStatus.isPause
+                ) {
+                    log.error {
+                        "GAME_SESSION_NOT_READY_AFTER_STARTUP_PROBE attempts=$attempt " +
+                            "action=ALERT_OPERATOR_AND_KEEP_RECOVERY_ARMED"
+                    }
+                    SystemUtil.notice(
+                        "Hearthstone is running but no readable current-game Power.log session was found. " +
+                            "Check for the offline/reconnect dialog; click Start to retry. The script did not report the game as healthy.",
+                    )
                 }
             }
         }

@@ -298,8 +298,10 @@ class OfflineRankSurrenderMatchmakingE2ETest {
     @Test
     fun `exact ranks five and ten remain eligible while rank four unknown and OCR failure require surrender`() {
         val now = System.currentTimeMillis()
-        assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = false),
-            "pre-match matchmaking remains rank-agnostic; rank is inspected after game start")
+        assertTrue(
+            MatchmakingGuardPolicy.runtimeAllowsInput(working = true, paused = false),
+            "matchmaking dispatch reaches game start before rank 9/unknown rank can be checked at mulligan",
+        )
         for (rank in listOf(5, 10)) {
             val decision = RankEligibilityCorePolicy.evaluate(
                 evidence = detection(rank, now),
@@ -319,7 +321,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
         }
 
         val denied = listOf(
-            detection(9, now), // rank 9 is checked only after matchmaking has started this game
+            detection(9, now), // rank 9 is observed only after matchmaking has started this game
             detection(4, now),
             null, // unresolved/unknown OCR and provider exception are both fail-closed evidence
         )
@@ -392,7 +394,7 @@ class OfflineRankSurrenderMatchmakingE2ETest {
         assertEquals(111, dimensions.second)
     }
 
-    /** Effective active-game/postgame fence; pre-match matchmaking stays rank-agnostic. */
+    /** Effective active-game/postgame gate: pre-match policy stays rank-agnostic. */
     private fun queueAllowed(): Boolean = MatchmakingGuardPolicy.runtimeAllowsInput(
         working = true,
         paused = false,

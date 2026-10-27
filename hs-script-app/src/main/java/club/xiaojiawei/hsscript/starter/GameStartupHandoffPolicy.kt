@@ -23,9 +23,9 @@ internal object GameStartupHandoffPolicy {
 
     data class Evaluation(val state: State, val decision: Decision)
 
-    /** A confirmed visible menu can finish startup before Power.log becomes non-empty. */
+    /** HUB alone is not a stable game-session handshake; keep Battle.net alive until a later phase. */
     fun startupHandshakeConfirmed(inWar: Boolean, mode: ModeEnum?): Boolean =
-        inWar || (mode != null && mode != ModeEnum.STARTUP && mode != ModeEnum.LOGIN)
+        inWar || (mode != null && mode != ModeEnum.STARTUP && mode != ModeEnum.LOGIN && mode != ModeEnum.HUB)
 
     fun onHandshakeTimeout(startupConfirmed: Boolean): HandshakeTimeoutDecision =
         HandshakeTimeoutDecision.CONTINUE_MONITORING

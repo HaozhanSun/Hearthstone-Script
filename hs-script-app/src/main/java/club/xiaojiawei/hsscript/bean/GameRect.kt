@@ -72,10 +72,10 @@ data class GameRect(
     /**
      * @param isCancel 执行前先右键取消
      */
-    fun lClick(isCancel: Boolean = true) {
+    fun lClick(isCancel: Boolean = true, dispatchAction: String? = null) {
         if (isCancel) cancel()
         showControlPos()
-        GameUtil.leftButtonClick(getClickPos())
+        GameUtil.leftButtonClick(getClickPos(), dispatchAction = dispatchAction)
     }
 
     /** Explicitly tagged input used only by the mandatory rank-surrender retry transaction. */

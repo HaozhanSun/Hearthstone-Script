@@ -42,6 +42,7 @@ internal object ScreenRecoveryWindowCapture {
     fun capture(
         hwnd: WinDef.HWND?,
         purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+        staleForMs: Long = 0L,
     ): AuthorizedGameWindowFrame? {
         if (GraphicsEnvironment.isHeadless()) return reject("headless-environment", hwnd)
         if (hwnd == null || !User32.INSTANCE.IsWindow(hwnd) || !User32.INSTANCE.IsWindowVisible(hwnd)) {
@@ -67,7 +68,20 @@ internal object ScreenRecoveryWindowCapture {
         )
         val preSessionQueueModalBefore = preSessionQueueModalContext(purpose)
         val preSessionMatchmakingBefore = preSessionMatchmakingContext(purpose)
-        if (!currentPowerLogReady && !preSessionQueueModalBefore && !preSessionMatchmakingBefore) {
+        val preSessionStaleProbeBefore = preSessionStaleProbeContext(purpose, staleForMs, currentPowerLogReady)
+        val preSessionIdleProbeBefore = ScreenRecoveryCapturePurposePolicy
+            .allowsPreSessionIdleClientProbe(purpose, currentPowerLogReady, staleForMs)
+        val preSessionStartupProbeBefore = ScreenRecoveryCapturePurposePolicy
+            .allowsPreSessionStartupClientProbe(purpose, currentPowerLogReady)
+        val noActiveQueueEvidenceBefore = !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+            !LifecycleTrace.hasRecentMatchmakingInputIntent()
+        val preSessionYoggProbeBefore = ScreenRecoveryCapturePurposePolicy.allowsPreSessionYoggProbe(
+            purpose, currentPowerLogReady, WarEx.inWar, noActiveQueueEvidenceBefore,
+        )
+        if (!currentPowerLogReady && !preSessionQueueModalBefore && !preSessionMatchmakingBefore &&
+            !preSessionStaleProbeBefore && !preSessionIdleProbeBefore && !preSessionStartupProbeBefore &&
+            !preSessionYoggProbeBefore
+        ) {
             return reject(
                 "current-game-session-not-ready",
                 hwnd,
@@ -80,6 +94,10 @@ internal object ScreenRecoveryWindowCapture {
             log.info {
                 "SCREEN_RECOVERY_CAPTURE_PRESESSION purpose=${purpose.name} " +
                     "matchmakingIntent=$preSessionMatchmakingBefore " +
+                    "staleClientProbe=$preSessionStaleProbeBefore " +
+                    "idleClientProbe=$preSessionIdleProbeBefore " +
+                    "startupClientProbe=$preSessionStartupProbeBefore " +
+                    "startupYoggProbe=$preSessionYoggProbeBefore " +
                     "authority=current-pid-window-foreground-pixel-ownership " +
                     "powerLog=${attachedPowerLog?.path() ?: "none"} " +
                     "currentPowerLog=${currentPowerLog?.absolutePath ?: "none"} " +
@@ -110,6 +128,16 @@ internal object ScreenRecoveryWindowCapture {
         val targetWindowVisibleAfter = User32.INSTANCE.IsWindowVisible(hwnd)
         val preSessionQueueModalAfter = preSessionQueueModalContext(purpose)
         val preSessionMatchmakingAfter = preSessionMatchmakingContext(purpose)
+        val preSessionStaleProbeAfter = preSessionStaleProbeContext(purpose, staleForMs, currentPowerLogReady)
+        val preSessionIdleProbeAfter = ScreenRecoveryCapturePurposePolicy
+            .allowsPreSessionIdleClientProbe(purpose, currentPowerLogReady, staleForMs)
+        val preSessionStartupProbeAfter = ScreenRecoveryCapturePurposePolicy
+            .allowsPreSessionStartupClientProbe(purpose, currentPowerLogReady)
+        val noActiveQueueEvidenceAfter = !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+            !LifecycleTrace.hasRecentMatchmakingInputIntent()
+        val preSessionYoggProbeAfter = ScreenRecoveryCapturePurposePolicy.allowsPreSessionYoggProbe(
+            purpose, currentPowerLogReady, WarEx.inWar, noActiveQueueEvidenceAfter,
+        )
         val evidence = ScreenRecoveryCaptureEvidence(
             processAlive = processStillAlive,
             currentSessionReady = currentPowerLogReady,
@@ -125,6 +153,10 @@ internal object ScreenRecoveryWindowCapture {
             purpose = purpose,
             preSessionQueueModalAuthorized = preSessionQueueModalBefore && preSessionQueueModalAfter,
             preSessionMatchmakingAuthorized = preSessionMatchmakingBefore && preSessionMatchmakingAfter,
+            preSessionStaleClientProbeAuthorized = preSessionStaleProbeBefore && preSessionStaleProbeAfter,
+            preSessionIdleClientProbeAuthorized = preSessionIdleProbeBefore && preSessionIdleProbeAfter,
+            preSessionStartupClientProbeAuthorized = preSessionStartupProbeBefore && preSessionStartupProbeAfter,
+            preSessionYoggProbeAuthorized = preSessionYoggProbeBefore && preSessionYoggProbeAfter,
             currentGameProcessId = currentPidAfter,
             targetWindowVisibleBefore = targetWindowVisibleBefore,
             targetWindowVisibleAfter = targetWindowVisibleAfter,
@@ -167,6 +199,23 @@ internal object ScreenRecoveryWindowCapture {
             mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
             terminal = GameUtil.isTerminalGameState(),
             recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
+        )
+
+    private fun preSessionStaleProbeContext(
+        purpose: ScreenRecoveryCapturePurpose,
+        staleForMs: Long,
+        warModelAuthoritative: Boolean,
+    ): Boolean =
+        ScreenRecoveryCapturePurposePolicy.allowsPreSessionStaleClientProbe(
+            purpose = purpose,
+            // A stale in-memory WAR model is not authoritative when the
+            // attached log is absent, empty, or belongs to another session.
+            nonGameplayScreen = true,
+            activeGame = warModelAuthoritative && WarEx.inWar,
+            mulligan = warModelAuthoritative && WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+            terminal = warModelAuthoritative && GameUtil.isTerminalGameState(),
+            stuckForMs = staleForMs,
+            warModelAuthoritative = warModelAuthoritative,
         )
 
     private fun clientBoundsOnScreen(hwnd: WinDef.HWND): Rectangle? = runCatching {

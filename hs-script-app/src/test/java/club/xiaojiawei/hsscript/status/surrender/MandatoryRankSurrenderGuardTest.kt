@@ -34,13 +34,13 @@ class MandatoryRankSurrenderGuardTest {
         assertTrue(MandatoryRankSurrenderGuard.isPending())
         assertTrue(MandatoryRankSurrenderGuard.isRecoveryUncertain())
         assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("UNKNOWN"))
-        assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
-        assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
+        assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
+        assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
 
         assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL"))
         assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_TERMINAL"))
         assertTrue(MandatoryRankSurrenderGuard.isPending(), "Power.log terminal markers do not prove the UI left the board")
-        assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
+        assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
         assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
         val cleanup = MandatoryRankSurrenderGuard.authorizeTerminalCleanup(terminalEvidence("test-game:self"))
         assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED", cleanup))
@@ -49,19 +49,114 @@ class MandatoryRankSurrenderGuardTest {
     }
 
     @Test
-    fun `missing process releases only previously accepted terminal cleanup and never pending surrender`() {
+    fun `missing process plus complete terminal proof clears stale result dispatch fence`() {
         MandatoryRankSurrenderGuard.begin("test-game:self")
         val capability = MandatoryRankSurrenderGuard.authorizeTerminalCleanup(terminalEvidence("test-game:self"))
-        assertTrue(capability != null)
         assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", capability))
-        assertFalse(MandatoryRankSurrenderGuard.reconcileMissingProcessAfterTerminalProof(false, false))
-        assertFalse(MandatoryRankSurrenderGuard.reconcileMissingProcessAfterTerminalProof(true, true))
-        assertTrue(MandatoryRankSurrenderGuard.reconcileMissingProcessAfterTerminalProof(true, false))
-        assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+        assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+        assertFalse(
+            ActionDispatchGate.allowForState(
+                action = "startup.missing-game-recovery",
+                paused = false,
+                working = true,
+                terminalCleanupPending = MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+            ),
+            "the incomplete result cleanup initially blocks starter dispatch",
+        )
 
-        MandatoryRankSurrenderGuard.begin("still-pending:self")
-        assertFalse(MandatoryRankSurrenderGuard.reconcileMissingProcessAfterTerminalProof(true, false))
-        assertTrue(MandatoryRankSurrenderGuard.isPending())
+        assertFalse(
+            MandatoryRankSurrenderGuard.reconcileMissingProcessAfterTerminalProof(
+                completeCurrentGameTerminalProof = false,
+                gameProcessAlive = false,
+            ),
+        )
+        assertFalse(
+            MandatoryRankSurrenderGuard.reconcileMissingProcessAfterTerminalProof(
+                completeCurrentGameTerminalProof = true,
+                gameProcessAlive = true,
+            ),
+        )
+        assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+
+        assertFalse(ActionDispatchGate.reconcileMissingGameTerminalCleanupFence(
+            gameAlive = true,
+            activeGame = false,
+            activeMatchmaking = false,
+            authoritativeTerminalProof = true,
+        ))
+        assertFalse(ActionDispatchGate.reconcileMissingGameTerminalCleanupFence(
+            gameAlive = true,
+            activeGame = false,
+            activeMatchmaking = true,
+            authoritativeTerminalProof = true,
+        ), "a live process in matchmaking must retain its own protection")
+        assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+        assertTrue(
+            ActionDispatchGate.reconcileMissingGameTerminalCleanupFence(
+                gameAlive = false,
+                activeGame = true,
+                activeMatchmaking = true,
+                authoritativeTerminalProof = false,
+            ),
+            "the previously accepted cleanup capability survives an unbindable Power.log and stale process-owned latches",
+        )
+        assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+        assertFalse(MandatoryRankSurrenderGuard.isPending())
+        assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
+        assertTrue(
+            ActionDispatchGate.allowForState(
+                action = "startup.missing-game-recovery",
+                paused = false,
+                working = true,
+                terminalCleanupPending = MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+            ),
+            "complete same-game terminal proof plus missing process releases the startup action fence",
+        )
+    }
+
+    @Test
+    fun `fresh deck selection completes terminal cleanup after a nonconceded game`() {
+        val evidence = CurrentGameSurrenderTerminalEvidence(
+            gameIdentity = "game-20261026-1611:laz#12793",
+            ownEntityId = "laz#12793",
+            opponentEntityId = "Perro#11555",
+            ownPlayState = "LOST",
+            opponentPlayState = "WON",
+            finalGameOver = true,
+            complete = true,
+        )
+        MandatoryRankSurrenderGuard.begin(evidence.gameIdentity)
+        val capability = MandatoryRankSurrenderGuard.authorizeTerminalCleanup(evidence)
+        assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", capability))
+        assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+        assertFalse(ActionDispatchGate.allowForState(
+            action = "matchmaking.start",
+            paused = false,
+            working = true,
+            currentSessionReady = true,
+            terminalCleanupPending = MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+        ), "the terminal cleanup fence remains until a fresh destination is proven")
+        assertFalse(MandatoryRankSurrenderGuard.confirmAtFreshDeckSelection(
+            screenKind = "DECK_SELECTION",
+            confidence = 100,
+            visualEvidence = "deck-selection-title",
+            freshObservation = false,
+        ), "stale deck chooser evidence cannot clear terminal cleanup")
+        assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+        assertTrue(MandatoryRankSurrenderGuard.confirmAtFreshDeckSelection(
+            screenKind = "DECK_SELECTION",
+            confidence = 100,
+            visualEvidence = "deck-selection-title",
+            freshObservation = true,
+        ))
+        assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+        assertTrue(ActionDispatchGate.allowForState(
+            action = "matchmaking.start",
+            paused = false,
+            working = true,
+            currentSessionReady = true,
+            terminalCleanupPending = MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+        ), "fresh deck selection releases the old game's cleanup fence before the next queue")
     }
 
     @Test
@@ -86,7 +181,17 @@ class MandatoryRankSurrenderGuardTest {
                 ),
                 "deck selection without this surrender's terminal capability must remain fenced",
             )
-            assertFalse(ActionDispatchGate.allow("matchmaking.start"))
+            assertTrue(
+                ActionDispatchGate.allowForState(
+                    action = "matchmaking.start",
+                    paused = false,
+                    working = true,
+                    mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending(),
+                    rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+                    currentSessionReady = true,
+                ),
+                "rank state must not block matchmaking once its screen/session permit is satisfied",
+            )
             assertTrue(
                 MandatoryRankSurrenderGuard.authorizeTerminalCleanup(terminalEvidence("test-game:self")) != null,
             )
@@ -125,9 +230,23 @@ class MandatoryRankSurrenderGuardTest {
                 MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
                 MulliganRankDispatchBarrier.currentState(),
             )
-            assertFalse(ActionDispatchGate.allow("startup.handoff"))
-            assertFalse(ActionDispatchGate.allow("matchmaking.start"))
-            assertFalse(ActionDispatchGate.allow("strategy.card.play"))
+            assertTrue(ActionDispatchGate.allow("startup.handoff"), "rank state must not block launch")
+            assertTrue(ActionDispatchGate.allowForState(
+                action = "matchmaking.start",
+                paused = false,
+                working = true,
+                mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending(),
+                rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+                currentSessionReady = true,
+            ), "rank state must not block matchmaking once its screen/session permit is satisfied")
+            assertFalse(ActionDispatchGate.allowForState(
+                action = "strategy.card.play",
+                paused = false,
+                working = true,
+                mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending(),
+                rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+                currentSessionReady = true,
+            ))
 
             assertEquals(
                 MandatoryRankSurrenderDeckSelectionRecovery.Result.COMPLETED,
@@ -141,17 +260,34 @@ class MandatoryRankSurrenderGuardTest {
             assertFalse(MandatoryRankSurrenderGuard.isPending())
             assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
             assertTrue(ActionDispatchGate.allow("startup.handoff"))
-            assertTrue(ActionDispatchGate.allow("matchmaking.start"))
+            assertTrue(ActionDispatchGate.allowForState(
+                action = "matchmaking.start",
+                paused = false,
+                working = true,
+                currentSessionReady = true,
+            ))
 
             // CREATE_GAME for the next match creates a new mulligan ticket;
             // cleanup of the prior surrender does not make gameplay eligible.
             val nextGameTicket = MulliganRankDispatchBarrier.beginCurrentGame()
             assertTrue(nextGameTicket > surrenderedGameTicket)
             assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
-            assertFalse(ActionDispatchGate.allow("strategy.card.play"))
+            assertFalse(ActionDispatchGate.allowForState(
+                action = "strategy.card.play",
+                paused = false,
+                working = true,
+                rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+                currentSessionReady = true,
+            ))
             assertFalse(MulliganRankDispatchBarrier.authorizeEligibleRank(nextGameTicket, 7))
             assertTrue(MulliganRankDispatchBarrier.authorizeEligibleRank(nextGameTicket, 5))
-            assertTrue(ActionDispatchGate.allow("strategy.card.play"))
+            assertTrue(ActionDispatchGate.allowForState(
+                action = "strategy.card.play",
+                paused = false,
+                working = true,
+                rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+                currentSessionReady = true,
+            ))
         } finally {
             WorkTimeListener.working = wasWorking
             when {
@@ -167,7 +303,7 @@ class MandatoryRankSurrenderGuardTest {
         MandatoryRankSurrenderGuard.begin()
         MandatoryRankSurrenderGuard.markRecoveryUncertain()
         assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_MAIN_MENU"))
-        assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
+        assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, MandatoryRankSurrenderGuard.isPending()))
     }
 
     @Test
@@ -262,7 +398,7 @@ class MandatoryRankSurrenderGuardTest {
         assertTrue(MandatoryRankSurrenderGuard.isPending())
 
         assertTrue(MandatoryRankSurrenderGuard.isPending())
-        assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
+        assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
         assertFalse(
             ActionDispatchGate.allowForState(
                 action = "strategy.card.play",
@@ -293,7 +429,7 @@ class MandatoryRankSurrenderGuardTest {
                 rankBarrierState = MulliganRankDispatchBarrier.currentState(),
             ),
         )
-        assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
+        assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
         assertEquals(
             ResultPageDismissalPolicy.Decision.DISPATCH_CLICK,
             ResultPageDismissalPolicy.decide(
@@ -316,7 +452,7 @@ class MandatoryRankSurrenderGuardTest {
         assertTrue(MandatoryRankSurrenderGuard.isPending(), "board/UNKNOWN postcheck remains fail-closed")
         assertFalse(MandatoryRankSurrenderGuard.confirmCompleted("UNKNOWN"))
         assertTrue(MandatoryRankSurrenderGuard.isPending(), "an inconclusive screen postcheck must not unlock queue")
-        assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
+        assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
         assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("SCREEN_RESULT_DISMISSED"))
         assertFalse(MandatoryRankSurrenderGuard.isPending())
         assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
@@ -364,7 +500,7 @@ class MandatoryRankSurrenderGuardTest {
         // subsequent match's unresolved mandatory-surrender barrier.
         terminalTracker.observeLine("CREATE_GAME")
         assertFalse(terminalTracker.hasCompleteTerminalEvidence())
-        assertFalse(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
+        assertTrue(MatchmakingGuardPolicy.runtimeAllowsInput(true, false, true))
         terminalTracker.observeLine("TAG_CHANGE Entity=me tag=PLAYSTATE value=WON")
         terminalTracker.observeLine("tag=STEP value=FINAL_GAMEOVER")
         terminalTracker.observeLine("CREATE_GAME")
@@ -563,9 +699,19 @@ class MandatoryRankSurrenderGuardTest {
                 ),
             )
             assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
-            assertTrue(ActionDispatchGate.allow("matchmaking.start"))
+            assertTrue(ActionDispatchGate.allowForState(
+                action = "matchmaking.start",
+                paused = false,
+                working = true,
+                currentSessionReady = true,
+            ))
             repeat(10) {
-                assertTrue(ActionDispatchGate.allow("matchmaking.start"), "no stale cleanup block or repeated blocked-action spam")
+                assertTrue(ActionDispatchGate.allowForState(
+                    action = "matchmaking.start",
+                    paused = false,
+                    working = true,
+                    currentSessionReady = true,
+                ), "no stale cleanup block or repeated blocked-action spam")
             }
 
             // A consecutive next match starts a new terminal cycle with a
@@ -633,9 +779,19 @@ class MandatoryRankSurrenderGuardTest {
                 ),
                 "a fresh second-cycle deck screen schedules the normal queue flow again",
             )
-            assertTrue(ActionDispatchGate.allow("matchmaking.start"))
+            assertTrue(ActionDispatchGate.allowForState(
+                action = "matchmaking.start",
+                paused = false,
+                working = true,
+                currentSessionReady = true,
+            ))
             repeat(10) {
-                assertTrue(ActionDispatchGate.allow("matchmaking.start"), "the second cleanup cycle does not leave stale blocked dispatch")
+                assertTrue(ActionDispatchGate.allowForState(
+                    action = "matchmaking.start",
+                    paused = false,
+                    working = true,
+                    currentSessionReady = true,
+                ), "the second cleanup cycle does not leave stale blocked dispatch")
             }
         } finally {
             WorkTimeListener.working = wasWorking

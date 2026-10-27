@@ -6,11 +6,12 @@ object MatchmakingGuardPolicy {
     enum class Decision { ABORT_GAME_STARTED, CONTINUE_MATCHMAKING }
 
     /** Rank is deliberately not part of the queue gate; rank is checked in Mulligan. */
+    @Suppress("UNUSED_PARAMETER")
     fun runtimeAllowsInput(
         working: Boolean,
         paused: Boolean,
         mandatoryRankSurrenderPending: Boolean = false,
-    ): Boolean = working && !paused && !mandatoryRankSurrenderPending
+    ): Boolean = working && !paused
 
     fun decide(evidence: LiveGameEvidence): Decision =
         if (evidence.inWar || (evidence.warPhase != "GAME_OVER" &&

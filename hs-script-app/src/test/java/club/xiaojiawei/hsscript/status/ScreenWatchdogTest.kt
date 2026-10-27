@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
 
 class ScreenWatchdogTest {
 
@@ -312,6 +313,64 @@ class ScreenWatchdogTest {
         assertFalse(postClickProbe.shouldBypassCooldown(), "one click must authorize only one fast probe")
         assertFalse(ordinaryProbe.shouldInspect)
         assertTrue(ordinaryProbe.reason.startsWith("cooldown"))
+    }
+
+    @Test
+    fun `mandatory surrender initial probe bypasses stuck threshold but remains cooldown bounded`() {
+        ScreenWatchdog.resetTimingForTest()
+        val initial = ScreenWatchdog.shouldInspect(
+            startedAt = 100_000L,
+            attempts = 1,
+            now = 100_020L,
+            stuckMs = 30_000L,
+            maxRetries = 3,
+            cooldownMs = 15_000L,
+            bypassThresholdForMandatorySurrenderInitial = true,
+        )
+        val withinCooldown = ScreenWatchdog.shouldInspect(
+            startedAt = 100_000L,
+            attempts = 3,
+            now = 100_500L,
+            stuckMs = 30_000L,
+            maxRetries = 3,
+            cooldownMs = 15_000L,
+        )
+
+        assertTrue(initial.shouldInspect, initial.reason)
+        assertTrue(initial.reason.startsWith("mandatory-surrender-initial"))
+        assertFalse(withinCooldown.shouldInspect)
+        assertTrue(withinCooldown.reason.startsWith("cooldown"))
+    }
+
+    @Test
+    fun `rank nine incident settings screenshot is probed at five seconds with bounded uncertain recheck`() {
+        val screenshot = javaClass.getResourceAsStream(
+            "/fixtures/screen-recovery/rank9-settings-overlay-20261026-084643.png",
+        )?.use(ImageIO::read) ?: error("missing captured v4.16.697 rank-nine settings screenshot")
+        val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true|warCount=0"
+        assertTrue(ScreenWatchdog.hasSettingsOverlayVisualForTest(screenshot))
+        assertEquals(ScreenWatchdogKind.SETTINGS, ScreenWatchdog.fastVisualKindForSurrenderForTest(state, screenshot))
+
+        val probe = ScreenWatchdog.MandatorySurrenderPostClickProbe()
+        val gearClickAt = 100_000L
+        probe.markSettingsClickDispatched(gearClickAt)
+        val beforeSettle = probe.settingsOverlayProbeTiming(gearClickAt + 4_999L)
+        assertFalse(beforeSettle!!.shouldInspect)
+        assertTrue(beforeSettle.reason.contains("remainingMs=1"))
+
+        val dueProbe = probe.settingsOverlayProbeTiming(gearClickAt + 5_000L)
+        assertTrue(dueProbe!!.shouldInspect)
+        assertTrue(dueProbe.reason.startsWith("mandatory-surrender-settings-overlay-probe"))
+        assertEquals(5_000L, ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_SETTLE_MS)
+        assertEquals(5_600L, ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_MAX_PROBE_LATENCY_MS)
+
+        // If the fresh frame is not yet decisive, retry observation after two
+        // seconds; never wait for the generic 30-second screen watchdog here.
+        probe.finishSettingsOverlayProbe(settingsConfirmed = false, now = gearClickAt + 5_000L)
+        assertFalse(probe.settingsOverlayProbeTiming(gearClickAt + 6_999L)!!.shouldInspect)
+        assertTrue(probe.settingsOverlayProbeTiming(gearClickAt + 7_000L)!!.shouldInspect)
+        probe.finishSettingsOverlayProbe(settingsConfirmed = true, now = gearClickAt + 7_000L)
+        assertEquals(null, probe.settingsOverlayProbeTiming(gearClickAt + 7_001L))
     }
 
     @Test

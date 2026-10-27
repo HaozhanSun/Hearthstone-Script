@@ -8,16 +8,42 @@ internal data class CapturedWindowIdentity(
     val processId: Int,
 )
 
-/** Pre-session capture is permitted only for bounded matchmaking probes. */
+/** Pre-session capture is permitted only for a named, narrow probe purpose. */
 internal enum class ScreenRecoveryCapturePurpose {
     SCREEN_STATE_RECOVERY,
+    /** Read-only stale-screen classification after a long, non-game state stall. */
+    STALE_CLIENT_PROBE,
+    /** Read-only classification during a freshly requested startup handoff. */
+    STARTUP_CLIENT_PROBE,
+    /** Narrow pre-session startup capture used to classify online menu, reconnect, or Yogg state. */
+    STARTUP_YOGG_PROBE,
+    /** Read-only client probe after one minute without progress; never grants input. */
+    IDLE_CLIENT_PROBE,
     /** Fresh SEARCHING observation immediately after a verified queue input. */
     MATCHMAKING_SEARCH,
     MATCHMAKING_ERROR_DIALOG,
 }
 
-/** The only pre-session Power.log exception: a queue-level opponent error modal. */
+    /** Pre-session capture and input authorization policies. */
 internal object ScreenRecoveryCapturePurposePolicy {
+    const val STALE_CLIENT_PROBE_AFTER_MS = 120_000L
+    const val IDLE_CLIENT_PROBE_AFTER_MS = 60_000L
+
+    /** Refuse generic pre-session recovery before it can disturb the foreground window. */
+    fun preflightRejectionReason(
+        currentSessionReady: Boolean,
+        preSessionQueueModalAuthorized: Boolean,
+        preSessionMatchmakingAuthorized: Boolean,
+        preSessionStaleClientProbeAuthorized: Boolean = false,
+        preSessionIdleClientProbeAuthorized: Boolean = false,
+        preSessionStartupClientProbeAuthorized: Boolean = false,
+        preSessionYoggProbeAuthorized: Boolean = false,
+    ): String? = if (
+        currentSessionReady || preSessionQueueModalAuthorized || preSessionMatchmakingAuthorized ||
+        preSessionStaleClientProbeAuthorized || preSessionIdleClientProbeAuthorized ||
+        preSessionStartupClientProbeAuthorized || preSessionYoggProbeAuthorized
+    ) null else "current-game-session-not-ready"
+
     /**
      * Generic stale-state recovery may inspect the fresh queue screen before
      * Hearthstone has opened the new Power.log game segment, but only after a
@@ -25,10 +51,15 @@ internal object ScreenRecoveryCapturePurposePolicy {
      */
     fun purposeForStateRecovery(
         tournamentMode: Boolean,
+        nonGameplayScreen: Boolean = tournamentMode,
         activeGame: Boolean,
         mulligan: Boolean,
         terminal: Boolean,
         recentInputIntent: Boolean,
+        stuckForMs: Long = 0L,
+        warModelAuthoritative: Boolean = true,
+        startupProbe: Boolean = false,
+        noActiveQueueEvidence: Boolean = true,
     ): ScreenRecoveryCapturePurpose = if (
         allowsPreSessionMatchmaking(
             purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_SEARCH,
@@ -40,9 +71,71 @@ internal object ScreenRecoveryCapturePurposePolicy {
         )
     ) {
         ScreenRecoveryCapturePurpose.MATCHMAKING_SEARCH
+    } else if (startupProbe && !warModelAuthoritative && !activeGame && noActiveQueueEvidence) {
+        ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE
+    } else if (allowsPreSessionStaleClientProbe(
+            purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            nonGameplayScreen = nonGameplayScreen,
+            activeGame = activeGame,
+            mulligan = mulligan,
+            terminal = terminal,
+            stuckForMs = stuckForMs,
+            warModelAuthoritative = warModelAuthoritative,
+        )
+    ) {
+        ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE
     } else {
         ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY
     }
+
+    /**
+     * Grants capture only, never input. A fresh screen classification must
+     * still protect MATCHMAKING and confirm any recovery action.
+     */
+    fun allowsPreSessionStaleClientProbe(
+        purpose: ScreenRecoveryCapturePurpose,
+        nonGameplayScreen: Boolean,
+        activeGame: Boolean,
+        mulligan: Boolean,
+        terminal: Boolean,
+        stuckForMs: Long,
+        warModelAuthoritative: Boolean = true,
+    ): Boolean = purpose == ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE &&
+        stuckForMs >= STALE_CLIENT_PROBE_AFTER_MS && (nonGameplayScreen || !warModelAuthoritative) &&
+        !activeGame && (!warModelAuthoritative || (!mulligan && !terminal))
+
+    fun allowsPreSessionStartupClientProbe(
+        purpose: ScreenRecoveryCapturePurpose,
+        currentSessionReady: Boolean,
+    ): Boolean = purpose == ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE && !currentSessionReady
+
+    fun allowsPreSessionYoggProbe(
+        purpose: ScreenRecoveryCapturePurpose,
+        currentSessionReady: Boolean,
+        activeGame: Boolean,
+        noActiveQueueEvidence: Boolean,
+    ): Boolean = purpose == ScreenRecoveryCapturePurpose.STARTUP_YOGG_PROBE &&
+        !currentSessionReady && !activeGame && noActiveQueueEvidence
+
+    fun allowsPreSessionIdleClientProbe(
+        purpose: ScreenRecoveryCapturePurpose,
+        currentSessionReady: Boolean,
+        stuckForMs: Long,
+    ): Boolean = purpose == ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE &&
+        !currentSessionReady && stuckForMs >= IDLE_CLIENT_PROBE_AFTER_MS
+
+    fun allowsStaleProbeRecovery(screenKind: String): Boolean = screenKind.uppercase() in setOf(
+        "MATCHMAKING",
+        "RECONNECT",
+        "RECONNECT_FAILURE",
+        "RECONNECT_SPINNER",
+        "SERVER_UNAVAILABLE",
+    )
+
+    fun allowsStartupOnlineMenu(screenKind: String): Boolean = screenKind.uppercase() in setOf(
+        "HOME", "TOURNAMENT", "DECK_SELECTION", "HOME_TASK_OVERLAY", "MATCHMAKING",
+        "GAME_MODE", "COLLECTION", "PACK_OPENING", "SHOP_OVERLAY",
+    )
 
     fun allowsPreSessionQueueModal(
         purpose: ScreenRecoveryCapturePurpose,
@@ -74,6 +167,68 @@ internal object ScreenRecoveryCapturePurposePolicy {
         recentInputIntent && tournamentMode && !activeGame && !mulligan && !terminal
 }
 
+/** Exact evidence needed to permit only HUB -> Traditional Battle pre-session entry. */
+internal object StartupHubModeChooserPolicy {
+    fun canAuthorizeTraditionalBattleSelection(
+        purpose: ScreenRecoveryCapturePurpose,
+        currentSessionReady: Boolean,
+        screenKind: String?,
+        confidence: Int,
+        evidence: String?,
+        currentMode: String?,
+        modalVisible: Boolean,
+        activeGame: Boolean,
+        activeMatchmaking: Boolean,
+        trustedCurrentWindow: Boolean,
+    ): Boolean = purpose in setOf(
+        ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+        ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+        ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+    ) && !currentSessionReady && screenKind.equals("TOURNAMENT", ignoreCase = true) &&
+        confidence >= MIN_CONFIDENCE && evidence == "hub-mode-chooser-visual-and-text" && currentMode == "HUB" &&
+        !modalVisible && !activeGame && !activeMatchmaking && trustedCurrentWindow
+
+    private const val MIN_CONFIDENCE = 90
+}
+
+/** Preserve the narrower HUB chooser proof when the notice postcheck sees that screen. */
+internal object StartupNoticePostcheckProofPolicy {
+    enum class Proof { HUB_MODE_CHOOSER, ONLINE_MENU, NONE }
+
+    fun choose(
+        purpose: ScreenRecoveryCapturePurpose,
+        currentSessionReady: Boolean,
+        screenKind: String?,
+        confidence: Int,
+        evidence: String?,
+        currentMode: String?,
+        modalVisible: Boolean,
+        activeGame: Boolean,
+        activeMatchmaking: Boolean,
+        terminalState: Boolean,
+        trustedCurrentWindow: Boolean,
+    ): Proof {
+        if (StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
+                purpose = purpose,
+                currentSessionReady = currentSessionReady,
+                screenKind = screenKind,
+                confidence = confidence,
+                evidence = evidence,
+                currentMode = currentMode,
+                modalVisible = modalVisible,
+                activeGame = activeGame || terminalState,
+                activeMatchmaking = activeMatchmaking,
+                trustedCurrentWindow = trustedCurrentWindow,
+            )
+        ) return Proof.HUB_MODE_CHOOSER
+
+        return if (
+            !modalVisible && !activeGame && !activeMatchmaking && !terminalState && trustedCurrentWindow &&
+            screenKind?.let(ScreenRecoveryCapturePurposePolicy::allowsStartupOnlineMenu) == true
+        ) Proof.ONLINE_MENU else Proof.NONE
+    }
+}
+
 internal data class ScreenRecoveryCaptureEvidence(
     val processAlive: Boolean,
     val currentSessionReady: Boolean,
@@ -89,6 +244,10 @@ internal data class ScreenRecoveryCaptureEvidence(
     val purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
     val preSessionQueueModalAuthorized: Boolean = false,
     val preSessionMatchmakingAuthorized: Boolean = false,
+    val preSessionStaleClientProbeAuthorized: Boolean = false,
+    val preSessionIdleClientProbeAuthorized: Boolean = false,
+    val preSessionStartupClientProbeAuthorized: Boolean = false,
+    val preSessionYoggProbeAuthorized: Boolean = false,
     val currentGameProcessId: Long? = target?.processId?.toLong(),
     val targetWindowVisibleBefore: Boolean = true,
     val targetWindowVisibleAfter: Boolean = true,
@@ -122,12 +281,20 @@ internal object ScreenRecoveryCaptureAuthority {
         }
         if (!evidence.currentSessionReady &&
             !evidence.preSessionQueueModalAuthorized &&
-            !evidence.preSessionMatchmakingAuthorized
+            !evidence.preSessionMatchmakingAuthorized &&
+            !evidence.preSessionStaleClientProbeAuthorized &&
+            !evidence.preSessionIdleClientProbeAuthorized &&
+            !evidence.preSessionStartupClientProbeAuthorized &&
+            !evidence.preSessionYoggProbeAuthorized
         ) {
             return "current-game-session-not-ready"
         }
         if (!evidence.currentSessionReady &&
             evidence.purpose != ScreenRecoveryCapturePurpose.MATCHMAKING_ERROR_DIALOG &&
+            !evidence.purpose.equals(ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE) &&
+            !evidence.purpose.equals(ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE) &&
+            !evidence.purpose.equals(ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE) &&
+            !evidence.purpose.equals(ScreenRecoveryCapturePurpose.STARTUP_YOGG_PROBE) &&
             !evidence.preSessionMatchmakingAuthorized
         ) return "current-game-session-not-ready"
         if (target.rootWindow == 0L || target.processId <= 0) return "target-window-identity-invalid"

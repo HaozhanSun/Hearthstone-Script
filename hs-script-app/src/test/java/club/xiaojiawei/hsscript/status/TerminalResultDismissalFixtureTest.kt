@@ -1,6 +1,8 @@
 package club.xiaojiawei.hsscript.status
 
 import java.awt.image.BufferedImage
+import java.awt.Color
+import java.awt.Graphics2D
 import java.io.ByteArrayInputStream
 import java.security.MessageDigest
 import javax.imageio.ImageIO
@@ -13,6 +15,59 @@ import org.junit.jupiter.api.Test
 
 /** Replays the deployed v4.16.564 terminal-menu incident without launching Hearthstone or dispatching input. */
 class TerminalResultDismissalFixtureTest {
+    @Test
+    fun `offline continue band pixel replay detects only the calibrated lower center control`() {
+        val image = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
+        val graphics: Graphics2D = image.createGraphics()
+        try {
+            graphics.color = Color.BLACK
+            graphics.fillRect(0, 0, image.width, image.height)
+            assertFalse(ScreenStateRecovery.continueControlVisibleForFixture(image))
+            assertFalse(UpstreamScreenStateRecovery.continueControlVisibleForFixture(image))
+
+            graphics.color = Color(230, 230, 230)
+            graphics.fillRect(864, 1004, 270, 15)
+        } finally {
+            graphics.dispose()
+        }
+        assertTrue(ScreenStateRecovery.continueControlVisibleForFixture(image))
+        assertTrue(UpstreamScreenStateRecovery.continueControlVisibleForFixture(image))
+    }
+
+    @Test
+    fun `rank nine incident screenshot is recognized as a rank progress continuation`() {
+        val image = requireNotNull(javaClass.getResourceAsStream("/fixtures/screen-recovery/rank9-progress-20261026-085402.png")).use {
+            requireNotNull(ImageIO.read(it))
+        }
+        assertEquals("RANK_PROGRESS_CONTINUATION", ScreenStateRecovery.classifyImageForResultFixture(image))
+        assertEquals("RANK_PROGRESS_CONTINUATION", UpstreamScreenStateRecovery.classifyImageForResultFixture(image))
+    }
+
+    @Test
+    fun `v698 rank ten screenshot is recognized and permits only the bounded continue policy`() {
+        val image = requireNotNull(
+            javaClass.getResourceAsStream("/fixtures/screen-recovery/rank10-result-v698-20261026-093304.png"),
+        ).use { requireNotNull(ImageIO.read(it)) }
+        assertEquals("RANK_PROGRESS_CONTINUATION", ScreenStateRecovery.classifyImageForResultFixture(image))
+        assertEquals("RANK_PROGRESS_CONTINUATION", UpstreamScreenStateRecovery.classifyImageForResultFixture(image))
+        assertEquals(
+            PostResultRankProgressPolicy.Action.CONTINUE,
+            PostResultRankProgressPolicy.decide(
+                rankProgressVisible = true,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = true,
+                rankProgressInputAttempts = 0,
+            ),
+        )
+        assertEquals(PostResultRankProgressPolicy.Input.CENTER_CLICK, PostResultRankProgressPolicy.inputForAttempt(1))
+        val continueTarget = GameUtil.terminalContinueTargetForTest()
+        assertEquals(-0.09, continueTarget.left, 0.0001)
+        assertEquals(0.09, continueTarget.right, 0.0001)
+        assertEquals(0.41, continueTarget.top, 0.0001)
+        assertEquals(0.48, continueTarget.bottom, 0.0001)
+        assertEquals(0.945, (continueTarget.top + continueTarget.bottom) / 2.0 + 0.5, 0.0001)
+    }
+
     @Test
     fun `incident screenshot and PowerLog fixture drive bounded inputs then require observed transition`() {
         val screenshot = requireNotNull(javaClass.getResourceAsStream(FIXTURE_SCREENSHOT)).use { it.readBytes() }

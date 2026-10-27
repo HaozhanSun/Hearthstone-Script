@@ -1,0 +1,95 @@
+$ErrorActionPreference = 'Stop'
+
+$modulePath = Join-Path $PSScriptRoot '..\..\..\main\resources\bat\deployment-contract.ps1'
+. ([System.IO.Path]::GetFullPath($modulePath))
+
+function Assert-Equal($Expected, $Actual, [string]$Message) {
+    if ($Expected -ne $Actual) {
+        throw "ASSERT_EQUAL failed: $Message expected=[$Expected] actual=[$Actual]"
+    }
+}
+
+$currentRoot = 'C:\fixtures\Hearthstone Script Release Candidate'
+$foreignRoot = 'C:\fixtures\Hearthstone Script Beta'
+$currentStart = '2026-10-25T23:00:00.0000000Z'
+$foreignStart = '2026-10-25T23:01:00.0000000Z'
+$identities = @{
+    1101 = [pscustomobject]@{ ProcessId = 1101; ProcessStartTimeUtc = $currentStart; ExecutablePath = 'C:\Java\bin\javaw.exe' }
+    2202 = [pscustomobject]@{ ProcessId = 2202; ProcessStartTimeUtc = $foreignStart; ExecutablePath = 'C:\Java\bin\javaw.exe' }
+    3303 = [pscustomobject]@{ ProcessId = 3303; ProcessStartTimeUtc = '2026-10-25T23:03:00.0000000Z'; ExecutablePath = 'C:\Java\bin\javaw.exe' }
+}
+$identityProvider = { param($processId) $identities[[int]$processId] }
+
+# Windows PowerShell's Process provider can expose Process.Path as empty while
+# MainModule.FileName is available. Exercise the concrete path resolver with a
+# Process-shaped result that deliberately has no Path property.
+$processWithoutPath = [pscustomobject]@{
+    MainModule = [pscustomobject]@{ FileName = 'C:\Java\bin\javaw.exe' }
+}
+$resolvedExecutable = Get-HsScriptExecutablePath $processWithoutPath 9901 { param($className, $filter) throw 'CIM should not be needed when MainModule resolves' }
+Assert-Equal 'C:\Java\bin\javaw.exe' $resolvedExecutable 'MainModule must resolve executable when Process.Path is absent'
+
+# If MainModule is inaccessible, CIM ExecutablePath is the fallback; an empty
+# result must throw instead of becoming an unverified process identity.
+$processWithUnreadableModule = [pscustomobject]@{ MainModule = $null }
+$cimFallback = Get-HsScriptExecutablePath $processWithUnreadableModule 9902 { param($className, $filter) [pscustomobject]@{ ExecutablePath = 'C:\Java\bin\java.exe' } }
+Assert-Equal 'C:\Java\bin\java.exe' $cimFallback 'CIM ExecutablePath must resolve inaccessible MainModule'
+$emptyCimFailedClosed = $false
+try {
+    $null = Get-HsScriptExecutablePath $processWithUnreadableModule 9903 { param($className, $filter) [pscustomobject]@{ ExecutablePath = '' } }
+} catch { $emptyCimFailedClosed = $true }
+Assert-Equal $true $emptyCimFailedClosed 'missing MainModule and CIM paths must fail closed'
+
+$currentMarker = [pscustomobject]@{
+    RuntimeRoot = $currentRoot; ReleaseChannel = 'release-candidate'; ProcessId = 1101
+    ProcessStartTimeUtc = $currentStart; ExecutablePath = 'C:\Java\bin\javaw.exe'
+}
+$foreignMarker = [pscustomobject]@{
+    RuntimeRoot = $foreignRoot; ReleaseChannel = 'beta'; ProcessId = 2202
+    ProcessStartTimeUtc = $foreignStart; ExecutablePath = 'C:\Java\bin\javaw.exe'
+}
+
+# Blank or unavailable CIM CommandLine is identified by exact launcher PID,
+# process start time, and executable path instead of being dropped as empty.
+$blankLine = Resolve-HsScriptProcessAssessment $currentRoot @(
+    [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 1101; CommandLine = $null }
+) @($currentMarker) $identityProvider
+Assert-Equal 'RUNTIME_ACTIVE' $blankLine.Status 'current channel marker must identify JVM when CommandLine is blank'
+Assert-Equal 1101 $blankLine.ProcessIds[0] 'current channel PID should be reported'
+
+# A verified foreign channel PID is not attributed to this runtime.
+$foreignOnly = Resolve-HsScriptProcessAssessment $currentRoot @(
+    [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 2202; CommandLine = '' }
+) @($foreignMarker) $identityProvider
+Assert-Equal 'IDLE' $foreignOnly.Status 'verified Beta process must not block RC based on channel ownership'
+
+# Unknown JVMs with unavailable command lines fail closed.
+$unavailableLine = Resolve-HsScriptProcessAssessment $currentRoot @(
+    [pscustomobject]@{ Name = 'java.exe'; ProcessId = 3303 }
+) @() $identityProvider
+Assert-Equal 'AMBIGUOUS' $unavailableLine.Status 'unclassified JVM must not be treated as absent'
+
+# A reused numeric PID with a different verified start time is stale marker
+# evidence, not ownership of the new process.
+$reusedMarker = [pscustomobject]@{
+    RuntimeRoot = $currentRoot; ReleaseChannel = 'release-candidate'; ProcessId = 3303
+    ProcessStartTimeUtc = '2026-10-25T22:00:00.0000000Z'; ExecutablePath = 'C:\Java\bin\javaw.exe'
+}
+$reusedPid = Resolve-HsScriptProcessAssessment $currentRoot @(
+    [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 3303; CommandLine = '' }
+) @($reusedMarker) $identityProvider
+Assert-Equal 'AMBIGUOUS' $reusedPid.Status 'verified PID reuse must not inherit old ownership or pass as an unidentified idle JVM'
+
+# Never restart the app while Hearthstone may still be in a queue/game.
+$activeGame = Resolve-HsScriptProcessAssessment $currentRoot @(
+    [pscustomobject]@{ Name = 'Hearthstone.exe'; ProcessId = 4404; CommandLine = $null }
+) @() $identityProvider
+Assert-Equal 'GAME_PROCESS_ACTIVE' $activeGame.Status 'a live game blocks deployment and launcher restart'
+
+# A visible, nonblank command line permits precise cross-channel classification.
+$foreignCommandLine = Resolve-HsScriptProcessAssessment $currentRoot @(
+    [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 5505; CommandLine = 'javaw.exe -jar "C:\fixtures\Hearthstone Script Beta\hs-script_4.jar"' }
+) @() $identityProvider
+Assert-Equal 'IDLE' $foreignCommandLine.Status 'foreign channel path must not be mistaken for current runtime'
+
+Write-Output 'DeploymentProcessOwnership.Tests.ps1 PASSED'

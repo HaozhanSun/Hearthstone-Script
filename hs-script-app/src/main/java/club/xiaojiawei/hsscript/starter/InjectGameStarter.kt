@@ -46,7 +46,7 @@ class InjectGameStarter(
 //            reductionGameWindowSize
         ) {
             if (GameUtil.findGameHWND() == null || !injectCheck()) {
-                pause()
+                stopStageWithoutPausing()
                 return
             }
             val delay = 200L

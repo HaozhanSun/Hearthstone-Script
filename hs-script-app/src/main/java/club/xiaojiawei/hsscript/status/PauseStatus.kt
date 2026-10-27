@@ -49,6 +49,7 @@ object PauseStatus {
         origin = if (paused) Origin.MANUAL else Origin.NONE
         pauseState.set(paused)
         isPauseProperty.set(paused)
+        LifecycleTrace.markGuardianManualPause(paused)
     }
 
     /** Safety stops may be recovered by the screen watchdog after a known UI repair. */

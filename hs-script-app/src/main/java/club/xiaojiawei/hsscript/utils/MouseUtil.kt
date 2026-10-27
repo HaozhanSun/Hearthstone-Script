@@ -17,6 +17,9 @@ import club.xiaojiawei.hsscript.status.GameWindowReadiness
 import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
+import club.xiaojiawei.hsscript.status.StartupInputReadiness
+import club.xiaojiawei.hsscript.status.StartupNoticeRecoveryPolicy
+import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
@@ -486,10 +489,124 @@ object MouseUtil {
     internal fun leftButtonClickForRecovery(
         pos: Point,
         terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
+        preSessionReconnect: Boolean = false,
+        preSessionStartupNotice: Boolean = false,
     ): Boolean {
-        val dispatchAction = if (terminalCleanupCapability == null) "recovery.left" else "terminal-result.dismiss"
-        if (!ActionDispatchGate.allow(dispatchAction, terminalCleanupCapability = terminalCleanupCapability)) return false
+        val dispatchAction = when {
+            terminalCleanupCapability != null -> "terminal-result.dismiss"
+            preSessionStartupNotice -> StartupNoticeRecoveryPolicy.DISPATCH_ACTION
+            preSessionReconnect -> "recovery.reconnect"
+            else -> "recovery.left"
+        }
+        if (!ActionDispatchGate.allow(dispatchAction, terminalCleanupCapability = terminalCleanupCapability)) {
+            if (preSessionStartupNotice) {
+                log.warn {
+                    "STARTUP_NOTICE_DISMISS_BLOCKED stage=dispatch-gate reason=authorization-denied " +
+                        "currentSessionReady=${ScreenStateRecovery.isCurrentGameSessionReadyForStart()} " +
+                        "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} " +
+                        "activeGame=${WarEx.inWar} mode=${Mode.currMode?.name} input=not-sent"
+                }
+            }
+            return false
+        }
+        if (preSessionStartupNotice) {
+            val hwnd = ScriptStatus.gameHWND ?: return false
+            val pid = GameUtil.findGameProcessIdForDiagnostics()?.toInt() ?: return false
+            fun permitStillMatches(): Boolean =
+                StartupInputReadiness.hasNoticeDismissPermit(pid, hwnd.toString(), pos, System.currentTimeMillis()) &&
+                    GameUtil.findGameProcessIdForDiagnostics() == pid.toLong() &&
+                    GameUtil.isVerifiedCurrentGameWindow(hwnd) &&
+                    !WarEx.inWar && Mode.currMode !== ModeEnum.GAMEPLAY &&
+                    !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+                    !LifecycleTrace.hasRecentMatchmakingInputIntent()
+            if (!permitStillMatches() || !hwndIsValid(hwnd) || !WorkTimeListener.working || PauseStatus.isPause) {
+                log.warn {
+                    "STARTUP_NOTICE_DISMISS_BLOCKED reason=stale-or-unsafe-permit pid=$pid hwnd=$hwnd " +
+                        "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} input=not-sent"
+                }
+                return false
+            }
+            val lockAcquired = try {
+                DRIVER_LOCK.tryLock(3000, TimeUnit.MILLISECONDS)
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                false
+            }
+            if (!lockAcquired) {
+                log.warn { "STARTUP_NOTICE_DISMISS_BLOCKED reason=input-lock-timeout pid=$pid hwnd=$hwnd input=not-sent" }
+                return false
+            }
+            try {
+                synchronized(e2eRobotLock) {
+                    if (!ActionDispatchGate.allow(dispatchAction) || !permitStillMatches() ||
+                        !WorkTimeListener.working || PauseStatus.isPause ||
+                        !forceFocusWindowForRecovery(hwnd) || !permitStillMatches()
+                    ) {
+                        log.warn {
+                            "STARTUP_NOTICE_DISMISS_BLOCKED reason=dispatch-recheck-failed " +
+                                "pid=$pid hwnd=$hwnd input=not-sent"
+                        }
+                        return false
+                    }
+                    val accepted = sendE2eWindowsClick(pos)
+                    if (accepted) {
+                        StartupInputReadiness.consumeNoticeDismissPermit(
+                            pid,
+                            hwnd.toString(),
+                            pos,
+                            System.currentTimeMillis(),
+                        )
+                    }
+                    log.warn {
+                        "STARTUP_NOTICE_DISMISS_CLICK_SENT pid=$pid hwnd=$hwnd pos=$pos " +
+                            "accepted=$accepted input=SendInput"
+                    }
+                    return accepted
+                }
+            } finally {
+                DRIVER_LOCK.unlock()
+            }
+        }
         val hwnd = ScriptStatus.gameHWND
+        if (preSessionReconnect) {
+            val pid = GameUtil.findGameProcessIdForDiagnostics()?.toInt()
+            if (hwnd == null || pid == null || !isBoundPreSessionReconnect(pid, hwnd, pos)) {
+                log.warn { "E2E_PRESESSION_RECONNECT_BLOCKED reason=permit-target-mismatch hwnd=$hwnd pos=$pos" }
+                return false
+            }
+            val lockAcquired = try {
+                DRIVER_LOCK.tryLock(3000, TimeUnit.MILLISECONDS)
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                false
+            }
+            if (!lockAcquired) return false
+            try {
+                synchronized(e2eRobotLock) {
+                    if (!ActionDispatchGate.allow("recovery.reconnect") ||
+                        !isBoundPreSessionReconnect(pid, hwnd, pos) ||
+                        !forceFocusWindowForRecovery(hwnd) ||
+                        GameUtil.findGameProcessIdForDiagnostics() != pid.toLong() ||
+                        !GameUtil.isVerifiedCurrentGameWindow(hwnd) ||
+                        !isBoundPreSessionReconnect(pid, hwnd, pos)
+                    ) {
+                        log.warn {
+                            "E2E_PRESESSION_RECONNECT_BLOCKED reason=window-or-permit-changed " +
+                                "pid=$pid hwnd=$hwnd pos=$pos input=not-sent"
+                        }
+                        return false
+                    }
+                    val accepted = sendE2eWindowsClick(pos)
+                    log.warn {
+                        "E2E_PRESESSION_RECONNECT_CLICK_SENT pid=$pid hwnd=$hwnd pos=$pos " +
+                            "accepted=$accepted input=SendInput"
+                    }
+                    return accepted
+                }
+            } finally {
+                DRIVER_LOCK.unlock()
+            }
+        }
         if (!e2eInputEnabled() || hwnd == null) {
             leftButtonClick(pos, hwnd, terminalCleanupCapability = terminalCleanupCapability)
             return true
@@ -545,6 +662,14 @@ object MouseUtil {
         }
     }
 
+    private fun isBoundPreSessionReconnect(pid: Int, hwnd: HWND, pos: Point): Boolean =
+        StartupInputReadiness.reconnectPermitMatches(
+            pid = pid,
+            hwnd = hwnd.toString(),
+            point = pos,
+            now = System.currentTimeMillis(),
+        )
+
     /**
      * The native EVENT path is useful for the normal injected runtime, but it
      * can report success without delivering input when the E2E run deliberately
@@ -556,8 +681,10 @@ object MouseUtil {
         hwnd: HWND,
         buttonMask: Int = InputEvent.BUTTON1_DOWN_MASK,
         recoveryCapability: MandatoryRankSurrenderGuard.RecoveryCapability? = null,
+        dispatchActionOverride: String? = null,
     ): Boolean {
-        val dispatchAction = if (recoveryCapability != null) "rank-surrender.mouse.robot" else "mouse.robot"
+        val dispatchAction = dispatchActionOverride ?:
+            if (recoveryCapability != null) "rank-surrender.mouse.robot" else "mouse.robot"
         val task: Future<Boolean> = e2eRobotExecutor.submit<Boolean> {
             synchronized(e2eRobotLock) {
                 if (!ActionDispatchGate.allow(dispatchAction, recoveryCapability)) return@submit false
@@ -609,13 +736,23 @@ object MouseUtil {
                     log.info { "E2E_INPUT_ROBOT_CANCELLED_BEFORE_PRESS client=(${pos.x},${pos.y}) hwnd=$hwnd" }
                     return@submit false
                 }
-                if (!ActionDispatchGate.allow("$dispatchAction.before-press", recoveryCapability)) return@submit false
-                e2eRobot.apply {
-                    mousePress(buttonMask)
-                    log.info { "E2E_INPUT_ROBOT_PRESSED" }
-                    delay(RandomUtil.getInteractionDelay(35))
-                    mouseRelease(buttonMask)
+                val beforePressAction = if (dispatchActionOverride != null) {
+                    dispatchAction
+                } else {
+                    "$dispatchAction.before-press"
                 }
+                val sent = RobotInputDispatchBoundary.dispatchIfAuthorized(
+                    action = beforePressAction,
+                    authorize = { action -> ActionDispatchGate.allow(action, recoveryCapability) },
+                ) {
+                    e2eRobot.apply {
+                        mousePress(buttonMask)
+                        log.info { "E2E_INPUT_ROBOT_PRESSED" }
+                        delay(RandomUtil.getInteractionDelay(35))
+                        mouseRelease(buttonMask)
+                    }
+                }
+                if (!sent) return@submit false
                 val foregroundAfterInput = User32.INSTANCE.GetForegroundWindow()
                 val focusAfterInput = foregroundAfterInput != null &&
                     Pointer.nativeValue(foregroundAfterInput.pointer) == Pointer.nativeValue(hwnd.pointer)
@@ -988,8 +1125,9 @@ object MouseUtil {
         mouseMode: Int = effectiveMouseMode(),
         recoveryCapability: MandatoryRankSurrenderGuard.RecoveryCapability? = null,
         terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
+        dispatchActionOverride: String? = null,
     ) {
-        val dispatchAction = when {
+        val dispatchAction = dispatchActionOverride ?: when {
             terminalCleanupCapability != null -> "terminal-result.dismiss"
             recoveryCapability != null -> "rank-surrender.mouse.left"
             else -> "mouse.left"
@@ -1103,7 +1241,12 @@ object MouseUtil {
                 }
 
                 if (e2eInputEnabled() && hwnd != null &&
-                    clickWithE2ERobot(pos, hwnd, recoveryCapability = recoveryCapability)
+                    clickWithE2ERobot(
+                        pos,
+                        hwnd,
+                        recoveryCapability = recoveryCapability,
+                        dispatchActionOverride = dispatchActionOverride,
+                    )
                 ) {
                     savePos(pos)
                     return

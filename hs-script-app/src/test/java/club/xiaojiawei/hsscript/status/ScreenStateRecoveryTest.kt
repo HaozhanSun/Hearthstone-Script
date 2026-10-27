@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import java.awt.Color
 import java.awt.Rectangle
 import java.awt.image.BufferedImage
+import java.io.File
 import javax.imageio.ImageIO
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -337,15 +338,16 @@ class ScreenStateRecoveryTest {
     }
 
     @Test
-    fun `restarts a confirmed stalled reconnect warning after the recovery threshold`() {
+    fun `restarts an exact stalled reconnect warning at 60 seconds while generic loading keeps its separate bound`() {
         val warning = "本次连接较平常花费了更多时间。请检查你的网络连接。"
         assertTrue(ScreenStateRecovery.looksLikeStalledReconnectLoadingText(warning))
         assertEquals("LOADING", ScreenStateRecovery.classifyForTest(warning))
         assertFalse(ScreenStateRecovery.looksLikeStalledReconnectLoadingText("正在加载，请稍候"))
 
         val reconnectAt = 10_000L
-        assertFalse(ScreenStateRecovery.shouldRestartStalledReconnectForTest(reconnectAt, 129_999L))
-        assertTrue(ScreenStateRecovery.shouldRestartStalledReconnectForTest(reconnectAt, 130_000L))
+        assertEquals(60_000L, IndefiniteReconnectRestartPolicy.DEFAULT_THRESHOLD_MS)
+        assertFalse(ScreenStateRecovery.shouldRestartStalledReconnectForTest(reconnectAt, 69_999L))
+        assertTrue(ScreenStateRecovery.shouldRestartStalledReconnectForTest(reconnectAt, 70_000L))
         assertFalse(ScreenStateRecovery.shouldRestartStalledReconnectForTest(0L, 999_999L))
         assertFalse(ScreenStateRecovery.shouldRestartStalledLoadingForTest(reconnectAt, 129_999L))
         assertTrue(ScreenStateRecovery.shouldRestartStalledLoadingForTest(reconnectAt, 130_000L))
@@ -370,6 +372,65 @@ class ScreenStateRecoveryTest {
     }
 
     @Test
+    fun `Yogg server error is classified as non-game with no input or restart`() {
+        val page = "Yogg has devoured the server again. Please check back later!"
+
+        assertTrue(ScreenStateRecovery.looksLikeServerUnavailableText(page))
+        val transition = ScreenStateRecovery.recoveryTransitionForTest(page)
+        assertEquals("SERVER_UNAVAILABLE", transition?.screen)
+        assertEquals("CLASSIFY_NON_GAME_NO_INPUT_NO_RESTART", transition?.action)
+        assertFalse(transition?.enterStrategy ?: true)
+        assertTrue(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("SERVER_UNAVAILABLE"))
+    }
+
+    @Test
+    fun `captured Yogg incident uses English ROI after the real Chinese OCR miss`() {
+        val image = ImageIO.read(
+            javaClass.getResourceAsStream("/fixtures/screen-recovery/yogg-server-unavailable-2026-10-25.png")
+                ?: error("missing captured Yogg incident fixture"),
+        )
+        val englishModel = javaClass.getResource("/resources/tessdata/eng.traineddata")
+            ?: error("missing classpath English Tesseract model")
+        val tessData = File(englishModel.toURI()).parentFile
+        assertTrue(File(tessData, "eng.traineddata").isFile)
+        assertTrue(File(tessData, "chi_sim.traineddata").isFile)
+
+        assertFalse(ScreenStateRecovery.looksLikeServerUnavailableText("__er,这大加_可人EL___"))
+        assertEquals(
+            "SERVER_UNAVAILABLE",
+            ScreenStateRecovery.classifyCapturedImageForTest(image, tessData),
+            "production bounded-ROI OCR and detection should recognize the saved Yogg incident",
+        )
+        val startupPurpose = ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
+            tournamentMode = false,
+            nonGameplayScreen = true,
+            activeGame = false,
+            mulligan = false,
+            terminal = false,
+            recentInputIntent = false,
+            warModelAuthoritative = false,
+            startupProbe = true,
+            noActiveQueueEvidence = true,
+        )
+        assertEquals(ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE, startupPurpose)
+        assertFalse(
+            StartupInputAuthorizationPolicy.mayIssuePreSessionReconnectPermit(
+                screenKind = "SERVER_UNAVAILABLE",
+                currentSessionReady = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                freshCapture = true,
+                exactWindowAndForeground = true,
+            ),
+            "a positively recognized Yogg page must never authorize reconnect or gameplay input",
+        )
+        val transition = ScreenStateRecovery.recoveryTransitionForTest(
+            "Yogg has devoured the server again. Please check back later!",
+        )
+        assertEquals("CLASSIFY_NON_GAME_NO_INPUT_NO_RESTART", transition?.action)
+    }
+
+    @Test
     fun `recognizes offline dialog from its bounded status and message ROIs`() {
         assertTrue(
             ScreenStateRecovery.looksLikeReconnectDialogRoiText(
@@ -385,6 +446,56 @@ class ScreenStateRecoveryTest {
                     ScreenStateRoiSelector.RECONNECT_DIALOG_MESSAGE_ROI to "游戏连接中断",
                 ),
         )?.screen,
+        )
+        assertTrue(
+            ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("RECONNECT"),
+            "the exact generic offline prompt must remain reachable through stale-session capture",
+        )
+        assertTrue(
+            StartupInputAuthorizationPolicy.mayIssuePreSessionReconnectPermit(
+                screenKind = "RECONNECT",
+                currentSessionReady = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                freshCapture = true,
+                exactWindowAndForeground = true,
+            ),
+            "only the fresh exact offline prompt can authorize the bounded reconnect control",
+        )
+    }
+
+    @Test
+    fun `captured opponent modal that OCR cannot classify stays blocked instead of becoming a menu`() {
+        val image = ImageIO.read(
+            javaClass.getResourceAsStream(
+                "/offline-ocr/screen-recovery/opponent-disconnect-user-attachment.png",
+            ) ?: error("missing captured disconnect attachment"),
+        )
+        val chineseModel = javaClass.getResource("/resources/tessdata/chi_sim.traineddata")
+            ?: error("missing classpath Chinese Tesseract model")
+        val tessData = File(chineseModel.toURI()).parentFile
+
+        val screen = ScreenStateRecovery.classifyCapturedImageForTest(image, tessData)
+        assertNull(screen, "the captured opponent modal's noisy OCR is not enough to grant any input authority")
+        assertTrue(ScreenStateRecovery.hasCenteredModalPanel(image))
+        assertFalse(ScreenRecoveryCapturePurposePolicy.allowsStartupOnlineMenu(screen.orEmpty()))
+        assertFalse(
+            StartupInputAuthorizationPolicy.allows(
+                action = "matchmaking.start",
+                currentSessionReady = false,
+                freshOnlineMenuReady = false,
+            ),
+        )
+        assertFalse(
+            StartupInputAuthorizationPolicy.mayIssuePreSessionReconnectPermit(
+                screenKind = screen.orEmpty(),
+                currentSessionReady = false,
+                activeGame = false,
+                activeMatchmaking = true,
+                freshCapture = true,
+                exactWindowAndForeground = true,
+            ),
+            "queue evidence fences even a recognized disconnect modal",
         )
     }
 

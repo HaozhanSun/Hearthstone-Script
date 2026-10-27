@@ -6,7 +6,6 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Keeps terminal-page Continue inputs on an independent retry clock while one
@@ -25,11 +24,14 @@ internal class TerminalResultSequenceController(
     private val terminalProofValid: () -> Boolean,
     private val paused: () -> Boolean,
     private val sameGame: () -> Boolean,
-    private val dispatchContinue: (Page, Int, plannedIntervalMillis: Long, recordDispatch: () -> Long?) -> Boolean,
+    private val dispatchContinue: (Page, Int, plannedIntervalMillis: Long, recordDispatch: () -> Long?) -> DispatchOutcome,
     private val confirmDestination: (ResultScreenObservation) -> Boolean,
     private val onStopped: (reason: String, destinationConfirmed: Boolean) -> Unit,
 ) {
     enum class Page { DEFEAT, RANK_PROGRESS }
+
+    /** Separates an attempted input from the OS input API's dispatch result. */
+    data class DispatchOutcome(val attempted: Boolean, val dispatchAccepted: Boolean)
 
     data class Snapshot(
         val stopped: Boolean,
@@ -37,16 +39,20 @@ internal class TerminalResultSequenceController(
         val inputs: Int,
         val probes: Int,
         val stopReason: String?,
+        val lastDispatchAccepted: Boolean?,
     )
 
     companion object {
-        const val MAX_CONTINUE_INPUTS = 2
+        const val MAX_CONTINUE_INPUTS = 4
         const val MAX_OBSERVATIONS = 20
-        const val MIN_OBSERVER_INTERVAL_MS = 600L
+        // Avoid burning the bounded 20-probe episode on repeated fast visual
+        // frames before the independent Continue clock reaches its next retry.
+        // The fast visual path still returns immediately, without OCR latency.
+        const val MIN_OBSERVER_INTERVAL_MS = 1_500L
+        const val MAX_AUTHORIZED_FRAME_AGE_MS = 25_000L
         const val DEFAULT_OBSERVER_INTERVAL_MS = MIN_OBSERVER_INTERVAL_MS
         const val DEFAULT_MONITOR_INTERVAL_MS = 50L
         const val DEFAULT_MAX_DURATION_MS = 120_000L
-        const val MAX_AUTHORIZED_FRAME_AGE_MS = 25_000L
     }
 
     private val lock = Any()
@@ -54,8 +60,11 @@ internal class TerminalResultSequenceController(
     private val destinationDetected = AtomicBoolean(false)
     private val inputCount = AtomicInteger(initialInputCount.coerceAtLeast(0))
     private val probeCount = AtomicInteger(0)
-    @Volatile private var latestObservation: ResultScreenObservation? = null
-    private val lastInputAtNanos = AtomicLong(Long.MIN_VALUE)
+    private val latestObservation = java.util.concurrent.atomic.AtomicReference<ResultScreenObservation?>()
+    private val latestObservationAtNanos = java.util.concurrent.atomic.AtomicLong(Long.MIN_VALUE)
+    private val lastInputAtNanos = java.util.concurrent.atomic.AtomicLong(Long.MIN_VALUE)
+    private val lastDispatchAccepted = java.util.concurrent.atomic.AtomicReference<Boolean?>()
+    private val inputScheduled = AtomicBoolean(false)
     private val scheduledTasks = CopyOnWriteArrayList<ScheduledFuture<*>>()
 
     @Volatile private var page = Page.DEFEAT
@@ -70,7 +79,7 @@ internal class TerminalResultSequenceController(
         return scheduledTasks.toList()
     }
 
-    fun snapshot(): Snapshot = Snapshot(stopped.get(), page, inputCount.get(), probeCount.get(), stopReason)
+    fun snapshot(): Snapshot = Snapshot(stopped.get(), page, inputCount.get(), probeCount.get(), stopReason, lastDispatchAccepted.get())
 
     fun cancel(reason: String) = stop(reason, destinationConfirmed = false)
 
@@ -110,7 +119,8 @@ internal class TerminalResultSequenceController(
         }
         val observation = runCatching(observe).getOrElse { return }
         if (stopped.get()) return
-        latestObservation = observation
+        latestObservation.set(observation)
+        latestObservationAtNanos.set(observation.capturedAtNanos)
         val destinationConfirmed = FreshPostResultDestinationPolicy.isConfirmed(
             observation.destinationScreen,
             observation.destinationConfidence,
@@ -137,9 +147,12 @@ internal class TerminalResultSequenceController(
     }
 
     private fun scheduleInput(delayMillis: Long, plannedMillis: Long = delayMillis) {
-        if (stopped.get() || inputCount.get() >= MAX_CONTINUE_INPUTS) return
+        if (stopped.get() || inputCount.get() >= MAX_CONTINUE_INPUTS || !inputScheduled.compareAndSet(false, true)) return
         plannedIntervalMillis = plannedMillis
-        val task = inputExecutor.schedule({ dispatchNext() }, delayMillis.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+        val task = inputExecutor.schedule({
+            inputScheduled.set(false)
+            dispatchNext()
+        }, delayMillis.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
         scheduledTasks += task
         if (stopped.get()) task.cancel(false)
     }
@@ -157,15 +170,23 @@ internal class TerminalResultSequenceController(
             if (next > MAX_CONTINUE_INPUTS) return
             next
         }
-        val observed = latestObservation
-        val frameAgeMs = observed?.let {
-            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - it.capturedAtNanos)
-        } ?: Long.MAX_VALUE
-        if (observed?.captureAuthorized != true ||
-            !(observed.resultVisible == true || observed.rankProgressVisible || observed.continueControlVisible) ||
-            frameAgeMs !in 0..MAX_AUTHORIZED_FRAME_AGE_MS ||
-            observed.capturedAtNanos <= lastInputAtNanos.get()
-        ) {
+        val observed = latestObservation.get()
+        val observedAt = latestObservationAtNanos.get()
+        val lastInputAt = lastInputAtNanos.get()
+        // After authoritative same-game terminal proof, a fresh authorized
+        // frame with the calibrated Continue band is enough to retry the
+        // result transition even when OCR cannot name a victory variant.
+        // This is deliberately narrower than accepting UNKNOWN pixels alone:
+        // the lower-center control must be visibly present in this frame.
+        val visibleResultPage = observed?.captureAuthorized == true &&
+            (observed.resultVisible == true || observed.rankProgressVisible || observed.continueControlVisible)
+        val frameAgeNanos = System.nanoTime() - observedAt
+        val frameIsCurrent = observedAt > 0L && frameAgeNanos in 0..TimeUnit.MILLISECONDS.toNanos(MAX_AUTHORIZED_FRAME_AGE_MS)
+        val postInputObservation = lastInputAt == Long.MIN_VALUE || observedAt > lastInputAt
+        if (!visibleResultPage || !frameIsCurrent || !postInputObservation) {
+            // Never turn timer expiry, an UNKNOWN frame, or a prior pre-click
+            // frame into permission to touch the client. Keep the bounded
+            // worker alive until a fresh authorized result-page frame arrives.
             scheduleInput(MIN_OBSERVER_INTERVAL_MS, retryIntervalMillis().coerceAtLeast(1L))
             return
         }
@@ -175,11 +196,11 @@ internal class TerminalResultSequenceController(
             !sameGame() -> return stop("new-game-detected", destinationConfirmed = false)
             !terminalProofValid() -> return stop("terminal-proof-invalid", destinationConfirmed = false)
         }
-        val targetPage = if (attempt == 1) Page.DEFEAT else Page.RANK_PROGRESS
+        val targetPage = if (observed?.rankProgressVisible == true) Page.RANK_PROGRESS else Page.DEFEAT
         val dispatchStartedAtNanos = System.nanoTime()
         var markedDispatchAtNanos: Long? = null
         var dispatchGapMillis: Long? = null
-        val dispatched = runCatching {
+        val outcome = runCatching {
             dispatchContinue(targetPage, attempt, plannedIntervalMillis) {
                 val now = System.nanoTime()
                 dispatchGapMillis = markedDispatchAtNanos?.let {
@@ -188,10 +209,11 @@ internal class TerminalResultSequenceController(
                 markedDispatchAtNanos = now
                 dispatchGapMillis
             }
-        }.getOrDefault(false)
-        if (!dispatched) return stop("continue-dispatch-failed", destinationConfirmed = false)
+        }.getOrDefault(DispatchOutcome(attempted = false, dispatchAccepted = false))
+        if (!outcome.attempted) return stop("continue-dispatch-failed", destinationConfirmed = false)
         val actualDispatchAt = markedDispatchAtNanos ?: dispatchStartedAtNanos
         lastInputAtNanos.set(actualDispatchAt)
+        lastDispatchAccepted.set(outcome.dispatchAccepted)
         synchronized(lock) {
             if (stopped.get() || destinationDetected.get()) return
             inputCount.set(attempt)

@@ -19,10 +19,10 @@ internal class StartupHandoffActivityTracker(
         while (true) {
             val previous = activityWindow.get()
             if (previous != null && nowMs < previous.lastAttemptAtMs) return
-            val next = if (
-                previous == null ||
-                nowMs - previous.lastAttemptAtMs >= activeWindowMs
-            ) {
+            // A gap between retries must not reset the hard processless-startup
+            // budget. Otherwise a launcher retry every <activeWindow> can keep
+            // startup/no-progress recovery deferred indefinitely.
+            val next = if (previous == null) {
                 ActivityWindow(firstAttemptAtMs = nowMs, lastAttemptAtMs = nowMs)
             } else {
                 previous.copy(lastAttemptAtMs = nowMs)
@@ -30,6 +30,9 @@ internal class StartupHandoffActivityTracker(
             if (activityWindow.compareAndSet(previous, next)) return
         }
     }
+
+    /** A new explicit Start or a confirmed game process begins a fresh startup episode. */
+    fun reset() = activityWindow.set(null)
 
     fun shouldDeferNoProgress(context: Context, nowMs: Long = System.currentTimeMillis()): Boolean {
         val window = activityWindow.get() ?: return false

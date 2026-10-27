@@ -117,7 +117,11 @@ class ScreenRecoveryGateTest {
         assertTrue(roiNames.contains(ScreenStateRoiSelector.RESULT_CONTINUE_ROI))
         assertFalse(roiNames.contains("screen-state-center"))
         assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyForTest("选择套牌 狂野对战"))
-        assertEquals("RESULT", UpstreamScreenStateRecovery.classifyForTest("点击继续"))
+        assertNull(
+            UpstreamScreenStateRecovery.classifyForTest("点击继续"),
+            "a generic Continue OCR hit needs corroborating terminal text or visual evidence",
+        )
+        assertEquals("RESULT", UpstreamScreenStateRecovery.classifyForTest("对战结束 点击继续"))
         assertEquals(
             false,
             UpstreamScreenStateRecovery.resultVisibilityForTest("DECK_SELECTION", 100),

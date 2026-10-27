@@ -1,20 +1,147 @@
 [CmdletBinding()]
 param()
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
-$javaPath = "C:\Program Files\Java\jdk-25.0.4\bin\javaw.exe"
-$logDirectory = Join-Path $scriptDirectory "log"
-$selectionLog = Join-Path $logDirectory "launcher-selection.log"
+$javaPath = 'C:\Program Files\Java\jdk-25.0.4\bin\javaw.exe'
+$logDirectory = Join-Path $scriptDirectory 'log'
+$selectionLog = Join-Path $logDirectory 'launcher-selection.log'
 . (Join-Path $scriptDirectory 'deployment-contract.ps1')
+. (Join-Path $scriptDirectory 'launcher-guardian-policy.ps1')
 $deployment = Resolve-Deployment $scriptDirectory
 if (-not (Test-Path -LiteralPath $javaPath)) { throw "javaw.exe was not found: $javaPath" }
 
-$replaced = @(Stop-ManagedHsScriptProcesses $scriptDirectory)
 New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
-Add-Content -LiteralPath $selectionLog -Value ("{0} selected={1} deploymentId={2} replacedPids={3}" -f (Get-Date -Format o), $deployment.AppJar, $deployment.DeploymentId, ($replaced -join ','))
+$runtimeHasher = [System.Security.Cryptography.SHA256]::Create()
+$runtimeHashBytes = $runtimeHasher.ComputeHash(
+    [System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFullPath($scriptDirectory).ToLowerInvariant())
+)
+$runtimeKey = ([System.BitConverter]::ToString($runtimeHashBytes)).Replace('-', '').Substring(0, 24)
+$runtimeHasher.Dispose()
+$guardianMutexState = Enter-HsScriptGuardianMutex -RuntimeKey $runtimeKey
+if (-not $guardianMutexState.Acquired) {
+    Add-Content -LiteralPath $selectionLog -Value ("{0} guardianAlreadyRunning action=NO_DUPLICATE_LAUNCH" -f (Get-Date -Format o))
+    $guardianMutexState.Mutex.Dispose()
+    exit 0
+}
+$guardianMutex = $guardianMutexState.Mutex
 
-$arguments = '-Dhs.script.launch.source=shortcut -Djna.library.path="' +
-    $scriptDirectory + '" -Dhs.script.deployment.id="' + $deployment.DeploymentId +
-    '" -Dhs.script.deployment.manifest="' + $deployment.ManifestPath + '" -jar "' + $deployment.AppJar + '"'
-Start-Process -FilePath $javaPath -ArgumentList $arguments -WorkingDirectory $scriptDirectory
+function Start-HsScriptChild([object]$ResolvedDeployment, [bool]$GuardianRestart) {
+    $runtimeGate = Enter-HsScriptRuntimeGate $scriptDirectory
+    try {
+        if (-not $GuardianRestart) {
+            $idle = Assert-HsScriptRuntimeIdle $scriptDirectory
+        }
+        $arguments = '-Dhs.script.launch.source=shortcut -Djna.library.path="' +
+            $scriptDirectory + '" -Dhs.script.deployment.id="' + $ResolvedDeployment.DeploymentId +
+            '" -Dhs.script.deployment.manifest="' + $ResolvedDeployment.ManifestPath + '" -jar "' +
+            $ResolvedDeployment.AppJar + '"'
+        $child = Start-Process -FilePath $javaPath -ArgumentList $arguments -WorkingDirectory $scriptDirectory -PassThru
+        $identity = Get-HsScriptProcessIdentity ([int]$child.Id)
+        if ($null -eq $identity -or [string]::IsNullOrWhiteSpace([string]$identity.ProcessStartTimeUtc) -or
+            [string]::IsNullOrWhiteSpace([string]$identity.ExecutablePath)) {
+            throw "Launched JVM identity could not be verified; refusing another launch: pid=$($child.Id)"
+        }
+        $marker = [ordered]@{
+            schema = 1
+            releaseChannel = ([string]$ResolvedDeployment.Manifest.releaseChannel).ToLowerInvariant()
+            runtimeDirectoryName = [string]$ResolvedDeployment.Manifest.runtimeDirectoryName
+            runtimeRoot = [System.IO.Path]::GetFullPath($scriptDirectory).TrimEnd('\')
+            processId = [int]$identity.ProcessId
+            processStartTimeUtc = [string]$identity.ProcessStartTimeUtc
+            executablePath = [System.IO.Path]::GetFullPath([string]$identity.ExecutablePath)
+            deploymentId = $ResolvedDeployment.DeploymentId
+            appJar = [string]$ResolvedDeployment.Manifest.appJar
+            recordedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        }
+        $markerPath = Join-Path $scriptDirectory 'hs-script.pid.json'
+        $temporaryMarker = "$markerPath.$([guid]::NewGuid().ToString('N')).tmp"
+        $marker | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $temporaryMarker -Encoding UTF8
+        Move-Item -LiteralPath $temporaryMarker -Destination $markerPath -Force
+        $guardianStatePath = Join-Path $logDirectory 'guardian-state.json'
+        $stateMatchesChild = $false
+        if (Test-Path -LiteralPath $guardianStatePath -PathType Leaf) {
+            try {
+                $priorGuardianState = Get-Content -LiteralPath $guardianStatePath -Raw | ConvertFrom-Json -ErrorAction Stop
+                $stateMatchesChild = [int64]$priorGuardianState.pid -eq [int64]$identity.ProcessId -and
+                    (Test-HsScriptStartTimeMatch -RecordedUtc ([string]$priorGuardianState.processStartTimeUtc) `
+                        -ObservedUtc ([string]$identity.ProcessStartTimeUtc))
+            } catch { $stateMatchesChild = $false }
+        }
+        if (-not $stateMatchesChild) {
+            $initialGuardianState = [ordered]@{
+                schema = 2
+                pid = [int]$identity.ProcessId
+                processStartTimeUtc = [string]$identity.ProcessStartTimeUtc
+                deploymentId = $ResolvedDeployment.DeploymentId
+                releaseChannel = ([string]$ResolvedDeployment.Manifest.releaseChannel).ToLowerInvariant()
+                intent = 'RUNNING'
+                working = $true
+                paused = $false
+                pauseOrigin = 'NONE'
+                gameAlive = (@(Get-Process -Name 'Hearthstone' -ErrorAction SilentlyContinue).Count -gt 0)
+                activeGame = $false
+                activeMatchmaking = $false
+                healthSnapshotKnown = $false
+                heartbeatAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+                recordedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+                reason = 'launcher-start'
+            }
+            $stateTemporary = "$guardianStatePath.$([guid]::NewGuid().ToString('N')).tmp"
+            $initialGuardianState | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $stateTemporary -Encoding UTF8
+            Move-Item -LiteralPath $stateTemporary -Destination $guardianStatePath -Force
+        }
+        Add-Content -LiteralPath $selectionLog -Value ("{0} startedPid={1} deploymentId={2} guardianRestart={3} marker={4}" -f (Get-Date -Format o), $identity.ProcessId, $ResolvedDeployment.DeploymentId, $GuardianRestart, $markerPath)
+        return [pscustomobject]@{ Process = $child; Identity = $identity; Deployment = $ResolvedDeployment }
+    } finally {
+        Exit-HsScriptRuntimeGate $runtimeGate
+    }
+}
+
+try {
+    $run = Start-HsScriptChild $deployment $false
+    $guardianNotifier = $null
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+        $guardianNotifier = [System.Windows.Forms.NotifyIcon]::new()
+        $guardianNotifier.Icon = [System.Drawing.SystemIcons]::Warning
+        $guardianNotifier.Text = 'Hearthstone RC guardian'
+        $guardianNotifier.Visible = $true
+    } catch {
+        Add-Content -LiteralPath $selectionLog -Value ("{0} guardianNotificationUnavailable={1}" -f `
+            (Get-Date -Format o), $_.Exception.Message)
+    }
+    $null = Invoke-HsScriptGuardianLoop -InitialRun $run `
+        -StartRun {
+            param($GuardianRestart)
+            $currentDeployment = Resolve-Deployment $scriptDirectory
+            Start-HsScriptChild $currentDeployment ([bool]$GuardianRestart)
+        } `
+        -ReadState {
+            param($CurrentRun)
+            $currentStatePath = Join-Path $logDirectory 'guardian-state.json'
+            if (-not (Test-Path -LiteralPath $currentStatePath -PathType Leaf)) { return $null }
+            try { Get-Content -LiteralPath $currentStatePath -Raw | ConvertFrom-Json -ErrorAction Stop }
+            catch { return $null }
+        } `
+        -IsHearthstoneAlive { @(Get-Process -Name 'Hearthstone' -ErrorAction SilentlyContinue).Count -gt 0 } `
+        -Notify {
+            param($title, $message)
+            if ($null -ne $guardianNotifier) {
+                try { $guardianNotifier.ShowBalloonTip(10000, $title, $message, [System.Windows.Forms.ToolTipIcon]::Warning) }
+                catch { Add-Content -LiteralPath $selectionLog -Value ("{0} guardianNotificationFailed={1}" -f (Get-Date -Format o), $_.Exception.Message) }
+            }
+        } `
+        -WriteLog {
+            param($line)
+            Add-Content -LiteralPath $selectionLog -Value ("{0} {1}" -f (Get-Date -Format o), $line)
+        }
+} finally {
+    if ($null -ne $guardianNotifier) {
+        $guardianNotifier.Visible = $false
+        $guardianNotifier.Dispose()
+    }
+    $guardianMutex.ReleaseMutex()
+    $guardianMutex.Dispose()
+}

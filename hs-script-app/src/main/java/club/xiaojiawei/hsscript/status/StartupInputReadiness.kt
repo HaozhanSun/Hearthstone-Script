@@ -1,0 +1,190 @@
+package club.xiaojiawei.hsscript.status
+
+import java.awt.Point
+import java.util.concurrent.atomic.AtomicReference
+
+/** Fresh, process-bound proof that the visible client is at an online menu. */
+internal object StartupInputReadiness {
+    private data class Proof(val pid: Int, val hwnd: String, val screen: String, val observedAt: Long)
+    private data class ReconnectPermit(
+        val pid: Int,
+        val hwnd: String,
+        val point: Point,
+        val expiresAt: Long,
+    )
+    private data class NoticeDismissPermit(
+        val pid: Int,
+        val hwnd: String,
+        val point: Point,
+        val expiresAt: Long,
+    )
+
+    private val proof = AtomicReference<Proof?>(null)
+    private val reconnectPermit = AtomicReference<ReconnectPermit?>(null)
+    private val noticeDismissPermit = AtomicReference<NoticeDismissPermit?>(null)
+
+    const val HUB_TRADITIONAL_BATTLE_ACTION = "mode.select-traditional"
+    const val HUB_MODE_CHOOSER_PROOF_MAX_AGE_MS = 8_000L
+
+    fun recordOnlineMenu(
+        pid: Int,
+        hwnd: String,
+        screen: String,
+        modalVisible: Boolean,
+        now: Long = System.currentTimeMillis(),
+    ) {
+        if (pid <= 0 || hwnd.isBlank() || modalVisible || screen !in ONLINE_MENU_SCREENS) {
+            invalidate(pid, hwnd)
+            return
+        }
+        reconnectPermit.set(null)
+        noticeDismissPermit.updateAndGet { current ->
+            if (current != null && current.pid == pid && current.hwnd == hwnd) null else current
+        }
+        proof.set(Proof(pid, hwnd, screen, now))
+    }
+
+    /** Narrow proof for the exact traditional-mode button on the HUB mode chooser. */
+    fun recordHubModeChooser(pid: Int, hwnd: String, now: Long = System.currentTimeMillis()) {
+        if (pid <= 0 || hwnd.isBlank()) {
+            invalidate(pid, hwnd)
+            return
+        }
+        reconnectPermit.set(null)
+        proof.set(Proof(pid, hwnd, HUB_MODE_CHOOSER_SCREEN, now))
+    }
+
+    fun invalidate(pid: Int? = null, hwnd: String? = null) {
+        proof.updateAndGet { current ->
+            if (current != null && (pid == null || current.pid == pid) &&
+                (hwnd == null || current.hwnd == hwnd)
+            ) null else current
+        }
+        reconnectPermit.set(null)
+        noticeDismissPermit.updateAndGet { current ->
+            if (current != null && (pid == null || current.pid == pid) &&
+                (hwnd == null || current.hwnd == hwnd)
+            ) null else current
+        }
+    }
+
+    fun isMenuReady(pid: Int, hwnd: String, mode: String?): Boolean =
+        proof.get()?.let { it.pid == pid && it.hwnd == hwnd && mode in allowedModesByScreen[it.screen].orEmpty() } == true
+
+    fun isHubTraditionalBattleSelectionReady(
+        pid: Int,
+        hwnd: String,
+        mode: String?,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean = proof.get()?.let {
+        it.pid == pid && it.hwnd == hwnd && it.screen == HUB_MODE_CHOOSER_SCREEN && mode == "HUB" &&
+            now >= it.observedAt && now - it.observedAt <= HUB_MODE_CHOOSER_PROOF_MAX_AGE_MS
+    } == true
+
+    fun issueReconnectPermit(pid: Int, hwnd: String, point: Point, now: Long): Boolean {
+        if (pid <= 0 || hwnd.isBlank() || point.x < 0 || point.y < 0) return false
+        proof.set(null)
+        reconnectPermit.set(ReconnectPermit(pid, hwnd, Point(point), now + RECONNECT_PERMIT_LIFETIME_MS))
+        return true
+    }
+
+    fun hasReconnectPermit(now: Long = System.currentTimeMillis()): Boolean =
+        reconnectPermit.get()?.let { now <= it.expiresAt } == true
+
+    fun reconnectPermitMatches(pid: Int, hwnd: String, point: Point, now: Long): Boolean =
+        reconnectPermit.get()?.let {
+            now <= it.expiresAt && it.pid == pid && it.hwnd == hwnd && it.point == point
+        } == true
+
+    fun consumeReconnectPermit(pid: Int, hwnd: String, point: Point, now: Long): Boolean {
+        val current = reconnectPermit.get() ?: return false
+        return current.pid == pid && current.hwnd == hwnd && current.point == point &&
+            now <= current.expiresAt && reconnectPermit.compareAndSet(current, null)
+    }
+
+    fun issueNoticeDismissPermit(pid: Int, hwnd: String, point: Point, now: Long): Boolean {
+        if (pid <= 0 || hwnd.isBlank() || point.x < 0 || point.y < 0) return false
+        proof.set(null)
+        reconnectPermit.set(null)
+        noticeDismissPermit.set(
+            NoticeDismissPermit(pid, hwnd, Point(point), now + StartupNoticeRecoveryPolicy.PERMIT_LIFETIME_MS),
+        )
+        return true
+    }
+
+    fun hasNoticeDismissPermit(pid: Int, hwnd: String, point: Point, now: Long): Boolean =
+        noticeDismissPermit.get()?.let {
+            now <= it.expiresAt && it.pid == pid && it.hwnd == hwnd && it.point == point
+        } == true
+
+    fun hasNoticeDismissPermit(pid: Int, hwnd: String, now: Long): Boolean =
+        noticeDismissPermit.get()?.let { now <= it.expiresAt && it.pid == pid && it.hwnd == hwnd } == true
+
+    fun consumeNoticeDismissPermit(pid: Int, hwnd: String, point: Point, now: Long): Boolean {
+        val current = noticeDismissPermit.get() ?: return false
+        return current.pid == pid && current.hwnd == hwnd && current.point == point &&
+            now <= current.expiresAt && noticeDismissPermit.compareAndSet(current, null)
+    }
+
+    internal fun resetForTest() {
+        proof.set(null)
+        reconnectPermit.set(null)
+        noticeDismissPermit.set(null)
+    }
+
+    private val ONLINE_MENU_SCREENS = setOf(
+        "HOME", "TOURNAMENT", "DECK_SELECTION", "HOME_TASK_OVERLAY", "MATCHMAKING",
+        "GAME_MODE", "COLLECTION", "PACK_OPENING", "SHOP_OVERLAY",
+    )
+
+    private const val HUB_MODE_CHOOSER_SCREEN = "HUB_MODE_CHOOSER"
+
+    private val allowedModesByScreen = mapOf(
+        "HOME" to setOf("HUB"),
+        "HOME_TASK_OVERLAY" to setOf("HUB"),
+        "TOURNAMENT" to setOf("TOURNAMENT"),
+        "DECK_SELECTION" to setOf("TOURNAMENT"),
+        "MATCHMAKING" to setOf("TOURNAMENT"),
+        "GAME_MODE" to setOf("GAME_MODE"),
+        "COLLECTION" to setOf("COLLECTIONMANAGER"),
+        "PACK_OPENING" to setOf("PACKOPENING"),
+        "SHOP_OVERLAY" to setOf("HUB"),
+    )
+
+    const val RECONNECT_PERMIT_LIFETIME_MS = 2_000L
+}
+
+/** Pure startup barrier shared by the last dispatch gate and offline policy tests. */
+internal object StartupInputAuthorizationPolicy {
+    fun allows(
+        action: String,
+        currentSessionReady: Boolean,
+        freshOnlineMenuReady: Boolean,
+        reconnectPermitValid: Boolean = false,
+        terminalCleanupCapabilityValid: Boolean = false,
+        rankSurrenderCapabilityValid: Boolean = false,
+        startupTraditionalBattleSelectionReady: Boolean = false,
+        startupNoticeDismissPermitValid: Boolean = false,
+    ): Boolean = if (action == StartupNoticeRecoveryPolicy.DISPATCH_ACTION) {
+        // A non-empty Power.log can make the session model ready while the
+        // client is still on this modal. The exact permit plus final active
+        // game/queue checks remain decisive for this one known button.
+        startupNoticeDismissPermitValid
+    } else currentSessionReady || freshOnlineMenuReady ||
+        (action.startsWith("startup.") && action != StartupNoticeRecoveryPolicy.DISPATCH_ACTION) ||
+        (action == StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION &&
+            startupTraditionalBattleSelectionReady) ||
+        (action == "recovery.reconnect" && reconnectPermitValid) ||
+        (action == "terminal-result.dismiss" && terminalCleanupCapabilityValid) ||
+        (action == "surrender.request" && rankSurrenderCapabilityValid)
+
+    fun mayIssuePreSessionReconnectPermit(
+        screenKind: String,
+        currentSessionReady: Boolean,
+        activeGame: Boolean,
+        activeMatchmaking: Boolean,
+        freshCapture: Boolean,
+        exactWindowAndForeground: Boolean,
+    ): Boolean = screenKind.equals("RECONNECT", ignoreCase = true) && !currentSessionReady &&
+        !activeGame && !activeMatchmaking && freshCapture && exactWindowAndForeground
+}

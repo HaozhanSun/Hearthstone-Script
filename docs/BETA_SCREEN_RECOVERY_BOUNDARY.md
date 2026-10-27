@@ -25,3 +25,10 @@ The baseline and optional screen paths use Robot capture in `UpstreamScreenState
 This setting is deliberately not a total screen-recovery kill switch. `SCREEN_WATCHDOG_ENABLED` independently controls the upstream surrender watchdog.
 
 Tests should therefore assert two distinct facts: OFF prevents Beta service work and cancels queued Beta callbacks; OFF does not disable the upstream lifecycle/startup/result paths.
+
+## Terminal result retry and operator Start invariants
+
+- A result-page `SendInput` dispatch result is diagnostic only. Every follow-up input requires a new, exact-client authorized capture taken after the prior input and positively classified as a result or rank-progress page; UNKNOWN and stale frames cannot authorize another click.
+- Keep retries bounded. Only a fresh recognized post-result destination completes terminal cleanup and releases matchmaking; a rank-progress page remains inside that barrier.
+- The in-app Start action may start the configured launcher chain when Hearthstone is absent only if pause, active-game, terminal, and recent-matchmaking guards are clear. Recheck those guards after the visible three-second countdown before dispatching the chain.
+- Preserve live result screenshots as hashed offline fixtures. The rank-nine regression fixture and controller replay test verify classification, rejected OS dispatch followed by a fresh-frame retry, and stop-on-destination without touching the live client.

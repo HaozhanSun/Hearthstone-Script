@@ -84,6 +84,7 @@ object ScreenWatchdog {
         maxRetries: Int = ConfigUtil.getInt(ConfigEnum.SCREEN_WATCHDOG_MAX_RETRIES),
         cooldownMs: Long = ConfigUtil.getLong(ConfigEnum.SCREEN_WATCHDOG_COOLDOWN_MS),
         bypassCooldownForMandatorySurrenderPostClick: Boolean = false,
+        bypassThresholdForMandatorySurrenderInitial: Boolean = false,
     ): TimingDecision {
         if (!ConfigUtil.getBoolean(ConfigEnum.SCREEN_WATCHDOG_ENABLED)) {
             return TimingDecision(false, "disabled")
@@ -91,7 +92,7 @@ object ScreenWatchdog {
         val stuckFor = now - startedAt
         val retryExceeded = attempts >= maxRetries.coerceAtLeast(1)
         val stuckExceeded = stuckFor >= stuckMs.coerceAtLeast(0L)
-        if (!retryExceeded && !stuckExceeded) {
+        if (!retryExceeded && !stuckExceeded && !bypassThresholdForMandatorySurrenderInitial) {
             return TimingDecision(false, "below-threshold stuckForMs=$stuckFor attempts=$attempts")
         }
         val previous = lastCaptureAt.get()
@@ -103,7 +104,9 @@ object ScreenWatchdog {
         if (!lastCaptureAt.compareAndSet(previous, now)) {
             return TimingDecision(false, "in-flight")
         }
-        val reason = if (bypassCooldownForMandatorySurrenderPostClick) {
+        val reason = if (bypassThresholdForMandatorySurrenderInitial) {
+            "mandatory-surrender-initial stuckForMs=$stuckFor attempts=$attempts"
+        } else if (bypassCooldownForMandatorySurrenderPostClick) {
             "mandatory-surrender-post-click stuckForMs=$stuckFor attempts=$attempts"
         } else {
             "threshold stuckForMs=$stuckFor attempts=$attempts"
@@ -117,7 +120,19 @@ object ScreenWatchdog {
      * watchdog cooldown; ordinary watchdog probes remain globally throttled.
      */
     internal class MandatorySurrenderPostClickProbe {
+        companion object {
+            /** Let the settings menu finish animating before its fresh visual probe. */
+            const val SETTINGS_OVERLAY_SETTLE_MS = 5_000L
+            const val SETTINGS_OVERLAY_UNCERTAIN_RECHECK_MS = 2_000L
+            /** Retry scheduler interval is randomized from 400 to 600 ms. */
+            const val SETTINGS_OVERLAY_MAX_PROBE_LATENCY_MS = SETTINGS_OVERLAY_SETTLE_MS + 600L
+
+            private const val NO_SETTINGS_PROBE = 0L
+            private const val SETTINGS_PROBE_IN_FLIGHT = -1L
+        }
+
         private val pending = AtomicBoolean(false)
+        private val settingsProbeDueAt = AtomicLong(NO_SETTINGS_PROBE)
 
         fun markClickDispatched() {
             pending.set(true)
@@ -127,6 +142,39 @@ object ScreenWatchdog {
 
         fun markProbeStarted() {
             pending.set(false)
+        }
+
+        fun markSettingsClickDispatched(now: Long = System.currentTimeMillis()) {
+            settingsProbeDueAt.set(now + SETTINGS_OVERLAY_SETTLE_MS)
+        }
+
+        /**
+         * Stages one fresh capture after the settings animation settles. An
+         * inconclusive frame gets a short bounded recheck rather than the
+         * unrelated 30-second global stuck-screen threshold.
+         */
+        fun settingsOverlayProbeTiming(now: Long = System.currentTimeMillis()): TimingDecision? {
+            val dueAt = settingsProbeDueAt.get()
+            when (dueAt) {
+                NO_SETTINGS_PROBE -> return null
+                SETTINGS_PROBE_IN_FLIGHT -> return TimingDecision(false, "mandatory-surrender-settings-probe-in-flight")
+            }
+            if (now < dueAt) {
+                return TimingDecision(false, "mandatory-surrender-settings-settle remainingMs=${dueAt - now}")
+            }
+            if (!settingsProbeDueAt.compareAndSet(dueAt, SETTINGS_PROBE_IN_FLIGHT)) {
+                return TimingDecision(false, "mandatory-surrender-settings-probe-in-flight")
+            }
+            return TimingDecision(
+                true,
+                "mandatory-surrender-settings-overlay-probe settledMs=${now - (dueAt - SETTINGS_OVERLAY_SETTLE_MS)}",
+            )
+        }
+
+        fun finishSettingsOverlayProbe(settingsConfirmed: Boolean, now: Long = System.currentTimeMillis()) {
+            settingsProbeDueAt.set(
+                if (settingsConfirmed) NO_SETTINGS_PROBE else now + SETTINGS_OVERLAY_UNCERTAIN_RECHECK_MS,
+            )
         }
     }
 

@@ -1,0 +1,21 @@
+# Offline replay evidence transcribed from the two 2026-10-26 RC v705 incidents.
+# The original gold Victory screenshot was not present in the integration checkout;
+# the exact four regional measurements from the supplied screenshot are retained here.
+incidentA.screen=Battle.net home
+incidentA.gamePid=none
+incidentA.gameAlive=false
+incidentA.powerLogCurrentSession=false
+incidentA.terminalCleanupPending=true
+incidentA.recoveryAge=00:33:40
+incidentA.blockedAction=ACTION_BLOCKED action=startup.missing-game-recovery reason=terminal-result-cleanup-pending
+incidentA.guardianSuppression=BETA_MISSING_GAME_RECOVERY_SUPPRESSED reason=guardian-or-action-gate dispatch=false identityMatches=true
+incidentB.gameOutcome=WON
+incidentB.opponentOutcome=LOST
+incidentB.finalState=FINAL_GAMEOVER
+incidentB.complete=true
+incidentB.ocrFailure=provider=PaddleX label=game-result-banner durationMs=16400
+incidentB.alert=screen-unverified UNKNOWN probes=3 NO_INPUT_NO_RESTART_NO_AUTO_PAUSE
+victory.continueGrayLightRatio=0.040
+victory.bannerLowSaturationRatio=0.372
+victory.centerDarkRatio=0.363
+victory.bannerWarmRatio=0.500

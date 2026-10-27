@@ -13,6 +13,8 @@ import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.LifecycleTrace
+import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
+import club.xiaojiawei.hsscript.starter.GameStartupFailureBudget
 import club.xiaojiawei.hsscript.utils.*
 import club.xiaojiawei.hsscriptbase.config.CORE_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
@@ -89,9 +91,20 @@ object Core {
     /**
      * 启动脚本
      */
-    fun start(force: Boolean = false) {
-        if ((!force && WorkTimeListener.working) || lock.isLocked) return
+    fun start(force: Boolean = false): Boolean {
+        if (!force && WorkTimeListener.working) {
+            log.info { "START_REQUEST_REJECTED source=core-start reason=already-working force=false" }
+            return false
+        }
+        if (lock.isLocked) {
+            log.warn {
+                "START_REQUEST_REJECTED source=core-start reason=startup-chain-busy force=$force " +
+                    "working=${WorkTimeListener.working}"
+            }
+            return false
+        }
 
+        GameStartupFailureBudget.reset()
         log.info { "START_REQUEST_ACCEPTED source=core-start force=$force" }
         LifecycleTrace.markStartupRequested("core-start")
         CORE_THREAD_POOL.execute {
@@ -99,7 +112,13 @@ object Core {
             var acquired = false
             try {
                 if (!force && WorkTimeListener.working) return@execute
-                if (!lock.tryLock()) return@execute
+                if (!lock.tryLock()) {
+                    log.warn {
+                        "START_REQUEST_REJECTED source=core-start reason=startup-chain-busy-at-dispatch " +
+                            "force=$force working=${WorkTimeListener.working}"
+                    }
+                    return@execute
+                }
                 acquired = true
 
                 if (ScriptStatus.isValidGameInstallPath && ScriptStatus.isValidPlatformProgramPath) {
@@ -108,7 +127,6 @@ object Core {
                 } else if (!PauseStatus.isPause) {
                     SystemUtil.notice("需要配置" + GAME_CN_NAME + "和" + PLATFORM_CN_NAME + "的路径")
                     WindowUtil.showStage(WindowEnum.SETTINGS, WindowUtil.getStage(WindowEnum.MAIN))
-                    PauseStatus.isPause = true
                 }
             } finally {
                 log.info {
@@ -120,13 +138,14 @@ object Core {
                 }
             }
         }
+        return true
     }
 
     /**
      * 重启脚本
      */
     fun restart(sync: Boolean = false) {
-        restartInternal(sync = sync, pauseBeforeRestart = true)
+        restartInternal(sync = sync, source = "standard")
     }
 
     /**
@@ -135,30 +154,22 @@ object Core {
      * pause transitions while recovering a confirmed home screen.
      */
     fun restartFromIdleWatchdog(sync: Boolean = false) {
-        restartInternal(sync = sync, pauseBeforeRestart = false)
+        restartInternal(sync = sync, source = "idle-watchdog")
     }
 
-    private fun restartInternal(sync: Boolean, pauseBeforeRestart: Boolean) {
+    private fun restartInternal(sync: Boolean, source: String) {
         if (!restartInFlight.compareAndSet(false, true)) {
             log.warn { "CORE_RESTART_SUPPRESSED reason=restart-already-in-flight" }
             return
         }
         ScreenLogListener.resetDealing()
+        AbstractModeStrategy.cancelAllTask()
+        Mode.reset()
         val exec = {
             try {
-                if (pauseBeforeRestart) {
-                    PauseStatus.asyncSetPause(true)
-                }
                 GameUtil.killGame(true)
-                log.info {
-                    "${GAME_CN_NAME}重启中…… source=${if (pauseBeforeRestart) "standard" else "idle-watchdog"} " +
-                        "pauseBeforeRestart=$pauseBeforeRestart"
-                }
-                if (pauseBeforeRestart) {
-                    PauseStatus.isPause = false
-                } else {
-                    StarterConfig.starter.start()
-                }
+                log.info { "${GAME_CN_NAME}重启中…… source=$source pauseBeforeRestart=false" }
+                StarterConfig.starter.start()
             } catch (fault: Throwable) {
                 log.error(fault) { "CORE_RESTART_FAILED action=release-restart-gate" }
                 throw fault

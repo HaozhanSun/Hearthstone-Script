@@ -3,7 +3,7 @@ package club.xiaojiawei.hsscript.starter
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscript.interfaces.closer.ScheduledCloser
-import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscript.status.TaskManager
 import club.xiaojiawei.hsscriptbase.util.isFalse
 import java.io.Closeable
@@ -64,9 +64,10 @@ abstract class AbstractStarter : ScheduledCloser{
         stopTask()
     }
 
-    protected fun pause() {
+    protected fun stopStageWithoutPausing() {
         stopTask()
-        PauseStatus.asyncSetPause(true)
+        log.error { "STARTUP_STAGE_BLOCKED name=${javaClass.simpleName} action=STOP_STAGE_NO_PAUSE" }
+        SystemUtil.notice("${javaClass.simpleName} could not complete. Automation remains unpaused; inspect the client and click Start to retry.")
     }
 
     override fun stopAll() {

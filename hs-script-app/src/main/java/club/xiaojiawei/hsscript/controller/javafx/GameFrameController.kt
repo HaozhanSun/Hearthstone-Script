@@ -10,6 +10,11 @@ import club.xiaojiawei.hsscript.dll.CSystemDll
 import club.xiaojiawei.hsscript.interfaces.StageHook
 import club.xiaojiawei.hsscript.starter.AbstractStarter
 import club.xiaojiawei.hsscript.starter.InjectGameStarter
+import club.xiaojiawei.hsscript.starter.MissingGameStartPolicy
+import club.xiaojiawei.hsscript.status.LifecycleTrace
+import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.bean.single.WarEx
+import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.go
 import club.xiaojiawei.hsscript.utils.runUI
@@ -131,14 +136,19 @@ class GameFrameController : Initializable, StageHook {
         }
     }
 
-    private fun startTimer(): Future<*> = go {
+    private fun startTimer(startStillAuthorized: () -> Boolean = { true }): Future<*> = go {
         (0 until 3).forEach { _ ->
             if (Thread.interrupted()) return@go
             Thread.sleep(1000)
         }
+        if (!startStillAuthorized()) {
+            log.warn { "GAME_START_RECOVERY_BLOCKED reason=authorization-changed-during-delay action=NONE" }
+            return@go
+        }
         val lastStarer = object : AbstractStarter() {
             override fun execStart() {
-                execCapture()
+                if (!running) execCapture()
+                else log.info { "GAME_CAPTURE_RETAINED reason=recovery-start-chain-already-capturing" }
             }
         }
         buildStarter {
@@ -150,24 +160,80 @@ class GameFrameController : Initializable, StageHook {
 
     @FXML
     protected fun startCapture() {
-        if (running) return
-        if (GameUtil.isAliveOfGame()) {
-            execCapture()
-        } else {
-            val future = startTimer()
-            var notification: Notification<Any>? = null
-            notification = notificationManager.showInfo(
-                "${GAME_CN_NAME}没有打开，3秒后自动打开",
-                button {
-                    +"取消"
-                    styleNormal(StyleSize.SMALL)
-                    onAction {
-                        future.cancel(true)
-                        notification?.hide()
-                    }
-                },
-                3
-            )
+        val gameAlive = GameUtil.isAliveOfGame()
+        val decision = MissingGameStartPolicy.decide(
+            gameAlive = gameAlive,
+            paused = PauseStatus.isPause,
+            activeGame = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+            terminal = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState(),
+            activeOrRecentQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                LifecycleTrace.hasRecentMatchmakingInputIntent(),
+        )
+        when (decision) {
+            MissingGameStartPolicy.Decision.BLOCK_PAUSED -> {
+                log.warn { "GAME_START_RECOVERY_BLOCKED reason=paused action=NONE" }
+                return
+            }
+            MissingGameStartPolicy.Decision.BLOCK_ACTIVE_OR_AMBIGUOUS -> {
+                log.warn {
+                    "GAME_START_RECOVERY_BLOCKED reason=active-or-ambiguous-session " +
+                        "gameAlive=$gameAlive inWar=${WarEx.inWar} phase=${WarEx.war.currentPhase.name} " +
+                        "recentQueue=${LifecycleTrace.hasRecentMatchmakingInputIntent()} action=NONE"
+                }
+                return
+            }
+            MissingGameStartPolicy.Decision.ATTACH_EXISTING_GAME -> {
+                if (running) return
+                execCapture()
+            }
+            MissingGameStartPolicy.Decision.START_CONFIGURED_CHAIN -> {
+                val dispatch = MissingGameStartPolicy.dispatch(
+                    decision = decision,
+                    startStillAuthorized = {
+                        MissingGameStartPolicy.decide(
+                            gameAlive = GameUtil.isAliveOfGame(),
+                            paused = PauseStatus.isPause,
+                            activeGame = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+                            terminal = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState(),
+                            activeOrRecentQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                                LifecycleTrace.hasRecentMatchmakingInputIntent(),
+                        ) == MissingGameStartPolicy.Decision.START_CONFIGURED_CHAIN
+                    },
+                    attachExistingGame = {},
+                    startConfiguredChain = {
+                        log.warn {
+                            "GAME_START_RECOVERY_REQUESTED reason=operator-start-game-process-missing " +
+                                "captureAlreadyRunning=$running activeQueue=false activeGame=false dispatch=CONFIGURED_STARTER_CHAIN"
+                        }
+                        val future = startTimer {
+                            MissingGameStartPolicy.decide(
+                                gameAlive = GameUtil.isAliveOfGame(),
+                                paused = PauseStatus.isPause,
+                                activeGame = WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+                                terminal = WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER || GameUtil.isTerminalGameState(),
+                                activeOrRecentQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                                    LifecycleTrace.hasRecentMatchmakingInputIntent(),
+                            ) == MissingGameStartPolicy.Decision.START_CONFIGURED_CHAIN
+                        }
+                        var notification: Notification<Any>? = null
+                        notification = notificationManager.showInfo(
+                            "${GAME_CN_NAME}没有打开，3秒后自动打开",
+                            button {
+                                +"取消"
+                                styleNormal(StyleSize.SMALL)
+                                onAction {
+                                    future.cancel(true)
+                                    notification?.hide()
+                                }
+                            },
+                            3
+                        )
+                    },
+                )
+                if (dispatch == MissingGameStartPolicy.DispatchResult.BLOCKED) {
+                    log.warn { "GAME_START_RECOVERY_BLOCKED reason=authorization-changed-before-schedule action=NONE" }
+                }
+            }
         }
     }
 

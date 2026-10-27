@@ -14,6 +14,103 @@ class ScreenRecoveryCaptureAuthorityTest {
     private val client = Rectangle(0, 0, 1920, 1080)
 
     @Test
+    fun `pre-session capture rejection can happen before foreground recovery`() {
+        assertEquals(
+            "current-game-session-not-ready",
+            ScreenRecoveryCapturePurposePolicy.preflightRejectionReason(
+                currentSessionReady = false,
+                preSessionQueueModalAuthorized = false,
+                preSessionMatchmakingAuthorized = false,
+            ),
+            "an empty or unbound Power log with no bounded queue intent must skip before foregrounding",
+        )
+        assertNull(
+            ScreenRecoveryCapturePurposePolicy.preflightRejectionReason(
+                currentSessionReady = true,
+                preSessionQueueModalAuthorized = false,
+                preSessionMatchmakingAuthorized = false,
+            ),
+        )
+        assertNull(
+            ScreenRecoveryCapturePurposePolicy.preflightRejectionReason(
+                currentSessionReady = false,
+                preSessionQueueModalAuthorized = false,
+                preSessionMatchmakingAuthorized = true,
+            ),
+            "existing narrowly authorized matchmaking capture remains available",
+        )
+        assertEquals(
+            "current-game-session-not-ready",
+            ScreenRecoveryCapturePurposePolicy.preflightRejectionReason(
+                currentSessionReady = false,
+                preSessionQueueModalAuthorized = false,
+                preSessionMatchmakingAuthorized = false,
+                preSessionStaleClientProbeAuthorized = false,
+            ),
+        )
+        assertNull(
+            ScreenRecoveryCapturePurposePolicy.preflightRejectionReason(
+                currentSessionReady = false,
+                preSessionQueueModalAuthorized = false,
+                preSessionMatchmakingAuthorized = false,
+                preSessionStaleClientProbeAuthorized = true,
+            ),
+            "the separately bounded stale-client probe may classify a visible client",
+        )
+        assertNull(
+            ScreenRecoveryCapturePurposePolicy.preflightRejectionReason(
+                currentSessionReady = false,
+                preSessionQueueModalAuthorized = false,
+                preSessionMatchmakingAuthorized = false,
+                preSessionStartupClientProbeAuthorized = true,
+            ),
+            "an explicitly requested, exact-window startup probe may classify the pre-game client",
+        )
+        assertEquals(
+            "current-game-session-not-ready",
+            ScreenRecoveryCapturePurposePolicy.preflightRejectionReason(
+                currentSessionReady = false,
+                preSessionQueueModalAuthorized = false,
+                preSessionMatchmakingAuthorized = false,
+                preSessionStartupClientProbeAuthorized = false,
+            ),
+            "the startup exception is not implied by an empty or unbound log alone",
+        )
+    }
+
+    @Test
+    fun `only same-frame trusted HUB chooser visual and text grants the exact entry action`() {
+        fun allows(
+            purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            currentSessionReady: Boolean = false,
+            screenKind: String? = "TOURNAMENT",
+            confidence: Int = 96,
+            evidence: String? = "hub-mode-chooser-visual-and-text",
+            currentMode: String? = "HUB",
+            modalVisible: Boolean = false,
+            activeGame: Boolean = false,
+            activeMatchmaking: Boolean = false,
+            trustedCurrentWindow: Boolean = true,
+        ) = StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
+            purpose, currentSessionReady, screenKind, confidence, evidence, currentMode,
+            modalVisible, activeGame, activeMatchmaking, trustedCurrentWindow,
+        )
+
+        assertTrue(allows())
+        assertFalse(allows(evidence = "tournament-text"), "OCR label alone is not same-frame visual proof")
+        assertFalse(allows(screenKind = "MATCHMAKING"))
+        assertFalse(allows(screenKind = "UNKNOWN"))
+        assertFalse(allows(purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY))
+        assertFalse(allows(currentSessionReady = true))
+        assertFalse(allows(currentMode = "TOURNAMENT"))
+        assertFalse(allows(modalVisible = true))
+        assertFalse(allows(activeGame = true))
+        assertFalse(allows(activeMatchmaking = true))
+        assertFalse(allows(trustedCurrentWindow = false))
+        assertFalse(allows(confidence = 89))
+    }
+
+    @Test
     fun `exact foreground HWND cannot authorize desktop pixels owned by Codex`() {
         val evidence = evidence(owners = List(63) { codex })
         assertEquals("client-center-not-owned-by-target-window", ScreenRecoveryCaptureAuthority.failureReason(evidence))
@@ -327,6 +424,188 @@ class ScreenRecoveryCaptureAuthorityTest {
         assertFalse(allows(terminal = true))
     }
 
+    @Test
+    fun `stale client probe is time bounded capture only and fails closed for active game contexts`() {
+        fun allows(
+            stuckForMs: Long = ScreenRecoveryCapturePurposePolicy.STALE_CLIENT_PROBE_AFTER_MS,
+            nonGameplayScreen: Boolean = true,
+            activeGame: Boolean = false,
+            mulligan: Boolean = false,
+            terminal: Boolean = false,
+            warModelAuthoritative: Boolean = true,
+        ) = ScreenRecoveryCapturePurposePolicy.allowsPreSessionStaleClientProbe(
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            nonGameplayScreen,
+            activeGame,
+            mulligan,
+            terminal,
+            stuckForMs,
+            warModelAuthoritative,
+        )
+
+        assertTrue(allows())
+        assertFalse(allows(stuckForMs = ScreenRecoveryCapturePurposePolicy.STALE_CLIENT_PROBE_AFTER_MS - 1))
+        assertFalse(allows(nonGameplayScreen = false))
+        assertTrue(
+            allows(nonGameplayScreen = false, warModelAuthoritative = false),
+            "a stale GAMEPLAY mode is not authoritative when the current Power.log session is missing",
+        )
+        assertFalse(allows(activeGame = true))
+        assertFalse(allows(mulligan = true))
+        assertFalse(allows(terminal = true))
+        assertTrue(allows(terminal = true, mulligan = true, warModelAuthoritative = false))
+        assertFalse(
+            ScreenRecoveryCapturePurposePolicy.allowsPreSessionStaleClientProbe(
+                ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+                true, false, false, false,
+                ScreenRecoveryCapturePurposePolicy.STALE_CLIENT_PROBE_AFTER_MS * 10,
+            ),
+            "a long stall does not grant ordinary recovery the pre-session exception",
+        )
+        assertEquals(
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
+                tournamentMode = true,
+                nonGameplayScreen = true,
+                activeGame = false,
+                mulligan = false,
+                terminal = false,
+                recentInputIntent = false,
+                stuckForMs = ScreenRecoveryCapturePurposePolicy.STALE_CLIENT_PROBE_AFTER_MS,
+                warModelAuthoritative = false,
+            ),
+        )
+        assertEquals(
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
+                tournamentMode = false,
+                nonGameplayScreen = true,
+                activeGame = false,
+                mulligan = false,
+                terminal = false,
+                recentInputIntent = false,
+                stuckForMs = ScreenRecoveryCapturePurposePolicy.STALE_CLIENT_PROBE_AFTER_MS,
+            ),
+        )
+        assertEquals(
+            ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+            ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
+                tournamentMode = true,
+                activeGame = true,
+                mulligan = false,
+                terminal = false,
+                recentInputIntent = false,
+                stuckForMs = ScreenRecoveryCapturePurposePolicy.STALE_CLIENT_PROBE_AFTER_MS * 2,
+            ),
+        )
+    }
+
+    @Test
+    fun `startup and stale gameplay probes can classify missing-log session under exact window authority`() {
+        val stalePurpose = ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
+            tournamentMode = false,
+            nonGameplayScreen = false,
+            activeGame = false,
+            mulligan = false,
+            terminal = false,
+            recentInputIntent = false,
+            stuckForMs = ScreenRecoveryCapturePurposePolicy.STALE_CLIENT_PROBE_AFTER_MS,
+            warModelAuthoritative = false,
+        )
+        assertEquals(ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE, stalePurpose)
+        assertTrue(ScreenRecoveryCapturePurposePolicy.allowsPreSessionStaleClientProbe(
+            stalePurpose,
+            nonGameplayScreen = false,
+            activeGame = false,
+            mulligan = false,
+            terminal = false,
+            stuckForMs = ScreenRecoveryCapturePurposePolicy.STALE_CLIENT_PROBE_AFTER_MS,
+            warModelAuthoritative = false,
+        ))
+        assertTrue(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("RECONNECT"))
+        assertFalse(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("UNKNOWN"))
+        assertTrue(ScreenRecoveryCaptureAuthority.isAuthorized(
+            evidence(
+                currentSessionReady = false,
+                purpose = stalePurpose,
+                preSessionStaleClientProbeAuthorized = true,
+            ),
+        ), "capture stays bound to exact current PID/HWND/foreground/pixel ownership")
+
+        val startupPurpose = ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
+            tournamentMode = false,
+            nonGameplayScreen = false,
+            activeGame = false,
+            mulligan = false,
+            terminal = false,
+            recentInputIntent = false,
+            startupProbe = true,
+            warModelAuthoritative = false,
+        )
+        assertEquals(ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE, startupPurpose)
+        assertTrue(ScreenRecoveryCaptureAuthority.isAuthorized(
+            evidence(
+                currentSessionReady = false,
+                purpose = startupPurpose,
+                preSessionStartupClientProbeAuthorized = true,
+            ),
+        ))
+    }
+
+    @Test
+    fun `Yogg startup capture requires no session game or active queue evidence`() {
+        assertTrue(
+            ScreenRecoveryCapturePurposePolicy.allowsPreSessionYoggProbe(
+                ScreenRecoveryCapturePurpose.STARTUP_YOGG_PROBE,
+                currentSessionReady = false,
+                activeGame = false,
+                noActiveQueueEvidence = true,
+            ),
+        )
+        assertFalse(ScreenRecoveryCapturePurposePolicy.allowsPreSessionYoggProbe(
+            ScreenRecoveryCapturePurpose.STARTUP_YOGG_PROBE, true, false, true,
+        ))
+        assertFalse(ScreenRecoveryCapturePurposePolicy.allowsPreSessionYoggProbe(
+            ScreenRecoveryCapturePurpose.STARTUP_YOGG_PROBE, false, true, true,
+        ))
+        assertFalse(ScreenRecoveryCapturePurposePolicy.allowsPreSessionYoggProbe(
+            ScreenRecoveryCapturePurpose.STARTUP_YOGG_PROBE, false, false, false,
+        ))
+        assertFalse(ScreenRecoveryCapturePurposePolicy.allowsPreSessionYoggProbe(
+            ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY, false, false, true,
+        ))
+    }
+
+    @Test
+    fun `stale probe can recover only recognized reconnect screens and leaves queue or unknown screens untouched`() {
+        assertTrue(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("RECONNECT"))
+        assertTrue(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("RECONNECT_FAILURE"))
+        assertTrue(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("RECONNECT_SPINNER"))
+        assertTrue(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("MATCHMAKING"))
+        assertFalse(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("UNKNOWN"))
+        assertFalse(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("DECK_SELECTION"))
+        assertFalse(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("MATCHMAKING_ERROR_DIALOG"))
+
+        assertTrue(
+            ScreenRecoveryCaptureAuthority.isAuthorized(
+                evidence(
+                    currentSessionReady = false,
+                    purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+                    preSessionStaleClientProbeAuthorized = true,
+                ),
+            ),
+        )
+        assertFalse(
+            ScreenRecoveryCaptureAuthority.isAuthorized(
+                evidence(
+                    currentSessionReady = false,
+                    purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+                ),
+            ),
+            "the purpose label alone cannot grant stale pre-session capture",
+        )
+    }
+
     private fun evidence(
         processAlive: Boolean = true,
         currentSessionReady: Boolean = true,
@@ -340,6 +619,9 @@ class ScreenRecoveryCaptureAuthorityTest {
         purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
         preSessionQueueModalAuthorized: Boolean = false,
         preSessionMatchmakingAuthorized: Boolean = false,
+        preSessionStaleClientProbeAuthorized: Boolean = false,
+        preSessionStartupClientProbeAuthorized: Boolean = false,
+        preSessionYoggProbeAuthorized: Boolean = false,
         currentGameProcessId: Long? = game.processId.toLong(),
         targetWindowVisibleBefore: Boolean = true,
         targetWindowVisibleAfter: Boolean = true,
@@ -358,6 +640,9 @@ class ScreenRecoveryCaptureAuthorityTest {
         purpose = purpose,
         preSessionQueueModalAuthorized = preSessionQueueModalAuthorized,
         preSessionMatchmakingAuthorized = preSessionMatchmakingAuthorized,
+        preSessionStaleClientProbeAuthorized = preSessionStaleClientProbeAuthorized,
+        preSessionStartupClientProbeAuthorized = preSessionStartupClientProbeAuthorized,
+        preSessionYoggProbeAuthorized = preSessionYoggProbeAuthorized,
         currentGameProcessId = currentGameProcessId,
         targetWindowVisibleBefore = targetWindowVisibleBefore,
         targetWindowVisibleAfter = targetWindowVisibleAfter,

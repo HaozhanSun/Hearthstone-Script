@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscript.appender.ExtraLogAppender
 import club.xiaojiawei.hsscript.bean.DownloaderParam
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.bean.single.WarEx.resetStatistics
+import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.component.ConfigCheckBox
 import club.xiaojiawei.hsscript.component.UrlLabel
 import club.xiaojiawei.hsscript.component.WorkTimeItem
@@ -20,9 +21,12 @@ import club.xiaojiawei.hsscript.enums.WindowEnum
 import club.xiaojiawei.hsscript.listener.VersionListener
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
+import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.DebugRunController
 import club.xiaojiawei.hsscript.status.DebugRunLease
+import club.xiaojiawei.hsscript.status.ManualStartRecoveryPolicy
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.RuntimeSelectionSnapshot
 import club.xiaojiawei.hsscript.status.RuntimeSelectionState
 import club.xiaojiawei.hsscript.status.RuntimeSelectionUiContract
@@ -30,9 +34,11 @@ import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.WorkTimeStatus
 import club.xiaojiawei.hsscript.statistics.DailySummaryService
 import club.xiaojiawei.hsscript.utils.ConfigExUtil
+import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.ConfigUtil.getString
 import club.xiaojiawei.hsscript.utils.ConfigUtil.putString
 import club.xiaojiawei.hsscript.utils.FXUtil
+import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil.copyToClipboard
 import club.xiaojiawei.hsscript.utils.UiLogFormatter
 import club.xiaojiawei.hsscript.utils.WindowUtil
@@ -742,12 +748,83 @@ class MainController : MainView() {
 
     @FXML
     protected fun start() {
-        log.info { "手动开始" }
+        log.info { "手动开始 START_REQUEST source=main-ui" }
         submitExtra {
-            PauseStatus.setPauseReturn(false).isTrue {
-                runUI {
-                    pauseToggleGroup.selectToggle(pauseButton)
+            if (PauseStatus.isPause) {
+                val sessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart()
+                val activeGame = sessionReady && (WarEx.inWar || GameUtil.isTerminalGameState())
+                val activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                    LifecycleTrace.hasRecentMatchmakingInputIntent()
+                // The explicit click creates a fresh bounded startup window
+                // when Test Run has expired. The pause listener owns the one
+                // Core.start dispatch after this gate, avoiding a duplicate.
+                val scheduleAllowsStart = WorkTimeListener.requestStart()
+                val decision = ManualStartRecoveryPolicy.evaluate(
+                    scheduleAllowsStart = scheduleAllowsStart,
+                    working = WorkTimeListener.working,
+                    currentGameSessionReady = sessionReady,
+                    debugRunExpired = DebugRunController.snapshot().state == DebugRunLease.State.EXPIRED,
+                    activeGameOrMatchmaking = activeGame || activeMatchmaking,
+                )
+                if (decision == ManualStartRecoveryPolicy.Decision.BLOCK_OUTSIDE_ALLOWED_WINDOW) {
+                    log.warn {
+                        "START_REQUEST_BLOCKED source=main-ui reason=outside-schedule-and-startup-window " +
+                            "activeGame=$activeGame activeMatchmaking=$activeMatchmaking " +
+                            "debugRun=${DebugRunController.snapshot().state}"
+                    }
+                    club.xiaojiawei.hsscript.utils.SystemUtil.notice(
+                        "Start was not dispatched because the schedule and bounded startup window are closed. The expired Test Run was not extended.",
+                    )
+                    return@submitExtra
                 }
+                log.info {
+                    "START_REQUEST_ACCEPTED source=main-ui decision=$decision " +
+                        "paused=true currentSessionReady=$sessionReady activeGame=$activeGame " +
+                        "activeMatchmaking=$activeMatchmaking debugRun=${DebugRunController.snapshot().state} " +
+                        "startupWindowMinutes=${ConfigUtil.getInt(ConfigEnum.STARTUP_RUN_WINDOW_MINUTES)} " +
+                        "dispatch=pause-listener-single"
+                }
+                if (DebugRunController.snapshot().state == DebugRunLease.State.EXPIRED &&
+                    !activeGame && !activeMatchmaking
+                ) {
+                    club.xiaojiawei.hsscript.utils.SystemUtil.notice(
+                        "Test Run expired. Your Start click opened a fresh bounded startup window; Hearthstone startup is being retried.",
+                    )
+                }
+                PauseStatus.setPauseReturn(false)
+                return@submitExtra
+            }
+            val scheduleAllowsStart = WorkTimeListener.requestStart()
+            val decision = ManualStartRecoveryPolicy.evaluate(
+                scheduleAllowsStart = scheduleAllowsStart,
+                working = WorkTimeListener.working,
+                currentGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+                debugRunExpired = DebugRunController.snapshot().state == DebugRunLease.State.EXPIRED,
+                activeGameOrMatchmaking = (ScreenStateRecovery.isCurrentGameSessionReadyForStart() &&
+                    (WarEx.inWar || GameUtil.isTerminalGameState())) ||
+                    LifecycleTrace.hasRecentActiveMatchmakingScreen() || LifecycleTrace.hasRecentMatchmakingInputIntent(),
+            )
+            if (decision == ManualStartRecoveryPolicy.Decision.BLOCK_OUTSIDE_ALLOWED_WINDOW) {
+                log.warn {
+                    "START_REQUEST_BLOCKED source=main-ui reason=outside-schedule-and-startup-window " +
+                        "debugRun=${DebugRunController.snapshot().state}"
+                }
+                WorkTimeListener.cannotWorkLog()
+                club.xiaojiawei.hsscript.utils.SystemUtil.notice(
+                    "The schedule and startup run window are closed. Start was not dispatched; the expired Test Run was not extended.",
+                )
+                return@submitExtra
+            }
+            log.info {
+                "START_REQUEST_ACCEPTED source=main-ui decision=$decision " +
+                    "working=${WorkTimeListener.working} " +
+                    "currentSessionReady=${ScreenStateRecovery.isCurrentGameSessionReadyForStart()} " +
+                    "debugRun=${DebugRunController.snapshot().state}"
+            }
+            if (!Core.start(force = true)) {
+                club.xiaojiawei.hsscript.utils.SystemUtil.notice(
+                    "Start could not rearm the application because the startup chain is already busy. Wait briefly, then click Start again.",
+                )
             }
         }
     }

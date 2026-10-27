@@ -151,8 +151,10 @@ internal data class ResultScreenObservation(
     val captureAuthorized: Boolean,
     val visualOnlyResultEvidence: Boolean = false,
     val rankProgressVisible: Boolean = false,
+    /** The calibrated lower-center Continue band is visibly rendered in the authorized frame. */
     val continueControlVisible: Boolean = false,
     val destinationScreen: String? = null,
     val destinationConfidence: Int = 0,
+    /** Monotonic time at which the authorized client pixels were captured. */
     val capturedAtNanos: Long = System.nanoTime(),
 )

@@ -380,7 +380,10 @@ object SystemUtil {
      * 关闭本软件
      */
     fun shutdownSoft() {
-        LifecycleTrace.mark("shutdown-request thread=${Thread.currentThread().name}")
+        val initiator = Thread.currentThread().stackTrace.firstOrNull {
+            it.className != Thread::class.java.name && it.className != SystemUtil::class.java.name
+        }?.let { "${it.className}#${it.methodName}" } ?: "unknown"
+        LifecycleTrace.mark("shutdown-request reason=explicit-shutdown initiator=$initiator thread=${Thread.currentThread().name}")
         // The automated E2E runner must not be terminated before it has
         // recorded a script-controlled game result.  This guard also makes
         // an unexpected shutdown request observable instead of turning into
@@ -391,6 +394,7 @@ object SystemUtil {
             log.warn { message }
             return
         }
+        LifecycleTrace.markGuardianStopped("explicit-shutdown initiator=$initiator")
         runCatching {
             WindowUtil.hideAllStage(true)
         }

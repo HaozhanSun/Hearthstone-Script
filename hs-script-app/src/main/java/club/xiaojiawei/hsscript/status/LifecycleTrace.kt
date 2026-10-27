@@ -5,9 +5,15 @@ import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.strategy.AbstractPhaseStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil
+import club.xiaojiawei.hsscript.consts.ROOT_PATH
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -46,12 +52,14 @@ object LifecycleTrace {
         if (running) return
         BetaScreenRecoveryService.start()
         running = true
+        writeGuardianState()
         Thread {
             var lastState = ""
             while (running) {
                 detectStuckGameOver()
                 detectStuckStateRecovery()
                 val state = snapshot()
+                writeGuardianState()
                 if (state != lastState) {
                     log.info { "LIFECYCLE_STATE $state" }
                     lastState = state
@@ -78,6 +86,62 @@ object LifecycleTrace {
         BetaScreenRecoveryService.stop()
         mark("monitor-stop reason=$reason")
     }
+
+    /** Persist the last supervised-run intent for the launcher-level guardian. */
+    fun markGuardianStopped(reason: String) {
+        log.info {
+            "GUARDIAN_INTENT intent=STOPPED reason=$reason pid=${ProcessHandle.current().pid()} " +
+                "thread=${Thread.currentThread().name}"
+        }
+        writeGuardianState(overrideIntent = "STOPPED", reason = reason)
+    }
+
+    /** Manual pause is an explicit instruction not to resurrect the script process. */
+    fun markGuardianManualPause(paused: Boolean) {
+        writeGuardianState(overrideIntent = if (paused) "PAUSED_MANUAL" else null)
+    }
+
+    private fun writeGuardianState(overrideIntent: String? = null, reason: String = "heartbeat") {
+        if (System.getProperty("hs.script.launch.source") != "shortcut") return
+        runCatching {
+            val working = WorkTimeListener.working
+            val manuallyPaused = PauseStatus.pauseOrigin == PauseStatus.Origin.MANUAL && PauseStatus.isPause
+            val intent = overrideIntent ?: when {
+                manuallyPaused -> "PAUSED_MANUAL"
+                working -> "RUNNING"
+                else -> "STOPPED"
+            }
+            val healthSnapshot = runCatching {
+                GuardianHealthSnapshot(
+                    gameAlive = GameUtil.isAliveOfGame(),
+                    activeGame = WarEx.inWar,
+                    activeMatchmaking = hasRecentActiveMatchmakingScreen() ||
+                        hasRecentMatchmakingInputIntent(),
+                )
+            }.getOrNull()
+            val directory = Path.of(ROOT_PATH, "log")
+            Files.createDirectories(directory)
+            val target = directory.resolve("guardian-state.json")
+            val temporary = directory.resolve("guardian-state.${ProcessHandle.current().pid()}.tmp")
+            val deploymentId = System.getProperty("hs.script.deployment.id", "unknown").replace(Regex("[^A-Za-z0-9_.-]"), "_")
+            val processStart = ProcessHandle.current().info().startInstant().orElse(java.time.Instant.EPOCH)
+            val json = """{"schema":2,"pid":${ProcessHandle.current().pid()},"processStartTimeUtc":"$processStart","deploymentId":"$deploymentId","releaseChannel":"${BuildInfo.RELEASE_CHANNEL}","intent":"$intent","working":$working,"paused":${PauseStatus.isPause},"pauseOrigin":"${PauseStatus.pauseOrigin}","gameAlive":${healthSnapshot?.gameAlive ?: false},"activeGame":${healthSnapshot?.activeGame ?: false},"activeMatchmaking":${healthSnapshot?.activeMatchmaking ?: false},"healthSnapshotKnown":${healthSnapshot != null},"heartbeatAtUtc":"${java.time.Instant.now()}","reason":"${reason.replace(Regex("[^A-Za-z0-9_. -]"), "_")}"}"""
+            Files.writeString(temporary, json)
+            try {
+                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: Exception) {
+                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING)
+            }
+        }.onFailure { error ->
+            log.warn(error) { "GUARDIAN_STATE_WRITE_FAILED" }
+        }
+    }
+
+    private data class GuardianHealthSnapshot(
+        val gameAlive: Boolean,
+        val activeGame: Boolean,
+        val activeMatchmaking: Boolean,
+    )
 
     fun markMainWindow(showing: Boolean, reason: String) {
         mainWindowShowing = showing
@@ -229,6 +293,12 @@ object LifecycleTrace {
         mark("visible-matchmaking-observed; suppressing stale-phase recovery for ${MATCHMAKING_SCREEN_RECOVERY_SUPPRESSION_MS}ms")
     }
 
+    /** A freshly confirmed deck-selection destination ends the prior queue-search evidence window. */
+    fun clearActiveMatchmakingScreenObserved(reason: String) {
+        activeMatchmakingScreenObservedAt = 0L
+        mark("active-matchmaking-evidence-cleared reason=$reason")
+    }
+
     /** A recent Start dispatch permits capture while the new queue has no Power.log yet. */
     fun markMatchmakingInputDispatched(now: Long = System.currentTimeMillis()) {
         matchmakingInputIntentAt = now
@@ -247,13 +317,30 @@ object LifecycleTrace {
             now - matchmakingInputIntentAt < MATCHMAKING_INPUT_INTENT_WINDOW_MS
 
     private fun snapshot(): String = runCatching {
-        val powerLog = PowerLogListener.logFile
-        val logState = if (powerLog == null) {
+        val scriptPid = ProcessHandle.current().pid()
+        val gamePid = GameUtil.findGameProcessIdForDiagnostics()
+        val gameProcessStartedAt = gamePid?.let {
+            runCatching { GameUtil.findProcessStartedAtForDiagnostics(it) }.getOrNull()
+        }
+        val diskPowerLog = PowerLogListener.logFile
+        val powerLog = diskPowerLog?.path()?.let(::File)
+        val latestPowerLog = GameUtil.getLatestLogDir()?.resolve(club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME)
+        val powerLogCurrentSession = gamePid != null && powerLog != null && latestPowerLog != null &&
+            powerLog.canonicalFile == latestPowerLog.canonicalFile &&
+            PowerLogSessionBindingPolicy.isCurrentSession(
+                powerLogPath = powerLog.absolutePath,
+                gameLogsRoot = latestPowerLog.parentFile?.parent,
+                length = powerLog.length(),
+                lastModifiedMs = powerLog.lastModified(),
+                processStartedAtMs = gameProcessStartedAt,
+            )
+        val logState = if (diskPowerLog == null) {
             "logFile=none"
         } else {
-            "logFile=${powerLog.path()} logPos=${powerLog.getPosition()} logLen=${powerLog.length()}"
+            "logFile=${diskPowerLog.path()} logPos=${diskPowerLog.getPosition()} logLen=${diskPowerLog.length()}"
         }
-        "pid=${ProcessHandle.current().pid()} " +
+        "pid=$scriptPid scriptPid=$scriptPid gamePid=${gamePid ?: "none"} " +
+            "gameAlive=${gamePid != null} powerLogCurrentSession=$powerLogCurrentSession " +
             "pause=${PauseStatus.isPause} " +
             "working=${WorkTimeListener.working} " +
             "mainWindowShowing=$mainWindowShowing " +

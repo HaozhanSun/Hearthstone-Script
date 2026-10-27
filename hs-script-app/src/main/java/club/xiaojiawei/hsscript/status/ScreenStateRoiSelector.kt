@@ -11,6 +11,9 @@ internal object ScreenStateRoiSelector {
     const val RECONNECT_DIALOG_MESSAGE_ROI = "screen-state-reconnect-dialog-message"
     const val START_GAME_ERROR_MODAL_ROI = "screen-state-start-game-error-modal"
     const val RESULT_CONTINUE_ROI = "screen-state-result-continue"
+    const val YOGG_SERVER_UNAVAILABLE_ROI = "screen-state-yogg-server-unavailable"
+    const val AMAZON_NOTICE_TITLE_ROI = "screen-state-amazon-notice-title"
+    const val AMAZON_NOTICE_CLOSE_ROI = "screen-state-amazon-notice-close"
 
     data class Roi(val name: String, val bounds: Rectangle)
 
@@ -44,7 +47,9 @@ internal object ScreenStateRoiSelector {
     private val targetedNormalized = listOf(
         NormalizedRoi(TRADITIONAL_BATTLE_ROI, 0.455, 0.275, 0.545, 0.335),
         NormalizedRoi(DECK_SELECTION_TITLE_ROI, 0.340, 0.100, 0.445, 0.160),
-        NormalizedRoi(RECONNECT_DIALOG_TITLE_ROI, 0.410, 0.365, 0.590, 0.435),
+        // The startup reconnect modal's actual heading is at the upper edge
+        // of the panel (2026-10-26 fixture), well above its status/message.
+        NormalizedRoi(RECONNECT_DIALOG_TITLE_ROI, 0.440, 0.205, 0.560, 0.270),
         // The offline/reconnect dialog is centered on the Hearthstone client.
         // Keep two narrow lines rather than OCR-ing the whole dialog: the
         // status line carries "离线状态" and the message line carries
@@ -53,12 +58,21 @@ internal object ScreenStateRoiSelector {
         // button. The old bands started below the body (around y=.515 and
         // y=.600), so the deck-selection title won even while this dialog
         // was visible. Keep the probes narrow, but cover both body lines.
-        NormalizedRoi(RECONNECT_DIALOG_STATUS_ROI, 0.300, 0.430, 0.750, 0.515),
-        NormalizedRoi(RECONNECT_DIALOG_MESSAGE_ROI, 0.300, 0.475, 0.750, 0.555),
+        NormalizedRoi(RECONNECT_DIALOG_STATUS_ROI, 0.370, 0.510, 0.640, 0.570),
+        NormalizedRoi(RECONNECT_DIALOG_MESSAGE_ROI, 0.300, 0.580, 0.720, 0.680),
         // The localized post-game "点击继续" control is centered near the
         // bottom of the client. Keep this exact action label separate from
         // the broad footer fallback so Tesseract can use a single text line.
         NormalizedRoi(RESULT_CONTINUE_ROI, 0.410, 0.905, 0.590, 0.980),
+        // The English Yogg outage notice is printed on a parchment note in
+        // the right page of the book. OCR this compact region with eng.traineddata;
+        // Chinese-only OCR returned unrelated glyphs on the captured outage.
+        NormalizedRoi(YOGG_SERVER_UNAVAILABLE_ROI, 0.535, 0.260, 0.750, 0.520),
+        // The 2026-10-26 Appstore notice has a stable centered title and a
+        // separate bottom-center Close control. These crops are intentionally
+        // narrow so an arbitrary modal cannot be treated as the same notice.
+        NormalizedRoi(AMAZON_NOTICE_TITLE_ROI, 0.420, 0.285, 0.720, 0.390),
+        NormalizedRoi(AMAZON_NOTICE_CLOSE_ROI, 0.440, 0.680, 0.560, 0.770),
     )
 
     // Kept out of normal screen recovery's OCR pass: this single crop is

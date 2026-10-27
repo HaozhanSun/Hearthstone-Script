@@ -127,7 +127,9 @@ abstract class AbstractLogListener(
             val waitLogFile = waitLogCreated(waitMillis)
             if (waitLogFile == null){
                 log.error { "$logFileName 日志创建失败" }
-                PauseStatus.isPause = true
+                club.xiaojiawei.hsscript.utils.SystemUtil.notice(
+                    "$logFileName was not created within the startup window. Automation remains unpaused; check Hearthstone and click Start to retry.",
+                )
                 return
             }else{
                 logFile = waitLogFile

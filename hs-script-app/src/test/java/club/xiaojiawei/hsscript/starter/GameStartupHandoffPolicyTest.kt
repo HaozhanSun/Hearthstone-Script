@@ -53,8 +53,9 @@ class GameStartupHandoffPolicyTest {
     }
 
     @Test
-    fun `verified Home mode confirms startup while the current session log is still empty`() {
-        assertTrue(GameStartupHandoffPolicy.startupHandshakeConfirmed(false, ModeEnum.HUB))
+    fun `Home alone does not confirm startup while the current session log is still empty`() {
+        assertFalse(GameStartupHandoffPolicy.startupHandshakeConfirmed(false, ModeEnum.HUB))
+        assertTrue(GameStartupHandoffPolicy.startupHandshakeConfirmed(false, ModeEnum.GAME_MODE))
         assertFalse(GameStartupHandoffPolicy.startupHandshakeConfirmed(false, ModeEnum.STARTUP))
         assertFalse(GameStartupHandoffPolicy.startupHandshakeConfirmed(false, ModeEnum.LOGIN))
         assertFalse(GameStartupHandoffPolicy.startupHandshakeConfirmed(false, null))

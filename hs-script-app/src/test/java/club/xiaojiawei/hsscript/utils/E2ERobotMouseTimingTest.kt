@@ -55,8 +55,15 @@ class E2ERobotMouseTimingTest {
         )
         assertTrue(robotMovement.contains("GameplayMouseMovementTiming.scaleStepDelayMs(RandomUtil.getMouseStepDelay())"))
         assertTrue(nativeMovement.contains("GameplayMouseMovementTiming.scaleStepDelayMs(RandomUtil.getMouseStepDelay())"))
-        assertTrue(normalGameplayClick.contains("clickWithE2ERobot(pos, hwnd, recoveryCapability = recoveryCapability)"))
+        assertTrue(normalGameplayClick.contains("clickWithE2ERobot("))
+        assertTrue(normalGameplayClick.contains("recoveryCapability = recoveryCapability"))
         assertTrue(normalRobotClick.contains("moveRobotAlongCurve(e2eRobot"))
+        assertTrue(normalRobotClick.contains("dispatchActionOverride ?:"), "Robot path retains semantic action overrides")
+        assertTrue(normalRobotClick.contains("RobotInputDispatchBoundary.dispatchIfAuthorized"))
+        assertTrue(
+            normalGameplayClick.contains("dispatchActionOverride = dispatchActionOverride"),
+            "semantic action must cross from click adapter into Robot boundary",
+        )
         assertTrue(normalRobotClick.contains("delay(RandomUtil.getInteractionDelay(35))"))
         assertTrue(recoveryClick.contains("sendE2eWindowsClick(Point(pos.x, pos.y))"))
         assertTrue(!recoveryClick.contains("GameplayMouseMovementTiming.scaleStepDelayMs"))

@@ -6,7 +6,7 @@ import kotlin.test.assertEquals
 
 class ReconnectFailureRecoveryPolicyTest {
     @Test
-    fun `reconnect failure performs bounded restarts then pauses, while repeated probe is throttled`() {
+    fun `reconnect failure performs bounded restarts then alerts without pausing, repeated probe is throttled`() {
         val policy = ReconnectFailureRecoveryPolicy()
         val firstAt = 10_000L
 
@@ -33,7 +33,7 @@ class ReconnectFailureRecoveryPolicyTest {
         )
         assertEquals(
             ReconnectFailureRecoveryPolicy.Evaluation(
-                ReconnectFailureRecoveryPolicy.Decision.PAUSE_AUTOMATION,
+                ReconnectFailureRecoveryPolicy.Decision.ALERT_OPERATOR,
                 attempt = 2,
             ),
             policy.observeFailure(firstAt + 2 * ReconnectFailureRecoveryPolicy.DEFAULT_RETRY_COOLDOWN_MS),

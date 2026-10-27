@@ -6,6 +6,7 @@ import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
 import club.xiaojiawei.hsscriptstrategysdk.DeckStrategy
+import club.xiaojiawei.hsscript.utils.SystemUtil
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
 import java.awt.Robot
@@ -161,7 +162,7 @@ object TournamentModeConfirmation {
                 -> return true
 
                 TournamentModeConfirmationState.MISMATCH -> {
-                    if (shouldContinue()) pauseForUnsafeMode(result) else logStateChanged(result)
+                    if (shouldContinue()) reportUnsafeMode(result) else logStateChanged(result)
                     return false
                 }
 
@@ -188,7 +189,7 @@ object TournamentModeConfirmation {
             }
             return true
         }
-        if (shouldContinue()) pauseForUnsafeMode(lastResult) else logStateChanged(lastResult)
+        if (shouldContinue()) reportUnsafeMode(lastResult) else logStateChanged(lastResult)
         return false
     }
 
@@ -207,7 +208,7 @@ object TournamentModeConfirmation {
         )
     }
 
-    private fun pauseForUnsafeMode(result: TournamentModeConfirmationResult?) {
+    private fun reportUnsafeMode(result: TournamentModeConfirmationResult?) {
         if (WarEx.inWar) {
             logStateChanged(result)
             return
@@ -224,15 +225,10 @@ object TournamentModeConfirmation {
             ocrText = result?.ocrText.orEmpty(),
             visual = result?.reason.orEmpty(),
         )
-        PauseStatus.setAutomaticPause(true)
         log.warn {
-            // Unknown mode text is not a user/manual pause. It is a bounded,
-            // recoverable safety stop: ScreenStateRecovery is allowed to
-            // inspect the active window and either re-enter the mode strategy
-            // or restart a genuinely stale client. Keep the selected strategy
-            // and slot in the evidence so recovery cannot silently switch
-            // decks after an OCR miss.
-            "TOURNAMENT_MODE_CONFIRMATION_FAILED action=PAUSE_FOR_AUTOMATIC_RECOVERY " +
+            // Keep a confirmed mismatch fail-closed for deck selection, but
+            // never synthesize a pause. The user retains pause ownership.
+            "TOURNAMENT_MODE_CONFIRMATION_FAILED action=BLOCK_DECK_SELECTION_NO_PAUSE " +
                 "expectedMode=${result?.expectedMode?.name ?: "n/a"} " +
                 "observedMode=${result?.observedMode?.name ?: "UNKNOWN"} " +
                 "strategy=${result?.strategyId ?: "n/a"} strategyName=${result?.strategyName ?: "n/a"} " +
@@ -240,6 +236,10 @@ object TournamentModeConfirmation {
                 "ocr=${result?.ocrText?.ifBlank { "<empty>" }?.take(160) ?: "<empty>"} " +
                 "boundedAttempts=true screenshot=${evidence?.file?.absolutePath ?: "not-saved"}"
         }
+        SystemUtil.notice(
+            "The selected game mode could not be confirmed. Deck selection was blocked; automation was not paused. " +
+                "Check Hearthstone and click Start to retry.",
+        )
     }
 
     private fun logStateChanged(result: TournamentModeConfirmationResult?) {
