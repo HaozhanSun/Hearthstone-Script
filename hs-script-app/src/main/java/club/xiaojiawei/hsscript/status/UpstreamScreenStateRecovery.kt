@@ -688,6 +688,16 @@ object UpstreamScreenStateRecovery {
                         "capturedWindow=$capturedWindow currentWindow=$freshWindow"
                 }
                 false
+            } else if (MatchmakingEntryRecoveryPolicy.shouldBlockModeChangingRecovery(
+                    entryGuardActive = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+                    screenKind = detection.kind.code,
+                )
+            ) {
+                log.warn {
+                    "SCREEN_RECOVERY_BLOCKED reason=matchmaking-entry-transition-guard " +
+                        "screen=${detection.kind.code} action=NO_MODE_CHANGE"
+                }
+                false
             } else {
                 ScreenRecoveryAuthorityGate.dispatchIfAuthorized(evidence) { apply(detection) }
             }
@@ -1309,6 +1319,19 @@ object UpstreamScreenStateRecovery {
         if (looksLikeStalledReconnectLoadingText(text)) {
             return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 95, "reconnect-slow-loading-text")
         }
+        val hubModeChoiceText = listOf("传统对战", "酒馆战棋", "竞技模式", "其他模式")
+            .any(text::contains)
+        // This structural four-button signature identifies the HUB chooser
+        // even when OCR picks up unrelated deck/pack labels beneath it. Give
+        // the visible screen precedence over noisy global OCR.
+        if (visual.hubModeChooserVisual) {
+            return Detection(
+                ScreenKind.TOURNAMENT,
+                ModeEnum.HUB,
+                if (hubModeChoiceText) 96 else 94,
+                if (hubModeChoiceText) "hub-mode-chooser-visual-and-text" else "hub-mode-chooser-visual",
+            )
+        }
         if (text.contains("选择套牌") || has("套牌", "狂野对战")) {
             return Detection(ScreenKind.DECK_SELECTION, ModeEnum.TOURNAMENT, 100, "deck-selection-title")
         }
@@ -1337,11 +1360,6 @@ object UpstreamScreenStateRecovery {
             )
         ) {
             return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
-        }
-        val hubModeChoiceText = listOf("传统对战", "酒馆战棋", "竞技模式", "其他模式")
-            .any(text::contains)
-        if (visual.hubModeChooserVisual && hubModeChoiceText) {
-            return Detection(ScreenKind.TOURNAMENT, ModeEnum.HUB, 96, "hub-mode-chooser-visual-and-text")
         }
         // The HUB chooser's red ornament and dark lower-right background can
         // satisfy the queue color heuristic. Conflicting same-frame text is

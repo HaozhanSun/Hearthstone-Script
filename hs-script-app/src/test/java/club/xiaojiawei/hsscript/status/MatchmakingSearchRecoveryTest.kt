@@ -19,6 +19,19 @@ import javax.imageio.ImageIO
 
 class MatchmakingSearchRecoveryTest {
     @Test
+    fun `mode changing recovery guard is limited to one minute after matchmaking dispatch`() {
+        LifecycleTrace.clearActiveMatchmakingScreenObserved("entry-guard-test-reset")
+        try {
+            LifecycleTrace.markMatchmakingInputDispatched(now = 100_000L)
+            assertTrue(LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(now = 159_999L))
+            assertFalse(LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(now = 160_000L))
+            assertFalse(LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(now = 99_999L))
+        } finally {
+            LifecycleTrace.clearActiveMatchmakingScreenObserved("entry-guard-test-cleanup")
+        }
+    }
+
+    @Test
     fun `fresh visual queue evidence clears stale result cleanup and leaves queue input enabled`() {
         val wasWorking = WorkTimeListener.working
         val wasPaused = PauseStatus.isPause
@@ -198,6 +211,35 @@ class MatchmakingSearchRecoveryTest {
             "hub-mode-chooser-visual-and-text",
             UpstreamScreenStateRecovery.classificationEvidenceForImageTest("传统对战 酒馆战棋 竞技模式 其他模式", hubFrame),
         )
+        assertEquals(
+            "TOURNAMENT",
+            UpstreamScreenStateRecovery.classifyImageForTest("选择套牌 卡牌包 选择套牌", hubFrame),
+            "the visible chooser must outrank unrelated global OCR from other UI regions",
+        )
+        assertEquals(
+            "hub-mode-chooser-visual",
+            UpstreamScreenStateRecovery.classificationEvidenceForImageTest("选择套牌 卡牌包", hubFrame),
+        )
+        assertTrue(
+            StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
+                purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                currentSessionReady = false,
+                screenKind = "TOURNAMENT",
+                confidence = 94,
+                evidence = "hub-mode-chooser-visual",
+                currentMode = "HUB",
+                modalVisible = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                trustedCurrentWindow = true,
+            ),
+            "a structural visual proof should remain sufficient for the one traditional-entry action",
+        )
+        assertTrue(MatchmakingEntryRecoveryPolicy.shouldBlockModeChangingRecovery(true, "PACK_OPENING"))
+        assertTrue(MatchmakingEntryRecoveryPolicy.shouldBlockModeChangingRecovery(true, "DECK_SELECTION"))
+        assertFalse(MatchmakingEntryRecoveryPolicy.shouldBlockModeChangingRecovery(true, "MATCHMAKING"))
+        assertFalse(MatchmakingEntryRecoveryPolicy.shouldBlockModeChangingRecovery(true, "GAMEPLAY"))
+        assertFalse(MatchmakingEntryRecoveryPolicy.shouldBlockModeChangingRecovery(false, "PACK_OPENING"))
 
         // Exercise the actual startup chain: frame classification -> policy ->
         // process/window-bound proof -> final dispatch action. This catches the

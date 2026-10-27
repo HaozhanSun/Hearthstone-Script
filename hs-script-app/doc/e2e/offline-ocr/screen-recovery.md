@@ -1,5 +1,7 @@
 # Screen recovery evidence and gotchas
 
+- The HUB mode chooser's four stacked parchment buttons are a structural visual signature. Its real parchment faces can be brown and dim, so calibrate the pixel threshold against captured client frames instead of requiring bright-neutral pixels. Classify that signature before interpreting global OCR for deck or pack text, because text from unrelated regions can be noisy or stale. During the first 60 seconds after a matchmaking Start dispatch, recovery may accept positive matchmaking/game progress but must not change modes from menu OCR; this prevents a slow startup probe from overwriting the in-flight mode-entry sequence. Preserve the one authorized Traditional Battle entry action, allow queue start without rank preflight, and keep rank enforcement post-mulligan.
+
 ## Required evidence
 
 Every `ScreenStateRecovery` trigger attempts a screenshot before safety gates

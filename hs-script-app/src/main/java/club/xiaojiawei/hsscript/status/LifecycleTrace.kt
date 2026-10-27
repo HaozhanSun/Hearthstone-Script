@@ -26,6 +26,7 @@ object LifecycleTrace {
     private const val STATE_RECOVERY_TIMEOUT_MS = StuckStateRecoveryCadencePolicy.STATE_TIMEOUT_MS
     private const val MATCHMAKING_SCREEN_RECOVERY_SUPPRESSION_MS = 120_000L
     private const val MATCHMAKING_INPUT_INTENT_WINDOW_MS = 15 * 60_000L
+    private const val MATCHMAKING_ENTRY_RECOVERY_GUARD_MS = 60_000L
 
     @Volatile
     private var mainWindowShowing = false
@@ -368,6 +369,11 @@ object LifecycleTrace {
     internal fun hasRecentMatchmakingInputIntent(now: Long = System.currentTimeMillis()): Boolean =
         matchmakingInputIntentAt > 0L && now >= matchmakingInputIntentAt &&
             now - matchmakingInputIntentAt < MATCHMAKING_INPUT_INTENT_WINDOW_MS
+
+    /** Protect mode transitions while asynchronous matchmaking entry settles. */
+    internal fun hasActiveMatchmakingEntryRecoveryGuard(now: Long = System.currentTimeMillis()): Boolean =
+        matchmakingInputIntentAt > 0L && now >= matchmakingInputIntentAt &&
+            now - matchmakingInputIntentAt < MATCHMAKING_ENTRY_RECOVERY_GUARD_MS
 
     private fun snapshot(): String = runCatching {
         val scriptPid = ProcessHandle.current().pid()

@@ -185,10 +185,24 @@ internal object StartupHubModeChooserPolicy {
         ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
         ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
     ) && !currentSessionReady && screenKind.equals("TOURNAMENT", ignoreCase = true) &&
-        confidence >= MIN_CONFIDENCE && evidence == "hub-mode-chooser-visual-and-text" && currentMode == "HUB" &&
+        confidence >= MIN_CONFIDENCE && evidence in HUB_CHOOSER_EVIDENCE && currentMode == "HUB" &&
         !modalVisible && !activeGame && !activeMatchmaking && trustedCurrentWindow
 
+    private val HUB_CHOOSER_EVIDENCE = setOf(
+        "hub-mode-chooser-visual-and-text",
+        "hub-mode-chooser-visual",
+    )
     private const val MIN_CONFIDENCE = 90
+}
+
+/** During the bounded start-click settle window, stale menu OCR cannot move modes. */
+internal object MatchmakingEntryRecoveryPolicy {
+    private val screensThatProveProgress = setOf(
+        "MATCHMAKING", "GAMEPLAY", "RESULT", "RANK_PROGRESS_CONTINUATION",
+    )
+
+    fun shouldBlockModeChangingRecovery(entryGuardActive: Boolean, screenKind: String?): Boolean =
+        entryGuardActive && screenKind?.uppercase() !in screensThatProveProgress
 }
 
 /** Preserve the narrower HUB chooser proof when the notice postcheck sees that screen. */
