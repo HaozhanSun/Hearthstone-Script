@@ -136,6 +136,38 @@ internal object ScreenRecoveryCapturePurposePolicy {
         "SERVER_UNAVAILABLE",
     )
 
+    enum class StaleProbeRecoveryDecision {
+        CLASSIFICATION_ONLY,
+        APPLY_RECOGNIZED_RECOVERY,
+        APPLY_CONFIGURED_DECK_SELECTION,
+    }
+
+    /** Resolve whether a fresh stale-client classification may enter recovery. */
+    fun staleProbeRecoveryDecision(
+        purpose: ScreenRecoveryCapturePurpose,
+        screenKind: String,
+        confidence: Int,
+        evidence: String,
+        freshObservation: Boolean,
+        configuredDeck: Boolean,
+        configuredRunMode: Boolean,
+        activeGame: Boolean,
+        activeMatchmaking: Boolean,
+    ): StaleProbeRecoveryDecision {
+        val kind = screenKind.uppercase()
+        if (purpose != ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE ||
+            !allowsStaleProbeRecovery(kind)
+        ) return StaleProbeRecoveryDecision.CLASSIFICATION_ONLY
+
+        if (kind != "DECK_SELECTION") return StaleProbeRecoveryDecision.APPLY_RECOGNIZED_RECOVERY
+
+        if (activeGame || activeMatchmaking || !configuredDeck || !configuredRunMode ||
+            !freshObservation || confidence < 85 || evidence != "deck-selection-title"
+        ) return StaleProbeRecoveryDecision.CLASSIFICATION_ONLY
+
+        return StaleProbeRecoveryDecision.APPLY_CONFIGURED_DECK_SELECTION
+    }
+
     fun allowsStartupOnlineMenu(screenKind: String): Boolean = screenKind.uppercase() in setOf(
         "HOME", "TOURNAMENT", "DECK_SELECTION", "HOME_TASK_OVERLAY", "MATCHMAKING",
         "GAME_MODE", "COLLECTION", "PACK_OPENING", "SHOP_OVERLAY",

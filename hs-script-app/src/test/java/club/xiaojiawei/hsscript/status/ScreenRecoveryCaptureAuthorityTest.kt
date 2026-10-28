@@ -606,6 +606,46 @@ class ScreenRecoveryCaptureAuthorityTest {
         )
     }
 
+    @Test
+    fun `stale fresh configured deck selection reaches safe matching transition only with authoritative evidence`() {
+        fun decision(
+            purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            screen: String = "DECK_SELECTION",
+            confidence: Int = 100,
+            evidence: String = "deck-selection-title",
+            fresh: Boolean = true,
+            configuredDeck: Boolean = true,
+            configuredRunMode: Boolean = true,
+            activeGame: Boolean = false,
+            activeMatchmaking: Boolean = false,
+        ) = ScreenRecoveryCapturePurposePolicy.staleProbeRecoveryDecision(
+            purpose, screen, confidence, evidence, fresh, configuredDeck, configuredRunMode,
+            activeGame, activeMatchmaking,
+        )
+
+        assertEquals(
+            ScreenRecoveryCapturePurposePolicy.StaleProbeRecoveryDecision.APPLY_CONFIGURED_DECK_SELECTION,
+            decision(),
+        )
+        val safeTransition = ScreenStateRecovery.recoveryTransitionForTest("选择套牌 狂野对战")
+        assertEquals("DECK_SELECTION", safeTransition?.screen)
+        assertEquals("START_MATCHING", safeTransition?.action)
+
+        listOf(
+            decision(fresh = false),
+            decision(confidence = 84),
+            decision(evidence = ""),
+            decision(screen = "UNKNOWN"),
+            decision(configuredDeck = false),
+            decision(configuredRunMode = false),
+            decision(activeGame = true),
+            decision(activeMatchmaking = true),
+            decision(purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY),
+        ).forEach {
+            assertEquals(ScreenRecoveryCapturePurposePolicy.StaleProbeRecoveryDecision.CLASSIFICATION_ONLY, it)
+        }
+    }
+
     private fun evidence(
         processAlive: Boolean = true,
         currentSessionReady: Boolean = true,

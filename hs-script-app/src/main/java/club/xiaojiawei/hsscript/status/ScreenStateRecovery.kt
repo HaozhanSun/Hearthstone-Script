@@ -557,14 +557,26 @@ object ScreenStateRecovery {
                 }
                 return InspectionResult.NO_ACTION
             }
-        } else if (capture.purpose == ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE &&
-            !ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery(detection.kind.code)
-        ) {
-            log.warn {
-                "SCREEN_RECOVERY_STALE_PROBE_CLASSIFICATION_ONLY screen=${detection.kind.code} " +
-                "action=NO_INPUT reason=pre-session-classification-only"
+        } else if (capture.purpose == ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE) {
+            val staleProbeDecision = ScreenRecoveryCapturePurposePolicy.staleProbeRecoveryDecision(
+                purpose = capture.purpose,
+                screenKind = detection.kind.code,
+                confidence = detection.confidence,
+                evidence = detection.evidence,
+                freshObservation = true,
+                configuredDeck = DeckStrategyManager.currentDeckStrategy != null,
+                configuredRunMode = DeckStrategyManager.currentRunMode != null,
+                activeGame = WarEx.inWar,
+                activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                    LifecycleTrace.hasRecentMatchmakingInputIntent(),
+            )
+            if (staleProbeDecision == ScreenRecoveryCapturePurposePolicy.StaleProbeRecoveryDecision.CLASSIFICATION_ONLY) {
+                log.warn {
+                    "SCREEN_RECOVERY_STALE_PROBE_CLASSIFICATION_ONLY screen=${detection.kind.code} " +
+                        "action=NO_INPUT reason=stale-probe-policy"
+                }
+                return InspectionResult.NO_ACTION
             }
-            return InspectionResult.NO_ACTION
         }
         if (capture.purpose == ScreenRecoveryCapturePurpose.STARTUP_YOGG_PROBE &&
             detection.kind != ScreenKind.SERVER_UNAVAILABLE
