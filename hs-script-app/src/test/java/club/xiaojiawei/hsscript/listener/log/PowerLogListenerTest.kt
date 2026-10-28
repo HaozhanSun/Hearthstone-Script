@@ -34,6 +34,36 @@ class PowerLogListenerTest {
     }
 
     @Test
+    fun `terminal loss tail remains fenced until a later create game`() {
+        assertFalse(
+            PowerLogListener.hasUnfinishedGame(
+                sequenceOf(
+                    "CREATE_GAME",
+                    "TAG_CHANGE Entity=1 tag=PLAYSTATE value=LOST",
+                    "TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER",
+                    "TAG_CHANGE Entity=1 tag=PLAYSTATE value=LOST",
+                ),
+            ),
+            "terminal tail traffic must not reopen an old game for replay",
+        )
+    }
+
+    @Test
+    fun `new create game reopens replay only after a terminal loss`() {
+        assertTrue(
+            PowerLogListener.hasUnfinishedGame(
+                sequenceOf(
+                    "CREATE_GAME",
+                    "TAG_CHANGE Entity=1 tag=PLAYSTATE value=LOST",
+                    "CREATE_GAME",
+                    "TAG_CHANGE Entity=GameEntity tag=STEP value=MAIN_ACTION",
+                ),
+            ),
+            "a new CREATE_GAME, not tail traffic, opens the next replayable game",
+        )
+    }
+
+    @Test
     fun `a later create game reopens replay after an earlier completed game`() {
         assertTrue(
             PowerLogListener.hasUnfinishedGame(
