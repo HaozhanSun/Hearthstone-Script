@@ -350,9 +350,29 @@ object DeckStrategyActuator {
             }
         }
 
-        // 等待动画结束
-        SystemUtil.delay(RandomUtil.getTurnStartDelay())
-        if (!war.isMyTurn || PauseStatus.isPause) return
+        if (!isTurnStartActionReady()) {
+            log.warn {
+                "TURN_START_ACTION_DEFERRED reason=authoritative-state-not-ready " +
+                    "mode=${Mode.currMode?.name ?: "NONE"} inWar=${WarEx.inWar} " +
+                    "phase=${war.currentPhase.name} step=${war.currentTurnStep?.name ?: "NONE"} " +
+                    "myTurn=${war.isMyTurn} paused=${PauseStatus.isPause}"
+            }
+            return
+        }
+        val animationSettleMs = RandomUtil.getTurnStartDelay()
+        log.info {
+            "TURN_START_ACTION_READY phase=${war.currentPhase.name} " +
+                "step=${war.currentTurnStep?.name ?: "NONE"} settleMs=$animationSettleMs"
+        }
+        SystemUtil.delay(animationSettleMs)
+        if (!isTurnStartActionReady()) {
+            log.info {
+                "TURN_START_ACTION_DEFERRED reason=readiness-changed-during-settle " +
+                    "phase=${war.currentPhase.name} step=${war.currentTurnStep?.name ?: "NONE"} " +
+                    "myTurn=${war.isMyTurn} paused=${PauseStatus.isPause}"
+            }
+            return
+        }
 
         // The E2E runner must verify the complete game-over path without
         // depending on an opponent or an expensive late-game search. This is
@@ -808,6 +828,18 @@ object DeckStrategyActuator {
     private fun canExec(): Boolean {
         return ConfigUtil.getBoolean(ConfigEnum.STRATEGY) && validPlayer() && !checkSurrender()
     }
+
+    private fun isTurnStartActionReady(): Boolean = TurnStartActionReadinessPolicy.isReady(
+        mode = Mode.currMode,
+        activeGame = WarEx.inWar,
+        isMyTurn = war.isMyTurn,
+        phase = war.currentPhase,
+        step = war.currentTurnStep,
+        currentPlayerIsMe = war.currentPlayer === war.me,
+        playerValid = war.me.isValid(),
+        paused = PauseStatus.isPause,
+        terminal = GameUtil.isTerminalGameState(),
+    )
 
     private fun validPlayer(): Boolean {
         if (!war.rival.isValid() && war.me.isValid()) {

@@ -11,6 +11,9 @@ import kotlin.math.max
  */
 object RandomUtil {
 
+    const val TURN_START_SETTLE_MIN_MS = 750
+    const val TURN_START_SETTLE_MAX_MS = 1_250
+
     /**
      * One random stream shared by the app, card SDK, and strategy plugins.
      * The stream is re-seeded at the beginning of each matchmaking/game run.
@@ -80,8 +83,8 @@ object RandomUtil {
         return baseDelay + distortionDelay
     }
 
-    /** Beginning-of-turn animation wait: 5 seconds +/- 500 milliseconds. */
-    fun getTurnStartDelay(): Int = getRandomAround(5_000, 500)
+    /** Beginning-of-turn animation settle after authoritative main-action readiness. */
+    fun getTurnStartDelay(): Int = getRandom(TURN_START_SETTLE_MIN_MS, TURN_START_SETTLE_MAX_MS)
 
     /** Short non-action pauses retain their old 150 ms center point. */
     fun getShortActionDelay(): Int = getRandomAround(150, 50)
