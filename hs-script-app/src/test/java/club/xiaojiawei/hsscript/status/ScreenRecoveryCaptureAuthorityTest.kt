@@ -577,13 +577,13 @@ class ScreenRecoveryCaptureAuthorityTest {
     }
 
     @Test
-    fun `stale probe can recover only recognized reconnect screens and leaves queue or unknown screens untouched`() {
+    fun `stale probe can recover recognized reconnect or exact configured deck selection screens`() {
         assertTrue(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("RECONNECT"))
         assertTrue(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("RECONNECT_FAILURE"))
         assertTrue(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("RECONNECT_SPINNER"))
         assertTrue(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("MATCHMAKING"))
+        assertTrue(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("DECK_SELECTION"))
         assertFalse(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("UNKNOWN"))
-        assertFalse(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("DECK_SELECTION"))
         assertFalse(ScreenRecoveryCapturePurposePolicy.allowsStaleProbeRecovery("MATCHMAKING_ERROR_DIALOG"))
 
         assertTrue(

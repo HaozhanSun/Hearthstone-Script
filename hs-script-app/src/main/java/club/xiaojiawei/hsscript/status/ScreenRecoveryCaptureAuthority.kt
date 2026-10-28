@@ -126,6 +126,10 @@ internal object ScreenRecoveryCapturePurposePolicy {
 
     fun allowsStaleProbeRecovery(screenKind: String): Boolean = screenKind.uppercase() in setOf(
         "MATCHMAKING",
+        // Fresh deck-selection recovery re-enters only the configured strategy;
+        // its handler still requires confidence-backed fresh evidence and all
+        // existing strategy and terminal/rank safeguards.
+        "DECK_SELECTION",
         "RECONNECT",
         "RECONNECT_FAILURE",
         "RECONNECT_SPINNER",
