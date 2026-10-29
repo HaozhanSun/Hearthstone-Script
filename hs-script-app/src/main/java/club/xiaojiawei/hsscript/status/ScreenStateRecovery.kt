@@ -2624,6 +2624,15 @@ object ScreenStateRecovery {
                     return false
                 }
                 Mode.recover(ModeEnum.TOURNAMENT, "visible-deck-selection", enterStrategy = false)
+                val startupStartReady = ActionDispatchGate.isFreshConfiguredDeckSelectionStartProofReady()
+                if (!startupStartReady) {
+                    log.warn {
+                        "SCREEN_RECOVERY_DECK_SELECTION_BLOCKED reason=mode-specific-startup-proof-missing " +
+                            "expectedMode=${DeckStrategyManager.currentRunMode?.name ?: "UNKNOWN"} " +
+                            "observedMode=UNKNOWN action=NO_DECK_SELECTION_NO_START"
+                    }
+                    return false
+                }
                 log.warn {
                     "SCREEN_RECOVERY_ACTION_REQUESTED screen=DECK_SELECTION next=START_MATCHING " +
                         "deck=${DeckStrategyManager.currentDeckStrategy?.name()} " +
@@ -2644,7 +2653,18 @@ object ScreenStateRecovery {
                         if (PauseStatus.resumeAutomaticPause("deck-selection-recovery")) {
                             log.warn { "SCREEN_RECOVERY_AUTO_RESUME reason=deck-selection-recovery" }
                         }
-                        TournamentModeStrategy.recoverDeckSelectionAndStart()
+                        val currentProof = ActionDispatchGate.isFreshConfiguredDeckSelectionStartProofReady()
+                        val dispatched = StartupInputAuthorizationPolicy.dispatchDeckSelectionRecoveryIfReady(
+                            startupScreenConfirmed = currentProof,
+                        ) {
+                            TournamentModeStrategy.recoverDeckSelectionAndStart()
+                        }
+                        if (!dispatched) {
+                            log.warn {
+                                "SCREEN_RECOVERY_DECK_SELECTION_BLOCKED reason=start-proof-expired-before-dispatch " +
+                                    "action=NO_DECK_SELECTION_NO_START"
+                            }
+                        }
                     }
                 }, 300, TimeUnit.MILLISECONDS)
             }

@@ -298,6 +298,16 @@ internal object StartupInputReadiness {
 
 /** Pure startup barrier shared by the last dispatch gate and offline policy tests. */
 internal object StartupInputAuthorizationPolicy {
+    /** Recovery may touch the selected deck only after the exact fresh mode-matched Start proof exists. */
+    fun dispatchDeckSelectionRecoveryIfReady(
+        startupScreenConfirmed: Boolean,
+        dispatch: () -> Unit,
+    ): Boolean {
+        if (!startupScreenConfirmed) return false
+        dispatch()
+        return true
+    }
+
     fun allowsHubTraditionalBattleSelection(
         action: String,
         processId: Int?,

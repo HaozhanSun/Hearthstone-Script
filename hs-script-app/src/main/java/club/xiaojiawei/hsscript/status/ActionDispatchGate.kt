@@ -56,6 +56,17 @@ object ActionDispatchGate {
         )
     }
 
+    /** Recovery-specific readiness: generic session/menu proof cannot stand in for configured-mode deck proof. */
+    internal fun isFreshConfiguredDeckSelectionStartProofReady(): Boolean {
+        val gameWindow = ScriptStatus.gameHWND ?: return false
+        val processId = runCatching { GameUtil.findGameProcessIdForDiagnostics()?.toInt() }.getOrNull()
+            ?: return false
+        return !WarEx.inWar &&
+            !runCatching { GameUtil.isTerminalGameState() }.getOrDefault(true) &&
+            runCatching { GameUtil.isVerifiedCurrentGameWindow(gameWindow) }.getOrDefault(false) &&
+            StartupInputReadiness.isDeckSelectionStartReady(processId, gameWindow.toString())
+    }
+
     private fun startupDeckSelectionModeNavigationReady(
         action: String,
         processId: Int?,

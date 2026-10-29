@@ -255,6 +255,14 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
 
     /** Used by screen recovery after it has positively identified deck selection. */
     fun recoverDeckSelectionAndStart() {
+        if (!ActionDispatchGate.isFreshConfiguredDeckSelectionStartProofReady()) {
+            log.warn {
+                "DECK_SELECTION_RECOVERY_BLOCKED reason=mode-specific-startup-proof-missing " +
+                    "expectedMode=${DeckStrategyManager.currentRunMode?.name ?: "UNKNOWN"} " +
+                    "action=NO_DECK_SELECTION_NO_START"
+            }
+            return
+        }
         val deckStrategy = DeckStrategyManager.currentDeckStrategy
         val runMode = DeckStrategyManager.currentRunMode
         if (deckStrategy == null || runMode == null) {

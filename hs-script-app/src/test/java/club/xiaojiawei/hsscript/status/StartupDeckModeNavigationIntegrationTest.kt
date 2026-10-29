@@ -187,6 +187,36 @@ class StartupDeckModeNavigationIntegrationTest {
     }
 
     @Test
+    fun `legacy recovery dispatches only after fresh configured mode start proof`() {
+        var deckSelectionOrStartDispatches = 0
+        val standardLiveFrame = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/standard-deck-selection-live-20261029-063038.png",
+        )))
+        assertEquals("UNKNOWN", TournamentModeConfirmation.observeImage(standardLiveFrame).observedMode.name)
+        assertFalse(StartupInputAuthorizationPolicy.dispatchDeckSelectionRecoveryIfReady(
+            startupScreenConfirmed = false,
+        ) { deckSelectionOrStartDispatches++ }, "UNKNOWN Standard frame must not enter deck recovery or Start")
+        assertEquals(0, deckSelectionOrStartDispatches)
+
+        assertTrue(StartupInputReadiness.recordDeckSelectionStart(
+            pid = 25948, hwnd = "captured-live-window", confidence = 95,
+            evidence = "deck-selection-start-control-visual", expectedRunMode = "WILD",
+            observedRunMode = "WILD", enabledStartButtonVisible = true, modalVisible = false, now = 40_000L,
+        ))
+        assertTrue(StartupInputAuthorizationPolicy.dispatchDeckSelectionRecoveryIfReady(
+            startupScreenConfirmed = StartupInputAuthorizationPolicy.allowsDeckSelectionStart(
+                action = "matchmaking.start", processId = 25948, hwnd = "captured-live-window",
+                exactWindowVerified = true,
+                freshDeckSelectionStartReady = StartupInputReadiness.isDeckSelectionStartReady(
+                    25948, "captured-live-window", 40_001L,
+                ),
+            ),
+        ) { deckSelectionOrStartDispatches++ })
+        assertEquals(1, deckSelectionOrStartDispatches, "fresh Wild proof reaches the recovery callsite once")
+        StartupInputReadiness.resetForTest()
+    }
+
+    @Test
     fun `navigation is fenced for active gameplay queue terminal modal and unsupported proof`() {
         fun decide(
             purpose: String = "STARTUP_CLIENT_PROBE",
