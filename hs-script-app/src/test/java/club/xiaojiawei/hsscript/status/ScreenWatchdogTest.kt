@@ -361,6 +361,8 @@ class ScreenWatchdogTest {
         val dueProbe = probe.settingsOverlayProbeTiming(gearClickAt + 3_000L)
         assertTrue(dueProbe!!.shouldInspect)
         assertTrue(dueProbe.reason.startsWith("mandatory-surrender-settings-overlay-probe"))
+        assertEquals(3_000L, SettingsOverlaySettlePolicy.settleMs("beta"))
+        assertEquals(5_000L, SettingsOverlaySettlePolicy.settleMs("stable"))
         assertEquals(3_000L, ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_SETTLE_MS)
         assertEquals(3_600L, ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_MAX_PROBE_LATENCY_MS)
 

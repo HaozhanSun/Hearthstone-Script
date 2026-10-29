@@ -419,3 +419,9 @@ this deletion boundary.
 - A fresh guardian heartbeat does not prove the app is progressing. Beta guardian snapshots also record the selected `hs_script.log` path, last-write UTC time, and file age; a stale/missing app log is surfaced as `ALERT_STALE_APP_LOG` without stopping or restarting the process.
 - When the launcher observes its child exit and no restart is authorized, it must atomically reconcile only that exact PID/start-time/deployment marker to `EXITED`, record the exit code/time and last app-log write, and set the matching guardian state to `STOPPED` with unknown health. A stale PID marker must never claim `RUNNING` after observed process exit.
 - Guardian health log lines must be formatted from the actual values and tested for literal `{0}`-style placeholders. Beta app-log checks must not change RC or Stable behavior.
+
+### Beta post-result transition latency
+
+- Diagnose post-result delay from the per-stage timings, not elapsed time alone. Keep the intentional result-screenshot animation wait separate from authorized capture, image save, visual classification, and each OCR ROI duration. A slow OCR pass is not evidence that the result page is still visible.
+- On the Beta upstream OCR path, probe the exact deck-selection title ROI first. It may short-circuit only for a fresh authorized capture with confidence at or above `FreshPostResultDestinationPolicy.MIN_CONFIDENCE` and no centered modal. Matchmaking, rank reward, unknown screens, and modal-covered deck geometry must continue through the existing recognition and exact destination confirmation path; a Continue input never counts as confirmation.
+- A settings-settle policy change is effective only after the corresponding Beta manifest-backed artifact is deployed and its runtime lineage is verified. In traces, distinguish the settle timer from subsequent foreground reacquisition and authorized capture time; do not attribute the latter to the timer.

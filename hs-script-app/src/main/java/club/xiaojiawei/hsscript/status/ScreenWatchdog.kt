@@ -8,6 +8,8 @@ import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.MouseUtil
 import club.xiaojiawei.hsscriptbase.config.log
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import java.awt.Rectangle
 import java.awt.RenderingHints
@@ -121,11 +123,11 @@ object ScreenWatchdog {
      */
     internal class MandatorySurrenderPostClickProbe {
         companion object {
-            /** Let the settings menu finish animating before its fresh visual probe. */
-            const val SETTINGS_OVERLAY_SETTLE_MS = 3_000L
+            /** Beta uses the measured 3-second settle; other release channels keep the 5-second interval. */
+            val SETTINGS_OVERLAY_SETTLE_MS = SettingsOverlaySettlePolicy.settleMs(BuildInfo.RELEASE_CHANNEL)
             const val SETTINGS_OVERLAY_UNCERTAIN_RECHECK_MS = 2_000L
             /** Retry scheduler interval is randomized from 400 to 600 ms. */
-            const val SETTINGS_OVERLAY_MAX_PROBE_LATENCY_MS = SETTINGS_OVERLAY_SETTLE_MS + 600L
+            val SETTINGS_OVERLAY_MAX_PROBE_LATENCY_MS = SETTINGS_OVERLAY_SETTLE_MS + 600L
 
             private const val NO_SETTINGS_PROBE = 0L
             private const val SETTINGS_PROBE_IN_FLIGHT = -1L
@@ -984,4 +986,12 @@ object ScreenWatchdog {
     private fun sanitize(value: String): String = value
         .replace(Regex("\\s+"), "_")
         .replace(Regex("[^A-Za-z0-9._:/,@=+\\-\\u4e00-\\u9fff]"), "_")
+}
+
+internal object SettingsOverlaySettlePolicy {
+    const val BETA_SETTLE_MS = 3_000L
+    const val OTHER_CHANNEL_SETTLE_MS = 5_000L
+
+    fun settleMs(releaseChannel: String): Long =
+        if (BuildChannel.identityToken(releaseChannel) == "beta") BETA_SETTLE_MS else OTHER_CHANNEL_SETTLE_MS
 }

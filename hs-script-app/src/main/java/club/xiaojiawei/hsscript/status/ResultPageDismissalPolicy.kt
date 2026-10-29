@@ -172,6 +172,18 @@ internal object TerminalResultSequenceTimingPolicy {
     }
 }
 
+/** Narrow OCR shortcut for the exact, modal-free deck-selection destination. */
+internal object PostResultOcrOptimizationPolicy {
+    fun shouldShortCircuit(
+        screenKind: String?,
+        confidence: Int,
+        centeredModalVisible: Boolean,
+        freshCaptureAuthorized: Boolean,
+    ): Boolean = !centeredModalVisible &&
+        screenKind == "DECK_SELECTION" &&
+        FreshPostResultDestinationPolicy.isConfirmed(screenKind, confidence, freshCaptureAuthorized)
+}
+
 /** Null visibility is distinct from no capture: only an authorized current-client frame may ground a terminal fallback. */
 internal data class ResultScreenObservation(
     val resultVisible: Boolean?,

@@ -129,6 +129,19 @@ class ScreenRecoveryGateTest {
         assertNull(UpstreamScreenStateRecovery.classifyForTest(""), "OCR failure must remain UNKNOWN")
     }
 
+    @Test
+    fun `post-result OCR probes deck title first and shortcuts only exact modal-free destination`() {
+        val postResultRois = UpstreamScreenStateRecovery.postResultOcrRoiNamesForTest()
+        assertEquals(ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI, postResultRois.first())
+
+        assertTrue(PostResultOcrOptimizationPolicy.shouldShortCircuit("DECK_SELECTION", 100, false, true))
+        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("DECK_SELECTION", 84, false, true))
+        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("DECK_SELECTION", 100, true, true))
+        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("DECK_SELECTION", 100, false, false))
+        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("MATCHMAKING", 98, false, true))
+        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("RANK_PROGRESS_CONTINUATION", 93, false, true))
+    }
+
     private val originalEnabled = ConfigUtil.getBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED)
 
     @AfterTest

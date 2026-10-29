@@ -789,6 +789,7 @@ object UpstreamScreenStateRecovery {
     private fun runOCR(
         capture: Capture,
         tessData: File,
+        postResultProbe: Boolean = false,
         onTimings: ((ResultProbeOcrTimings) -> Unit)? = null,
     ): String {
         val chiSim = File(tessData, "$CHI_SIM_DATA.traineddata")
@@ -833,10 +834,13 @@ object UpstreamScreenStateRecovery {
             // screen-state-center crop. Probe the same narrow, capture-local
             // anchors as beta recovery so the upstream fallback cannot turn
             // every OCR observation into an empty string.
-            val (targetedRois, secondaryRois) = screenRecoveryOcrRois(
+            val (selectedTargetedRois, secondaryRois) = screenRecoveryOcrRois(
                 capture.image.width,
                 capture.image.height,
             )
+            val targetedRois = if (postResultProbe) {
+                orderPostResultTargetedRois(selectedTargetedRois)
+            } else selectedTargetedRois
             fun recognize(roi: ScreenStateRoiSelector.Roi, targeted: Boolean): String {
                 val roiStartedAt = System.nanoTime()
                 val crop = crop(capture.image, roi.bounds)
@@ -856,11 +860,34 @@ object UpstreamScreenStateRecovery {
                 return value
             }
             val targetedStartedAt = System.nanoTime()
+            var earlyDestination = false
             val targetedText = try {
-                targetedRois.joinToString(separator = "") { recognize(it, targeted = true) }
+                val accumulated = StringBuilder()
+                for (roi in targetedRois) {
+                    accumulated.append(recognize(roi, targeted = true))
+                    val detection = detect(accumulated.toString(), capture.visual)
+                    if (postResultProbe &&
+                        PostResultOcrOptimizationPolicy.shouldShortCircuit(
+                            screenKind = detection?.kind?.code,
+                            confidence = detection?.confidence ?: 0,
+                            centeredModalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image),
+                            freshCaptureAuthorized = true,
+                        )
+                    ) {
+                        earlyDestination = true
+                        path = "TARGETED_POST_RESULT_DECK_DESTINATION_EARLY_EXIT"
+                        ocrSucceeded = true
+                        break
+                    }
+                }
+                accumulated.toString()
             } finally {
                 targetedMs = ResultScreenProbeTelemetry.elapsedMs(targetedStartedAt)
                 roiTimingSummary = roiTimings.joinToString(",")
+            }
+            if (earlyDestination) {
+                ocrSucceeded = true
+                return@runCatching targetedText
             }
             if (detect(targetedText, capture.visual) != null) {
                 path = "TARGETED_ONLY"
@@ -911,6 +938,17 @@ object UpstreamScreenStateRecovery {
     internal fun screenRecoveryOcrRoiNamesForTest(): List<String> {
         val (targeted, secondary) = screenRecoveryOcrRois(1920, 1080)
         return (targeted + secondary).map { it.name }
+    }
+
+    internal fun postResultOcrRoiNamesForTest(): List<String> =
+        orderPostResultTargetedRois(
+            screenRecoveryOcrRois(1920, 1080).first,
+        ).map { it.name }
+
+    private fun orderPostResultTargetedRois(
+        rois: List<ScreenStateRoiSelector.Roi>,
+    ): List<ScreenStateRoiSelector.Roi> = rois.sortedBy {
+        if (it.name == ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI) 0 else 1
     }
 
     internal fun classifyCapturedImageForTest(image: BufferedImage, tessData: File): String? {
@@ -1736,7 +1774,12 @@ object UpstreamScreenStateRecovery {
                 capturedAtNanos = authorizedCapture.capture.capturedAtNanos,
             ))
         }
-        val ocrText = runOCR(authorizedCapture.capture, File(TESS_DATA_PATH)) { ocrTimings = it }
+        val ocrText = runOCR(
+            authorizedCapture.capture,
+            File(TESS_DATA_PATH),
+            postResultProbe = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
+            onTimings = { ocrTimings = it },
+        )
         val decisionStartedAt = System.nanoTime()
         val detection = detect(ocrText, authorizedCapture.capture.visual)
         decisionMs = ResultScreenProbeTelemetry.elapsedMs(decisionStartedAt)
