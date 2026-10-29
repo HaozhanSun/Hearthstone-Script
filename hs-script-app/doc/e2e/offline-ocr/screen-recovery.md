@@ -313,7 +313,12 @@ this deletion boundary.
   after the chooser classifier passes; generic idle screenshots and menu OCR
   alone remain insufficient. The offline regression constructs the chooser
   frame over search-like colors and verifies the proof route, dispatch gate,
-  and queue exclusion.
+  and queue exclusion. When the current process has an empty or unbound
+  Power.log, `WarEx.inWar` is stale phase state and must not prevent the
+  bounded startup probe or chooser proof; active-game fencing requires an
+  authoritative current-session model. At dispatch, the process-bound chooser
+  proof may bypass stale phase flags for `mode.select-traditional` only; keep
+  generic clicks, matchmaking, and gameplay input blocked.
   Regression case: after the Amazon notice closes, the mode chooser can be
   classified as `TOURNAMENT` while the script is still in `HUB`. A generic
   `STARTUP_READINESS_RECONFIRMED` proof is not sufficient for

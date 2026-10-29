@@ -247,20 +247,64 @@ class MatchmakingSearchRecoveryTest {
         // generic mouse.left tag and the last hard gate rejected the click.
         val ocr = "传统对战 酒馆战棋 竞技模式 其他模式"
         val evidence = UpstreamScreenStateRecovery.classificationEvidenceForImageTest(ocr, hubFrame)
+        val activeGameFromStaleLatch = StartupGamePhaseEvidencePolicy.hasAuthoritativeActiveGame(
+            warModelAuthoritative = false,
+            warInProgress = true,
+        )
+        assertFalse(activeGameFromStaleLatch, "WarEx.inWar with an empty, unbound Power.log is stale state")
+        assertTrue(
+            StartupGamePhaseEvidencePolicy.hasAuthoritativeActiveGame(
+                warModelAuthoritative = true,
+                warInProgress = true,
+            ),
+            "a fresh current-session game model retains its active-game fence",
+        )
+        val startupPurpose = ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
+            tournamentMode = false,
+            activeGame = activeGameFromStaleLatch,
+            mulligan = false,
+            terminal = false,
+            recentInputIntent = false,
+            warModelAuthoritative = false,
+            startupProbe = true,
+            noActiveQueueEvidence = true,
+        )
+        assertEquals(ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE, startupPurpose)
         assertTrue(
             StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
-                purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                purpose = startupPurpose,
                 currentSessionReady = false,
                 screenKind = UpstreamScreenStateRecovery.classifyImageForTest(ocr, hubFrame),
                 confidence = 96,
                 evidence = evidence,
                 currentMode = "HUB",
                 modalVisible = false,
-                activeGame = false,
+                activeGame = activeGameFromStaleLatch,
                 activeMatchmaking = false,
                 trustedCurrentWindow = true,
             ),
         )
+        assertTrue(StartupInputAuthorizationPolicy.allowsHubTraditionalBattleSelection(
+            action = StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION,
+            processId = 26500,
+            hwnd = "current-game-window",
+            exactWindowVerified = true,
+            freshHubChooserReady = true,
+        ), "fresh exact HUB chooser proof is sufficient before Power.log has bytes")
+        assertFalse(StartupInputAuthorizationPolicy.allowsHubTraditionalBattleSelection(
+            action = "mouse.left",
+            processId = 26500,
+            hwnd = "current-game-window",
+            exactWindowVerified = true,
+            freshHubChooserReady = true,
+        ))
+        assertFalse(StartupInputAuthorizationPolicy.allowsHubTraditionalBattleSelection(
+            action = StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION,
+            processId = 26501,
+            hwnd = "different-window",
+            exactWindowVerified = false,
+            freshHubChooserReady = true,
+        ))
         // Startup's first capture can be a loading/ad frame. It must neither
         // mint readiness nor stop the bounded probe before the chooser settles.
         val initialLoadingFrame = BufferedImage(1280, 720, BufferedImage.TYPE_INT_RGB).apply {

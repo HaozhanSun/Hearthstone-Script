@@ -291,7 +291,10 @@ object UpstreamScreenStateRecovery {
             evidence = detection?.evidence,
             currentMode = Mode.currMode?.name,
             modalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image),
-            activeGame = WarEx.inWar,
+            activeGame = StartupGamePhaseEvidencePolicy.hasAuthoritativeActiveGame(
+                warModelAuthoritative = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+                warInProgress = WarEx.inWar,
+            ),
             activeMatchmaking = activeQueueEvidence,
             trustedCurrentWindow = currentPid != null && currentPid > 0 &&
                 currentHwnd == authorizedCapture.gameWindow.toString() &&
@@ -513,7 +516,10 @@ object UpstreamScreenStateRecovery {
                 freshObservation = true,
                 configuredDeck = DeckStrategyManager.currentDeckStrategy != null,
                 configuredRunMode = DeckStrategyManager.currentRunMode != null,
-                activeGame = WarEx.inWar,
+                activeGame = StartupGamePhaseEvidencePolicy.hasAuthoritativeActiveGame(
+                    warModelAuthoritative = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+                    warInProgress = WarEx.inWar,
+                ),
                 activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
                     LifecycleTrace.hasRecentMatchmakingInputIntent(),
             )
@@ -573,23 +579,27 @@ object UpstreamScreenStateRecovery {
             currentSessionPowerLogPath = currentPowerLog?.absolutePath,
             powerLogLength = attachedPowerLog?.length() ?: 0L,
         )
-        // WarEx can retain a terminal phase from the previous Hearthstone
-        // process. Before the new session log is ready, only the independently
-        // observed active-game latch is authoritative enough to fence a
-        // read-only stale-screen probe.
+        // WarEx can retain an active-game phase from the previous Hearthstone
+        // process. Before the new session log is ready, that latch alone must
+        // not fence the exact, read-only startup chooser probe.
         val currentWarModelAuthoritative = currentSessionReady
+        val authoritativeActiveGame = StartupGamePhaseEvidencePolicy.hasAuthoritativeActiveGame(
+            warModelAuthoritative = currentWarModelAuthoritative,
+            warInProgress = WarEx.inWar,
+        )
+        val authoritativeTerminalState = currentWarModelAuthoritative && GameUtil.isTerminalGameState()
         val activeQueueEvidence = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
             LifecycleTrace.hasRecentMatchmakingInputIntent()
         val capturePurpose = if (
             !currentSessionReady && stuckForMs >= ScreenRecoveryCapturePurposePolicy.IDLE_CLIENT_PROBE_AFTER_MS &&
-            Mode.currMode !== ModeEnum.GAMEPLAY && !WarEx.inWar && !GameUtil.isTerminalGameState() &&
+            Mode.currMode !== ModeEnum.GAMEPLAY && !authoritativeActiveGame && !authoritativeTerminalState &&
             !activeQueueEvidence
         ) {
             ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE
         } else ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
             tournamentMode = Mode.currMode === ModeEnum.TOURNAMENT,
             nonGameplayScreen = Mode.currMode !== ModeEnum.GAMEPLAY,
-            activeGame = WarEx.inWar,
+            activeGame = authoritativeActiveGame,
             mulligan = currentWarModelAuthoritative && WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
             terminal = currentWarModelAuthoritative && GameUtil.isTerminalGameState(),
             recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
@@ -601,22 +611,22 @@ object UpstreamScreenStateRecovery {
         val preSessionQueueModalAuthorized = ScreenRecoveryCapturePurposePolicy.allowsPreSessionQueueModal(
             purpose = capturePurpose,
             tournamentMode = Mode.currMode === ModeEnum.TOURNAMENT,
-            activeGame = WarEx.inWar,
+            activeGame = authoritativeActiveGame,
             mulligan = currentWarModelAuthoritative && WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
             terminal = currentWarModelAuthoritative && GameUtil.isTerminalGameState(),
         )
         val preSessionMatchmakingAuthorized = ScreenRecoveryCapturePurposePolicy.allowsPreSessionMatchmaking(
             purpose = capturePurpose,
             tournamentMode = Mode.currMode === ModeEnum.TOURNAMENT,
-            activeGame = WarEx.inWar,
-            mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
-            terminal = GameUtil.isTerminalGameState(),
+            activeGame = authoritativeActiveGame,
+            mulligan = currentWarModelAuthoritative && WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+            terminal = authoritativeTerminalState,
             recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
         )
         val preSessionStaleClientProbeAuthorized = ScreenRecoveryCapturePurposePolicy.allowsPreSessionStaleClientProbe(
             purpose = capturePurpose,
             nonGameplayScreen = Mode.currMode !== ModeEnum.GAMEPLAY,
-            activeGame = WarEx.inWar,
+            activeGame = authoritativeActiveGame,
             mulligan = currentWarModelAuthoritative && WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
             terminal = currentWarModelAuthoritative && GameUtil.isTerminalGameState(),
             stuckForMs = stuckForMs,
@@ -632,7 +642,7 @@ object UpstreamScreenStateRecovery {
         val preSessionYoggProbeAuthorized = ScreenRecoveryCapturePurposePolicy.allowsPreSessionYoggProbe(
             purpose = capturePurpose,
             currentSessionReady = currentSessionReady,
-            activeGame = WarEx.inWar,
+            activeGame = authoritativeActiveGame,
             noActiveQueueEvidence = !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
                 !LifecycleTrace.hasRecentMatchmakingInputIntent(),
         )
@@ -1238,9 +1248,13 @@ object UpstreamScreenStateRecovery {
                 evidence = afterDetection?.evidence,
                 currentMode = Mode.currMode?.name,
                 modalVisible = afterModalVisible,
-                activeGame = WarEx.inWar,
+                activeGame = StartupGamePhaseEvidencePolicy.hasAuthoritativeActiveGame(
+                    warModelAuthoritative = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+                    warInProgress = WarEx.inWar,
+                ),
                 activeMatchmaking = afterActiveMatchmaking,
-                terminalState = GameUtil.isTerminalGameState(),
+                terminalState = ScreenStateRecovery.isCurrentGameSessionReadyForStart() &&
+                    GameUtil.isTerminalGameState(),
                 trustedCurrentWindow = GameUtil.findGameProcessIdForDiagnostics() == currentPid.toLong() &&
                     ScriptStatus.gameHWND?.toString() == expectedWindow.toString() &&
                     GameUtil.isVerifiedCurrentGameWindow(expectedWindow),

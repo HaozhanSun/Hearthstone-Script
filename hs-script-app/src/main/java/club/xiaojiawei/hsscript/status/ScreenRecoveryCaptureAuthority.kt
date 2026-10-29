@@ -231,6 +231,12 @@ internal object StartupHubModeChooserPolicy {
     private const val MIN_CONFIDENCE = 90
 }
 
+/** Game-phase latches are usable as gameplay evidence only with an authoritative current session. */
+internal object StartupGamePhaseEvidencePolicy {
+    fun hasAuthoritativeActiveGame(warModelAuthoritative: Boolean, warInProgress: Boolean): Boolean =
+        warModelAuthoritative && warInProgress
+}
+
 /** During the bounded start-click settle window, stale menu OCR cannot move modes. */
 internal object MatchmakingEntryRecoveryPolicy {
     private val screensThatProveProgress = setOf(

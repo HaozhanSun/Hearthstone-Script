@@ -854,7 +854,10 @@ object ScreenStateRecovery {
             // empty. Such data may fence input only after a fresh session is
             // ready; the pre-session path is capture-only until classified.
             nonGameplayScreen = true,
-            activeGame = WarEx.inWar,
+            activeGame = StartupGamePhaseEvidencePolicy.hasAuthoritativeActiveGame(
+                warModelAuthoritative = warModelAuthoritative,
+                warInProgress = WarEx.inWar,
+            ),
             mulligan = warModelAuthoritative && WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
             terminal = warModelAuthoritative && GameUtil.isTerminalGameState(),
             recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),

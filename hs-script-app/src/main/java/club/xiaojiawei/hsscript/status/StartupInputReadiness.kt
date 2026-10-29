@@ -252,6 +252,16 @@ internal object StartupInputReadiness {
 
 /** Pure startup barrier shared by the last dispatch gate and offline policy tests. */
 internal object StartupInputAuthorizationPolicy {
+    fun allowsHubTraditionalBattleSelection(
+        action: String,
+        processId: Int?,
+        hwnd: String?,
+        exactWindowVerified: Boolean,
+        freshHubChooserReady: Boolean,
+    ): Boolean = action == StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION &&
+        processId != null && processId > 0 && !hwnd.isNullOrBlank() && exactWindowVerified &&
+        freshHubChooserReady
+
     fun allowsDeckSelectionStart(
         action: String,
         processId: Int?,
