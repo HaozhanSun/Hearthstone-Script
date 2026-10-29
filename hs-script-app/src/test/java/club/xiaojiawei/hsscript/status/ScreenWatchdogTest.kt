@@ -343,7 +343,7 @@ class ScreenWatchdogTest {
     }
 
     @Test
-    fun `rank nine incident settings screenshot is probed at five seconds with bounded uncertain recheck`() {
+    fun `rank nine incident settings screenshot is probed at three seconds with bounded uncertain recheck`() {
         val screenshot = javaClass.getResourceAsStream(
             "/fixtures/screen-recovery/rank9-settings-overlay-20261026-084643.png",
         )?.use(ImageIO::read) ?: error("missing captured v4.16.697 rank-nine settings screenshot")
@@ -354,23 +354,23 @@ class ScreenWatchdogTest {
         val probe = ScreenWatchdog.MandatorySurrenderPostClickProbe()
         val gearClickAt = 100_000L
         probe.markSettingsClickDispatched(gearClickAt)
-        val beforeSettle = probe.settingsOverlayProbeTiming(gearClickAt + 4_999L)
+        val beforeSettle = probe.settingsOverlayProbeTiming(gearClickAt + 2_999L)
         assertFalse(beforeSettle!!.shouldInspect)
         assertTrue(beforeSettle.reason.contains("remainingMs=1"))
 
-        val dueProbe = probe.settingsOverlayProbeTiming(gearClickAt + 5_000L)
+        val dueProbe = probe.settingsOverlayProbeTiming(gearClickAt + 3_000L)
         assertTrue(dueProbe!!.shouldInspect)
         assertTrue(dueProbe.reason.startsWith("mandatory-surrender-settings-overlay-probe"))
-        assertEquals(5_000L, ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_SETTLE_MS)
-        assertEquals(5_600L, ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_MAX_PROBE_LATENCY_MS)
+        assertEquals(3_000L, ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_SETTLE_MS)
+        assertEquals(3_600L, ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_MAX_PROBE_LATENCY_MS)
 
         // If the fresh frame is not yet decisive, retry observation after two
         // seconds; never wait for the generic 30-second screen watchdog here.
-        probe.finishSettingsOverlayProbe(settingsConfirmed = false, now = gearClickAt + 5_000L)
-        assertFalse(probe.settingsOverlayProbeTiming(gearClickAt + 6_999L)!!.shouldInspect)
-        assertTrue(probe.settingsOverlayProbeTiming(gearClickAt + 7_000L)!!.shouldInspect)
-        probe.finishSettingsOverlayProbe(settingsConfirmed = true, now = gearClickAt + 7_000L)
-        assertEquals(null, probe.settingsOverlayProbeTiming(gearClickAt + 7_001L))
+        probe.finishSettingsOverlayProbe(settingsConfirmed = false, now = gearClickAt + 3_000L)
+        assertFalse(probe.settingsOverlayProbeTiming(gearClickAt + 4_999L)!!.shouldInspect)
+        assertTrue(probe.settingsOverlayProbeTiming(gearClickAt + 5_000L)!!.shouldInspect)
+        probe.finishSettingsOverlayProbe(settingsConfirmed = true, now = gearClickAt + 5_000L)
+        assertEquals(null, probe.settingsOverlayProbeTiming(gearClickAt + 5_001L))
     }
 
     @Test

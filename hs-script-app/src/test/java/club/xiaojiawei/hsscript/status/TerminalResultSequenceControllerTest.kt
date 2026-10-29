@@ -158,7 +158,7 @@ class TerminalResultSequenceControllerTest {
             maxDurationMillis = 30_000L,
             observe = {
                 coordinator.nextProbe(ticket)
-                ResultScreenObservation(resultVisible = true, captureAuthorized = true)
+                ResultScreenObservation(resultVisible = true, captureAuthorized = true, continueControlVisible = true)
             },
             terminalProofValid = { true },
             paused = { false },
@@ -325,7 +325,7 @@ class TerminalResultSequenceControllerTest {
                     coordinator.confirmDestination(ticket)
                 },
                 dispatch = { page, attempt, plannedGapMs, markDispatch ->
-                    assertEquals(5_000L, plannedGapMs)
+                    assertEquals(if (attempt == 1) 5_000L else 3_000L, plannedGapMs)
                     assertEquals(attempt, coordinator.reserveInput(ticket))
                     synchronized(dispatches) {
                         dispatches += page to System.nanoTime()
@@ -363,8 +363,8 @@ class TerminalResultSequenceControllerTest {
             assertEquals(TerminalResultSequenceController.Page.DEFEAT, capturedDispatches[0].first)
             assertEquals(TerminalResultSequenceController.Page.RANK_PROGRESS, capturedDispatches[1].first)
             val actualGapMs = TimeUnit.NANOSECONDS.toMillis(capturedDispatches[1].second - capturedDispatches[0].second)
-            assertTrue(actualGapMs >= 5_000L, "actual dispatch gap=$actualGapMs ms; retries remain paced")
-            println("TERMINAL_RESULT_SEQUENCE_DISPATCH_GAP_MS=$actualGapMs postClickFrameRequired=true intervalMs=5000")
+            assertTrue(actualGapMs >= 2_000L, "actual dispatch gap=$actualGapMs ms; retries remain paced")
+            println("TERMINAL_RESULT_SEQUENCE_DISPATCH_GAP_MS=$actualGapMs postClickFrameRequired=true intervalMs=2000..3000")
             assertEquals(1, maxObserversActive.get(), "observation remains serial while the input clock runs independently")
 
             assertTrue(done.await(2, TimeUnit.SECONDS), "fresh deck selection must stop the sequence")
@@ -410,7 +410,7 @@ class TerminalResultSequenceControllerTest {
                     maxDurationMillis = 30_000L,
                     observe = {
                         coordinator.nextProbe(ticket)
-                        ResultScreenObservation(true, captureAuthorized = true)
+                        ResultScreenObservation(true, captureAuthorized = true, continueControlVisible = true)
                     },
                     terminalProofValid = { proofValid.get() },
                     paused = { paused.get() },
@@ -488,11 +488,12 @@ class TerminalResultSequenceControllerTest {
         .digest(bytes).joinToString("") { "%02X".format(it) }
 
     private fun observationForFixture(kind: String?): ResultScreenObservation = when (kind) {
-        "RESULT" -> ResultScreenObservation(resultVisible = true, captureAuthorized = true)
+        "RESULT" -> ResultScreenObservation(resultVisible = true, captureAuthorized = true, continueControlVisible = true)
         "RANK_PROGRESS_CONTINUATION" -> ResultScreenObservation(
             resultVisible = true,
             captureAuthorized = true,
             rankProgressVisible = true,
+            continueControlVisible = true,
         )
         else -> ResultScreenObservation(resultVisible = null, captureAuthorized = true)
     }

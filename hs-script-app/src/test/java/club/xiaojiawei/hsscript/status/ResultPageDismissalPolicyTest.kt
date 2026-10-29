@@ -17,9 +17,29 @@ import org.junit.jupiter.api.Test
 
 class ResultPageDismissalPolicyTest {
     @Test
+    fun `event timing requires fresh authorized actionable frames and clamps retry delay`() {
+        val now = System.nanoTime()
+        val fresh = ResultScreenObservation(
+            resultVisible = null,
+            captureAuthorized = true,
+            continueControlVisible = true,
+            capturedAtNanos = now,
+        )
+        assertTrue(TerminalResultSequenceTimingPolicy.actionable(fresh, Long.MIN_VALUE, now))
+        assertFalse(TerminalResultSequenceTimingPolicy.actionable(fresh.copy(continueControlVisible = false), Long.MIN_VALUE, now))
+        assertFalse(TerminalResultSequenceTimingPolicy.actionable(fresh.copy(captureAuthorized = false), Long.MIN_VALUE, now))
+        assertFalse(TerminalResultSequenceTimingPolicy.actionable(fresh.copy(capturedAtNanos = now - Duration.ofSeconds(26).toNanos()), Long.MIN_VALUE, now))
+        assertFalse(TerminalResultSequenceTimingPolicy.actionable(fresh.copy(capturedAtNanos = now - Duration.ofSeconds(1).toNanos()), now - Duration.ofSeconds(1).toNanos(), now))
+        assertTrue(TerminalResultSequenceTimingPolicy.actionable(fresh.copy(capturedAtNanos = now), now - Duration.ofSeconds(2).toNanos(), now))
+        assertEquals(2_000L, TerminalResultSequenceTimingPolicy.retryInterval(1L))
+        assertEquals(2_500L, TerminalResultSequenceTimingPolicy.retryInterval(2_500L))
+        assertEquals(3_000L, TerminalResultSequenceTimingPolicy.retryInterval(9_000L))
+    }
+
+    @Test
     fun `incident screenshots and current-client postchecks replay through dismissal policy with bounded retries`() {
-        assertTrue(ResultPageDismissalPolicy.TERMINAL_RETRY_MIN_INTERVAL_MS in 5_000..5_500)
-        assertTrue(ResultPageDismissalPolicy.TERMINAL_RETRY_MAX_INTERVAL_MS in 6_500..7_000)
+        assertEquals(2_000, ResultPageDismissalPolicy.TERMINAL_RETRY_MIN_INTERVAL_MS)
+        assertEquals(3_000, ResultPageDismissalPolicy.TERMINAL_RETRY_MAX_INTERVAL_MS)
 
         val defeat = loadImage(INCIDENT_DEFEAT)
         val rankOne = loadImage(INCIDENT_RANK_ONE)
@@ -66,14 +86,15 @@ class ResultPageDismissalPolicyTest {
         assertTrue(acceptedDispatch())
         assertEquals(TerminalPageCleanupCoordinator.State.RUNNING, coordinator.snapshot().state)
 
-        // The exact incident records an UNKNOWN postcheck before its retry is due.
+        // The exact incident's UNKNOWN postcheck arrives after the new timing
+        // floor; it still cannot dispatch because it has no actionable band.
         val initialAt = LocalDateTime.parse("2026-10-21T12:41:30.627")
         val unknownAt = LocalDateTime.parse("2026-10-21T12:41:35.150")
-        val retryDelayMs = 5_500L
+        val retryDelayMs = 2_500L
         val secondDispatchAt = initialAt.plusNanos(retryDelayMs * 1_000_000)
         assertTrue(retryDelayMs in ResultPageDismissalPolicy.TERMINAL_RETRY_MIN_INTERVAL_MS.toLong()..
             ResultPageDismissalPolicy.TERMINAL_RETRY_MAX_INTERVAL_MS.toLong())
-        assertTrue(Duration.between(initialAt, unknownAt).toMillis() < retryDelayMs)
+        assertTrue(Duration.between(initialAt, unknownAt).toMillis() > retryDelayMs)
         assertEquals(1, dispatchCalls, "accepted dispatch does not schedule an early extra input")
 
         // The second incident frame is a rank page. UNKNOWN at the live postcheck

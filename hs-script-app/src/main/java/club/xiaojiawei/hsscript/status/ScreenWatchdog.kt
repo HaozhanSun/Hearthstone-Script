@@ -122,7 +122,7 @@ object ScreenWatchdog {
     internal class MandatorySurrenderPostClickProbe {
         companion object {
             /** Let the settings menu finish animating before its fresh visual probe. */
-            const val SETTINGS_OVERLAY_SETTLE_MS = 5_000L
+            const val SETTINGS_OVERLAY_SETTLE_MS = 3_000L
             const val SETTINGS_OVERLAY_UNCERTAIN_RECHECK_MS = 2_000L
             /** Retry scheduler interval is randomized from 400 to 600 ms. */
             const val SETTINGS_OVERLAY_MAX_PROBE_LATENCY_MS = SETTINGS_OVERLAY_SETTLE_MS + 600L

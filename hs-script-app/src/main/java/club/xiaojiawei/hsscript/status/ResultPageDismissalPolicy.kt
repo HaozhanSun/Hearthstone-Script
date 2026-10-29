@@ -1,5 +1,7 @@
 package club.xiaojiawei.hsscript.status
 
+import java.util.concurrent.TimeUnit
+
 /** A dismissal is accepted only after an observation that the result page is gone. */
 internal object ResultPageDismissalPolicy {
     enum class FlowScreen { UNKNOWN, DEFEAT, RANK_PROGRESS, POST_RESULT_DESTINATION }
@@ -141,8 +143,33 @@ internal object ResultPageDismissalPolicy {
     /** One center-click/Enter pair may recover a known result page when fresh postchecks are UNKNOWN. */
     const val MAX_UNKNOWN_RESULT_FALLBACK_INPUTS = 2
 
-    const val TERMINAL_RETRY_MIN_INTERVAL_MS = 5_000
-    const val TERMINAL_RETRY_MAX_INTERVAL_MS = 7_000
+    const val TERMINAL_RETRY_MIN_INTERVAL_MS = 2_000
+    const val TERMINAL_RETRY_MAX_INTERVAL_MS = 3_000
+}
+
+/** Shared timing and fresh-frame gate for event-driven terminal Continue inputs. */
+internal object TerminalResultSequenceTimingPolicy {
+    const val MIN_RETRY_INTERVAL_MS = 2_000L
+    const val MAX_RETRY_INTERVAL_MS = 3_000L
+
+    fun retryInterval(candidateMillis: Long): Long =
+        candidateMillis.coerceIn(MIN_RETRY_INTERVAL_MS, MAX_RETRY_INTERVAL_MS)
+
+    fun actionable(
+        observation: ResultScreenObservation?,
+        lastInputAtNanos: Long,
+        nowNanos: Long,
+    ): Boolean {
+        observation ?: return false
+        val capturedAt = observation.capturedAtNanos
+        val age = nowNanos - capturedAt
+        if (!observation.captureAuthorized || !observation.continueControlVisible ||
+            observation.resultVisible == false || age !in 0..TimeUnit.MILLISECONDS.toNanos(25_000L)
+        ) return false
+        return lastInputAtNanos == Long.MIN_VALUE ||
+            (capturedAt > lastInputAtNanos &&
+                capturedAt - lastInputAtNanos >= TimeUnit.MILLISECONDS.toNanos(MIN_RETRY_INTERVAL_MS))
+    }
 }
 
 /** Null visibility is distinct from no capture: only an authorized current-client frame may ground a terminal fallback. */

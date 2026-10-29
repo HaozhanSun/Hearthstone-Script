@@ -49,7 +49,6 @@ internal class TerminalResultSequenceController(
         // frames before the independent Continue clock reaches its next retry.
         // The fast visual path still returns immediately, without OCR latency.
         const val MIN_OBSERVER_INTERVAL_MS = 1_500L
-        const val MAX_AUTHORIZED_FRAME_AGE_MS = 25_000L
         const val DEFAULT_OBSERVER_INTERVAL_MS = MIN_OBSERVER_INTERVAL_MS
         const val DEFAULT_MONITOR_INTERVAL_MS = 50L
         const val DEFAULT_MAX_DURATION_MS = 120_000L
@@ -75,7 +74,6 @@ internal class TerminalResultSequenceController(
         scheduleObserver()
         scheduleEligibilityMonitor()
         scheduledTasks += inputExecutor.schedule({ stop("episode-deadline", destinationConfirmed = false) }, maxDurationMillis, TimeUnit.MILLISECONDS)
-        scheduleInput(initialRetryIntervalMillis)
         return scheduledTasks.toList()
     }
 
@@ -144,6 +142,9 @@ internal class TerminalResultSequenceController(
             // UNKNOWN keeps the known two-page sequence eligible. The timer is
             // authorized by terminal proof, not by OCR completing on time.
         }
+        if (TerminalResultSequenceTimingPolicy.actionable(observation, lastInputAtNanos.get(), System.nanoTime())) {
+            scheduleInput(0L, plannedIntervalMillis)
+        }
     }
 
     private fun scheduleInput(delayMillis: Long, plannedMillis: Long = delayMillis) {
@@ -171,23 +172,16 @@ internal class TerminalResultSequenceController(
             next
         }
         val observed = latestObservation.get()
-        val observedAt = latestObservationAtNanos.get()
         val lastInputAt = lastInputAtNanos.get()
         // After authoritative same-game terminal proof, a fresh authorized
         // frame with the calibrated Continue band is enough to retry the
         // result transition even when OCR cannot name a victory variant.
         // This is deliberately narrower than accepting UNKNOWN pixels alone:
         // the lower-center control must be visibly present in this frame.
-        val visibleResultPage = observed?.captureAuthorized == true &&
-            (observed.resultVisible == true || observed.rankProgressVisible || observed.continueControlVisible)
-        val frameAgeNanos = System.nanoTime() - observedAt
-        val frameIsCurrent = observedAt > 0L && frameAgeNanos in 0..TimeUnit.MILLISECONDS.toNanos(MAX_AUTHORIZED_FRAME_AGE_MS)
-        val postInputObservation = lastInputAt == Long.MIN_VALUE || observedAt > lastInputAt
-        if (!visibleResultPage || !frameIsCurrent || !postInputObservation) {
-            // Never turn timer expiry, an UNKNOWN frame, or a prior pre-click
-            // frame into permission to touch the client. Keep the bounded
-            // worker alive until a fresh authorized result-page frame arrives.
-            scheduleInput(MIN_OBSERVER_INTERVAL_MS, retryIntervalMillis().coerceAtLeast(1L))
+        if (!TerminalResultSequenceTimingPolicy.actionable(observed, lastInputAt, System.nanoTime())) {
+            // Only a fresh authorized capture with the calibrated visible
+            // Continue control can trigger an input. The next observer event
+            // will reconsider; timer expiry never grants click authority.
             return
         }
         when {
@@ -217,12 +211,10 @@ internal class TerminalResultSequenceController(
         synchronized(lock) {
             if (stopped.get() || destinationDetected.get()) return
             inputCount.set(attempt)
-            page = if (attempt == 1) Page.RANK_PROGRESS else targetPage
+            page = targetPage
         }
         if (attempt < MAX_CONTINUE_INPUTS) {
-            val interval = retryIntervalMillis().coerceAtLeast(1L)
-            val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - actualDispatchAt)
-            scheduleInput(interval - elapsed, interval)
+            plannedIntervalMillis = TerminalResultSequenceTimingPolicy.retryInterval(retryIntervalMillis())
         }
     }
 
