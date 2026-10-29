@@ -260,6 +260,13 @@ object CardDescriptionParser {
     }
 
     private fun resolveTarget(clause: String): ParsedTarget? {
+        // Conditional weapon buffs describe an automatic effect on the weapon,
+        // not a player-selected friendly-minion target. Without this guard,
+        // “如果你控制着其他海盗，使你的武器获得+1/+1” falls through to the
+        // generic “获得” inference and synthesizes an unnecessary target action.
+        if (clause.contains("武器获得")) {
+            return null
+        }
         if (clause.contains("每个英雄") || clause.contains("双方英雄") || clause.contains("所有角色") || clause.contains(
                 "所有随从"
             )

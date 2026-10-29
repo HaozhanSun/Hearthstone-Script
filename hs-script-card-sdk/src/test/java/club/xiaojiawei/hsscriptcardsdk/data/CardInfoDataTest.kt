@@ -42,4 +42,23 @@ class CardInfoDataTest {
             CardDescriptionParser.parseAsCardActionEnum(card)
         )
     }
+
+    @Test
+    fun conditionalWeaponBuffDoesNotInventFriendlyMinionTarget() {
+        val card = DBCard(
+            cardId = "OG_315",
+            name = "血帆教徒",
+            type = "MINION",
+            text = "战吼：如果你控制着其他海盗，使你的武器获得+1/+1。"
+        )
+
+        assertEquals(
+            listOf(CardActionEnum.NO_POINT),
+            CardDescriptionParser.parseAsCardActionEnum(card)
+        )
+        assertEquals(
+            null,
+            CardDescriptionParser.parseAsPlayActionInterceptor(card)
+        )
+    }
 }
