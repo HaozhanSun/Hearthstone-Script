@@ -373,6 +373,53 @@ class StartupDeckModeNavigationIntegrationTest {
     }
 
     @Test
+    fun `idle client probe dispatches only bounded wrong mode Back and schedules a fresh probe`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/wild-config-standard-live-20261029-091917.png",
+        )))
+        val observed = TournamentModeConfirmation.observeImage(image)
+        assertEquals("STANDARD", observed.observedMode.name)
+        val decision = StartupDeckModeNavigationPolicy.decide(
+            purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE.name,
+            screenKind = "DECK_SELECTION",
+            confidence = 100,
+            evidence = "deck-selection-title",
+            expectedRunMode = "WILD",
+            observedRunMode = observed.observedMode.name,
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            currentSessionReady = false,
+            activeGame = false,
+            activeMatchmaking = false,
+            terminal = false,
+            trustedCurrentWindow = true,
+        )
+        assertTrue(decision.allowed, "the exact idle probe may navigate back to the mode selector")
+        var backDispatches = 0
+        var freshProbes = 0
+        assertTrue(StartupDeckModeNavigationPolicy.dispatchWrongModeTooltipReturn(
+            image = image,
+            expectedMode = "WILD",
+            decision = decision,
+            dispatchReturn = { backDispatches++; true },
+            requestFreshSelectorProbe = { freshProbes++ },
+        ), "exercise the same bounded Back dispatch seam used by UpstreamScreenStateRecovery")
+        assertEquals(1, backDispatches)
+        assertEquals(1, freshProbes)
+        assertFalse(StartupInputAuthorizationPolicy.allows(
+            action = "matchmaking.start",
+            currentSessionReady = false,
+            freshOnlineMenuReady = false,
+            freshDeckSelectionStartReady = false,
+            selectedModeStartPermitValid = false,
+        ), "IDLE_CLIENT_PROBE must never authorize Start from the opposite mode")
+        val source = File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt").readText()
+        assertTrue(source.contains("purpose = authorizedCapture.purpose"),
+            "the runtime callsite must pass IDLE_CLIENT_PROBE through this same purpose gate")
+        StartupInputReadiness.resetForTest()
+    }
+
+    @Test
     fun `navigation is fenced for active gameplay queue terminal modal and unsupported proof`() {
         fun decide(
             purpose: String = "STARTUP_CLIENT_PROBE",

@@ -18,6 +18,7 @@ function Start-HsScriptBetaRuntimeAfterDeploy(
     [scriptblock]$GetProcessRecords = { @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop) },
     [scriptblock]$StartCanonicalLauncher = $null,
     [scriptblock]$GetIdentity = ${function:Get-HsScriptProcessIdentity},
+    [scriptblock]$GetProcessStartTime = ${function:Get-HsScriptProcessStartTimeUtc},
     [scriptblock]$Wait = { param($Milliseconds) Start-Sleep -Milliseconds $Milliseconds },
     [int]$TimeoutSeconds = 60
 ) {
@@ -75,6 +76,53 @@ function Start-HsScriptBetaRuntimeAfterDeploy(
                             ProcessStartTimeUtc = [string]$identity.ProcessStartTimeUtc
                             ExecutablePath = [System.IO.Path]::GetFullPath([string]$identity.ExecutablePath)
                             MarkerPath = $markerPath
+                        }
+                    }
+                    # An elevated javaw process can deny both MainModule and CIM
+                    # image-path reads. Fall back only when the process snapshot,
+                    # marker start time, Java basename, and fully hash-validated
+                    # current Beta deployment all agree. This cannot accept a stale
+                    # marker for a reused PID or a previous/channel-mismatched build.
+                    if ($null -eq $identity -or [string]::IsNullOrWhiteSpace([string]$identity.ExecutablePath)) {
+                        $records = @(& $GetProcessRecords)
+                        $record = $records | Where-Object { [int]$_.ProcessId -eq $processId } | Select-Object -First 1
+                        $fallbackStartText = $null
+                        try { $fallbackStartText = & $GetProcessStartTime $processId } catch { }
+                        $fallbackStart = $null
+                        try {
+                            if ([string]$fallbackStartText) {
+                                $fallbackStart = [DateTimeOffset]::Parse([string]$fallbackStartText).ToUniversalTime()
+                            }
+                        } catch { }
+                        $recordedStart = $null
+                        try {
+                            $startValue = $marker.processStartTimeUtc
+                            $recordedStart = if ($startValue -is [DateTime]) {
+                                [DateTimeOffset]::new($startValue.ToUniversalTime())
+                            } else { [DateTimeOffset]::Parse([string]$startValue).ToUniversalTime() }
+                        } catch { }
+                        $expectedExecutableName = [System.IO.Path]::GetFileName([string]$marker.executablePath)
+                        $processNameMatches = $null -ne $record -and
+                            [string]$record.Name -ieq $expectedExecutableName -and
+                            $expectedExecutableName -in @('java.exe', 'javaw.exe')
+                        $startTimeMatches = $null -ne $recordedStart -and $null -ne $fallbackStart -and
+                            [Math]::Abs(($recordedStart - $fallbackStart).TotalMilliseconds) -le 1000
+                        $deploymentMatches = $false
+                        try {
+                            $currentDeployment = Resolve-Deployment $root
+                            $deploymentMatches = ([string]$currentDeployment.Manifest.releaseChannel).ToLowerInvariant() -ceq 'beta' -and
+                                [string]$currentDeployment.DeploymentId -ceq $DeploymentId -and
+                                [string]$marker.deploymentId -ceq $currentDeployment.DeploymentId
+                        } catch { }
+                        if ($processNameMatches -and $startTimeMatches -and $deploymentMatches) {
+                            return [pscustomobject]@{
+                                ProcessId = $processId
+                                DeploymentId = [string]$marker.deploymentId
+                                ProcessStartTimeUtc = $fallbackStart.ToString('o')
+                                ExecutablePath = "java-fallback:$expectedExecutableName"
+                                MarkerPath = $markerPath
+                                Verification = 'marker-starttime-processname-current-beta-manifest-hash'
+                            }
                         }
                     }
                 }

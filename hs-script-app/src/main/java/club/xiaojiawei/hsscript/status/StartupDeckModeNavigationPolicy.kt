@@ -51,7 +51,9 @@ internal object StartupDeckModeNavigationPolicy {
         trustedCurrentWindow: Boolean,
     ): Decision {
         val denial = when {
-            purpose !in setOf("STARTUP_CLIENT_PROBE", "STALE_CLIENT_PROBE", "SCREEN_STATE_RECOVERY") -> Denial.WRONG_PURPOSE
+            purpose !in setOf(
+                "STARTUP_CLIENT_PROBE", "STALE_CLIENT_PROBE", "IDLE_CLIENT_PROBE", "SCREEN_STATE_RECOVERY",
+            ) -> Denial.WRONG_PURPOSE
             screenKind != "DECK_SELECTION" -> Denial.WRONG_SCREEN
             confidence < 90 || evidence !in setOf(
                 "deck-selection-title", "deck-selection-title-roi", "deck-selection-start-control-visual",

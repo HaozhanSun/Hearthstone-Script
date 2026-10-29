@@ -103,6 +103,65 @@ try {
     Assert-Equal $launcherPath $launcherCalls[0] 'post-deploy restart uses canonical Beta launcher'
     Assert-Equal 77011 $restarted.ProcessId 'restart PID is independently verified against its identity'
     Assert-Equal $newDeploymentId $restarted.DeploymentId 'restart verifies exact manifest deployment ID'
+
+    # Elevated process executable-path reads may be denied. The fallback still
+    # requires exact marker PID/start time, javaw basename, and a hash-verified
+    # current Beta manifest/deployment ID.
+    Write-TestBetaManifest $runtimeRoot $newDeploymentId
+    $fallbackStart = '2026-10-29T16:53:00.0000000Z'
+    $fallbackPid = 77012
+    $fallbackStartMarker = @{
+        processId = $fallbackPid; processStartTimeUtc = $fallbackStart
+        executablePath = $javaPath; deploymentId = $newDeploymentId
+    } | ConvertTo-Json
+    $fallbackStartLauncher = {
+        param($Launcher, $WorkingDirectory)
+        [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'hs-script.pid.json'), $fallbackStartMarker)
+    }.GetNewClosure()
+    $fallbackStartIdentity = { param($ProcessId) [pscustomobject]@{
+        ProcessId = $ProcessId; ProcessStartTimeUtc = $fallbackStart; ExecutablePath = ''
+    } }
+    $fallbackStartRecords = { @([pscustomobject]@{ Name = 'javaw.exe'; ProcessId = $fallbackPid; CommandLine = '' }) }
+    $fallbackRestart = Start-HsScriptBetaRuntimeAfterDeploy -RuntimeRoot $runtimeRoot `
+        -DeploymentId $newDeploymentId -GetProcessRecords $fallbackStartRecords `
+        -StartCanonicalLauncher $fallbackStartLauncher -GetIdentity $fallbackStartIdentity `
+        -GetProcessStartTime { param($ProcessId) $fallbackStart } -Wait { param($Milliseconds) } -TimeoutSeconds 1
+    Assert-Equal $fallbackPid $fallbackRestart.ProcessId 'path-denied fallback verifies exact PID'
+    Assert-Equal 'marker-starttime-processname-current-beta-manifest-hash' $fallbackRestart.Verification 'fallback verification is explicit'
+
+    function Assert-FallbackRestartRefused([string]$Label, [scriptblock]$GetRecords, [scriptblock]$GetStartTime, [scriptblock]$StartLauncher = $fallbackStartLauncher, [string]$ExpectedDeploymentId = $newDeploymentId) {
+        $refused = $false
+        try {
+            Start-HsScriptBetaRuntimeAfterDeploy -RuntimeRoot $runtimeRoot -DeploymentId $ExpectedDeploymentId `
+                -GetProcessRecords $GetRecords -StartCanonicalLauncher $StartLauncher `
+                -GetIdentity $fallbackStartIdentity -GetProcessStartTime $GetStartTime `
+                -Wait { param($Milliseconds) } -TimeoutSeconds 1 | Out-Null
+        } catch { $refused = $_.Exception.Message -match 'did not produce a verifiable process marker' }
+        Assert-Equal $true $refused $Label
+    }
+    Assert-FallbackRestartRefused 'wrong PID in process snapshot is refused' `
+        { @([pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 77013; CommandLine = '' }) } `
+        { param($ProcessId) $fallbackStart }
+    Assert-FallbackRestartRefused 'wrong process start time is refused' $fallbackStartRecords `
+        { param($ProcessId) '2026-10-29T16:52:58.0000000Z' }
+    $currentManifestPath = Join-Path $runtimeRoot 'deployment-manifest.json'
+    $validManifestRaw = [System.IO.File]::ReadAllText($currentManifestPath)
+    $wrongChannelManifest = ($validManifestRaw | ConvertFrom-Json | Select-Object * | ConvertTo-Json).Replace('"releaseChannel": "beta"', '"releaseChannel": "release-candidate"')
+    [System.IO.File]::WriteAllText($currentManifestPath, $wrongChannelManifest)
+    Assert-FallbackRestartRefused 'wrong channel/current manifest is refused' $fallbackStartRecords `
+        { param($ProcessId) $fallbackStart }
+    [System.IO.File]::WriteAllText($currentManifestPath, $validManifestRaw)
+    $appJarPath = Join-Path $runtimeRoot 'hs-script_v4.16.700.jar'
+    [System.IO.File]::AppendAllText($appJarPath, '-tampered')
+    Assert-FallbackRestartRefused 'bad current artifact hash is refused' $fallbackStartRecords `
+        { param($ProcessId) $fallbackStart }
+    [System.IO.File]::WriteAllText($appJarPath, 'fixture=hs-script_v4.16.700.jar')
+    # Restore the exact fixture manifest after restoring the artifact bytes.
+    Write-TestBetaManifest $runtimeRoot $newDeploymentId
+    $emptyStartLauncher = { param($Launcher, $WorkingDirectory) Remove-Item -LiteralPath (Join-Path $runtimeRoot 'hs-script.pid.json') -Force -ErrorAction SilentlyContinue }.GetNewClosure()
+    Assert-FallbackRestartRefused 'missing marker is refused' { @() } { param($ProcessId) $fallbackStart } $emptyStartLauncher
+    Write-TestBetaManifest $runtimeRoot $deploymentId
+
     $wrongChannelRestartBlocked = $false
     try {
         Start-HsScriptBetaRuntimeAfterDeploy -RuntimeRoot $otherRoot -DeploymentId $newDeploymentId `
