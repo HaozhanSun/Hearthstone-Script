@@ -509,7 +509,23 @@ this deletion boundary.
   process/window-bound mode-selector probe. Do not treat the click or the old
   deck-selection capture as proof that the configured format is now selected;
   only a subsequent fresh mode confirmation and deck-selection capture may
-  authorize Start.
+  authorize Start. The selected Wild deck's gray incompatibility tooltip is a
+  fixed hover card above the deck list, not a centered blocking dialog. The
+  image-specific tooltip signature may waive only the broad centered-panel
+  veto for the named Return-to-selector action; never waive it for Start or
+  another action.
+- The generic idle stuck-screen ladder applies only to a fresh, exact-window,
+  same-fingerprint unknown blocker or exact reconnect dialog in a confirmed
+  non-game, non-queue state.
+  After 60 seconds, click the exact client origin three times, logging each
+  dispatch and re-capturing after the sequence. A changed fingerprint ends the
+  ladder. If the same blocker remains for another 60 seconds, re-capture and
+  recheck every game/queue/pause/terminal/window fence immediately before the
+  no-pause client restart. Deck mode mismatch, Event Quest, results, gameplay,
+  queue and pause remain owned by their dedicated recovery paths. Exact
+  reconnect uses the staged top-left-only ladder; never click Reconnect or
+  Cancel. Reconfirm current PID and Power.log/session evidence immediately
+  before its final restart.
 - For an exact reconnect screen, the 60-second no-pause restart grace must
   schedule its own fresh authorized capture at the threshold rather than wait
   for the next slow periodic OCR pass. Re-evaluate current active-game,

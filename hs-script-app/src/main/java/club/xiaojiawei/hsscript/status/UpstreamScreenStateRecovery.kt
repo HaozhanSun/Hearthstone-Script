@@ -61,6 +61,7 @@ object UpstreamScreenStateRecovery {
     private val reconnectAttemptProcessId = AtomicLong(0L)
     private val slowReconnectWarningObservedAt = AtomicLong(0L)
     private val unknownStartupRestartPolicy = UnknownStartupRestartPolicy()
+    private val stuckScreenUnblockPolicy = StuckScreenUnblockPolicy()
     private val indefiniteReconnectRestartPolicy = IndefiniteReconnectRestartPolicy()
     private val exactReconnectRecheckSchedule = ExactReconnectRecheckSchedule()
     private val clientRestartInFlight = ClientRestartRequestGate()
@@ -68,6 +69,7 @@ object UpstreamScreenStateRecovery {
     private val eventQuestOverlayRecoveryInFlight = AtomicBoolean(false)
     private val eventQuestOverlayRecoveryPolicy = EventQuestOverlayRecoveryPolicy()
     private val startupDeckModeNavigationAttempts = StartupDeckModeNavigationAttemptGate()
+    private val stuckScreenUnblockProbeInFlight = AtomicBoolean(false)
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
@@ -271,7 +273,8 @@ object UpstreamScreenStateRecovery {
             ocrUnknown = ocrDetection == null,
             questOverlayVisible = capture.visual.startupQuestOverlayVisual,
             matchmakingVisible = capture.visual.matchmakingSearchVisual,
-            modalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image),
+            modalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image) &&
+                !ScreenStateRecovery.isWrongModeDeckTooltip(capture.image),
             configuredDeckSelected = DeckStrategyManager.currentDeckStrategy != null &&
                 DeckStrategyManager.currentRunMode != null,
         )
@@ -283,7 +286,16 @@ object UpstreamScreenStateRecovery {
                 detection?.confidence ?: 0, detection?.evidence, true,
             ) + " purpose=${authorizedCapture.purpose}"
         }
-        if (detection != null) unknownStartupRestartPolicy.reset()
+        if (detection != null) {
+            unknownStartupRestartPolicy.reset()
+            if (stuckScreenUnblockPolicy.hasProgress()) {
+                log.warn {
+                    "STUCK_SCREEN_UNBLOCK_RECHECK result=UNBLOCKED newScreen=${detection.kind.code} " +
+                        "evidence=${detection.evidence} action=STOP_LADDER"
+                }
+            }
+            stuckScreenUnblockPolicy.reset()
+        }
         if (detection?.kind in setOf(
                 ScreenKind.DECK_SELECTION,
                 ScreenKind.HOME,
@@ -361,8 +373,12 @@ object UpstreamScreenStateRecovery {
             val isReconnectState = detection?.kind == ScreenKind.RECONNECT ||
                 detection?.kind == ScreenKind.RECONNECT_FAILURE ||
                 detection?.kind == ScreenKind.SERVER_UNAVAILABLE
+            val wrongModeDeckTooltip = detection?.kind == ScreenKind.DECK_SELECTION &&
+                ScreenStateRecovery.isWrongModeDeckTooltip(capture.image)
+            val blockingModalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image) &&
+                !wrongModeDeckTooltip
             val cleanMenu = pid != null && !WarEx.inWar &&
-                !ScreenStateRecovery.hasCenteredModalPanel(capture.image) &&
+                !blockingModalVisible &&
                 !looksLikeReconnectText(ocrText) && !looksLikeReconnectFailureText(ocrText) &&
                 detection != null && ScreenRecoveryCapturePurposePolicy.allowsStartupOnlineMenu(detection.kind.code)
             if (startupHubModeChooser) {
@@ -422,7 +438,7 @@ object UpstreamScreenStateRecovery {
                         expectedRunMode = expectedMode,
                         observedRunMode = observedMode,
                         enabledStartButtonVisible = startVisible,
-                        modalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image),
+                        modalVisible = blockingModalVisible,
                         currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
                         activeGame = activeGame,
                         activeMatchmaking = activeQueue,
@@ -442,36 +458,42 @@ object UpstreamScreenStateRecovery {
                             confidence = currentDetection.confidence,
                             evidence = currentDetection.evidence,
                             enabledStartButtonVisible = startVisible,
-                            modalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image),
+                            modalVisible = blockingModalVisible,
                         )
                         val accepted = if (proofRecorded && stateStillCurrent() && !WarEx.inWar &&
                             !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
                             !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() &&
                             !GameUtil.isTerminalGameState()
                         ) {
-                            StartupDeckModeNavigationPolicy.dispatchIfAllowed(navigationDecision) {
-                                MouseUtil.leftButtonClick(
-                                    TournamentModeStrategy.BACK_RECT.getCenterClickPos(),
-                                    authorizedCapture.gameWindow,
-                                    dispatchActionOverride = StartupDeckModeNavigationPolicy.ACTION,
-                                )
-                            }
+                            StartupDeckModeNavigationPolicy.dispatchWrongModeTooltipReturn(
+                                image = capture.image,
+                                expectedMode = expectedMode,
+                                decision = navigationDecision,
+                                dispatchReturn = {
+                                    MouseUtil.leftButtonClick(
+                                        TournamentModeStrategy.BACK_RECT.getCenterClickPos(),
+                                        authorizedCapture.gameWindow,
+                                        dispatchActionOverride = StartupDeckModeNavigationPolicy.ACTION,
+                                    )
+                                },
+                                requestFreshSelectorProbe = {
+                                    log.warn {
+                                        "STARTUP_DECK_MODE_NAVIGATION_POSTCHECK scheduled=true " +
+                                            "pid=$pid hwnd=$hwnd next=FRESH_MODE_SELECTOR_PROBE action=NO_START"
+                                    }
+                                    ScreenStateRecovery.scheduleStartupMenuReprobeAfterModeSelection()
+                                },
+                            )
                         } else false
                         modeNavigationAttempted = accepted
-                        if (accepted) {
-                            log.warn {
-                                "STARTUP_DECK_MODE_NAVIGATION_POSTCHECK scheduled=true " +
-                                    "pid=$pid hwnd=$hwnd next=FRESH_MODE_SELECTOR_PROBE action=NO_START"
-                            }
-                            ScreenStateRecovery.scheduleStartupMenuReprobeAfterModeSelection()
-                        }
                         log.warn {
                             "STARTUP_DECK_MODE_NAVIGATION decision=${if (accepted) "DISPATCH_ACCEPTED" else "BLOCKED"} " +
                                 "reason=${if (!attempt.allowed) attempt.reason else if (!proofRecorded) "proof-not-recorded" else if (!accepted) "final-state-or-dispatch-gate" else "mode-unconfirmed"} " +
                                 "attempt=${attempt.attempt} expectedMode=${expectedMode ?: "UNKNOWN"} " +
                                 "observedMode=${observedMode ?: "UNKNOWN"} pid=$pid hwnd=$hwnd " +
                                 "confidence=${currentDetection.confidence} evidence=${currentDetection.evidence} " +
-                                "startVisible=$startVisible activeGame=$activeGame activeQueue=$activeQueue " +
+                                "startVisible=$startVisible wrongModeDeckTooltip=$wrongModeDeckTooltip " +
+                                "activeGame=$activeGame activeQueue=$activeQueue " +
                                 "terminal=$terminal exactWindow=$trustedWindow action=${StartupDeckModeNavigationPolicy.ACTION} " +
                                 "inputAccepted=$accepted"
                         }
@@ -480,7 +502,8 @@ object UpstreamScreenStateRecovery {
                             "STARTUP_DECK_MODE_NAVIGATION decision=BLOCKED reason=${navigationDecision.denial.name.lowercase()} " +
                                 "expectedMode=${expectedMode ?: "UNKNOWN"} observedMode=${observedMode ?: "UNKNOWN"} " +
                                 "pid=${pid ?: "none"} hwnd=$hwnd activeGame=$activeGame activeQueue=$activeQueue " +
-                                "terminal=$terminal exactWindow=$trustedWindow action=NO_INPUT"
+                            "terminal=$terminal exactWindow=$trustedWindow " +
+                            "wrongModeDeckTooltip=$wrongModeDeckTooltip action=NO_INPUT"
                         }
                     }
                     TournamentModeConfirmation.reportUnconfirmedDeckSelection(
@@ -524,6 +547,15 @@ object UpstreamScreenStateRecovery {
         ) return true
         if (detection?.kind == ScreenKind.BETA_RESULT_CONFIRMATION &&
             dismissFreshBetaResultConfirmation(authorizedCapture)
+        ) return true
+        if (detection?.kind == ScreenKind.RECONNECT && capture.visual.reconnectDialogVisual &&
+            handleGenericIdleUnblock(
+                authorizedCapture = authorizedCapture,
+                detection = detection,
+                currentPid = currentPid,
+                stateFingerprint = stateFingerprint,
+                stuckForMs = stuckForMs,
+            )
         ) return true
 
         // Keep one durable, categorized copy for every 30-second recovery
@@ -571,6 +603,14 @@ object UpstreamScreenStateRecovery {
                     "unknownStateScreenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
                     "unknownStateScreenshotLink=${evidence?.link ?: "none"}"
             }
+            if (handleGenericIdleUnblock(
+                    authorizedCapture = authorizedCapture,
+                    detection = detection,
+                    currentPid = currentPid,
+                    stateFingerprint = stateFingerprint,
+                    stuckForMs = stuckForMs,
+                )
+            ) return false
             val eligibleProbe = authorizedCapture.purpose in setOf(
                 ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
                 ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
@@ -2176,6 +2216,256 @@ object UpstreamScreenStateRecovery {
             log.error(error) { "SCREEN_RECOVERY_RECONNECT_RESTART_FAILED pid=$pid action=RELEASE_RESTART_GATE" }
             false
         }
+    }
+
+    private fun handleGenericIdleUnblock(
+        authorizedCapture: AuthorizedCapture,
+        detection: Detection?,
+        currentPid: Int?,
+        stateFingerprint: String,
+        stuckForMs: Long,
+    ): Boolean {
+        val capture = authorizedCapture.capture
+        val exactReconnect = detection?.kind == ScreenKind.RECONNECT && capture.visual.reconnectDialogVisual
+        val staleQueueHistoryCleared = if (exactReconnect) {
+            LifecycleTrace.supersedeActiveMatchmakingScreenForReconnect()
+        } else false
+        if (staleQueueHistoryCleared) {
+            log.warn {
+                "STUCK_SCREEN_UNBLOCK_QUEUE_HISTORY_CLEARED reason=exact-current-reconnect " +
+                    "staleIntentIgnored=${LifecycleTrace.hasRecentMatchmakingInputIntent()}"
+            }
+        }
+        if (detection?.kind == ScreenKind.DECK_SELECTION) {
+            stuckScreenUnblockPolicy.reset()
+            log.info { "STUCK_SCREEN_UNBLOCK_SKIPPED reason=deck-mode-has-dedicated-recovery action=NO_GENERIC_CLICK" }
+            return true
+        }
+        val eligiblePurpose = authorizedCapture.purpose in setOf(
+            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+        )
+        val exactWindow = currentPid != null &&
+            GameUtil.findGameProcessIdForDiagnostics() == currentPid.toLong() &&
+            ScriptStatus.gameHWND?.toString() == authorizedCapture.gameWindow.toString() &&
+            GameUtil.isVerifiedCurrentGameWindow(authorizedCapture.gameWindow, currentPid.toLong())
+        val activeGame = ScreenStateRecovery.isCurrentGameSessionReadyForStart() || WarEx.inWar ||
+            Mode.currMode == ModeEnum.GAMEPLAY || Mode.nextMode == ModeEnum.GAMEPLAY
+        val activeQueue = capture.visual.matchmakingSearchVisual ||
+            LifecycleTrace.hasRecentActiveMatchmakingScreen() || LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
+        val resultOrTerminal = GameUtil.isTerminalGameState() || MandatoryRankSurrenderGuard.isPending() ||
+            MandatoryRankSurrenderGuard.isTerminalCleanupPending() || ScreenStateRecovery.looksLikeResultVisual(
+                capture.visual.resultContinueGrayLightRatio,
+                capture.visual.resultBannerLowSaturationRatio,
+                capture.visual.loadingCentralDarkRatio,
+                capture.visual.resultBannerWarmRatio,
+            )
+        val evidence = StuckScreenUnblockPolicy.Evidence(
+            nowMs = System.currentTimeMillis(),
+            stableForMs = stuckForMs,
+            fingerprint = "$stateFingerprint|${stuckScreenPerceptualFingerprint(capture.image)}",
+            // Capture authority minted this exact probe; long OCR must not
+            // make its screen classification retroactively stale. Before any
+            // click below we acquire a second, immediately fresh frame.
+            captureFresh = eligiblePurpose,
+            exactWindowVerified = exactWindow,
+            eligibleIdleProbe = eligiblePurpose,
+            recognizedSafeBlocker = (detection == null || exactReconnect) &&
+                !capture.visual.startupQuestOverlayVisual &&
+                (!capture.visual.reconnectDialogVisual || exactReconnect) && !capture.visual.battleNetLauncherVisual &&
+                !capture.visual.amazonAppstoreSunsetNoticeVisual && !capture.visual.matchmakingSearchVisual &&
+                !resultOrTerminal,
+            currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+            activeGame = activeGame,
+            activeQueue = activeQueue,
+            terminal = resultOrTerminal,
+            paused = PauseStatus.isPause,
+            modeMismatchDeck = detection?.kind == ScreenKind.DECK_SELECTION,
+            reconnect = false,
+            resultOrTerminalScreen = detection?.kind in setOf(ScreenKind.RESULT, ScreenKind.BETA_RESULT_CONFIRMATION,
+                ScreenKind.RANK_PROGRESS_CONTINUATION) || resultOrTerminal,
+            activeGameplayScreen = activeGame,
+            matchmakingScreen = activeQueue,
+        )
+        // Non-modal unknown frames retain the older classification-only/restart policy.
+        if (!evidence.recognizedSafeBlocker && !evidence.modeMismatchDeck) return false
+        val decision = stuckScreenUnblockPolicy.observe(evidence)
+        val point = StartupQuestOverlayDismissPolicy.topLeftPixel(capture.bounds)
+        log.warn {
+            "STUCK_SCREEN_UNBLOCK_DECISION action=${decision.action} reason=${decision.reason} " +
+                "click=${decision.clickNumber}/${StuckScreenUnblockPolicy.MAX_TOP_LEFT_CLICKS} " +
+                "fingerprint=${evidence.fingerprint} purpose=${authorizedCapture.purpose} " +
+                "fresh=${evidence.captureFresh} exactWindow=$exactWindow activeGame=$activeGame " +
+                "activeQueue=$activeQueue terminal=$resultOrTerminal paused=${PauseStatus.isPause} " +
+                "point=$point"
+        }
+        when (decision.action) {
+            StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT -> {
+                val fresh = captureVerifiedGameScreen(stuckForMs = stuckForMs, startupProbe = true)
+                val freshVisualDetection = fresh?.let {
+                    detect("", it.capture.visual) ?: startupDeckSelectionVisualDetection(
+                        purpose = it.purpose,
+                        image = it.capture.image,
+                        ocrUnknown = true,
+                        questOverlayVisible = it.capture.visual.startupQuestOverlayVisual,
+                        matchmakingVisible = it.capture.visual.matchmakingSearchVisual,
+                        modalVisible = ScreenStateRecovery.hasCenteredModalPanel(it.capture.image) &&
+                            !ScreenStateRecovery.isWrongModeDeckTooltip(it.capture.image),
+                        configuredDeckSelected = DeckStrategyManager.currentDeckStrategy != null &&
+                            DeckStrategyManager.currentRunMode != null,
+                    )
+                }
+                val freshFingerprint = fresh?.let {
+                    "$stateFingerprint|${stuckScreenPerceptualFingerprint(it.capture.image)}"
+                }
+                val freshAuthorized = fresh != null && currentPid != null &&
+                    fresh.gameWindow.toString() == authorizedCapture.gameWindow.toString() &&
+                    fresh.purpose in setOf(ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                        ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE, ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE) &&
+                    System.nanoTime() - fresh.capture.capturedAtNanos <= 5_000_000_000L &&
+                    freshFingerprint == evidence.fingerprint &&
+                    (freshVisualDetection == null || exactReconnect &&
+                        freshVisualDetection.kind == ScreenKind.RECONNECT && fresh.capture.visual.reconnectDialogVisual) &&
+                    !fresh.capture.visual.startupQuestOverlayVisual &&
+                    (!fresh.capture.visual.reconnectDialogVisual || exactReconnect) &&
+                    !fresh.capture.visual.battleNetLauncherVisual && !fresh.capture.visual.matchmakingSearchVisual &&
+                    !ScreenStateRecovery.looksLikeResultVisual(
+                        fresh.capture.visual.resultContinueGrayLightRatio,
+                        fresh.capture.visual.resultBannerLowSaturationRatio,
+                        fresh.capture.visual.loadingCentralDarkRatio,
+                        fresh.capture.visual.resultBannerWarmRatio,
+                    ) && !GameUtil.isTerminalGameState() &&
+                    !ScreenStateRecovery.isCurrentGameSessionReadyForStart() && !WarEx.inWar &&
+                    !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+                    !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() && !PauseStatus.isPause &&
+                    WorkTimeListener.working && GameUtil.findGameProcessIdForDiagnostics() == currentPid.toLong() &&
+                    GameUtil.isVerifiedCurrentGameWindow(authorizedCapture.gameWindow, currentPid.toLong())
+                val freshPoint = fresh?.let { StartupQuestOverlayDismissPolicy.topLeftPixel(it.capture.bounds) }
+                var accepted = freshAuthorized && freshPoint != null && currentPid != null
+                if (accepted && freshPoint != null && currentPid != null) {
+                    for (clickNumber in decision.clickNumber..StuckScreenUnblockPolicy.MAX_TOP_LEFT_CLICKS) {
+                        val clickAccepted = MouseUtil.leftButtonClickForIdleStuckRecovery(
+                            freshPoint, currentPid.toLong(), authorizedCapture.gameWindow,
+                        )
+                        log.warn {
+                            "STUCK_SCREEN_UNBLOCK_CLICK click=$clickNumber/3 point=$freshPoint " +
+                                "accepted=$clickAccepted capture=${fresh?.capture?.file?.absolutePath ?: "not-saved"}"
+                        }
+                        if (!clickAccepted) {
+                            accepted = false
+                            break
+                        }
+                    }
+                }
+                if (accepted) {
+                    accepted = stuckScreenUnblockPolicy.completeTopLeftClickBatch(
+                        evidence.fingerprint, System.currentTimeMillis(),
+                    )
+                }
+                if (!accepted) stuckScreenUnblockPolicy.reset()
+                log.warn {
+                    "STUCK_SCREEN_UNBLOCK_BATCH complete=$accepted clickCount=${if (accepted) 3 else decision.clickNumber} " +
+                        "sourcePoint=$point freshPoint=$freshPoint fingerprint=${evidence.fingerprint}"
+                }
+                if (accepted && stuckScreenUnblockProbeInFlight.compareAndSet(false, true)) {
+                    EXTRA_THREAD_POOL.schedule({
+                        try {
+                            inspectAndRecover(stuckForMs, stateFingerprint, startupProbe = true)
+                        } finally {
+                            stuckScreenUnblockProbeInFlight.set(false)
+                        }
+                    }, 800L, TimeUnit.MILLISECONDS)
+                    log.warn {
+                        "STUCK_SCREEN_UNBLOCK_RECHECK scheduled=true delayMs=800 clickCount=3 action=FRESH_CAPTURE"
+                    }
+                }
+                true
+            }
+            StuckScreenUnblockPolicy.Action.REPROBE -> {
+                log.warn { "STUCK_SCREEN_UNBLOCK_RECHECK result=STILL_BLOCKED fingerprint=${evidence.fingerprint}" }
+                true
+            }
+            StuckScreenUnblockPolicy.Action.UNBLOCKED -> {
+                stuckScreenUnblockPolicy.reset()
+                log.warn { "STUCK_SCREEN_UNBLOCK_RECHECK result=UNBLOCKED fingerprint=${evidence.fingerprint}" }
+                true
+            }
+            StuckScreenUnblockPolicy.Action.RESTART_CLIENT -> {
+                val fresh = captureVerifiedGameScreen(stuckForMs = stuckForMs, startupProbe = true)
+                val freshDetection = fresh?.let {
+                    if (exactReconnect && it.capture.visual.reconnectDialogVisual) {
+                        Detection(ScreenKind.RECONNECT, ModeEnum.LOGIN, 100, "reconnect-dialog-structural-visual")
+                    } else detect("", it.capture.visual) ?: startupDeckSelectionVisualDetection(
+                        purpose = it.purpose,
+                        image = it.capture.image,
+                        ocrUnknown = true,
+                        questOverlayVisible = it.capture.visual.startupQuestOverlayVisual,
+                        matchmakingVisible = it.capture.visual.matchmakingSearchVisual,
+                        modalVisible = ScreenStateRecovery.hasCenteredModalPanel(it.capture.image) &&
+                            !ScreenStateRecovery.isWrongModeDeckTooltip(it.capture.image),
+                        configuredDeckSelected = DeckStrategyManager.currentDeckStrategy != null &&
+                            DeckStrategyManager.currentRunMode != null,
+                    )
+                }
+                val finalSafe = fresh != null && currentPid != null &&
+                    fresh.gameWindow.toString() == authorizedCapture.gameWindow.toString() &&
+                    System.nanoTime() - fresh.capture.capturedAtNanos <= 5_000_000_000L &&
+                    "$stateFingerprint|${stuckScreenPerceptualFingerprint(fresh.capture.image)}" == evidence.fingerprint &&
+                    !fresh.capture.visual.startupQuestOverlayVisual &&
+                    (!fresh.capture.visual.reconnectDialogVisual || exactReconnect) &&
+                    !fresh.capture.visual.matchmakingSearchVisual &&
+                    !fresh.capture.visual.battleNetLauncherVisual && !fresh.capture.visual.amazonAppstoreSunsetNoticeVisual &&
+                    (if (exactReconnect) freshDetection?.kind == ScreenKind.RECONNECT &&
+                        fresh.capture.visual.reconnectDialogVisual else freshDetection == null) &&
+                    !ScreenStateRecovery.hasAuthoritativeCurrentGameEvidenceForReconnect() &&
+                    !PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence() &&
+                    !ScreenStateRecovery.isCurrentGameSessionReadyForStart() &&
+                    !WarEx.inWar && Mode.currMode != ModeEnum.GAMEPLAY && Mode.nextMode != ModeEnum.GAMEPLAY &&
+                    !GameUtil.isTerminalGameState() && !MandatoryRankSurrenderGuard.isPending() &&
+                    !MandatoryRankSurrenderGuard.isTerminalCleanupPending() && !PauseStatus.isPause &&
+                    WorkTimeListener.working && !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+                    !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() &&
+                    GameUtil.findGameProcessIdForDiagnostics() == currentPid.toLong() &&
+                    GameUtil.isVerifiedCurrentGameWindow(authorizedCapture.gameWindow, currentPid.toLong())
+                val restartAccepted = finalSafe && currentPid != null &&
+                    clientRestartInFlight.tryAcquire(currentPid.toLong(), System.currentTimeMillis())
+                log.error {
+                    "STUCK_SCREEN_UNBLOCK_RESTART decision=${if (restartAccepted) "RESTART_CLIENT" else "DEFER"} " +
+                        "reason=${if (!finalSafe) decision.reason else if (!restartAccepted) "client-restart-in-flight" else "final-fences-cleared"} " +
+                        "finalGuard=$finalSafe freshScreen=${freshDetection?.kind?.code ?: "UNKNOWN"} " +
+                        "pause=${PauseStatus.isPause} action=${if (restartAccepted) "idle-watchdog" else "NO_ACTION"}"
+                }
+                if (restartAccepted) Core.restartFromIdleWatchdog()
+                true
+            }
+            StuckScreenUnblockPolicy.Action.WAIT,
+            StuckScreenUnblockPolicy.Action.STOP,
+            -> true
+        }
+        return true
+    }
+
+    /** Stable coarse client-content fingerprint; omit the bottom HUD clock and frame-level motion. */
+    private fun stuckScreenPerceptualFingerprint(image: BufferedImage): String {
+        var hash = 0xcbf29ce484222325UL.toLong()
+        val x0 = (image.width * 0.12).toInt()
+        val x1 = (image.width * 0.88).toInt()
+        val y0 = (image.height * 0.08).toInt()
+        val y1 = (image.height * 0.90).toInt()
+        for (row in 0 until 9) {
+            for (column in 0 until 12) {
+                val x = (x0 + ((column + 0.5) / 12.0 * (x1 - x0))).toInt().coerceIn(0, image.width - 1)
+                val y = (y0 + ((row + 0.5) / 9.0 * (y1 - y0))).toInt().coerceIn(0, image.height - 1)
+                val rgb = image.getRGB(x, y)
+                val r = (rgb ushr 16) and 0xff
+                val g = (rgb ushr 8) and 0xff
+                val b = rgb and 0xff
+                val quantized = ((r / 32) shl 6) or ((g / 32) shl 3) or (b / 32)
+                hash = (hash xor quantized.toLong()) * 0x100000001b3L
+            }
+        }
+        return java.lang.Long.toUnsignedString(hash, 16)
     }
 
     private fun shouldAttemptReconnect(now: Long): Boolean {

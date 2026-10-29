@@ -17,6 +17,7 @@ class StartupDeckModeNavigationIntegrationTest {
         val screen = UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("", image)
         assertEquals("DECK_SELECTION", screen)
         assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+        assertTrue(ScreenStateRecovery.wrongModeTooltipVisualForTest(image))
         val visibleWrongMode = TournamentModeConfirmation.observeImage(image)
         assertEquals("UNKNOWN", visibleWrongMode.observedMode.name)
 
@@ -59,11 +60,24 @@ class StartupDeckModeNavigationIntegrationTest {
         ))
 
         var dispatches = 0
-        assertTrue(StartupDeckModeNavigationPolicy.dispatchIfAllowed(decision) {
-            dispatches++
-            true
-        })
+        var reprobes = 0
+        assertTrue(StartupDeckModeNavigationPolicy.dispatchWrongModeTooltipReturn(
+            image = image,
+            expectedMode = RunModeEnum.WILD.name,
+            decision = decision,
+            dispatchReturn = { dispatches++; true },
+            requestFreshSelectorProbe = { reprobes++ },
+        ))
         assertEquals(1, dispatches, "the integration dispatch seam must be reached, not just intent-recorded")
+        assertEquals(1, reprobes, "accepted Return must request a fresh selector capture")
+        assertFalse(StartupDeckModeNavigationPolicy.dispatchWrongModeTooltipReturn(
+            image = image,
+            expectedMode = RunModeEnum.STANDARD.name,
+            decision = decision,
+            dispatchReturn = { dispatches++; true },
+            requestFreshSelectorProbe = { reprobes++ },
+        ), "tooltip affordance is scoped to configured Wild mode")
+        assertEquals(1, dispatches)
         assertFalse(StartupInputAuthorizationPolicy.allows(
             action = StartupDeckModeNavigationPolicy.ACTION,
             currentSessionReady = true,
@@ -75,6 +89,22 @@ class StartupDeckModeNavigationIntegrationTest {
             currentSessionReady = false,
             freshOnlineMenuReady = false,
             startupDeckSelectionModeNavigationReady = true,
+        ))
+        assertFalse(StartupInputAuthorizationPolicy.allowsDeckSelectionStart(
+            action = "matchmaking.start", processId = 25948, hwnd = "live",
+            exactWindowVerified = true, freshDeckSelectionStartReady = false,
+        ), "the wrong-mode frame may dispatch only Return, never Start")
+        assertTrue(StartupInputReadiness.recordDeckSelectionStart(
+            pid = 25948, hwnd = "captured-live-window", confidence = 95,
+            evidence = "deck-selection-start-control-visual", expectedRunMode = "WILD",
+            observedRunMode = "WILD", enabledStartButtonVisible = true, modalVisible = false, now = 10_500L,
+        ), "only the later fresh mode-matched capture may create Start proof")
+        assertTrue(StartupInputAuthorizationPolicy.allowsDeckSelectionStart(
+            action = "matchmaking.start", processId = 25948, hwnd = "captured-live-window",
+            exactWindowVerified = true,
+            freshDeckSelectionStartReady = StartupInputReadiness.isDeckSelectionStartReady(
+                25948, "captured-live-window", 10_501L,
+            ),
         ))
         StartupInputReadiness.resetForTest()
     }

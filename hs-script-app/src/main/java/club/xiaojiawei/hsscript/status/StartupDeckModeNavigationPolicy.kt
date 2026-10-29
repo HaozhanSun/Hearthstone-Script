@@ -73,6 +73,20 @@ internal object StartupDeckModeNavigationPolicy {
     /** Keeps the integration boundary explicit: only an allowed Back action can reach the dispatcher. */
     fun dispatchIfAllowed(decision: Decision, dispatch: () -> Boolean): Boolean =
         decision.allowed && dispatch()
+
+    /** Production/test seam: the tooltip-specific image proof permits only Return, then demands re-probe. */
+    fun dispatchWrongModeTooltipReturn(
+        image: java.awt.image.BufferedImage,
+        expectedMode: String?,
+        decision: Decision,
+        dispatchReturn: () -> Boolean,
+        requestFreshSelectorProbe: () -> Unit,
+    ): Boolean {
+        if (expectedMode != "WILD" || !ScreenStateRecovery.isWrongModeDeckTooltip(image) || !decision.allowed) return false
+        val accepted = dispatchReturn()
+        if (accepted) requestFreshSelectorProbe()
+        return accepted
+    }
 }
 
 /** One automatic Back attempt per continuous startup deck-selection screen. */

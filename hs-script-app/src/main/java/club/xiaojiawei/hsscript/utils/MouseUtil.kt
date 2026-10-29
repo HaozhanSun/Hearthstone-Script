@@ -28,6 +28,7 @@ import club.xiaojiawei.hsscript.status.StartupQuestOverlayDismissPermitStore
 import club.xiaojiawei.hsscript.status.StartupQuestOverlayDismissPolicy
 import club.xiaojiawei.hsscript.status.StartupQuestOverlayRecoveryFence
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
+import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
@@ -752,6 +753,38 @@ object MouseUtil {
         } finally {
             DRIVER_LOCK.unlock()
         }
+    }
+
+    /** Exact client-origin click for the generic idle stuck-screen ladder. */
+    internal fun leftButtonClickForIdleStuckRecovery(
+        pos: Point,
+        expectedPid: Long,
+        expectedWindow: HWND,
+    ): Boolean {
+        fun safe(): Boolean = WorkTimeListener.working && !PauseStatus.isPause && !WarEx.inWar &&
+            Mode.currMode != ModeEnum.GAMEPLAY && Mode.nextMode != ModeEnum.GAMEPLAY &&
+            !ScreenStateRecovery.isCurrentGameSessionReadyForStart() &&
+            !GameUtil.isTerminalGameState() && !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+            !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() &&
+            GameUtil.findGameProcessIdForDiagnostics() == expectedPid &&
+            ScriptStatus.gameHWND?.toString() == expectedWindow.toString() &&
+            GameUtil.isVerifiedCurrentGameWindow(expectedWindow, expectedPid)
+        if (pos.x < 0 || pos.y < 0 || !safe() || !ActionDispatchGate.allow("startup.stuck-screen-unblock")) return false
+        if (!hwndIsValid(expectedWindow)) return false
+        val lockAcquired = try { DRIVER_LOCK.tryLock(3, TimeUnit.SECONDS) }
+        catch (error: InterruptedException) { Thread.currentThread().interrupt(); false }
+        if (!lockAcquired) return false
+        return try {
+            synchronized(e2eRobotLock) {
+                if (!safe() || !forceFocusWindowForRecovery(expectedWindow) || !safe()) return false
+                val accepted = sendE2eWindowsClick(pos)
+                log.warn {
+                    "STUCK_SCREEN_UNBLOCK_INPUT pid=$expectedPid hwnd=$expectedWindow pos=$pos " +
+                        "accepted=$accepted action=startup.stuck-screen-unblock"
+                }
+                accepted
+            }
+        } finally { DRIVER_LOCK.unlock() }
     }
 
     /** Dispatch only the one fresh, permit-bound startup quest-overlay tap. */
