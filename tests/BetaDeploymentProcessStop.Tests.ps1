@@ -67,6 +67,49 @@ try {
     $deploymentId = 'hs-script_v4.16.700.jar|fixture'
     Write-TestBetaManifest $runtimeRoot $deploymentId
     $markerStart = '2026-10-27T19:00:00.0000000Z'
+    $gameAbsent = Assert-HsScriptBetaGameProcessAbsent -GetProcessRecords { @() }
+    Assert-Equal $true $gameAbsent 'Beta restart proceeds only when no Hearthstone process can own a queue'
+    $activeGameRestartBlocked = $false
+    try {
+        Assert-HsScriptBetaGameProcessAbsent -GetProcessRecords {
+            @([pscustomobject]@{ Name = 'Hearthstone.exe'; ProcessId = 4404; CommandLine = '' })
+        } | Out-Null
+    } catch { $activeGameRestartBlocked = $_.Exception.Message -match 'active match or queue' }
+    Assert-Equal $true $activeGameRestartBlocked 'any live Hearthstone PID fails closed without killing it'
+
+    $launcherPath = Join-Path $runtimeRoot 'launch-as-admin.vbs'
+    [System.IO.File]::WriteAllText($launcherPath, 'fixture launcher')
+    $newDeploymentId = 'hs-script_v4.16.711.jar|fresh-fixture'
+    $newStart = '2026-10-29T15:43:00.0000000Z'
+    $launcherCalls = [System.Collections.Generic.List[string]]::new()
+    $newIdentity = { param($ProcessId) [pscustomobject]@{
+        ProcessId = $ProcessId; ProcessStartTimeUtc = $newStart; ExecutablePath = $javaPath
+    } }
+    $startNewRuntime = {
+        param($Launcher, $WorkingDirectory)
+        Assert-Equal $launcherPath $Launcher 'post-deploy launch uses canonical manifest-backed VBS'
+        Assert-Equal $runtimeRoot $WorkingDirectory 'canonical launcher starts from Beta runtime root'
+        $launcherCalls.Add($Launcher) | Out-Null
+        $newMarker = @{
+            processId = 77011; processStartTimeUtc = $newStart; executablePath = $javaPath
+            deploymentId = $newDeploymentId
+        } | ConvertTo-Json
+        [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'hs-script.pid.json'), $newMarker)
+    }.GetNewClosure()
+    $restarted = Start-HsScriptBetaRuntimeAfterDeploy -RuntimeRoot $runtimeRoot `
+        -DeploymentId $newDeploymentId -GetProcessRecords { @() } -StartCanonicalLauncher $startNewRuntime `
+        -GetIdentity $newIdentity -Wait { param($Milliseconds) } -TimeoutSeconds 1
+    Assert-Equal 1 $launcherCalls.Count 'canonical Beta launcher invoked after install'
+    Assert-Equal $launcherPath $launcherCalls[0] 'post-deploy restart uses canonical Beta launcher'
+    Assert-Equal 77011 $restarted.ProcessId 'restart PID is independently verified against its identity'
+    Assert-Equal $newDeploymentId $restarted.DeploymentId 'restart verifies exact manifest deployment ID'
+    $wrongChannelRestartBlocked = $false
+    try {
+        Start-HsScriptBetaRuntimeAfterDeploy -RuntimeRoot $otherRoot -DeploymentId $newDeploymentId `
+            -GetProcessRecords { @() } -StartCanonicalLauncher { } -TimeoutSeconds 1 | Out-Null
+    } catch { $wrongChannelRestartBlocked = $_.Exception.Message -match 'non-Beta runtime root' }
+    Assert-Equal $true $wrongChannelRestartBlocked 'restart helper refuses non-Beta runtime roots'
+
     $marker = @{
         schema = 1
         releaseChannel = 'beta'
@@ -224,7 +267,10 @@ Assert-Equal 'Beta release original failure sentinel' $originalFailure 'release 
 $deployScript = [System.IO.File]::ReadAllText((Join-Path $root 'build-and-deploy.ps1'))
 foreach ($required in @(
     '. $betaDeploymentProcessUtilsSource',
+    'Assert-HsScriptBetaGameProcessAbsent | Out-Null',
     '$stoppedRuntimeProcesses = @(Stop-ManagedHsScriptProcesses $runtimeRoot)',
+    'Start-HsScriptBetaRuntimeAfterDeploy',
+    "BETA_APP_RESTART_VERIFIED pid=",
     '$originalError = $_',
     'throw $originalError.Exception'
 )) {
@@ -234,4 +280,4 @@ if (-not $deployScript.Contains('$betaDeploymentProcessUtilsSource = Join-Path $
     throw 'Beta process-stop helper must be loaded from the Beta source root'
 }
 
-Write-Output 'BetaDeploymentProcessStop.Tests: PASS (Beta-only ownership, exact marker fallback, PID/name/manifest refusal, missing/corrupt marker, unrelated JVM, original error propagation)'
+Write-Output 'BetaDeploymentProcessStop.Tests: PASS (Beta-only ownership, game-preserving restart guard, canonical launch, exact deployment/PID verification, exact marker fallback, PID/name/manifest refusal, missing/corrupt marker, unrelated JVM, original error propagation)'

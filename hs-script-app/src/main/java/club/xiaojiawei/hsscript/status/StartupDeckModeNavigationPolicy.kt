@@ -4,6 +4,18 @@ package club.xiaojiawei.hsscript.status
 internal object StartupDeckModeNavigationPolicy {
     const val ACTION = "startup.mode-return-to-selector"
 
+    fun isModeProofProbe(purpose: ScreenRecoveryCapturePurpose): Boolean =
+        purpose == ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE ||
+            purpose == ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE ||
+            purpose == ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE
+
+    fun requiresClassificationOnly(
+        purpose: ScreenRecoveryCapturePurpose,
+        screenKind: String,
+        freshConfiguredModeStartProof: Boolean,
+    ): Boolean = screenKind == "DECK_SELECTION" &&
+        (purpose == ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE || !freshConfiguredModeStartProof)
+
     enum class Denial {
         NONE,
         WRONG_PURPOSE,

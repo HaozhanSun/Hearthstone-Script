@@ -87,6 +87,19 @@ $runtimeStop = $deployScript.IndexOf('Stop-ManagedHsScriptProcesses', [System.St
 if ($artifactCheck -lt 0 -or $runtimeStop -lt 0 -or $artifactCheck -gt $runtimeStop) {
     throw 'Artifact timestamp must be verified before the deployment process is stopped or runtime is modified'
 }
+$betaGameGuard = $deployScript.IndexOf('Assert-HsScriptBetaGameProcessAbsent | Out-Null', [System.StringComparison]::Ordinal)
+$betaRuntimeRestart = $deployScript.IndexOf('Start-HsScriptBetaRuntimeAfterDeploy', [System.StringComparison]::Ordinal)
+$shortcutSync = $deployScript.IndexOf("sync-shortcuts.ps1", [System.StringComparison]::Ordinal)
+$deployComplete = $deployScript.IndexOf("BUILD_AND_DEPLOY_COMPLETE", [System.StringComparison]::Ordinal)
+if ($betaGameGuard -lt 0 -or $betaGameGuard -gt $runtimeStop) {
+    throw 'Beta deployment must fail closed on a live Hearthstone process before stopping the Beta app'
+}
+if ($betaRuntimeRestart -lt $shortcutSync -or $deployComplete -lt $betaRuntimeRestart) {
+    throw 'Beta deployment must launch and verify the canonical runtime after shortcut sync before reporting completion'
+}
+if ($deployScript -notmatch 'BETA_APP_RESTART_VERIFIED pid=.*deploymentId=') {
+    throw 'Beta deployment must report the verified post-deploy PID and deployment ID'
+}
 
 $invalidNames = @(
     'hs-script_v4.16.483-local-20260928-211941.jar',

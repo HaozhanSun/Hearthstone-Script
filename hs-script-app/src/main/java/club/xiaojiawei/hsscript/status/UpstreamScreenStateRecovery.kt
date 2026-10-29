@@ -343,7 +343,11 @@ object UpstreamScreenStateRecovery {
             }
             return false
         }
-        val startupClientProbe = authorizedCapture.purpose == ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE
+        // Stale probes also run before Power.log/session readiness. They must
+        // classify a deck chooser as classification-only unless fresh mode
+        // proof matches the configured format; treating these as generic stale
+        // recovery caused repeated START_MATCHING attempts against Standard.
+        val startupClientProbe = StartupDeckModeNavigationPolicy.isModeProofProbe(authorizedCapture.purpose)
         var startupClassificationOnly = false
         val currentPid = GameUtil.findGameProcessIdForDiagnostics()?.toInt()
         if (currentPid != null && currentPid > 0) {
@@ -391,6 +395,7 @@ object UpstreamScreenStateRecovery {
         } else if (authorizedCapture.purpose in setOf(
                 ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
                 ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+                ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
             ) && !ScreenStateRecovery.isCurrentGameSessionReadyForStart()
         ) {
             // A fresh, process-bound reconnect/unknown/modal observation revokes
@@ -443,7 +448,12 @@ object UpstreamScreenStateRecovery {
                         "proof=${if (currentDetection.kind == ScreenKind.DECK_SELECTION) "MATCHMAKING_START_ONLY" else "ONLINE_MENU"} " +
                         "provider=UPSTREAM"
                 }
-                if (currentDetection.kind == ScreenKind.DECK_SELECTION && !readinessRecorded) {
+                if (StartupDeckModeNavigationPolicy.requiresClassificationOnly(
+                        purpose = authorizedCapture.purpose,
+                        screenKind = currentDetection.kind.code,
+                        freshConfiguredModeStartProof = readinessRecorded,
+                    )
+                ) {
                     startupClassificationOnly = true
                     val expectedMode = expectedDeckMode
                     val observedMode = deckModeObservation?.observedMode?.name
@@ -545,7 +555,11 @@ object UpstreamScreenStateRecovery {
                         "SCREEN_RECOVERY_DECK_SELECTION_CLASSIFICATION_ONLY " +
                             "expectedRunMode=${expectedDeckMode ?: "UNKNOWN"} " +
                             "observedRunMode=${deckModeObservation?.observedMode?.name ?: "UNKNOWN"} " +
+                            "purpose=${authorizedCapture.purpose.name} " +
                             "action=${if (modeNavigationAttempted) "BACK_TO_MODE_SELECTOR_ONLY" else "NO_START"} provider=UPSTREAM"
+                    }
+                    if (authorizedCapture.purpose == ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE) {
+                        StartupInputReadiness.invalidate(pid, hwnd)
                     }
                 }
             } else {
@@ -2905,6 +2919,14 @@ object UpstreamScreenStateRecovery {
                     DeckStrategyManager.currentRunMode == null
                 ) {
                     log.warn { "SCREEN_RECOVERY_DECK_SELECTION_SKIPPED reason=no-selected-strategy" }
+                    return false
+                }
+                if (!ActionDispatchGate.isFreshConfiguredDeckSelectionStartProofReady()) {
+                    log.warn {
+                        "SCREEN_RECOVERY_DECK_SELECTION_BLOCKED reason=mode-specific-startup-proof-missing " +
+                            "expectedMode=${DeckStrategyManager.currentRunMode?.name ?: "UNKNOWN"} " +
+                            "observedMode=UNKNOWN action=NO_START_REPROBE_MODE_SELECTOR"
+                    }
                     return false
                 }
                 Mode.recover(ModeEnum.TOURNAMENT, "visible-deck-selection", enterStrategy = false)

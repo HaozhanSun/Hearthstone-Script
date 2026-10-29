@@ -239,6 +239,13 @@ if ($embeddedBuildTimestampPacific -cne $buildTimestampPacific) {
 }
 Write-Output "ARTIFACT_TIMESTAMP_VERIFIED=$embeddedBuildTimestampPacific"
 
+if ($Channel -eq 'beta') {
+    # Fail closed while Hearthstone is present. A live client may own a match,
+    # a queue, or a result transition; deployment must never force-close it.
+    Assert-HsScriptBetaGameProcessAbsent | Out-Null
+    Write-Output 'BETA_RESTART_PREFLIGHT=GAME_ABSENT'
+}
+
 $stoppedRuntimeProcesses = @(Stop-ManagedHsScriptProcesses $runtimeRoot)
 if ($stoppedRuntimeProcesses.Count -gt 0) {
     Write-Output "STOPPED_RUNTIME_PROCESSES=$($stoppedRuntimeProcesses -join ',')"
@@ -429,6 +436,15 @@ if (-not $?) { throw 'Diagnostic retention task installation or verification fai
 
 Exit-HsScriptRuntimeGate $runtimeGate
 $runtimeGate = $null
+
+if ($Channel -eq 'beta') {
+    $betaRestart = Start-HsScriptBetaRuntimeAfterDeploy `
+        -RuntimeRoot $runtimeRoot `
+        -DeploymentId ([string]$manifest.deploymentId)
+    Write-Output "BETA_APP_RESTART_VERIFIED pid=$($betaRestart.ProcessId) deploymentId=$($betaRestart.DeploymentId) " +
+        "processStartTimeUtc=$($betaRestart.ProcessStartTimeUtc) executable=$($betaRestart.ExecutablePath) " +
+        "marker=$($betaRestart.MarkerPath)"
+}
 
 Write-Output "DEPLOYED_JAR=$deployedJar"
 Write-Output "DEPLOYMENT_ID=$($manifest.deploymentId)"

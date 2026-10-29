@@ -1,5 +1,90 @@
 $ErrorActionPreference = 'Stop'
 
+function Assert-HsScriptBetaGameProcessAbsent(
+    [scriptblock]$GetProcessRecords = { @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop) }
+) {
+    $processes = @(& $GetProcessRecords)
+    $gamePids = @($processes | Where-Object { [string]$_.Name -ieq 'Hearthstone.exe' } |
+        ForEach-Object { [int]$_.ProcessId })
+    if ($gamePids.Count -gt 0) {
+        throw "Refusing Beta deployment restart while Hearthstone is running (PID(s): $($gamePids -join ',')). The client may own an active match or queue; no game process was stopped."
+    }
+    return $true
+}
+
+function Start-HsScriptBetaRuntimeAfterDeploy(
+    [string]$RuntimeRoot,
+    [string]$DeploymentId,
+    [scriptblock]$GetProcessRecords = { @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop) },
+    [scriptblock]$StartCanonicalLauncher = $null,
+    [scriptblock]$GetIdentity = ${function:Get-HsScriptProcessIdentity},
+    [scriptblock]$Wait = { param($Milliseconds) Start-Sleep -Milliseconds $Milliseconds },
+    [int]$TimeoutSeconds = 60
+) {
+    $root = Get-HsScriptCanonicalRuntimeRoot $RuntimeRoot
+    if ((Split-Path -Leaf $root) -cne 'Hearthstone Script Beta') {
+        throw "Beta restart refuses a non-Beta runtime root: $root"
+    }
+    if ([string]::IsNullOrWhiteSpace($DeploymentId)) { throw 'Beta restart requires the exact manifest deployment ID' }
+    Assert-HsScriptBetaGameProcessAbsent -GetProcessRecords $GetProcessRecords | Out-Null
+    $launcher = Join-Path $root 'launch-as-admin.vbs'
+    if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) { throw "Canonical Beta launcher is missing: $launcher" }
+    if ($null -eq $StartCanonicalLauncher) {
+        $StartCanonicalLauncher = {
+            param($LauncherPath, $WorkingDirectory)
+            $wscript = Join-Path $env:WINDIR 'System32\wscript.exe'
+            if (-not (Test-Path -LiteralPath $wscript -PathType Leaf)) { throw "wscript.exe was not found: $wscript" }
+            Start-Process -FilePath $wscript -ArgumentList @('//B', "`"$LauncherPath`"") `
+                -WorkingDirectory $WorkingDirectory -WindowStyle Hidden | Out-Null
+        }
+    }
+    & $StartCanonicalLauncher $launcher $root
+
+    $markerPath = Join-Path $root 'hs-script.pid.json'
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds([Math]::Max(1, $TimeoutSeconds))
+    do {
+        if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
+            try { $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json -ErrorAction Stop }
+            catch { $marker = $null }
+            if ($null -ne $marker -and [string]$marker.deploymentId -ceq $DeploymentId) {
+                $processId = 0
+                if ([int]::TryParse([string]$marker.processId, [ref]$processId) -and $processId -gt 0) {
+                    $identity = $null
+                    try { $identity = & $GetIdentity $processId } catch { }
+                    $startMatches = $false
+                    try {
+                        $markerStartValue = $marker.processStartTimeUtc
+                        $recordedStart = if ($markerStartValue -is [DateTime]) {
+                            [DateTimeOffset]::new($markerStartValue.ToUniversalTime())
+                        } else {
+                            [DateTimeOffset]::Parse([string]$markerStartValue).ToUniversalTime()
+                        }
+                        $observedStart = [DateTimeOffset]::Parse([string]$identity.ProcessStartTimeUtc).ToUniversalTime()
+                        $startMatches = [Math]::Abs(($recordedStart - $observedStart).TotalMilliseconds) -le 1000
+                    } catch { }
+                    if ($null -ne $identity -and
+                        [string]$identity.ProcessStartTimeUtc -and [string]$identity.ExecutablePath -and
+                        $startMatches -and
+                        [string]$marker.executablePath -and
+                        ([System.IO.Path]::GetFullPath([string]$marker.executablePath) -ieq
+                            [System.IO.Path]::GetFullPath([string]$identity.ExecutablePath))
+                    ) {
+                        return [pscustomobject]@{
+                            ProcessId = $processId
+                            DeploymentId = [string]$marker.deploymentId
+                            ProcessStartTimeUtc = [string]$identity.ProcessStartTimeUtc
+                            ExecutablePath = [System.IO.Path]::GetFullPath([string]$identity.ExecutablePath)
+                            MarkerPath = $markerPath
+                        }
+                    }
+                }
+            }
+        }
+        & $Wait 500
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw "Canonical Beta launcher did not produce a verifiable process marker for deployment $DeploymentId within $TimeoutSeconds seconds: $markerPath"
+}
+
 function Stop-ManagedHsScriptProcesses(
     [string]$RuntimeRoot,
     [scriptblock]$GetProcessRecords = { @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop) },

@@ -217,6 +217,70 @@ class StartupDeckModeNavigationIntegrationTest {
     }
 
     @Test
+    fun `stale upstream deck probe classifies unknown mode and cannot apply start recovery`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/standard-deck-selection-live-20261029-063038.png",
+        )))
+        assertTrue(StartupDeckModeNavigationPolicy.isModeProofProbe(ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE))
+        assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("", image))
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+        assertEquals("UNKNOWN", TournamentModeConfirmation.observeImage(image).observedMode.name)
+        assertFalse(StartupInputReadiness.recordStartupOnlineScreen(
+            pid = 25948,
+            hwnd = "captured-live-window",
+            screen = "DECK_SELECTION",
+            confidence = 94,
+            evidence = "deck-selection-start-control-visual",
+            expectedRunMode = "WILD",
+            observedRunMode = "UNKNOWN",
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            now = 50_000L,
+        ), "stale Standard/UNKNOWN mode frame must not record Start readiness")
+
+        var recoveryStarts = 0
+        assertFalse(StartupInputAuthorizationPolicy.dispatchDeckSelectionRecoveryIfReady(
+            startupScreenConfirmed = StartupInputReadiness.isDeckSelectionStartReady(
+                25948, "captured-live-window", 50_001L,
+            ),
+        ) { recoveryStarts++ })
+        assertEquals(0, recoveryStarts, "the upstream apply-to-start observable seam must stay uncalled")
+        assertTrue(StartupDeckModeNavigationPolicy.requiresClassificationOnly(
+            purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            screenKind = "DECK_SELECTION",
+            freshConfiguredModeStartProof = false,
+        ))
+        StartupInputReadiness.resetForTest()
+    }
+
+    @Test
+    fun `idle client deck classifier cannot apply recovery even when start button and mode look valid`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/standard-deck-selection-live-20261029-063038.png",
+        )))
+        assertTrue(StartupDeckModeNavigationPolicy.isModeProofProbe(ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE))
+        assertTrue(StartupDeckModeNavigationPolicy.requiresClassificationOnly(
+            purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+            screenKind = "DECK_SELECTION",
+            freshConfiguredModeStartProof = true,
+        ), "IDLE_CLIENT_PROBE is capture-only by contract")
+        assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("", image))
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+        assertEquals("UNKNOWN", TournamentModeConfirmation.observeImage(image).observedMode.name)
+
+        var startDispatches = 0
+        assertFalse(StartupInputAuthorizationPolicy.dispatchDeckSelectionRecoveryIfReady(
+            startupScreenConfirmed = !StartupDeckModeNavigationPolicy.requiresClassificationOnly(
+                purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+                screenKind = "DECK_SELECTION",
+                freshConfiguredModeStartProof = true,
+            ),
+        ) { startDispatches++ })
+        assertEquals(0, startDispatches, "repeated idle probes must not repeatedly request a queue input")
+        StartupInputReadiness.resetForTest()
+    }
+
+    @Test
     fun `navigation is fenced for active gameplay queue terminal modal and unsupported proof`() {
         fun decide(
             purpose: String = "STARTUP_CLIENT_PROBE",
