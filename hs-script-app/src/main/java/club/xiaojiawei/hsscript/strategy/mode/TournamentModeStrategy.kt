@@ -12,6 +12,7 @@ import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.StartupInputReadiness
+import club.xiaojiawei.hsscript.status.StartupModeEntryDispatchPolicy
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
 import club.xiaojiawei.hsscript.status.TerminalCleanupQueueResumePolicy
@@ -97,20 +98,20 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                                 gameWindow.toString(),
                                 Mode.currMode?.name,
                             )
-                        if (!startupSelectionReady) {
+                        val dispatched = StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
+                            chooserProofFresh = startupSelectionReady,
+                            paused = PauseStatus.isPause,
+                        ) { action ->
+                            log.info { "STARTUP_MODE_ENTRY_ACTION_REQUEST action=$action" }
+                            TOURNAMENT_MODE_RECT.lClick(isCancel = false, dispatchAction = action)
+                        }
+                        if (!dispatched) {
                             log.info {
                                 "STARTUP_MODE_ENTRY_WAITING_FOR_PROOF pid=${gamePid ?: "none"} " +
-                                    "hwnd=${gameWindow ?: "none"} action=NO_INPUT"
+                                    "hwnd=${gameWindow ?: "none"} paused=${PauseStatus.isPause} action=NO_INPUT"
                             }
                             return@LRunnable
                         }
-                        log.info {
-                            "STARTUP_MODE_ENTRY_ACTION_REQUEST action=${StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION}"
-                        }
-                        TOURNAMENT_MODE_RECT.lClick(
-                            isCancel = false,
-                            dispatchAction = StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION,
-                        )
                         ScreenStateRecovery.scheduleStartupMenuReprobeAfterModeSelection()
                     } else if (Mode.currMode == ModeEnum.GAME_MODE) {
                         cancelAllWantEnterTasks()

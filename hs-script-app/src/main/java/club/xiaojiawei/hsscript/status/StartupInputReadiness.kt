@@ -25,7 +25,7 @@ internal object StartupInputReadiness {
     private val betaResultConfirmationPermit = AtomicReference<NoticeDismissPermit?>(null)
 
     const val HUB_TRADITIONAL_BATTLE_ACTION = "mode.select-traditional"
-    const val HUB_MODE_CHOOSER_PROOF_MAX_AGE_MS = 8_000L
+    const val HUB_MODE_CHOOSER_PROOF_MAX_AGE_MS = 30_000L
     const val DECK_SELECTION_START_PROOF_MAX_AGE_MS = 8_000L
 
     fun recordOnlineMenu(
@@ -311,4 +311,17 @@ internal object StartupInputAuthorizationPolicy {
         exactWindowAndForeground: Boolean,
     ): Boolean = screenKind.equals("RECONNECT", ignoreCase = true) && !currentSessionReady &&
         !activeGame && !activeMatchmaking && freshCapture && exactWindowAndForeground
+}
+
+/** Call-site handoff keeps HUB entry on one named action and never falls back to a generic click. */
+internal object StartupModeEntryDispatchPolicy {
+    fun dispatchTraditionalBattleIfReady(
+        chooserProofFresh: Boolean,
+        paused: Boolean,
+        dispatch: (String) -> Unit,
+    ): Boolean {
+        if (paused || !chooserProofFresh) return false
+        dispatch(StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION)
+        return true
+    }
 }

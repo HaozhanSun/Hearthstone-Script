@@ -250,6 +250,20 @@ class StartupInputReadinessTest {
     }
 
     @Test
+    fun `HUB chooser proof remains valid through 30 seconds and expires after`() {
+        val observedAt = 80_000L
+        StartupInputReadiness.recordHubModeChooser(101, "hwnd-a", observedAt)
+
+        assertEquals(30_000L, StartupInputReadiness.HUB_MODE_CHOOSER_PROOF_MAX_AGE_MS)
+        assertTrue(StartupInputReadiness.isHubTraditionalBattleSelectionReady(
+            101, "hwnd-a", "HUB", observedAt + 30_000L,
+        ), "the bounded proof remains usable at its maximum age")
+        assertFalse(StartupInputReadiness.isHubTraditionalBattleSelectionReady(
+            101, "hwnd-a", "HUB", observedAt + 30_001L,
+        ), "expired chooser proof must not reach the scheduled callback")
+    }
+
+    @Test
     fun `pre-session reconnect permission is one exact short-lived control for one process`() {
         val point = Point(960, 650)
         assertTrue(StartupInputReadiness.issueReconnectPermit(101, "hwnd-a", point, now = 1_000L))
