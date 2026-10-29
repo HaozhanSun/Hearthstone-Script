@@ -202,6 +202,7 @@ internal object StartupInputAuthorizationPolicy {
         startupTraditionalBattleSelectionReady: Boolean = false,
         startupNoticeDismissPermitValid: Boolean = false,
         betaResultConfirmationPermitValid: Boolean = false,
+        startupQuestOverlayDismissPermitValid: Boolean = false,
     ): Boolean = if (action == StartupNoticeRecoveryPolicy.DISPATCH_ACTION) {
         // A non-empty Power.log can make the session model ready while the
         // client is still on this modal. The exact permit plus final active
@@ -209,6 +210,8 @@ internal object StartupInputAuthorizationPolicy {
         startupNoticeDismissPermitValid
     } else if (action == BetaStartupResultConfirmationPolicy.DISPATCH_ACTION) {
         betaResultConfirmationPermitValid
+    } else if (action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION) {
+        startupQuestOverlayDismissPermitValid
     } else currentSessionReady || freshOnlineMenuReady ||
         (action.startsWith("startup.") && action != StartupNoticeRecoveryPolicy.DISPATCH_ACTION) ||
         (action == StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION &&

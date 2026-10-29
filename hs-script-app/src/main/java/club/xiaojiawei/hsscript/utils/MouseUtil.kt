@@ -22,6 +22,10 @@ import club.xiaojiawei.hsscript.status.BetaStartupResultConfirmationPolicy
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscript.status.StartupNoticeRecoveryPolicy
+import club.xiaojiawei.hsscript.status.StartupQuestOverlayDismissAuthorization
+import club.xiaojiawei.hsscript.status.StartupQuestOverlayDismissPermitStore
+import club.xiaojiawei.hsscript.status.StartupQuestOverlayDismissPolicy
+import club.xiaojiawei.hsscript.status.StartupQuestOverlayRecoveryFence
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscriptbase.config.log
@@ -556,6 +560,7 @@ object MouseUtil {
             }
             return false
         }
+
         if (preSessionStartupNotice) {
             val hwnd = ScriptStatus.gameHWND ?: return false
             val pid = GameUtil.findGameProcessIdForDiagnostics()?.toInt() ?: return false
@@ -743,6 +748,92 @@ object MouseUtil {
         } catch (error: Throwable) {
             log.warn(error) { "E2E_RECOVERY_CLICK_FAILED pos=(${pos.x},${pos.y}) hwnd=$hwnd" }
             return false
+        } finally {
+            DRIVER_LOCK.unlock()
+        }
+    }
+
+    /** Dispatch only the one fresh, permit-bound startup quest-overlay tap. */
+    internal fun leftButtonClickForStartupQuestOverlayRecovery(
+        pos: Point,
+        clientBounds: java.awt.Rectangle,
+        expectedPid: Long,
+        expectedHwnd: HWND,
+        permit: StartupQuestOverlayDismissPermitStore.Permit,
+    ): Boolean {
+        val action = StartupQuestOverlayDismissPolicy.DISPATCH_ACTION
+        fun contextStillMatches(): Boolean =
+            StartupQuestOverlayRecoveryFence.isActive() &&
+                ScriptStatus.gameHWND?.toString() == expectedHwnd.toString() &&
+                GameUtil.findGameProcessIdForDiagnostics() == expectedPid &&
+                GameUtil.isVerifiedCurrentGameWindow(expectedHwnd, expectedPid) &&
+                clientBounds.contains(pos) &&
+                Mode.currMode === ModeEnum.HUB && Mode.nextMode !== ModeEnum.GAMEPLAY &&
+                !WarEx.inWar && !GameUtil.isTerminalGameState() &&
+                !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+                !LifecycleTrace.hasRecentMatchmakingInputIntent() &&
+                WorkTimeListener.working && !PauseStatus.isPause
+
+        val permitValid = ActionDispatchGate.startupQuestOverlayPermitValid(
+            permit,
+            expectedPid,
+            expectedHwnd.toString(),
+            pos,
+            System.currentTimeMillis(),
+            consume = false,
+        )
+        if (!permitValid || !contextStillMatches() || !hwndIsValid(expectedHwnd)) {
+            log.warn {
+                "SCREEN_RECOVERY_HOME_TASK_OVERLAY_CLICK_BLOCKED reason=stale-permit-or-context " +
+                    "pid=$expectedPid hwnd=$expectedHwnd point=$pos pause=${PauseStatus.isPause} " +
+                    "working=${WorkTimeListener.working} input=not-sent"
+            }
+            return false
+        }
+        val lockAcquired = try {
+            DRIVER_LOCK.tryLock(3_000L, TimeUnit.MILLISECONDS)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!lockAcquired) {
+            log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_CLICK_BLOCKED reason=input-lock-timeout input=not-sent" }
+            return false
+        }
+        try {
+            synchronized(e2eRobotLock) {
+                if (!contextStillMatches() || !forceFocusWindowForRecovery(expectedHwnd) ||
+                    !contextStillMatches() || !hwndIsValid(expectedHwnd)
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_CLICK_BLOCKED reason=foreground-or-context-changed " +
+                            "pid=$expectedPid hwnd=$expectedHwnd input=not-sent"
+                    }
+                    return false
+                }
+                return ActionDispatchGate.dispatchStartupQuestOverlayDismiss(
+                    permit,
+                    expectedPid,
+                    expectedHwnd.toString(),
+                    pos,
+                    System.currentTimeMillis(),
+                ) {
+                    if (!ActionDispatchGate.allow(action) || !contextStillMatches()) {
+                        log.warn {
+                            "SCREEN_RECOVERY_HOME_TASK_OVERLAY_CLICK_BLOCKED reason=dispatch-gate-recheck " +
+                                "pid=$expectedPid hwnd=$expectedHwnd input=not-sent"
+                        }
+                        false
+                    } else {
+                        val accepted = sendE2eWindowsClick(pos)
+                        log.warn {
+                            "SCREEN_RECOVERY_HOME_TASK_OVERLAY_CLICK_SENT pid=$expectedPid hwnd=$expectedHwnd " +
+                                "pos=$pos accepted=$accepted input=SendInput"
+                        }
+                        accepted
+                    }
+                }
+            }
         } finally {
             DRIVER_LOCK.unlock()
         }

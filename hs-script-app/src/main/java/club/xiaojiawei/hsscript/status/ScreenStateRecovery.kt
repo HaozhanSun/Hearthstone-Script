@@ -72,7 +72,7 @@ object ScreenStateRecovery {
     private const val RECONNECT_RETRY_INTERVAL_MS = 60_000L
     private const val RECOVERY_POSTCHECK_TIMEOUT_MS = 3_000L
     private const val RECOVERY_POSTCHECK_POLL_MS = 300L
-    private const val STARTUP_QUEST_OVERLAY_MAX_PROBES = 5
+    private const val STARTUP_QUEST_OVERLAY_MAX_PROBES = StartupQuestOverlayRecoveryFence.MAX_REOBSERVATIONS
     private const val RECONNECT_SPINNER_CHECK_DELAY_MS = 10_000L
     /**
      * The client displays a distinct slow-connection warning only after a
@@ -1405,7 +1405,8 @@ object ScreenStateRecovery {
     internal fun looksLikeStartupQuestOverlayText(ocrText: String): Boolean {
         val normalized = ocrText.lowercase(Locale.ROOT)
             .replace(Regex("[\\s\\p{Punct}，。、“”‘’：:！!？?]"), "")
-        return normalized.contains("你的任务") || normalized.contains("yourquests")
+        return normalized.contains("你的活动任务") || normalized.contains("你的活動任務") ||
+            normalized.contains("你的任务") || normalized.contains("yourquests")
     }
 
     internal fun looksLikeReconnectFailureDialogRoiText(ocrText: String): Boolean {
@@ -2089,130 +2090,222 @@ object ScreenStateRecovery {
 
     private fun scheduleHomeTaskOverlayRecovery(
         recoveryToken: Long,
-        dismissDispatches: Int,
-        probeAttempts: Int,
         delayMs: Long,
     ) {
         val task = EXTRA_THREAD_POOL.schedule({
             if (!ScreenRecoveryRuntime.isCurrent(recoveryToken)) return@schedule
-            if ((!WorkTimeListener.working && !PauseStatus.isAutomaticPause) ||
-                !PauseStatus.canRunAutomaticRecovery() ||
-                PauseStatus.pauseOrigin == PauseStatus.Origin.MANUAL ||
-                WarEx.inWar || Mode.currMode != ModeEnum.HUB
-            ) {
-                log.info {
-                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_SKIPPED reason=state-changed " +
-                        "working=${WorkTimeListener.working} pauseOrigin=${PauseStatus.pauseOrigin} " +
-                        "mode=${Mode.currMode?.name ?: "NONE"} inWar=${WarEx.inWar}"
-                }
-                return@schedule
-            }
-            if (probeAttempts >= STARTUP_QUEST_OVERLAY_MAX_PROBES) {
-                log.error {
-                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_ALERT reason=probe-limit " +
-                        "probes=$probeAttempts dispatches=$dismissDispatches action=NO_INPUT_NO_AUTO_PAUSE"
-                }
-                SystemUtil.notice(
-                    "The Hearthstone overlay could not be verified after bounded checks. No input was sent and automation was not paused; inspect the client.",
-                )
-                return@schedule
-            }
-
-            val sourcePid = GameUtil.findGameProcessIdForDiagnostics()
-            val hwnd = resolveLiveGameWindow()
-            if (sourcePid == null || hwnd == null) {
-                log.warn {
-                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=game-window-unavailable " +
-                        "action=NO_INPUT_NO_AUTO_PAUSE"
-                }
-                SystemUtil.notice("Hearthstone's window is unavailable during recovery. Inspect the client and click Start to retry.")
-                return@schedule
-            }
-            val frameResult = MouseUtil.withRecoveryForeground(hwnd) {
-                val currentWindow = resolveLiveGameWindow()
-                val currentPid = GameUtil.findGameProcessIdForDiagnostics()
-                if (currentWindow == null || currentWindow.toString() != hwnd.toString() || currentPid != sourcePid) {
-                    null
-                } else {
-                    captureScreen(currentWindow)
-                }
-            }
-            val capture = frameResult.value
-            val captureTrusted = frameResult.foregroundConfirmed && capture != null &&
-                GameUtil.findGameProcessIdForDiagnostics() == sourcePid &&
-                GameUtil.isVerifiedCurrentGameWindow(hwnd)
-            if (!captureTrusted) {
-                log.warn {
-                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=trusted-capture-unavailable " +
-                        "foregroundConfirmed=${frameResult.foregroundConfirmed} capture=${capture != null} " +
-                        "probe=${probeAttempts + 1} action=NO_INPUT_NO_AUTO_PAUSE"
-                }
-                SystemUtil.notice("The game window could not be verified for overlay recovery. No input was sent; inspect Hearthstone and click Start to retry.")
-                return@schedule
-            }
-
-            val freshCapture = requireNotNull(capture)
-            val evidence = runOCR(freshCapture)
-            val captureStillTrusted = GameUtil.findGameProcessIdForDiagnostics() == sourcePid &&
-                GameUtil.isVerifiedCurrentGameWindow(hwnd)
-            val detection = if (captureStillTrusted) detect(evidence, freshCapture.visual) else null
-            val observation = when (detection?.kind) {
-                ScreenKind.HOME_TASK_OVERLAY -> StartupQuestOverlayPolicy.Observation.QUEST_OVERLAY
-                ScreenKind.HOME -> StartupQuestOverlayPolicy.Observation.HUB
-                else -> StartupQuestOverlayPolicy.Observation.UNKNOWN
-            }
-            val action = StartupQuestOverlayPolicy.decide(
-                observation = observation,
-                captureTrusted = captureStillTrusted,
-                dismissDispatches = dismissDispatches,
-            )
-            log.info {
-                "SCREEN_RECOVERY_HOME_TASK_OVERLAY_PROBE observation=$observation " +
-                    "detected=${detection?.kind?.code ?: "UNKNOWN"} confidence=${detection?.confidence ?: 0} " +
-                    "action=$action dismissDispatches=$dismissDispatches probe=${probeAttempts + 1} " +
-                    "pid=$sourcePid hwnd=$hwnd screenshot=${freshCapture.file?.absolutePath ?: "none"}"
-            }
-            when (action) {
-                StartupQuestOverlayPolicy.Action.DISMISS_OVERLAY -> {
-                    val accepted = MouseUtil.leftButtonClickForRecovery(
-                        HubModeStrategy.HIDE_TASK_RECT.getCenterClickPos(),
-                    )
+            if (!StartupQuestOverlayRecoveryFence.tryBeginObservation()) return@schedule
+            try {
+                val observations = StartupQuestOverlayRecoveryFence.recordObservation()
+                if (observations > STARTUP_QUEST_OVERLAY_MAX_PROBES) {
                     log.warn {
-                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_DISMISS dispatched=$accepted " +
-                            "uiAccepted=unverified attempt=${dismissDispatches + 1}"
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_UNRESOLVED reason=reobservation-budget-exhausted " +
+                            "taps=${StartupQuestOverlayRecoveryFence.tapsAttempted()} " +
+                            "observations=${observations - 1} pause=${PauseStatus.isPause} " +
+                            "ordinaryDispatch=blocked"
                     }
+                    return@schedule
+                }
+                if (PauseStatus.isPause || !WorkTimeListener.working || Mode.currMode != ModeEnum.HUB) {
+                    log.info {
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_REOBSERVE_DEFERRED " +
+                            "reason=manual-pause-or-state-change working=${WorkTimeListener.working} " +
+                            "pause=${PauseStatus.isPause} mode=${Mode.currMode?.name ?: "NONE"} " +
+                            "taps=${StartupQuestOverlayRecoveryFence.tapsAttempted()}"
+                    }
+                    if (observations < STARTUP_QUEST_OVERLAY_MAX_PROBES) {
+                        scheduleHomeTaskOverlayRecovery(
+                            recoveryToken,
+                            10_000L,
+                        )
+                    }
+                    return@schedule
+                }
+
+                val sourcePid = GameUtil.findGameProcessIdForDiagnostics()
+                val hwnd = resolveLiveGameWindow()
+                if (sourcePid == null || hwnd == null) {
+                    log.warn {
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_UNRESOLVED reason=game-window-unavailable " +
+                            "pause=${PauseStatus.isPause} ordinaryDispatch=blocked"
+                    }
+                    if (observations < STARTUP_QUEST_OVERLAY_MAX_PROBES) {
+                        scheduleHomeTaskOverlayRecovery(
+                            recoveryToken,
+                            10_000L,
+                        )
+                    }
+                    return@schedule
+                }
+                val frameResult = MouseUtil.withRecoveryForeground(hwnd) {
+                    val currentWindow = resolveLiveGameWindow()
+                    val currentPid = GameUtil.findGameProcessIdForDiagnostics()
+                    if (currentWindow == null || currentWindow.toString() != hwnd.toString() || currentPid != sourcePid) {
+                        null
+                    } else {
+                        captureScreen(currentWindow)
+                    }
+                }
+                val freshCapture = frameResult.value
+                val targetWindow = freshCapture?.evidence?.target?.rootWindow
+                val expectedWindow = com.sun.jna.Pointer.nativeValue(hwnd.pointer)
+                val captureTrusted = frameResult.foregroundConfirmed && freshCapture != null &&
+                    freshCapture.evidence.target?.processId?.toLong() == sourcePid &&
+                    targetWindow == expectedWindow &&
+                    freshCapture.evidence.currentGameProcessId == sourcePid &&
+                    GameUtil.findGameProcessIdForDiagnostics() == sourcePid &&
+                    GameUtil.isVerifiedCurrentGameWindow(hwnd, sourcePid)
+                if (!captureTrusted) {
+                    log.warn {
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_UNRESOLVED reason=trusted-capture-unavailable " +
+                            "foregroundConfirmed=${frameResult.foregroundConfirmed} capture=${freshCapture != null} " +
+                            "probe=$observations pause=${PauseStatus.isPause} ordinaryDispatch=blocked"
+                    }
+                    if (observations < STARTUP_QUEST_OVERLAY_MAX_PROBES) {
+                        scheduleHomeTaskOverlayRecovery(
+                            recoveryToken,
+                            10_000L,
+                        )
+                    }
+                    return@schedule
+                }
+
+                val capture = requireNotNull(freshCapture)
+                val evidence = runOCR(capture)
+                val currentPid = GameUtil.findGameProcessIdForDiagnostics()
+                val currentHwnd = resolveLiveGameWindow()
+                val captureStillTrusted = currentPid == sourcePid && currentHwnd?.toString() == hwnd.toString() &&
+                    GameUtil.isVerifiedCurrentGameWindow(hwnd, sourcePid)
+                val detection = if (captureStillTrusted) detect(evidence, capture.visual) else null
+                val activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                    LifecycleTrace.hasRecentMatchmakingInputIntent()
+                val gameIntent = WarEx.inWar || GameUtil.isTerminalGameState() ||
+                    Mode.currMode == ModeEnum.GAMEPLAY || Mode.nextMode == ModeEnum.GAMEPLAY
+                if (activeMatchmaking || gameIntent) {
+                    StartupQuestOverlayRecoveryFence.resolve()
+                    log.warn {
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_STOPPED reason=${if (activeMatchmaking) "recent-matchmaking-intent" else "game-or-terminal-intent"} " +
+                            "detected=${detection?.kind?.code ?: "UNKNOWN"} pid=$sourcePid hwnd=$hwnd " +
+                            "pause=${PauseStatus.isPause} ordinaryDispatch=enabled input=not-sent"
+                    }
+                    return@schedule
+                }
+
+                val nowMs = System.currentTimeMillis()
+                val captureAgeMs = ((System.nanoTime() - capture.capturedAtNanos) / 1_000_000L).coerceAtLeast(0L)
+                val isExactOverlay = detection?.kind == ScreenKind.HOME_TASK_OVERLAY &&
+                    detection.evidence == "startup-your-quests-overlay"
+                val safeTransition = detection != null && detection.confidence >= 85 &&
+                    detection.kind in setOf(
+                        ScreenKind.HOME,
+                        ScreenKind.TOURNAMENT,
+                        ScreenKind.DECK_SELECTION,
+                        ScreenKind.MATCHMAKING,
+                        ScreenKind.LOGIN,
+                        ScreenKind.GAME_MODE,
+                        ScreenKind.COLLECTION,
+                        ScreenKind.PACK_OPENING,
+                    )
+                val observation = StartupQuestOverlayDismissPolicy.Observation(
+                    nowMs = nowMs,
+                    captureAtMs = nowMs - captureAgeMs,
+                    captureTrusted = captureStillTrusted && captureAgeMs <= StartupQuestOverlayDismissPolicy.MAX_CAPTURE_AGE_MS,
+                    currentPid = currentPid,
+                    expectedPid = sourcePid,
+                    currentWindow = currentHwnd?.toString(),
+                    expectedWindow = hwnd.toString(),
+                    exactQuestOverlay = isExactOverlay,
+                    confidence = detection?.confidence ?: 0,
+                    noRecentMatchmakingIntent = !activeMatchmaking,
+                    noGameIntent = !gameIntent,
+                    safeTransition = safeTransition,
+                )
+                val tapsAttempted = StartupQuestOverlayRecoveryFence.tapsAttempted()
+                val decision = StartupQuestOverlayDismissPolicy.decide(tapsAttempted, observation)
+                log.info {
+                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_PROBE observation=${detection?.kind?.code ?: "UNKNOWN"} " +
+                        "confidence=${detection?.confidence ?: 0} evidence=${detection?.evidence ?: "none"} " +
+                        "action=${decision.action} reason=${decision.reason} taps=$tapsAttempted " +
+                        "probe=$observations pid=$sourcePid hwnd=$hwnd " +
+                        "screenshot=${capture.file?.absolutePath ?: "none"}"
+                }
+                when (decision.action) {
+                    StartupQuestOverlayDismissPolicy.Action.RESOLVE_SAFE_TRANSITION -> {
+                        StartupQuestOverlayRecoveryFence.resolve()
+                        val mode = requireNotNull(detection).mode
+                        Mode.recover(
+                            mode,
+                            "verified-screen-transition-after-quest-overlay",
+                            enterStrategy = mode == ModeEnum.HUB,
+                        )
+                        log.warn {
+                            "SCREEN_RECOVERY_HOME_TASK_OVERLAY_RESOLVED screen=${detection.kind.code} " +
+                                "mode=${mode.name} confidence=${detection.confidence} " +
+                                "ordinaryDispatch=enabled"
+                        }
+                    }
+                    StartupQuestOverlayDismissPolicy.Action.TAP_TOP_LEFT -> {
+                        val point = StartupQuestOverlayDismissPolicy.topLeftPoint(capture.bounds)
+                        if (point == null) {
+                            log.warn {
+                                "SCREEN_RECOVERY_HOME_TASK_OVERLAY_UNRESOLVED reason=invalid-client-bounds " +
+                                    "taps=$tapsAttempted pause=${PauseStatus.isPause} ordinaryDispatch=blocked"
+                            }
+                        } else {
+                            val permit = StartupQuestOverlayDismissAuthorization.permits.issue(
+                                sourcePid,
+                                hwnd.toString(),
+                                point,
+                                System.currentTimeMillis(),
+                            )
+                            val accepted = if (permit == null) false else runCatching {
+                                MouseUtil.leftButtonClickForStartupQuestOverlayRecovery(
+                                    point,
+                                    capture.bounds,
+                                    sourcePid,
+                                    hwnd,
+                                    permit,
+                                )
+                            }.onFailure { error ->
+                                log.warn(error) {
+                                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_CLICK_FAILED " +
+                                        "reason=${error.javaClass.simpleName} input=unknown failClosed=true"
+                                }
+                            }.getOrDefault(false)
+                            if (permit != null) StartupQuestOverlayRecoveryFence.recordTapAttempt()
+                            log.warn {
+                                "SCREEN_RECOVERY_HOME_TASK_OVERLAY_TOP_LEFT_TAP tap=" +
+                                    "${StartupQuestOverlayRecoveryFence.tapsAttempted()}/${StartupQuestOverlayDismissPolicy.MAX_TAPS} " +
+                                    "accepted=$accepted uiAccepted=awaiting-fresh-capture point=$point " +
+                                    "pid=$sourcePid hwnd=$hwnd"
+                            }
+                        }
+                    }
+                    StartupQuestOverlayDismissPolicy.Action.STOP -> {
+                        log.warn {
+                            "SCREEN_RECOVERY_HOME_TASK_OVERLAY_UNRESOLVED reason=${decision.reason} " +
+                                "taps=$tapsAttempted observed=${detection?.kind?.code ?: "UNKNOWN"} " +
+                                "confidence=${detection?.confidence ?: 0} pause=${PauseStatus.isPause} " +
+                                "ordinaryDispatch=blocked"
+                        }
+                    }
+                }
+                if (StartupQuestOverlayRecoveryFence.isActive() &&
+                    observations < STARTUP_QUEST_OVERLAY_MAX_PROBES
+                ) {
                     scheduleHomeTaskOverlayRecovery(
                         recoveryToken,
-                        dismissDispatches + if (accepted) 1 else 0,
-                        probeAttempts + 1,
-                        900L,
+                        if (decision.action == StartupQuestOverlayDismissPolicy.Action.TAP_TOP_LEFT) 450L else 10_000L,
                     )
-                }
-                StartupQuestOverlayPolicy.Action.ENTER_HUB -> {
-                    if (PauseStatus.resumeAutomaticPause("verified-hub-after-quest-overlay")) {
-                        log.warn { "SCREEN_RECOVERY_AUTO_RESUME reason=verified-hub-after-quest-overlay" }
-                    }
-                    Mode.recover(ModeEnum.HUB, "verified-hub-after-quest-overlay", enterStrategy = true)
-                    log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_CONFIRMED state=HUB strategyStarted=true" }
-                }
-                StartupQuestOverlayPolicy.Action.WAIT_FOR_TRUSTED_CAPTURE -> {
-                    log.warn { "SCREEN_RECOVERY_HOME_TASK_OVERLAY_WAIT reason=screen-unclassified action=NO_INPUT" }
-                    scheduleHomeTaskOverlayRecovery(recoveryToken, dismissDispatches, probeAttempts + 1, 900L)
-                }
-                StartupQuestOverlayPolicy.Action.BLOCK_UNTRUSTED -> {
+                } else if (StartupQuestOverlayRecoveryFence.isActive()) {
                     log.warn {
-                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_BLOCKED reason=provenance-changed " +
-                            "action=NO_INPUT_NO_AUTO_PAUSE"
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_UNRESOLVED reason=reobservation-budget-exhausted " +
+                            "taps=${StartupQuestOverlayRecoveryFence.tapsAttempted()} " +
+                            "pause=${PauseStatus.isPause} ordinaryDispatch=blocked"
                     }
-                    SystemUtil.notice("The game window changed during overlay recovery. No further input was sent; click Start to retry.")
                 }
-                StartupQuestOverlayPolicy.Action.EXHAUSTED -> {
-                    log.error {
-                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_EXHAUSTED dismissDispatches=$dismissDispatches " +
-                            "state=HUB strategyStarted=false action=NO_AUTO_PAUSE"
-                    }
-                    SystemUtil.notice("The overlay remains unresolved after bounded recovery. Inspect Hearthstone and click Start to retry.")
-                }
+            } finally {
+                StartupQuestOverlayRecoveryFence.finishObservation()
             }
         }, delayMs, TimeUnit.MILLISECONDS)
         ScreenRecoveryRuntime.track(recoveryToken, task)
@@ -2259,12 +2352,26 @@ object ScreenStateRecovery {
 
         when (detection.kind) {
             ScreenKind.HOME_TASK_OVERLAY -> {
+                if (detection.evidence != "startup-your-quests-overlay" ||
+                    detection.confidence < StartupQuestOverlayDismissPolicy.MIN_CONFIDENCE
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_UNRESOLVED " +
+                            "reason=initial-overlay-evidence-not-exact confidence=${detection.confidence} " +
+                            "evidence=${detection.evidence} pause=${PauseStatus.isPause} " +
+                            "ordinaryDispatch=unchanged"
+                    }
+                    return false
+                }
+                StartupQuestOverlayRecoveryFence.begin()
                 Mode.recover(ModeEnum.HUB, "visible-home-task-overlay", enterStrategy = false)
-                log.warn { "SCREEN_RECOVERY_ACTION_REQUESTED screen=HOME_TASK_OVERLAY action=PROBE_THEN_DISMISS" }
+                log.warn {
+                    "SCREEN_RECOVERY_ACTION_REQUESTED screen=HOME_TASK_OVERLAY " +
+                        "action=FRESH_CAPTURE_THEN_TOP_LEFT_TAP maxTaps=${StartupQuestOverlayDismissPolicy.MAX_TAPS} " +
+                        "pause=${PauseStatus.isPause} ordinaryDispatch=blocked"
+                }
                 scheduleHomeTaskOverlayRecovery(
                     recoveryToken = recoveryToken,
-                    dismissDispatches = 0,
-                    probeAttempts = 0,
                     delayMs = 300L,
                 )
             }

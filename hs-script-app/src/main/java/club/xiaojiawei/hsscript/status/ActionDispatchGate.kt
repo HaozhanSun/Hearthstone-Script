@@ -17,6 +17,7 @@ import club.xiaojiawei.hsscript.listener.log.PowerLogListener
  */
 object ActionDispatchGate {
     private val terminalCleanupBlockLogThrottle = TerminalCleanupBlockLogThrottle()
+    private val startupQuestOverlayDispatchScope = ThreadLocal<Boolean>()
 
     fun allow(
         action: String,
@@ -24,6 +25,15 @@ object ActionDispatchGate {
         terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
         rankSurrenderCapability: MulliganRankDispatchBarrier.SurrenderCapability? = null,
     ): Boolean {
+        if (StartupQuestOverlayRecoveryFence.isActive() &&
+            startupQuestOverlayDispatchScope.get() != true
+        ) {
+            log.warn {
+                "ACTION_BLOCKED action=$action reason=startup-quest-overlay-unresolved " +
+                    "pause=${PauseStatus.isPause} working=${WorkTimeListener.working} dispatch=false"
+            }
+            return false
+        }
         if (action.startsWith("startup.")) {
             val gameAlive = runCatching { GameUtil.isAliveOfGame() }.getOrDefault(true)
             // The cleanup capability is minted only after complete terminal
@@ -94,6 +104,8 @@ object ActionDispatchGate {
                     gameWindow.toString(),
                     System.currentTimeMillis(),
                 ),
+            startupQuestOverlayDismissPermitValid = action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION &&
+                startupQuestOverlayDispatchScope.get() == true,
         )
         if (!startupGateAllowed) {
             log.warn {
@@ -129,6 +141,8 @@ object ActionDispatchGate {
                     gameWindow.toString(),
                     System.currentTimeMillis(),
                 ),
+            startupQuestOverlayDismissPermitValid = action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION &&
+                startupQuestOverlayDispatchScope.get() == true,
         )
         if (!allowed) return false
         if (action == "surrender.request" && rankSurrenderCapability != null &&
@@ -140,6 +154,48 @@ object ActionDispatchGate {
             return false
         }
         return true
+    }
+
+    internal fun startupQuestOverlayPermitValid(
+        permit: StartupQuestOverlayDismissPermitStore.Permit?,
+        pid: Long?,
+        window: String?,
+        point: java.awt.Point,
+        nowMs: Long,
+        consume: Boolean,
+    ): Boolean {
+        val valid = if (consume) {
+            StartupQuestOverlayDismissAuthorization.permits.consume(permit, pid, window, point, nowMs)
+        } else {
+            StartupQuestOverlayDismissAuthorization.permits.isValid(permit, pid, window, point, nowMs)
+        }
+        if (!valid) {
+            log.warn {
+                "ACTION_BLOCKED action=recovery.startup-quest-overlay.top-left " +
+                    "reason=no-valid-one-use-permit pid=${pid ?: "none"} window=${window ?: "none"} " +
+                    "point=(${point.x},${point.y}) dispatch=false"
+            }
+        }
+        return valid
+    }
+
+    internal fun dispatchStartupQuestOverlayDismiss(
+        permit: StartupQuestOverlayDismissPermitStore.Permit?,
+        pid: Long?,
+        window: String?,
+        point: java.awt.Point,
+        nowMs: Long,
+        dispatch: () -> Boolean,
+    ): Boolean {
+        if (!StartupQuestOverlayRecoveryFence.isActive() ||
+            !startupQuestOverlayPermitValid(permit, pid, window, point, nowMs, consume = true)
+        ) return false
+        startupQuestOverlayDispatchScope.set(true)
+        return try {
+            dispatch()
+        } finally {
+            startupQuestOverlayDispatchScope.remove()
+        }
     }
 
     internal fun reconcileStartupMissingGameTerminalCleanupFence(
@@ -193,6 +249,7 @@ object ActionDispatchGate {
         startupTraditionalBattleSelectionReady: Boolean = false,
         startupNoticeDismissPermitValid: Boolean = false,
         betaResultConfirmationPermitValid: Boolean = false,
+        startupQuestOverlayDismissPermitValid: Boolean = false,
     ): Boolean {
         if (paused || !working) {
             log.warn {
@@ -211,6 +268,7 @@ object ActionDispatchGate {
                 startupTraditionalBattleSelectionReady = startupTraditionalBattleSelectionReady,
                 startupNoticeDismissPermitValid = startupNoticeDismissPermitValid,
                 betaResultConfirmationPermitValid = betaResultConfirmationPermitValid,
+                startupQuestOverlayDismissPermitValid = startupQuestOverlayDismissPermitValid,
             )
         ) {
             log.warn {
