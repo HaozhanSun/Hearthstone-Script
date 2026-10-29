@@ -772,9 +772,12 @@ object MouseUtil {
                     log.info { "E2E_INPUT_ROBOT_CANCELLED_BEFORE_MOVE client=(${pos.x},${pos.y}) hwnd=$hwnd" }
                     return@submit false
                 }
+                val movementStartedAt = System.nanoTime()
                 val sampleCount = moveRobotAlongCurve(e2eRobot, Point(screenPoint.x, screenPoint.y))
+                val movementMs = (System.nanoTime() - movementStartedAt) / 1_000_000L
                 log.info {
-                    "E2E_INPUT_ROBOT_MOVED screen=(${screenPoint.x},${screenPoint.y}) samples=$sampleCount"
+                    "E2E_INPUT_ROBOT_MOVED screen=(${screenPoint.x},${screenPoint.y}) " +
+                        "samples=$sampleCount durationMs=$movementMs"
                 }
                 if (Thread.currentThread().isInterrupted) {
                     log.info { "E2E_INPUT_ROBOT_CANCELLED_BEFORE_PRESS client=(${pos.x},${pos.y}) hwnd=$hwnd" }
@@ -1195,6 +1198,7 @@ object MouseUtil {
             return
         }
         if (validatePoint(pos)) {
+            val lockWaitStartedAt = if (e2eInputEnabled()) System.nanoTime() else 0L
             val lockAcquired = if (e2eInputEnabled()) {
                 log.info { "E2E_INPUT_LOCK_WAIT pos=(${pos.x},${pos.y})" }
                 try {
@@ -1210,6 +1214,12 @@ object MouseUtil {
             } else {
                 DRIVER_LOCK.lock()
                 true
+            }
+            if (e2eInputEnabled() && lockAcquired) {
+                log.info {
+                    "E2E_INPUT_LOCK_ACQUIRED pos=(${pos.x},${pos.y}) waitMs=" +
+                        "${((System.nanoTime() - lockWaitStartedAt) / 1_000_000L).coerceAtLeast(0L)}"
+                }
             }
             if (!lockAcquired) {
                 if (e2eInputEnabled()) {

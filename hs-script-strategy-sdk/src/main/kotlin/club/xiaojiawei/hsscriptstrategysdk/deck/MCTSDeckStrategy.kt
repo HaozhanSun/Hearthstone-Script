@@ -12,6 +12,7 @@ import club.xiaojiawei.hsscriptcardsdk.bean.PowerAction
 import club.xiaojiawei.hsscriptcardsdk.bean.TurnOverAction
 import club.xiaojiawei.hsscriptcardsdk.bean.War
 import club.xiaojiawei.hsscriptcardsdk.bean.Card
+import club.xiaojiawei.hsscriptcardsdk.CardAction
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
 import club.xiaojiawei.hsscriptcardsdk.mcts.MonteCarloTreeSearch
@@ -632,8 +633,10 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 template.experimentalActionBudgetMillis,
                 template.rootSelectionPolicy,
             )
+            val planningStartedAt = System.nanoTime()
             val path = search.searchBestNode(war, arg)
                 .filter { it.applyAction !is EmptyAction }
+            val planningMs = (System.nanoTime() - planningStartedAt) / 1_000_000L
             var action = path.firstOrNull()?.applyAction
             if (action == null || action === TurnOverAction) {
                 // The search snapshot can be one parser update behind the
@@ -998,14 +1001,27 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                 )
                 break
             }
+            val preDispatchStartedAt = System.nanoTime()
             waitForPreDispatchAnimation(template.decisionModel, action, war, "experimental")
+            val preDispatchMs = (System.nanoTime() - preDispatchStartedAt) / 1_000_000L
+            var actionCallbackMs = 0L
+            var afterDispatchSnapshotMs = 0L
             try {
-                action.exec.accept(war)
+                val callbackStartedAt = System.nanoTime()
+                val isNoTargetMinionPlay = action is PlayAction &&
+                    action.creator?.cardType === CardTypeEnum.MINION
+                if (isNoTargetMinionPlay) {
+                    CardAction.withMctsNoTargetMinionPlayTiming { action.exec.accept(war) }
+                } else {
+                    action.exec.accept(war)
+                }
+                actionCallbackMs = (System.nanoTime() - callbackStartedAt) / 1_000_000L
                 phaseFence.observe(actionPhase)
                 if (action is PlayAction && action.creator?.cardType === CardTypeEnum.WEAPON) {
                     weaponPlayedThisTurn = true
                     experimentalTurnState.markWeaponPlayed()
                 }
+                val afterDispatchSnapshotStartedAt = System.nanoTime()
                 val afterDispatchScreenshot = MctsReplayTrace.captureActionSnapshot(
                     war,
                     "after-dispatch",
@@ -1014,6 +1030,7 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
                     describeAction(action),
                     "dispatched",
                 )
+                afterDispatchSnapshotMs = (System.nanoTime() - afterDispatchSnapshotStartedAt) / 1_000_000L
                 MctsReplayTrace.record(
                     war,
                     "action_dispatch_returned",
@@ -1052,7 +1069,16 @@ abstract class MCTSDeckStrategy : DeckStrategy() {
             actionCount++
             lastExperimentalTurnProducedAction = true
 
-            if (!awaitStateChange(war, before, turnDeadline)) {
+            val stateConfirmStartedAt = System.nanoTime()
+            val stateConfirmed = awaitStateChange(war, before, turnDeadline)
+            val stateConfirmMs = (System.nanoTime() - stateConfirmStartedAt) / 1_000_000L
+            log.info {
+                "MCTS_EXPERIMENT_TIMING strategy=${name()} cycle=$cycle step=$actionCount " +
+                    "planningMs=$planningMs preDispatchMs=$preDispatchMs actionCallbackMs=$actionCallbackMs " +
+                    "afterDispatchSnapshotMs=$afterDispatchSnapshotMs stateConfirmMs=$stateConfirmMs " +
+                    "stateConfirmed=$stateConfirmed"
+            }
+            if (!stateConfirmed) {
                 lastExperimentalTurnHadUnconfirmedDispatch = true
                 val unconfirmedScreenshot = MctsReplayTrace.captureActionSnapshot(
                     war,

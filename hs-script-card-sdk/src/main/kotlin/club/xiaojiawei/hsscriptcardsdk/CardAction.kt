@@ -27,6 +27,39 @@ abstract class CardAction(
     createDefaultAction: Boolean = true,
     val common: Boolean = false,
 ) {
+    companion object {
+        private val mctsNoTargetMinionTiming = ThreadLocal.withInitial { false }
+
+        /**
+         * Scope the shorter post-play settle to an MCTS-dispatched action.
+         * The generic no-target minion interceptor is the only consumer, so
+         * targeted plays and non-MCTS strategies retain their existing delay.
+         */
+        @JvmStatic
+        fun <T> withMctsNoTargetMinionPlayTiming(block: () -> T): T {
+            val previous = mctsNoTargetMinionTiming.get()
+            mctsNoTargetMinionTiming.set(true)
+            return try {
+                block()
+            } finally {
+                mctsNoTargetMinionTiming.set(previous)
+            }
+        }
+
+        @JvmStatic
+        fun isMctsNoTargetMinionPlayTiming(): Boolean = mctsNoTargetMinionTiming.get()
+
+        @JvmStatic
+        fun shouldUseMctsShortSettleForNoTargetPlay(cardType: CardTypeEnum?): Boolean =
+            cardType === CardTypeEnum.MINION && isMctsNoTargetMinionPlayTiming()
+
+        var mouseActionInterval: Int = 3600
+
+        private const val SHORT_PAUSE_TIME = 150
+
+        var commonActionFactory: Supplier<CardAction>? = null
+    }
+
     protected var depth = 0
         set(value) {
             field = value
@@ -780,14 +813,6 @@ abstract class CardAction(
      * 适配与cardId相匹配的card，支持通配符% 匹配任意个字符（为了性能考虑，每次返回的对象应该一样）
      */
     abstract fun getCardId(): Array<String>
-
-    companion object {
-        var mouseActionInterval: Int = 3600
-
-        private const val SHORT_PAUSE_TIME = 150
-
-        var commonActionFactory: Supplier<CardAction>? = null
-    }
 
     abstract class DefaultCardAction : CardAction() {
         override fun execPower(): Boolean = commonAction?.execPower() == true

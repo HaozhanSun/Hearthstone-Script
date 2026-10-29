@@ -168,9 +168,11 @@ object NonSpellNoPointPlayActionInterceptor : PlayActionInterceptor {
         @Argument(1) player: Player,
         @This cardAction: CardAction
     ): List<PlayAction> {
+        val useMctsShortSettle =
+            CardAction.shouldUseMctsShortSettleForNoTargetPlay(cardAction.belongCard?.cardType)
         return listOf(
             PlayAction({ newWar ->
-                cardAction.findSelf(newWar)?.action?.power()
+                cardAction.findSelf(newWar)?.action?.power(isPause = !useMctsShortSettle)
             }, { newWar ->
                 cardAction.apply {
                     spendSelfCost(newWar)
