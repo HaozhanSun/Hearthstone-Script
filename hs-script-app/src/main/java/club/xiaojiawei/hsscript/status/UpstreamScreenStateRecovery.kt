@@ -304,11 +304,12 @@ object UpstreamScreenStateRecovery {
         )
         val safeIdleMenuCandidate = isSafeIdleUnblockScreen(detection, capture.visual) || wrongModeDeckCandidate
         val exactReconnectCandidate = detection?.kind == ScreenKind.RECONNECT && capture.visual.reconnectDialogVisual
-        val observedStuckFrame = StuckScreenUnblockFrameIdentity.create(
-            processId = capture.processId.toInt(),
+        val observedStuckFrame = stuckScreenFrameIdentity(
+            capture = capture,
             windowId = authorizedCapture.gameWindow.toString(),
-            perceptualFingerprint = stuckScreenPerceptualFingerprint(capture.image),
-            exactReconnectDialog = exactReconnectCandidate,
+            detection = detection,
+            expectedMode = expectedDeckModeForUnblock,
+            exactReconnect = exactReconnectCandidate,
         )
         val observedStuckFingerprint = observedStuckFrame.fingerprint
         val sameScreenLadderInProgress = stuckScreenUnblockPolicy.hasProgressFor(observedStuckFingerprint)
@@ -320,7 +321,7 @@ object UpstreamScreenStateRecovery {
             if (stuckScreenUnblockPolicy.hasProgress()) {
                 log.warn {
                     "STUCK_SCREEN_UNBLOCK_RECHECK result=UNBLOCKED newScreen=${detection.kind.code} " +
-                        "evidence=${detection.evidence} action=STOP_LADDER"
+                        "evidence=${detection.evidence} identityReason=${observedStuckFrame.reason} action=STOP_LADDER"
                 }
             }
             stuckScreenUnblockPolicy.reset()
@@ -364,8 +365,9 @@ object UpstreamScreenStateRecovery {
             }
         }
         val currentHwnd = ScriptStatus.gameHWND?.toString().orEmpty()
-        val activeQueueEvidence = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
-            LifecycleTrace.hasRecentMatchmakingInputIntent()
+        val activeQueueEvidence = capture.visual.matchmakingSearchVisual ||
+            LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+            LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
         val startupHubModeChooser = StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
             purpose = authorizedCapture.purpose,
             currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
@@ -397,7 +399,8 @@ object UpstreamScreenStateRecovery {
             log.warn {
                 "STARTUP_MODE_CHOOSER_CONFIRMED screen=TOURNAMENT mode=HUB pid=$currentPid " +
                     "hwnd=$currentHwnd confidence=${detection?.confidence ?: 0} " +
-                    "evidence=${detection?.evidence} action=ALLOW_TRADITIONAL_ENTRY_ONLY"
+                    "evidence=${detection?.evidence} currentSessionReady=${ScreenStateRecovery.isCurrentGameSessionReadyForStart()} " +
+                    "proof=FRESH_PID_HWND_ONE_USE action=ALLOW_TRADITIONAL_ENTRY_ONLY"
             }
         } else if (authorizedCapture.purpose in setOf(
                 ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
@@ -512,21 +515,18 @@ object UpstreamScreenStateRecovery {
                             !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() &&
                             !GameUtil.isTerminalGameState()
                         ) {
-                            StartupDeckModeNavigationPolicy.dispatchWrongModeTooltipReturn(
+                            StartupDeckModeNavigationPolicy.dispatchConfiguredModeCorrection(
                                 image = capture.image,
                                 expectedMode = expectedMode,
                                 decision = navigationDecision,
-                                dispatchReturn = {
-                                    MouseUtil.leftButtonClick(
-                                        TournamentModeStrategy.BACK_RECT.getCenterClickPos(),
-                                        authorizedCapture.gameWindow,
-                                        dispatchActionOverride = StartupDeckModeNavigationPolicy.ACTION,
-                                    )
+                                openSelectorAndSelectMode = {
+                                    TournamentModeStrategy.correctVerifiedDeckSelectionToWild()
                                 },
-                                requestFreshSelectorProbe = {
+                                requestFreshModeProbe = {
                                     log.warn {
-                                        "STARTUP_DECK_MODE_NAVIGATION_POSTCHECK scheduled=true " +
-                                            "pid=$pid hwnd=$hwnd next=FRESH_MODE_SELECTOR_PROBE action=NO_START"
+                                        "STARTUP_DECK_MODE_NAVIGATION_POSTCHECK scheduled=true pid=$pid hwnd=$hwnd " +
+                                            "next=FRESH_CONFIGURED_MODE_PROBE expectedMode=${expectedMode ?: "UNKNOWN"} " +
+                                            "action=NO_START"
                                     }
                                     ScreenStateRecovery.scheduleStartupMenuReprobeAfterModeSelection()
                                 },
@@ -534,14 +534,15 @@ object UpstreamScreenStateRecovery {
                         } else false
                         modeNavigationAttempted = accepted
                         log.warn {
-                            "STARTUP_DECK_MODE_NAVIGATION decision=${if (accepted) "DISPATCH_ACCEPTED" else "BLOCKED"} " +
-                                "reason=${if (!attempt.allowed) attempt.reason else if (!proofRecorded) "proof-not-recorded" else if (!accepted) "final-state-or-dispatch-gate" else "mode-unconfirmed"} " +
+                            "STARTUP_DECK_MODE_NAVIGATION decision=${if (accepted) "MODE_CORRECTION_DISPATCHED" else "BLOCKED"} " +
+                                "reason=${if (accepted) "fresh-opposite-mode-deck-proof" else if (!attempt.allowed) attempt.reason else if (!proofRecorded) "proof-not-recorded" else "final-state-or-dispatch-gate"} " +
                                 "attempt=${attempt.attempt} expectedMode=${expectedMode ?: "UNKNOWN"} " +
                                 "observedMode=${observedMode ?: "UNKNOWN"} pid=$pid hwnd=$hwnd " +
                                 "confidence=${currentDetection.confidence} evidence=${currentDetection.evidence} " +
                                 "startVisible=$startVisible wrongModeDeckTooltip=$wrongModeDeckTooltip " +
                                 "activeGame=$activeGame activeQueue=$activeQueue " +
-                                "terminal=$terminal exactWindow=$trustedWindow action=${StartupDeckModeNavigationPolicy.ACTION} " +
+                                "terminal=$terminal exactWindow=$trustedWindow " +
+                                "action=${StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION}+${StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION} " +
                                 "inputAccepted=$accepted"
                         }
                     } else {
@@ -2426,11 +2427,12 @@ object UpstreamScreenStateRecovery {
                 }
                 val freshFrame = fresh?.let {
                     val isSameExactReconnectDialog = exactReconnect && fresh.capture.visual.reconnectDialogVisual
-                    StuckScreenUnblockFrameIdentity.create(
-                        processId = it.capture.processId.toInt(),
+                    stuckScreenFrameIdentity(
+                        capture = it.capture,
                         windowId = it.gameWindow.toString(),
-                        perceptualFingerprint = stuckScreenPerceptualFingerprint(it.capture.image),
-                        exactReconnectDialog = isSameExactReconnectDialog,
+                        detection = freshVisualDetection,
+                        expectedMode = expectedModeForLadder,
+                        exactReconnect = isSameExactReconnectDialog,
                     )
                 }
                 val freshAuthorized = fresh != null && currentPid != null &&
@@ -2520,7 +2522,10 @@ object UpstreamScreenStateRecovery {
             }
             StuckScreenUnblockPolicy.Action.UNBLOCKED -> {
                 stuckScreenUnblockPolicy.reset()
-                log.warn { "STUCK_SCREEN_UNBLOCK_RECHECK result=UNBLOCKED fingerprint=${evidence.fingerprint}" }
+                log.warn {
+                    "STUCK_SCREEN_UNBLOCK_RECHECK result=UNBLOCKED fingerprint=${evidence.fingerprint} " +
+                        "identityReason=${currentFrameProof.reason}"
+                }
                 true
             }
             StuckScreenUnblockPolicy.Action.RESTART_CLIENT -> {
@@ -2544,11 +2549,12 @@ object UpstreamScreenStateRecovery {
                     fresh != null &&
                     fresh.capture.visual.reconnectDialogVisual
                 val finalFrame = fresh?.let {
-                    StuckScreenUnblockFrameIdentity.create(
-                        processId = it.capture.processId.toInt(),
+                    stuckScreenFrameIdentity(
+                        capture = it.capture,
                         windowId = it.gameWindow.toString(),
-                        perceptualFingerprint = stuckScreenPerceptualFingerprint(it.capture.image),
-                        exactReconnectDialog = freshIsSameExactReconnectDialog,
+                        detection = freshDetection,
+                        expectedMode = expectedModeForLadder,
+                        exactReconnect = freshIsSameExactReconnectDialog,
                     )
                 }
                 val finalSafe = fresh != null && currentPid != null &&
@@ -2597,6 +2603,32 @@ object UpstreamScreenStateRecovery {
             -> true
         }
         return true
+    }
+
+    private fun stuckScreenFrameIdentity(
+        capture: Capture,
+        windowId: String,
+        detection: Detection?,
+        expectedMode: String?,
+        exactReconnect: Boolean,
+    ): StuckScreenUnblockFrameIdentity.Proof {
+        val perceptual = stuckScreenPerceptualFingerprint(capture.image)
+        val observedMode = if (detection?.kind == ScreenKind.DECK_SELECTION) {
+            TournamentModeConfirmation.observeImage(capture.image).observedMode.name
+        } else null
+        val semantic = StuckScreenUnblockFrameIdentity.semanticScreenIdentity(
+            screenKind = detection?.kind?.code,
+            screenMode = detection?.mode?.name,
+            expectedRunMode = expectedMode,
+            observedRunMode = observedMode,
+        )
+        return StuckScreenUnblockFrameIdentity.create(
+            processId = capture.processId.toInt(),
+            windowId = windowId,
+            perceptualFingerprint = perceptual,
+            exactReconnectDialog = exactReconnect,
+            semanticScreenIdentity = semantic,
+        )
     }
 
     /** Stable coarse client-content fingerprint; omit the bottom HUD clock and frame-level motion. */

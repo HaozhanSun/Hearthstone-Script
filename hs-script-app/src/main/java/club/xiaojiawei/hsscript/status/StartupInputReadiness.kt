@@ -8,7 +8,14 @@ import club.xiaojiawei.hsscriptbase.config.log
 
 /** Fresh, process-bound proof that the visible client is at an online menu. */
 internal object StartupInputReadiness {
-    private data class Proof(val pid: Int, val hwnd: String, val screen: String, val observedAt: Long)
+    private data class Proof(
+        val pid: Int,
+        val hwnd: String,
+        val screen: String,
+        val observedAt: Long,
+        val expectedMode: String? = null,
+        val observedMode: String? = null,
+    )
     private data class SelectedModePermit(val pid: Int, val hwnd: String, val mode: String, val observedAt: Long)
     private data class ReconnectPermit(
         val pid: Int,
@@ -90,6 +97,7 @@ internal object StartupInputReadiness {
             return
         }
         reconnectPermit.set(null)
+        clearSelectedTournamentMode(pid, hwnd)
         betaResultConfirmationPermit.set(null)
         proof.set(Proof(pid, hwnd, HUB_MODE_CHOOSER_SCREEN, now))
     }
@@ -151,7 +159,14 @@ internal object StartupInputReadiness {
         reconnectPermit.set(null)
         noticeDismissPermit.set(null)
         betaResultConfirmationPermit.set(null)
-        proof.set(Proof(pid, hwnd, DECK_SELECTION_MODE_NAV_SCREEN, now))
+        proof.set(Proof(
+            pid = pid,
+            hwnd = hwnd,
+            screen = DECK_SELECTION_MODE_NAV_SCREEN,
+            observedAt = now,
+            expectedMode = expectedRunMode,
+            observedMode = observedRunMode,
+        ))
         return true
     }
 
@@ -197,9 +212,11 @@ internal object StartupInputReadiness {
         pid: Int,
         hwnd: String,
         now: Long = System.currentTimeMillis(),
+        expectedMode: String? = null,
     ): Boolean = proof.get()?.let {
         it.pid == pid && it.hwnd == hwnd && it.screen == DECK_SELECTION_MODE_NAV_SCREEN &&
-            now >= it.observedAt && now - it.observedAt <= DECK_MODE_NAVIGATION_PROOF_MAX_AGE_MS
+            now >= it.observedAt && now - it.observedAt <= DECK_MODE_NAVIGATION_PROOF_MAX_AGE_MS &&
+            (expectedMode == null || it.expectedMode == expectedMode && it.observedMode != expectedMode)
     } == true
 
     fun invalidate(pid: Int? = null, hwnd: String? = null) {
@@ -238,6 +255,15 @@ internal object StartupInputReadiness {
         it.pid == pid && it.hwnd == hwnd && it.screen == HUB_MODE_CHOOSER_SCREEN && mode == "HUB" &&
             now >= it.observedAt && now - it.observedAt <= HUB_MODE_CHOOSER_PROOF_MAX_AGE_MS
     } == true
+
+    /** Traditional Battle consumes the exact observed chooser proof; another click needs a fresh capture. */
+    fun consumeHubModeChooser(pid: Int, hwnd: String, now: Long = System.currentTimeMillis()): Boolean {
+        val current = proof.get() ?: return false
+        if (current.pid != pid || current.hwnd != hwnd || current.screen != HUB_MODE_CHOOSER_SCREEN ||
+            now < current.observedAt || now - current.observedAt > HUB_MODE_CHOOSER_PROOF_MAX_AGE_MS
+        ) return false
+        return proof.compareAndSet(current, null)
+    }
 
     fun issueReconnectPermit(pid: Int, hwnd: String, point: Point, now: Long): Boolean {
         if (pid <= 0 || hwnd.isBlank() || point.x < 0 || point.y < 0) return false
@@ -401,7 +427,12 @@ internal object StartupInputAuthorizationPolicy {
         startupNoticeDismissPermitValid
     } else if (action == BetaStartupResultConfirmationPolicy.DISPATCH_ACTION) {
         betaResultConfirmationPermitValid
-    } else if (action == StartupDeckModeNavigationPolicy.ACTION) {
+    } else if (action in setOf(
+            StartupDeckModeNavigationPolicy.ACTION,
+            StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION,
+            StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION,
+        )
+    ) {
         startupDeckSelectionModeNavigationReady
     } else if (action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION) {
         startupQuestOverlayDismissPermitValid
@@ -472,10 +503,12 @@ internal object StartupModeEntryDispatchPolicy {
         activeModeEntry.set(identity)
         return try {
             val accepted = dispatch(StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION)
+            val proofConsumed = accepted && StartupInputReadiness.consumeHubModeChooser(processId, hwnd)
             log.info {
                 "STARTUP_MODE_ENTRY_DISPATCH_RESULT result=${if (accepted) "ACCEPTED" else "REJECTED"} " +
                     "pid=$processId hwnd=$hwnd waitMs=${(System.nanoTime() - waitStartedAt) / 1_000_000L} " +
-                    "action=${StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION}"
+                    "action=${StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION} proofConsumed=$proofConsumed " +
+                    "retry=FRESH_HUB_SCREEN_PROBE_ONLY"
             }
             accepted
         } finally {

@@ -1,8 +1,10 @@
 package club.xiaojiawei.hsscript.status
 
-/** Narrow permission to back out of an unconfirmed startup deck chooser to select the configured format. */
+/** Narrow startup permissions for safely correcting a freshly confirmed configured-format mismatch. */
 internal object StartupDeckModeNavigationPolicy {
     const val ACTION = "startup.mode-return-to-selector"
+    const val OPEN_SELECTOR_ACTION = "startup.mode-open-selector"
+    const val SELECT_WILD_ACTION = "startup.mode-select-wild"
 
     fun isModeProofProbe(purpose: ScreenRecoveryCapturePurpose): Boolean =
         purpose == ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE ||
@@ -82,7 +84,8 @@ internal object StartupDeckModeNavigationPolicy {
         activeGame: Boolean,
         activeMatchmaking: Boolean,
         terminal: Boolean,
-    ): Boolean = action == ACTION && proofFresh && exactWindowVerified &&
+    ): Boolean = action in setOf(ACTION, OPEN_SELECTOR_ACTION, SELECT_WILD_ACTION) &&
+        proofFresh && exactWindowVerified &&
         !currentSessionReady && !activeGame && !activeMatchmaking && !terminal
 
     /** Keeps the integration boundary explicit: only an allowed Back action can reach the dispatcher. */
@@ -104,6 +107,22 @@ internal object StartupDeckModeNavigationPolicy {
         ) return false
         val accepted = dispatchReturn()
         if (accepted) requestFreshSelectorProbe()
+        return accepted
+    }
+
+    /** Dispatches only configured-Wild selection controls from a fresh exact opposite-mode deck screenshot. */
+    fun dispatchConfiguredModeCorrection(
+        image: java.awt.image.BufferedImage,
+        expectedMode: String?,
+        decision: Decision,
+        openSelectorAndSelectMode: () -> Boolean,
+        requestFreshModeProbe: () -> Unit,
+    ): Boolean {
+        val exactOppositeMode = expectedMode == "WILD" &&
+            TournamentModeConfirmation.isConfirmedModeMismatch(image, expectedMode)
+        if (!exactOppositeMode || !decision.allowed) return false
+        val accepted = openSelectorAndSelectMode()
+        if (accepted) requestFreshModeProbe()
         return accepted
     }
 }

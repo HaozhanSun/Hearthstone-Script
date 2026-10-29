@@ -103,6 +103,113 @@ class StuckScreenUnblockCallsiteIntegrationTest {
     }
 
     @Test
+    fun `fresh HUB chooser after restart with empty Power log permits one Traditional click and never Start`() {
+        assertLiveChooserClassifiesAsStructurallyVerifiedHub()
+        val observedAt = System.currentTimeMillis()
+        LifecycleTrace.resetMatchmakingEvidenceForTest()
+        try {
+            LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = true, now = observedAt - 90_000L)
+            assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(observedAt),
+                "fixture models historical queue intent from a previous session")
+            val activeQueueEvidence = LifecycleTrace.hasRecentActiveMatchmakingScreen(observedAt) ||
+                LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(observedAt)
+            assertFalse(activeQueueEvidence, "historical intent alone is not evidence of a current queue")
+            assertTrue(StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
+                purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+                currentSessionReady = false,
+                screenKind = "TOURNAMENT",
+                confidence = 96,
+                evidence = "hub-mode-chooser-visual-and-text",
+                currentMode = "HUB",
+                modalVisible = false,
+                activeGame = false,
+                activeMatchmaking = activeQueueEvidence,
+                trustedCurrentWindow = true,
+            ), "exact HUB chooser proof remains valid with historical intent and no current queue evidence")
+            assertFalse(StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
+                purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+                currentSessionReady = false,
+                screenKind = "TOURNAMENT",
+                confidence = 96,
+                evidence = "hub-mode-chooser-visual-and-text",
+                currentMode = "HUB",
+                modalVisible = false,
+                activeGame = false,
+                activeMatchmaking = true,
+                trustedCurrentWindow = true,
+            ), "actual current matchmaking evidence still fences HUB entry")
+        } finally {
+            LifecycleTrace.resetMatchmakingEvidenceForTest()
+        }
+        val purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE
+        val stuckForMs = ScreenRecoveryCapturePurposePolicy.IDLE_CLIENT_PROBE_AFTER_MS
+        assertTrue(ScreenRecoveryCapturePurposePolicy.allowsPreSessionIdleClientProbe(
+            purpose = purpose,
+            currentSessionReady = false,
+            stuckForMs = stuckForMs,
+        ), "fresh client-owned screenshot may classify the startup chooser before a new Power.log exists")
+        assertTrue(StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
+            purpose = purpose,
+            currentSessionReady = false,
+            screenKind = "TOURNAMENT",
+            confidence = 96,
+            evidence = "hub-mode-chooser-visual-and-text",
+            currentMode = "HUB",
+            modalVisible = false,
+            activeGame = false,
+            activeMatchmaking = false,
+            trustedCurrentWindow = true,
+        ))
+
+        val now = System.currentTimeMillis()
+        val pid = 36_892
+        val hwnd = "native@0x24907bc"
+        StartupInputReadiness.resetForTest()
+        try {
+            StartupInputReadiness.recordHubModeChooser(pid, hwnd, now)
+            assertTrue(StartupInputReadiness.isHubTraditionalBattleSelectionReady(pid, hwnd, "HUB", now))
+            val actions = mutableListOf<String>()
+            assertTrue(StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
+                chooserProofFresh = StartupInputReadiness.isHubTraditionalBattleSelectionReady(pid, hwnd, "HUB", now),
+                paused = false,
+                processId = pid,
+                hwnd = hwnd,
+            ) { action ->
+                actions += action
+                StartupInputAuthorizationPolicy.allowsHubTraditionalBattleSelection(
+                    action = action,
+                    processId = pid,
+                    hwnd = hwnd,
+                    exactWindowVerified = true,
+                    freshHubChooserReady = StartupInputReadiness.isHubTraditionalBattleSelectionReady(
+                        pid, hwnd, "HUB", now,
+                    ),
+                    currentSessionReady = false,
+                    activeGame = false,
+                    activeMatchmaking = false,
+                    terminal = false,
+                )
+            })
+            assertEquals(listOf(StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION), actions)
+            assertFalse(StartupInputReadiness.isHubTraditionalBattleSelectionReady(pid, hwnd, "HUB", now),
+                "accepted click consumes chooser proof; retry requires a fresh exact chooser capture")
+            assertFalse(StartupInputAuthorizationPolicy.allows(
+                action = "matchmaking.start",
+                currentSessionReady = false,
+                freshOnlineMenuReady = false,
+                freshDeckSelectionStartReady = false,
+                selectedModeStartPermitValid = false,
+            ), "HUB visual proof only authorizes Traditional Battle selection, never Start")
+            assertFalse(StartupInputAuthorizationPolicy.allowsHubTraditionalBattleSelection(
+                action = "matchmaking.start", processId = pid, hwnd = hwnd,
+                exactWindowVerified = true, freshHubChooserReady = true,
+            ))
+        } finally {
+            StartupInputReadiness.resetForTest()
+        }
+    }
+
+    @Test
     fun `changed frame and active queue pause or terminal evidence prevent click and restart dispatch`() {
         assertLiveChooserClassifiesAsStructurallyVerifiedHub()
         val changedPolicy = StuckScreenUnblockPolicy()
@@ -283,5 +390,59 @@ class StuckScreenUnblockCallsiteIntegrationTest {
             oneMinuteLaterSameDialog.action, true,
         ) { restartDispatches++ })
         assertEquals(1, restartDispatches)
+    }
+
+    @Test
+    fun `wrong mode deck uses semantic continuity across animated frames then restarts only after second minute`() {
+        fun frame(perceptual: String, observedMode: String) = StuckScreenUnblockFrameIdentity.create(
+            processId = 25_948,
+            windowId = "native@0x44c086e",
+            perceptualFingerprint = perceptual,
+            exactReconnectDialog = false,
+            semanticScreenIdentity = StuckScreenUnblockFrameIdentity.semanticScreenIdentity(
+                screenKind = "DECK_SELECTION",
+                screenMode = "TOURNAMENT",
+                expectedRunMode = "WILD",
+                observedRunMode = observedMode,
+            ),
+        )
+
+        val standardFrame = frame("pHash-12-24-03", "STANDARD")
+        val animatedStandardFrame = frame("pHash-12-24-50", "STANDARD")
+        val laterAnimatedStandardFrame = frame("pHash-12-25-20", "STANDARD")
+        val wildFrame = frame("pHash-wild", "WILD")
+        assertTrue(StuckScreenUnblockFrameIdentity.isSameClientScreen(standardFrame, animatedStandardFrame))
+        assertTrue(StuckScreenUnblockFrameIdentity.isSameClientScreen(standardFrame, laterAnimatedStandardFrame))
+        assertFalse(StuckScreenUnblockFrameIdentity.isSameClientScreen(standardFrame, wildFrame),
+            "a positively observed mode transition ends the wrong-mode ladder")
+
+        val policy = StuckScreenUnblockPolicy()
+        val first = policy.observe(evidence(
+            now = 61_000L,
+            stableForMs = 61_000L,
+            fingerprint = standardFrame.fingerprint,
+        ))
+        assertEquals(StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT, first.action)
+        val clicks = mutableListOf<Int>()
+        assertTrue(StuckScreenUnblockDispatch.dispatchTopLeftBatch(
+            batchInFlight = AtomicBoolean(false), action = first.action, firstClick = first.clickNumber,
+            freshCaptureAuthorized = StuckScreenUnblockFrameIdentity.isSameClientScreen(
+                standardFrame, animatedStandardFrame,
+            ), point = Point(0, 0), expectedFingerprint = standardFrame.fingerprint,
+            completionTimeMs = { 61_100L },
+            dispatchClick = { _, number -> clicks += number; true },
+            completeBatch = policy::completeTopLeftClickBatch,
+            requestFreshRecheck = {},
+        ))
+        assertEquals(listOf(1, 2, 3), clicks)
+        assertEquals(StuckScreenUnblockPolicy.Action.REPROBE, policy.observe(evidence(
+            now = 121_099L, stableForMs = 121_099L, fingerprint = animatedStandardFrame.fingerprint,
+        )).action)
+        assertEquals(StuckScreenUnblockPolicy.Action.RESTART_CLIENT, policy.observe(evidence(
+            now = 121_100L, stableForMs = 121_100L, fingerprint = laterAnimatedStandardFrame.fingerprint,
+        )).action)
+        assertEquals(StuckScreenUnblockPolicy.Action.UNBLOCKED, policy.observe(evidence(
+            now = 121_200L, stableForMs = 0L, fingerprint = wildFrame.fingerprint,
+        )).action)
     }
 }

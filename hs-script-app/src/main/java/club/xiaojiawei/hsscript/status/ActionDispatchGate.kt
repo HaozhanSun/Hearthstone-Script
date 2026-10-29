@@ -81,16 +81,24 @@ object ActionDispatchGate {
         exactWindowVerified: Boolean,
         currentSessionReady: Boolean,
     ): Boolean {
-        val activeGame = currentSessionReady || WarEx.inWar || Mode.currMode == ModeEnum.GAMEPLAY
+        val activeGame = currentSessionReady || WarEx.inWar ||
+            Mode.currMode == ModeEnum.GAMEPLAY || Mode.nextMode == ModeEnum.GAMEPLAY
         val activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
             LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
         val terminal = MandatoryRankSurrenderGuard.isPending() ||
             MandatoryRankSurrenderGuard.isTerminalCleanupPending() ||
             PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence()
+        val expectedCorrectionMode = if (action in setOf(
+                StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION,
+                StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION,
+            )
+        ) "WILD" else null
         return processId != null && !hwnd.isNullOrBlank() &&
             StartupDeckModeNavigationPolicy.allowsDispatch(
                 action = action,
-                proofFresh = StartupInputReadiness.isDeckSelectionModeNavigationReady(processId, hwnd),
+                proofFresh = StartupInputReadiness.isDeckSelectionModeNavigationReady(
+                    processId, hwnd, expectedMode = expectedCorrectionMode,
+                ),
                 exactWindowVerified = exactWindowVerified,
                 currentSessionReady = currentSessionReady,
                 activeGame = activeGame,
@@ -224,6 +232,7 @@ object ActionDispatchGate {
                     "currentSessionReady=$currentSessionReady freshOnlineMenuReady=$freshOnlineMenuReady " +
                     "freshDeckSelectionStartReady=$freshDeckSelectionStartReady " +
                     "selectedModeStartPermitValid=$selectedModeStartPermitValid " +
+                    "modeNavigationPermitValid=$startupDeckSelectionModeNavigationReady " +
                     "dispatch=false"
             }
             return false

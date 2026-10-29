@@ -51,7 +51,7 @@ internal class StuckScreenUnblockPolicy(
             clicks = 0
             thirdClickAtMs = 0L
         }
-        if (screenChanged) return Decision(Action.UNBLOCKED, 0, "screen-fingerprint-changed")
+        if (screenChanged) return Decision(Action.UNBLOCKED, 0, "semantic-screen-state-changed")
         if (clicks < MAX_TOP_LEFT_CLICKS) {
             if (e.nowMs - firstSeenAtMs < firstThresholdMs) return Decision(Action.WAIT, clicks, "first-stage-threshold")
             if (!e.dispatchAccepted) return Decision(Action.STOP, clicks, "click-dispatch-failed")

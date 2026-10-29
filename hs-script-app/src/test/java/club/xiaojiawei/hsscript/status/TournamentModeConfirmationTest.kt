@@ -14,6 +14,22 @@ import kotlin.test.assertTrue
 
 class TournamentModeConfirmationTest {
     @Test
+    fun `configured format selector clicks do not send a cancel right click first`() {
+        val source = Files.readString(moduleRoot().resolve(Path.of(
+            "src", "main", "java", "club", "xiaojiawei", "hsscript", "strategy", "mode", "TournamentModeStrategy.kt",
+        )))
+        listOf(
+            "CHANGE_MODE_RECT.lClick(isCancel = false)",
+            "CLASSIC_MODE_RECT.lClick(isCancel = false)",
+            "STANDARD_MODE_RECT.lClick(isCancel = false)",
+            "WILD_MODE_RECT.lClick(isCancel = false)",
+            "CASUAL_MODE_RECT.lClick(isCancel = false)",
+        ).forEach { requiredCall ->
+            assertTrue(source.contains(requiredCall), "mode selection must preserve the open selector: $requiredCall")
+        }
+    }
+
+    @Test
     fun `wild target pauses before deck selection when observed title is standard`() {
         val result = TournamentModeConfirmation.evaluate(
             expectedMode = RunModeEnum.WILD,

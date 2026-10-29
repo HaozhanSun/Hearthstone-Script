@@ -499,36 +499,44 @@ this deletion boundary.
   UNKNOWN but a fresh, exact client capture has the fixed enabled Start-control
   visual, no modal/quest/queue visual, and a configured deck, classify only the
   deck-selection screen. The Start proof still requires an independently
-  confirmed configured format; unknown or mismatched format may authorize one
-  bounded Back-to-format-selector action only. Recheck the mode after selection
-  before deck selection or Start, and retain active-game, current-queue,
+  confirmed configured format; an exact, high-confidence opposite-mode deck
+  screenshot may authorize only opening the format selector and clicking the
+  configured format under a short PID/HWND-bound proof. Never pre-click a
+  format option with a right-click because it can dismiss the selector. Recheck
+  the mode after selection before deck selection or Start, and retain
+  active-game, current-queue,
   terminal, exact-window, and post-mulligan surrender fences. Regression must
   use the saved live frame and assert that the named navigation dispatch is
   reached while `matchmaking.start` remains blocked for UNKNOWN mode.
-  After the bounded Back-to-selector dispatch is accepted, schedule a fresh
-  process/window-bound mode-selector probe. Do not treat the click or the old
+  After configured-mode correction is accepted, schedule a fresh
+  process/window-bound mode probe. Do not treat the click or the old
   deck-selection capture as proof that the configured format is now selected;
   only a subsequent fresh mode confirmation and deck-selection capture may
   authorize Start. The selected Wild deck's gray incompatibility tooltip is a
   fixed hover card above the deck list, not a centered blocking dialog. The
-  image-specific tooltip signature may waive only the broad centered-panel
-  veto for the named Return-to-selector action; never waive it for Start or
-  another action.
+  tooltip alone cannot authorize mode correction; exact visible opposite-format
+  title evidence plus independent configured-mode confirmation is required.
+  Never waive the centered-panel veto for Start or another action.
 - The generic idle stuck-screen ladder applies only to a fresh, exact-window,
-  same-fingerprint unknown blocker, exact reconnect dialog, or structurally
+  same-screen UNKNOWN blocker (using perceptual identity), exact reconnect dialog, or structurally
   confirmed HUB mode chooser in a confirmed non-game, non-queue state. A HUB
   chooser requires its dedicated visual signature and Mode=HUB; OCR labels such
   as PACKOPENING or HUB alone cannot qualify. Event Quest retains its dedicated
   exact-overlay recovery path.
   After 60 seconds, click the exact client origin three times, logging each
-  dispatch and re-capturing after the sequence. A changed fingerprint ends the
-  ladder. If the same blocker remains for another 60 seconds, re-capture and
+  dispatch and re-capturing after the sequence. For known screens, continuity
+  uses semantic classification and mode evidence (for deck selection, expected
+  and observed format); perceptual hash is only a fallback for UNKNOWN.
+  Animation or glow noise cannot reset the ladder. A proven semantic state
+  transition ends it. If the same blocker remains for another 60 seconds, re-capture and
   recheck every game/queue/pause/terminal/window fence immediately before the
-  no-pause client restart. Deck mode mismatch, Event Quest, results, gameplay,
-  queue and pause remain owned by their dedicated recovery paths. Exact
+  no-pause client restart. A confirmed deck-mode mismatch first gets one
+  bounded configured-mode selector correction, then enters this ladder if the
+  same opposite mode persists. Event Quest, results, gameplay, queue and pause
+  remain owned by their dedicated recovery paths. Exact
   reconnect uses the staged top-left-only ladder; never click Reconnect or
   Cancel. Reconfirm current PID and Power.log/session evidence immediately
-  before its final restart. The unchanged-screen fingerprint must tolerate
+  before its final restart. Known-screen identity must tolerate
   small animation/glow changes but distinguish a real screen transition; it is
   bound to PID/HWND rather than lifecycle phase labels.
 - For an exact reconnect screen, the 60-second no-pause restart grace must
@@ -544,3 +552,10 @@ this deletion boundary.
   replay the live Standard chooser with its configured Wild deck tooltip,
   assert Return reaches the dispatcher, confirm the fresh selector stage, and
   keep Start denied until fresh WILD mode and deck proof exist.
+- A fresh exact HUB chooser capture may authorize only one Traditional Battle
+  entry action before a current Power.log exists, provided exact PID/HWND,
+  foreground/pixel authority, no-game/no-queue/no-terminal fences, and
+  unpaused/working checks pass. Consume chooser proof on accepted dispatch;
+  UNKNOWN post-click captures cannot mint or reuse it. A retry requires a new
+  exact HUB capture. HUB proof never authorizes deck Start. Test after
+  Hearthstone restart with an empty new Power.log and a captured HUB fixture.

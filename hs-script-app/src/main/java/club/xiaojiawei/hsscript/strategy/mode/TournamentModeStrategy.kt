@@ -13,6 +13,7 @@ import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.StartupInputReadiness
+import club.xiaojiawei.hsscript.status.StartupDeckModeNavigationPolicy
 import club.xiaojiawei.hsscript.status.StartupModeEntryDispatchPolicy
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
@@ -231,7 +232,10 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
 
     private fun clickModeChangeButton() {
         log.info { "点击切换模式按钮" }
-        CHANGE_MODE_RECT.lClick()
+        // Opening the selector is an input step of the startup mode-selection
+        // transaction. A pre-click right-click can close the selector before
+        // its target option is dispatched.
+        CHANGE_MODE_RECT.lClick(isCancel = false)
     }
 
     private fun changeMode(runModeEnum: RunModeEnum) {
@@ -334,22 +338,44 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
 
     private fun changeModeToClassic() {
         log.info { "切换至经典模式" }
-        CLASSIC_MODE_RECT.lClick()
+        CLASSIC_MODE_RECT.lClick(isCancel = false)
     }
 
     private fun changeModeToStandard() {
         log.info { "切换至标准模式" }
-        STANDARD_MODE_RECT.lClick()
+        STANDARD_MODE_RECT.lClick(isCancel = false)
     }
 
     private fun changeModeToWild() {
         log.info { "切换至狂野模式" }
-        WILD_MODE_RECT.lClick()
+        WILD_MODE_RECT.lClick(isCancel = false)
     }
 
     private fun changeModeToCasual() {
         log.info { "切换至休闲模式" }
-        CASUAL_MODE_RECT.lClick()
+        CASUAL_MODE_RECT.lClick(isCancel = false)
+    }
+
+    /** Select Wild only when screen recovery minted a fresh opposite-mode deck-selection permit. */
+    internal fun correctVerifiedDeckSelectionToWild(): Boolean {
+        val opened = CHANGE_MODE_RECT.lClick(
+            isCancel = false,
+            dispatchAction = StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION,
+        )
+        if (!opened) {
+            log.warn { "STARTUP_MODE_CORRECTION action=OPEN_SELECTOR accepted=false target=WILD" }
+            return false
+        }
+        SystemUtil.delayShort()
+        val selected = WILD_MODE_RECT.lClick(
+            isCancel = false,
+            dispatchAction = StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION,
+        )
+        log.warn {
+            "STARTUP_MODE_CORRECTION action=SELECT_CONFIGURED_MODE accepted=$selected target=WILD " +
+                "proof=FRESH_OPPOSITE_MODE_DECK_SELECTION next=FRESH_MODE_PROBE_NO_START"
+        }
+        return selected
     }
 
     fun startMatching() {
