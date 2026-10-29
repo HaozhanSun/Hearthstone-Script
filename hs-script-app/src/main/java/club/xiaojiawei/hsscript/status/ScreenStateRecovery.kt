@@ -2696,8 +2696,9 @@ object ScreenStateRecovery {
             }
 
             ScreenKind.RECONNECT -> {
-                val activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
-                    LifecycleTrace.hasRecentMatchmakingInputIntent()
+                val freshActiveQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen()
+                val currentSessionReady = isCurrentGameSessionReadyForStart()
+                val activeMatchmaking = freshActiveQueue || currentSessionReady && WarEx.inWar
                 val activeGameEvidence = hasAuthoritativeCurrentGameEvidenceForReconnect()
                 val terminalState = GameUtil.isTerminalGameState() ||
                     club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
@@ -2707,6 +2708,7 @@ object ScreenStateRecovery {
                         activeGame = activeGameEvidence,
                         activeMatchmaking = activeMatchmaking,
                         terminalState = terminalState,
+                        currentSessionReady = currentSessionReady,
                     )
                 ) {
                     log.warn {
@@ -2904,8 +2906,9 @@ object ScreenStateRecovery {
             }
 
             ScreenKind.RECONNECT_SPINNER -> {
-                val activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
-                    LifecycleTrace.hasRecentMatchmakingInputIntent()
+                val freshActiveQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen()
+                val currentSessionReady = isCurrentGameSessionReadyForStart()
+                val activeMatchmaking = freshActiveQueue || currentSessionReady && WarEx.inWar
                 val terminalState = GameUtil.isTerminalGameState() ||
                     club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
                         .isTerminalCleanupPending()
@@ -2913,6 +2916,7 @@ object ScreenStateRecovery {
                         exactReconnectVisible = true,
                         activeMatchmaking = activeMatchmaking,
                         terminalState = terminalState,
+                        currentSessionReady = currentSessionReady,
                     )
                 ) {
                     log.warn {

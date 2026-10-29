@@ -3,9 +3,13 @@ package club.xiaojiawei.hsscript.status
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
 
 class OfflineReconnectRecoveryTest {
+    @AfterEach
+    fun clearMatchmakingEvidence() = LifecycleTrace.resetMatchmakingEvidenceForTest()
+
     @Test
     fun `reconnect restarts at 60 seconds without clicking or pausing`() {
         val policy = IndefiniteReconnectRestartPolicy()
@@ -100,6 +104,7 @@ class OfflineReconnectRecoveryTest {
         assertFalse(ReconnectRestartSafetyPolicy.mayRestart(
             exactReconnectVisible = true,
             activeGame = true,
+            currentSessionReady = true,
             activeMatchmaking = false,
             terminalState = false,
         ))
@@ -141,6 +146,7 @@ class OfflineReconnectRecoveryTest {
                 activeGame = activeGameEvidence,
                 activeMatchmaking = false,
                 terminalState = false,
+                currentSessionReady = true,
             ),
         )
     }
@@ -166,6 +172,7 @@ class OfflineReconnectRecoveryTest {
                 activeGame = activeGameEvidence,
                 activeMatchmaking = false,
                 terminalState = false,
+                currentSessionReady = true,
             ),
         )
     }
@@ -189,6 +196,49 @@ class OfflineReconnectRecoveryTest {
             "the persisted exact offline prompt restarts without waiting on the unrelated matchmaking-error probe",
         )
         assertEquals(1, policy.attempts())
+    }
+
+    @Test
+    fun `stale matchmaking intent and screen latch do not fence an exact reconnect`() {
+        val observedAt = 100_000L
+        LifecycleTrace.markActiveMatchmakingScreenObserved(observedAt)
+        LifecycleTrace.markMatchmakingInputDispatched(observedAt)
+        val reconnectAt = observedAt + 120_001L
+
+        assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(reconnectAt))
+        assertFalse(LifecycleTrace.hasRecentActiveMatchmakingScreen(reconnectAt))
+        assertFalse(ReconnectRestartEvidencePolicy.shouldDefer(
+            exactReconnectVisible = true,
+            freshActiveQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen(reconnectAt),
+            currentSessionReady = false,
+            activeGame = false,
+            terminalState = false,
+        ))
+        assertTrue(ReconnectRestartSafetyPolicy.mayRestart(
+            exactReconnectVisible = true,
+            activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen(reconnectAt),
+            terminalState = false,
+        ))
+    }
+
+    @Test
+    fun `fresh queue authoritative active game and terminal proof still defer restart`() {
+        assertTrue(ReconnectRestartEvidencePolicy.shouldDefer(true, true, false, false, false))
+        assertTrue(ReconnectRestartEvidencePolicy.shouldDefer(true, false, true, true, false))
+        assertTrue(ReconnectRestartEvidencePolicy.shouldDefer(true, false, false, false, true))
+        assertFalse(ReconnectRestartEvidencePolicy.shouldDefer(true, false, true, false, false))
+        assertFalse(ReconnectRestartEvidencePolicy.shouldDefer(true, false, false, true, false))
+    }
+
+    @Test
+    fun `reconnect age continues through a temporary fresh queue deferral`() {
+        val policy = IndefiniteReconnectRestartPolicy()
+        assertEquals(IndefiniteReconnectRestartPolicy.Decision.WAIT,
+            policy.observe(true, 10_000L, activeQueue = false, terminalState = false))
+        assertEquals(IndefiniteReconnectRestartPolicy.Decision.DEFER_ACTIVE_QUEUE,
+            policy.observe(true, 20_000L, activeQueue = true, terminalState = false))
+        assertEquals(IndefiniteReconnectRestartPolicy.Decision.RESTART_CLIENT_NO_PAUSE,
+            policy.observe(true, 70_000L, activeQueue = false, terminalState = false))
     }
 
     @Test

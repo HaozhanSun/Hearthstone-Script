@@ -339,17 +339,23 @@ this deletion boundary.
   `Core.restartFromIdleWatchdog()` without clicking Reconnect or pausing.
   Active game evidence requires both the `WarEx.inWar` latch and a non-empty
   Power.log proven to belong to the current Hearthstone process; an empty or
-  stale log cannot make a stale latch authoritative. Recent matchmaking and
-  terminal evidence also defer the restart, and the policy caps retries. A
-  transient reconnect must not restart the client.
+  stale log cannot make a stale latch authoritative. A fresh active-queue
+  screen and terminal evidence also defer restart. The 15-minute matchmaking
+  input intent is capture context, not proof the queue is still active. Keep
+  the original reconnect age while a fresh queue briefly defers restart, so
+  expired queue evidence cannot restart the 60-second grace period. The policy
+  caps retries; a transient reconnect must not restart the client.
   Reconnect routing depends on `BETA_RECOVERY_EXTENSIONS_ENABLED`: disabled
   routes `ScreenStateRecovery.inspectAndRecover` to
   `UpstreamScreenStateRecovery`; enabled uses the Beta `ScreenStateRecovery`
   implementation. Keep both paths aligned: exact RECONNECT is classification
   only during a 60-second grace period, then restart Hearthstone without
-  clicking Reconnect or Cancel. Active game, recent matchmaking, and terminal
-  evidence defer the restart; `WarEx.inWar` alone does not. `Core.restartFromIdleWatchdog()`
-  kills/restarts the client without changing the script's pause state. The separate generic
+  clicking Reconnect or Cancel. Require current-session authority for an
+  active-game fence; a fresh queue screen and current terminal proof still
+  defer restart. Reuse the persisted reconnect screenshot fixture and verify
+  stale queue intent does not fence restart, while fresh queue/current game/
+  terminal evidence does. `Core.restartFromIdleWatchdog()` kills/restarts the
+  client without changing the script's pause state. The separate generic
   loading-screen threshold remains 120 seconds.
 - Missing-client recovery must treat matchmaking/game latches as live-client
   evidence only while the exact Hearthstone process is present. If the process

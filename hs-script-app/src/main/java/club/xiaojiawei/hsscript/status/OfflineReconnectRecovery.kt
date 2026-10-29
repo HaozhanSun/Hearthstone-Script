@@ -135,7 +135,26 @@ internal object ReconnectRestartSafetyPolicy {
         activeGame: Boolean = false,
         activeMatchmaking: Boolean,
         terminalState: Boolean,
-    ): Boolean = exactReconnectVisible && !activeGame && !activeMatchmaking && !terminalState
+        currentSessionReady: Boolean = false,
+    ): Boolean = exactReconnectVisible && !ReconnectRestartEvidencePolicy.shouldDefer(
+        exactReconnectVisible = exactReconnectVisible,
+        freshActiveQueue = activeMatchmaking,
+        currentSessionReady = currentSessionReady,
+        activeGame = activeGame,
+        terminalState = terminalState,
+    )
+}
+
+/** A stale queue intent is advisory only; restart is fenced by a fresh queue or authoritative active game. */
+internal object ReconnectRestartEvidencePolicy {
+    fun shouldDefer(
+        exactReconnectVisible: Boolean,
+        freshActiveQueue: Boolean,
+        currentSessionReady: Boolean,
+        activeGame: Boolean,
+        terminalState: Boolean,
+    ): Boolean = exactReconnectVisible &&
+        (terminalState || freshActiveQueue || currentSessionReady && activeGame)
 }
 
 internal object ReconnectActiveGameEvidencePolicy {
@@ -162,9 +181,13 @@ internal class IndefiniteReconnectRestartPolicy(
         terminalState: Boolean,
     ): Decision {
         if (!exactReconnectVisible || nowMs <= 0L) return Decision.WAIT
-        if (activeQueue) return Decision.DEFER_ACTIVE_QUEUE
-        if (terminalState) return Decision.DEFER_TERMINAL
+        if (terminalState) {
+            firstObservedAt = 0L
+            return Decision.DEFER_TERMINAL
+        }
         if (firstObservedAt == 0L) firstObservedAt = nowMs
+        // Keep the original reconnect age while fresh queue evidence briefly defers restart.
+        if (activeQueue) return Decision.DEFER_ACTIVE_QUEUE
         if (nowMs - firstObservedAt < thresholdMs) return Decision.WAIT
         if (restartAttempts >= maxRestarts) return Decision.ALERT_OPERATOR
         if (lastRestartAt > 0L && nowMs - lastRestartAt < retryCooldownMs) return Decision.WAIT

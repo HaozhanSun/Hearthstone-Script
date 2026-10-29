@@ -1878,11 +1878,18 @@ object UpstreamScreenStateRecovery {
     private fun restartClientForIndefiniteReconnect(now: Long): Boolean {
         val pid = GameUtil.findGameProcessIdForDiagnostics()?.toInt()
         val hwnd = ScriptStatus.gameHWND
-        val activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
-            LifecycleTrace.hasRecentMatchmakingInputIntent()
+        val currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart()
+        val freshActiveQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen()
         val activeGameEvidence = ScreenStateRecovery.hasAuthoritativeCurrentGameEvidenceForReconnect()
         val terminalState = runCatching { GameUtil.isTerminalGameState() }.getOrDefault(true)
-        if (!WorkTimeListener.working || PauseStatus.isPause || terminalState || activeQueue || activeGameEvidence ||
+        val reconnectSafetyDeferred = ReconnectRestartEvidencePolicy.shouldDefer(
+            exactReconnectVisible = true,
+            freshActiveQueue = freshActiveQueue,
+            currentSessionReady = currentSessionReady,
+            activeGame = WarEx.inWar,
+            terminalState = terminalState,
+        )
+        if (!WorkTimeListener.working || PauseStatus.isPause || reconnectSafetyDeferred ||
             pid == null || pid <= 0 || hwnd == null ||
             GameUtil.findGameProcessIdForDiagnostics() != pid.toLong() ||
             !GameUtil.isVerifiedCurrentGameWindow(hwnd)
@@ -1890,7 +1897,9 @@ object UpstreamScreenStateRecovery {
             log.warn {
                 "SCREEN_RECOVERY_RECONNECT_RESTART_DEFERRED reason=final-safety-check " +
                     "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} " +
-                "terminal=$terminalState activeQueue=$activeQueue activeGameEvidence=$activeGameEvidence staleWarLatch=${WarEx.inWar} " +
+                "terminal=$terminalState freshActiveQueue=$freshActiveQueue activeGameEvidence=$activeGameEvidence " +
+                    "currentSessionReady=$currentSessionReady staleMatchmakingIntentIgnored=${LifecycleTrace.hasRecentMatchmakingInputIntent()} " +
+                    "staleWarLatch=${WarEx.inWar} " +
                     "pid=${pid ?: "none"} hwnd=${hwnd ?: "none"}"
             }
             return false
@@ -2099,11 +2108,19 @@ object UpstreamScreenStateRecovery {
             }
 
             ScreenKind.RECONNECT -> {
-                val activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
-                    LifecycleTrace.hasRecentMatchmakingInputIntent()
+                val currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart()
+                val freshActiveQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen()
                 val activeGameEvidence = ScreenStateRecovery.hasAuthoritativeCurrentGameEvidenceForReconnect()
+                val activeQueue = freshActiveQueue || currentSessionReady && WarEx.inWar
                 val terminalState = GameUtil.isTerminalGameState()
-                if (terminalState || activeQueue || activeGameEvidence) {
+                if (ReconnectRestartEvidencePolicy.shouldDefer(
+                        exactReconnectVisible = true,
+                        freshActiveQueue = freshActiveQueue,
+                        currentSessionReady = currentSessionReady,
+                        activeGame = WarEx.inWar,
+                        terminalState = terminalState,
+                    )
+                ) {
                     log.warn {
                         "SCREEN_RECOVERY_RECONNECT_DEFERRED reason=${when { terminalState -> "terminal"; activeQueue -> "active-matchmaking"; else -> "current-session-gameplay" }} " +
                             "action=NO_INPUT_NO_RESTART activeGameEvidence=$activeGameEvidence staleWarLatch=${WarEx.inWar}"
@@ -2114,7 +2131,7 @@ object UpstreamScreenStateRecovery {
                 when (indefiniteReconnectRestartPolicy.observe(
                     exactReconnectVisible = true,
                     nowMs = now,
-                    activeQueue = activeQueue || activeGameEvidence,
+                    activeQueue = activeQueue,
                     terminalState = terminalState,
                 )) {
                     IndefiniteReconnectRestartPolicy.Decision.RESTART_CLIENT_NO_PAUSE -> {
@@ -2236,8 +2253,9 @@ object UpstreamScreenStateRecovery {
             ScreenKind.LOADING -> {
                 val now = System.currentTimeMillis()
                 if (detection.evidence == "reconnect-slow-loading-text") {
-                    val activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
-                        LifecycleTrace.hasRecentMatchmakingInputIntent()
+                    val currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart()
+                    val freshActiveQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen()
+                    val activeQueue = freshActiveQueue || currentSessionReady && WarEx.inWar
                     val terminalState = GameUtil.isTerminalGameState()
                     when (indefiniteReconnectRestartPolicy.observe(true, now, activeQueue, terminalState)) {
                         IndefiniteReconnectRestartPolicy.Decision.RESTART_CLIENT_NO_PAUSE -> {

@@ -370,6 +370,11 @@ object LifecycleTrace {
         matchmakingInputIntentAt > 0L && now >= matchmakingInputIntentAt &&
             now - matchmakingInputIntentAt < MATCHMAKING_INPUT_INTENT_WINDOW_MS
 
+    internal fun resetMatchmakingEvidenceForTest() {
+        activeMatchmakingScreenObservedAt = 0L
+        matchmakingInputIntentAt = 0L
+    }
+
     /** Protect mode transitions while asynchronous matchmaking entry settles. */
     internal fun hasActiveMatchmakingEntryRecoveryGuard(now: Long = System.currentTimeMillis()): Boolean =
         matchmakingInputIntentAt > 0L && now >= matchmakingInputIntentAt &&
