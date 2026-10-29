@@ -2368,6 +2368,18 @@ object UpstreamScreenStateRecovery {
             }
 
             ScreenKind.RECONNECT -> {
+                // The exact current reconnect capture supersedes a prior queue
+                // screen observation. Preserve independent active-game and
+                // terminal checks, but do not let the historical queue latch
+                // defer the bounded no-pause restart.
+                val staleQueueEvidenceCleared = LifecycleTrace.supersedeActiveMatchmakingScreenForReconnect()
+                if (staleQueueEvidenceCleared) {
+                    log.info {
+                        "SCREEN_RECOVERY_RECONNECT_QUEUE_HISTORY_CLEARED reason=exact-current-reconnect " +
+                            "staleIntent=${LifecycleTrace.hasRecentMatchmakingInputIntent()} " +
+                            "action=CONTINUE_RECONNECT_AGEING"
+                    }
+                }
                 val currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart()
                 val freshActiveQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen()
                 val activeGameEvidence = ScreenStateRecovery.hasAuthoritativeCurrentGameEvidenceForReconnect()
@@ -2383,7 +2395,10 @@ object UpstreamScreenStateRecovery {
                 ) {
                     log.warn {
                         "SCREEN_RECOVERY_RECONNECT_DEFERRED reason=${when { terminalState -> "terminal"; activeQueue -> "active-matchmaking"; else -> "current-session-gameplay" }} " +
-                            "action=NO_INPUT_NO_RESTART activeGameEvidence=$activeGameEvidence staleWarLatch=${WarEx.inWar}"
+                            "action=NO_INPUT_NO_RESTART activeGameEvidence=$activeGameEvidence " +
+                            "staleQueueEvidenceCleared=$staleQueueEvidenceCleared " +
+                            "staleMatchmakingIntentIgnored=${LifecycleTrace.hasRecentMatchmakingInputIntent()} " +
+                            "staleWarLatch=${WarEx.inWar}"
                     }
                     return false
                 }

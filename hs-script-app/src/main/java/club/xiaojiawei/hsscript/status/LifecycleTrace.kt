@@ -352,6 +352,19 @@ object LifecycleTrace {
         mark("active-matchmaking-evidence-cleared reason=$reason")
     }
 
+    /** A current exact reconnect screen supersedes only the previous queue-screen observation. */
+    fun supersedeActiveMatchmakingScreenForReconnect(
+        reason: String = "exact-reconnect-screen",
+        now: Long = System.currentTimeMillis(),
+    ): Boolean {
+        val hadRecentQueueScreen = hasRecentActiveMatchmakingScreen(now)
+        activeMatchmakingScreenObservedAt = 0L
+        mark("active-matchmaking-screen-superseded reason=$reason staleInputIntentRetained=${
+            hasRecentMatchmakingInputIntent(now)
+        }")
+        return hadRecentQueueScreen
+    }
+
     /** A recent Start dispatch permits capture while the new queue has no Power.log yet. */
     fun markMatchmakingInputDispatched(now: Long = System.currentTimeMillis()) {
         matchmakingInputIntentAt = now

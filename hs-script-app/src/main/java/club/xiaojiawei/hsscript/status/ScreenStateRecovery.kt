@@ -2717,6 +2717,17 @@ object ScreenStateRecovery {
             }
 
             ScreenKind.RECONNECT -> {
+                // A fresh exact reconnect capture replaces the prior active
+                // queue-screen observation. Live-game and terminal proof are
+                // checked independently below.
+                val staleQueueEvidenceCleared = LifecycleTrace.supersedeActiveMatchmakingScreenForReconnect()
+                if (staleQueueEvidenceCleared) {
+                    log.info {
+                        "SCREEN_RECOVERY_RECONNECT_QUEUE_HISTORY_CLEARED reason=exact-current-reconnect " +
+                            "staleIntent=${LifecycleTrace.hasRecentMatchmakingInputIntent()} " +
+                            "action=CONTINUE_RECONNECT_AGEING"
+                    }
+                }
                 val freshActiveQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen()
                 val currentSessionReady = isCurrentGameSessionReadyForStart()
                 val activeMatchmaking = freshActiveQueue || currentSessionReady && WarEx.inWar
@@ -2734,7 +2745,8 @@ object ScreenStateRecovery {
                 ) {
                     log.warn {
                         "SCREEN_RECOVERY_RECONNECT_DEFERRED reason=${if (terminalState) "terminal" else "active-matchmaking"} " +
-                            "action=NO_INPUT_NO_RESTART"
+                            "action=NO_INPUT_NO_RESTART staleQueueEvidenceCleared=$staleQueueEvidenceCleared " +
+                            "staleMatchmakingIntentIgnored=${LifecycleTrace.hasRecentMatchmakingInputIntent()}"
                     }
                     return false
                 }

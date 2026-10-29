@@ -222,6 +222,38 @@ class OfflineReconnectRecoveryTest {
     }
 
     @Test
+    fun `exact reconnect clears a recent queue-screen latch and restarts after 60 seconds despite stale intent`() {
+        val queueObservedAt = 100_000L
+        LifecycleTrace.markActiveMatchmakingScreenObserved(queueObservedAt)
+        LifecycleTrace.markMatchmakingInputDispatched(queueObservedAt)
+        val reconnectObservedAt = queueObservedAt + 30_000L
+        assertTrue(LifecycleTrace.hasRecentActiveMatchmakingScreen(reconnectObservedAt))
+        assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(reconnectObservedAt))
+
+        // This is the production RECONNECT branch behavior: the exact current
+        // reconnect capture supersedes the previous queue screen, but leaves
+        // long-window input intent history intact for diagnostics.
+        assertTrue(LifecycleTrace.supersedeActiveMatchmakingScreenForReconnect(now = reconnectObservedAt))
+        assertFalse(LifecycleTrace.hasRecentActiveMatchmakingScreen(reconnectObservedAt))
+        assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(reconnectObservedAt))
+        assertFalse(ReconnectRestartEvidencePolicy.shouldDefer(
+            exactReconnectVisible = true,
+            freshActiveQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen(reconnectObservedAt),
+            currentSessionReady = false,
+            activeGame = false,
+            terminalState = false,
+        ))
+
+        val policy = IndefiniteReconnectRestartPolicy()
+        assertEquals(IndefiniteReconnectRestartPolicy.Decision.WAIT,
+            policy.observe(true, reconnectObservedAt, activeQueue = false, terminalState = false))
+        assertEquals(IndefiniteReconnectRestartPolicy.Decision.WAIT,
+            policy.observe(true, reconnectObservedAt + 59_999L, activeQueue = false, terminalState = false))
+        assertEquals(IndefiniteReconnectRestartPolicy.Decision.RESTART_CLIENT_NO_PAUSE,
+            policy.observe(true, reconnectObservedAt + 60_000L, activeQueue = false, terminalState = false))
+    }
+
+    @Test
     fun `fresh queue authoritative active game and terminal proof still defer restart`() {
         assertTrue(ReconnectRestartEvidencePolicy.shouldDefer(true, true, false, false, false))
         assertTrue(ReconnectRestartEvidencePolicy.shouldDefer(true, false, true, true, false))

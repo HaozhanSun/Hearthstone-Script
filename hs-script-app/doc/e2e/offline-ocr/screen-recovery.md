@@ -481,3 +481,16 @@ this deletion boundary.
 - Diagnose post-result delay from the per-stage timings, not elapsed time alone. Keep the intentional result-screenshot animation wait separate from authorized capture, image save, visual classification, and each OCR ROI duration. A slow OCR pass is not evidence that the result page is still visible.
 - On the Beta upstream OCR path, probe the exact deck-selection title ROI first. It may short-circuit only for a fresh authorized capture with confidence at or above `FreshPostResultDestinationPolicy.MIN_CONFIDENCE` and no centered modal. Matchmaking, rank reward, unknown screens, and modal-covered deck geometry must continue through the existing recognition and exact destination confirmation path; a Continue input never counts as confirmation.
 - A settings-settle policy change is effective only after the corresponding Beta manifest-backed artifact is deployed and its runtime lineage is verified. In traces, distinguish the settle timer from subsequent foreground reacquisition and authorized capture time; do not attribute the latter to the timer.
+
+- Beta reconnect regression (2026-10-28 22:14): the exact current capture was
+  `RECONNECT confidence=94 evidence=reconnect-dialog-structural-visual`, but a
+  recent prior MATCHMAKING screen kept the queue latch active and deferred the
+  60-second no-pause restart even though the current Power.log was empty and
+  current screen was not a queue. When an exact reconnect frame is confirmed,
+  clear the prior active-queue-screen latch before evaluating restart; keep
+  authoritative current-game and terminal-result fences. The long matchmaking
+  input-intent window is historical only and must never independently veto
+  this reconnect restart. Regress a recent queue-screen latch plus retained
+  input-intent history through the 60-second restart, and retain negative cases
+  for a current queue, authoritative live game, and terminal proof. No
+  reconnect click or pause is part of this escalation.
