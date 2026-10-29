@@ -505,6 +505,11 @@ this deletion boundary.
   terminal, exact-window, and post-mulligan surrender fences. Regression must
   use the saved live frame and assert that the named navigation dispatch is
   reached while `matchmaking.start` remains blocked for UNKNOWN mode.
+  After the bounded Back-to-selector dispatch is accepted, schedule a fresh
+  process/window-bound mode-selector probe. Do not treat the click or the old
+  deck-selection capture as proof that the configured format is now selected;
+  only a subsequent fresh mode confirmation and deck-selection capture may
+  authorize Start.
 - For an exact reconnect screen, the 60-second no-pause restart grace must
   schedule its own fresh authorized capture at the threshold rather than wait
   for the next slow periodic OCR pass. Re-evaluate current active-game,

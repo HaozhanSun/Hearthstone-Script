@@ -458,6 +458,13 @@ object UpstreamScreenStateRecovery {
                             }
                         } else false
                         modeNavigationAttempted = accepted
+                        if (accepted) {
+                            log.warn {
+                                "STARTUP_DECK_MODE_NAVIGATION_POSTCHECK scheduled=true " +
+                                    "pid=$pid hwnd=$hwnd next=FRESH_MODE_SELECTOR_PROBE action=NO_START"
+                            }
+                            ScreenStateRecovery.scheduleStartupMenuReprobeAfterModeSelection()
+                        }
                         log.warn {
                             "STARTUP_DECK_MODE_NAVIGATION decision=${if (accepted) "DISPATCH_ACCEPTED" else "BLOCKED"} " +
                                 "reason=${if (!attempt.allowed) attempt.reason else if (!proofRecorded) "proof-not-recorded" else if (!accepted) "final-state-or-dispatch-gate" else "mode-unconfirmed"} " +

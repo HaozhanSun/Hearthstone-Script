@@ -10,14 +10,15 @@ import javax.imageio.ImageIO
 
 class StartupDeckModeNavigationIntegrationTest {
     @Test
-    fun `live standard deck chooser with unknown mode dispatches only bounded back navigation`() {
+    fun `live standard deck chooser with unrecognized mode dispatches only bounded back navigation`() {
         val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/standard-deck-selection-live-20261029-045427.png",
         )))
         val screen = UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("", image)
         assertEquals("DECK_SELECTION", screen)
         assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
-        assertEquals("UNKNOWN", TournamentModeConfirmation.observeImage(image).observedMode.name)
+        val visibleWrongMode = TournamentModeConfirmation.observeImage(image)
+        assertEquals("UNKNOWN", visibleWrongMode.observedMode.name)
 
         val decision = StartupDeckModeNavigationPolicy.decide(
             purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE.name,
@@ -25,7 +26,7 @@ class StartupDeckModeNavigationIntegrationTest {
             confidence = 95,
             evidence = "deck-selection-start-control-visual",
             expectedRunMode = RunModeEnum.WILD.name,
-            observedRunMode = "UNKNOWN",
+            observedRunMode = visibleWrongMode.observedMode.name,
             enabledStartButtonVisible = true,
             modalVisible = false,
             currentSessionReady = false,
@@ -39,7 +40,7 @@ class StartupDeckModeNavigationIntegrationTest {
             pid = 25948,
             hwnd = "captured-live-window",
             expectedRunMode = "WILD",
-            observedRunMode = "UNKNOWN",
+            observedRunMode = visibleWrongMode.observedMode.name,
             confidence = 95,
             evidence = "deck-selection-start-control-visual",
             enabledStartButtonVisible = true,
