@@ -254,6 +254,49 @@ class TournamentModeConfirmationTest {
         }
     }
 
+    @Test
+    fun `wrong mode deck frame authorizes neither selector click nor Start without mode-selector proof`() {
+        val image = javax.imageio.ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/tournament-wild-deck-standard-mode-20261029.png",
+        )))
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+        val observed = TournamentModeConfirmation.observeImage(image)
+        assertEquals(ObservedTournamentMode.UNKNOWN, observed.observedMode)
+
+        try {
+            assertFalse(StartupInputReadiness.recordDeckSelectionStart(
+                pid = 27692,
+                hwnd = "captured-game-window",
+                confidence = 100,
+                evidence = "deck-selection-title-roi",
+                expectedRunMode = RunModeEnum.WILD.name,
+                observedRunMode = observed.observedMode.name,
+                enabledStartButtonVisible = true,
+                modalVisible = false,
+                now = 20_000L,
+            ))
+            val freshDeckProof = StartupInputReadiness.isDeckSelectionStartReady(
+                27692,
+                "captured-game-window",
+                20_001L,
+            )
+            listOf("mode.open-selector", "mode.select-wild", "matchmaking.start").forEach { action ->
+                assertFalse(
+                    ActionDispatchGate.allowForState(
+                        action = action,
+                        paused = false,
+                        working = true,
+                        currentSessionReady = false,
+                        freshDeckSelectionStartReady = freshDeckProof,
+                    ),
+                    "unknown/mismatched mode evidence must not authorize $action",
+                )
+            }
+        } finally {
+            StartupInputReadiness.resetForTest()
+        }
+    }
+
     private fun observation(text: String): TournamentModeObservation =
         TournamentModeObservation(
             observedMode = TournamentModeConfirmation.classifyModeTitle(text),

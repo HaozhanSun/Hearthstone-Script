@@ -399,7 +399,11 @@ this deletion boundary.
   mode-selector proof exists. If mode-title OCR is UNKNOWN, do not let upstream
   recovery call `startMatching` merely because the structural deck-selection
   classifier succeeded. Keep it classification-only, notify the operator once,
-  and require manual mode correction/retry. The visible tooltip
+  and require manual mode correction/retry. We do not currently have an
+  authorized capture of the tournament mode selector after opening it, so a
+  deck-selection frame cannot authorize either opening that selector or
+  selecting Wild. Resume only after a new exact deck-selection capture confirms
+  the configured mode. The visible tooltip
   `狂野模式套牌无法用于标准模式` with an exact deck-selection Start signature is
   a specific wrong-mode terminal state for the matchmaking-error probe: emit
   `OPERATOR_ACTION_REQUIRED`, send no confirm/Start input, and stop retry timers.
