@@ -53,6 +53,14 @@ class StartupInputReadinessTest {
             ),
             "an authorized deck-selection capture can start a match before Power.log has bytes",
         )
+        assertFalse(
+            StartupInputAuthorizationPolicy.allows(
+                action = "matchmaking.start",
+                currentSessionReady = true,
+                freshOnlineMenuReady = false,
+            ),
+            "a stale Power.log/current-session signal cannot substitute for mode proof",
+        )
         listOf("mouse.left", "strategy.card.play", "surrender.request").forEach { action ->
             assertFalse(
                 StartupInputAuthorizationPolicy.allows(
@@ -73,6 +81,39 @@ class StartupInputReadinessTest {
                 10_000L + StartupInputReadiness.DECK_SELECTION_START_PROOF_MAX_AGE_MS + 1,
             ),
         )
+    }
+
+    @Test
+    fun `recent confirmed selector mode authorizes only matchmaking start in its exact window`() {
+        StartupInputReadiness.recordSelectedTournamentMode(101, "hwnd-a", "WILD", now = 20_000L)
+        val permit = StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+            101, "hwnd-a", "WILD", now = 20_001L,
+        )
+        assertTrue(permit)
+        assertTrue(StartupInputAuthorizationPolicy.allows(
+            action = "matchmaking.start",
+            currentSessionReady = true,
+            freshOnlineMenuReady = false,
+            selectedModeStartPermitValid = permit,
+        ))
+        assertFalse(StartupInputAuthorizationPolicy.allows(
+            action = "strategy.card.play",
+            currentSessionReady = false,
+            freshOnlineMenuReady = false,
+            selectedModeStartPermitValid = permit,
+        ), "selected mode permit is exclusive to queue Start")
+        assertFalse(StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+            101, "hwnd-a", "STANDARD", now = 20_001L,
+        ))
+        assertFalse(StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+            102, "hwnd-a", "WILD", now = 20_001L,
+        ))
+        assertFalse(StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+            101, "hwnd-a", "WILD",
+            now = 20_000L + StartupInputReadiness.SELECTED_MODE_START_PERMIT_MAX_AGE_MS + 1,
+        ))
+        StartupInputReadiness.clearSelectedTournamentMode(101, "hwnd-a")
+        assertFalse(StartupInputReadiness.hasSelectedTournamentModeStartPermit(101, "hwnd-a", "WILD", 20_002L))
     }
 
     @Test

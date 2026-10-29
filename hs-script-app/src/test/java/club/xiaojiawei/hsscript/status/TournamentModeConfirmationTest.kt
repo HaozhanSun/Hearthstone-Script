@@ -306,7 +306,8 @@ class TournamentModeConfirmationTest {
         )))
         assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
         val observed = TournamentModeConfirmation.observeImage(image)
-        assertEquals(ObservedTournamentMode.UNKNOWN, observed.observedMode)
+        assertEquals(ObservedTournamentMode.STANDARD, observed.observedMode)
+        assertEquals("title-visual-template-standard", observed.evidence)
 
         try {
             assertFalse(StartupInputReadiness.recordDeckSelectionStart(

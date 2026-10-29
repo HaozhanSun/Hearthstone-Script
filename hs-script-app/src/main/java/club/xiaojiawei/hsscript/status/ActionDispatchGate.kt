@@ -6,6 +6,7 @@ import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.status.ScriptStatus
+import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
@@ -44,6 +45,11 @@ object ActionDispatchGate {
                     gameWindow.toString(),
                 ),
             )
+        val selectedModeStartPermitValid = action == "matchmaking.start" && processId != null && gameWindow != null &&
+            exactGameWindowVerified && DeckStrategyManager.currentRunMode != null &&
+            StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+                processId, gameWindow.toString(), DeckStrategyManager.currentRunMode?.name,
+            )
         val startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationReady(
             action, processId, gameWindow?.toString(), exactGameWindowVerified, currentSessionReady,
         )
@@ -52,6 +58,7 @@ object ActionDispatchGate {
             currentSessionReady = currentSessionReady,
             freshOnlineMenuReady = freshOnlineMenuReady,
             freshDeckSelectionStartReady = freshDeckSelectionStartReady,
+            selectedModeStartPermitValid = selectedModeStartPermitValid,
             startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationReady,
         )
     }
@@ -170,6 +177,11 @@ object ActionDispatchGate {
         val startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationReady(
             action, processId, gameWindow?.toString(), exactGameWindowVerified, currentSessionReady,
         )
+        val selectedModeStartPermitValid = action == "matchmaking.start" && processId != null && gameWindow != null &&
+            exactGameWindowVerified && DeckStrategyManager.currentRunMode != null &&
+            StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+                processId, gameWindow.toString(), DeckStrategyManager.currentRunMode?.name,
+            )
         val startupGateAllowed = StartupInputAuthorizationPolicy.allows(
             action = action,
             currentSessionReady = currentSessionReady,
@@ -197,6 +209,7 @@ object ActionDispatchGate {
             startupQuestOverlayDismissPermitValid = action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION &&
                 startupQuestOverlayDispatchScope.get() == true,
             freshDeckSelectionStartReady = freshDeckSelectionStartReady,
+            selectedModeStartPermitValid = selectedModeStartPermitValid,
             startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationReady,
         )
         if (!startupGateAllowed) {
@@ -204,6 +217,7 @@ object ActionDispatchGate {
                 "ACTION_BLOCKED action=$action reason=startup-screen-not-confirmed " +
                     "currentSessionReady=$currentSessionReady freshOnlineMenuReady=$freshOnlineMenuReady " +
                     "freshDeckSelectionStartReady=$freshDeckSelectionStartReady " +
+                    "selectedModeStartPermitValid=$selectedModeStartPermitValid " +
                     "dispatch=false"
             }
             return false
@@ -346,6 +360,7 @@ object ActionDispatchGate {
         betaResultConfirmationPermitValid: Boolean = false,
         startupQuestOverlayDismissPermitValid: Boolean = false,
         freshDeckSelectionStartReady: Boolean = false,
+        selectedModeStartPermitValid: Boolean = false,
         startupDeckSelectionModeNavigationPermitValid: Boolean = false,
     ): Boolean {
         if (paused || !working) {
@@ -367,6 +382,7 @@ object ActionDispatchGate {
                 betaResultConfirmationPermitValid = betaResultConfirmationPermitValid,
                 startupQuestOverlayDismissPermitValid = startupQuestOverlayDismissPermitValid,
                 freshDeckSelectionStartReady = freshDeckSelectionStartReady,
+                selectedModeStartPermitValid = selectedModeStartPermitValid,
                 startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationPermitValid,
             )
         ) {
@@ -374,6 +390,7 @@ object ActionDispatchGate {
                 "ACTION_BLOCKED action=$action reason=startup-screen-not-confirmed " +
                     "currentSessionReady=$currentSessionReady freshOnlineMenuReady=$freshOnlineMenuReady " +
                     "freshDeckSelectionStartReady=$freshDeckSelectionStartReady " +
+                    "selectedModeStartPermitValid=$selectedModeStartPermitValid " +
                     "dispatch=false"
             }
             return false

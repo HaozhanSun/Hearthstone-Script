@@ -145,6 +145,7 @@ class ActionDispatchGateTest {
                     working = true,
                     currentSessionReady = false,
                     freshOnlineMenuReady = true,
+                    selectedModeStartPermitValid = action == "matchmaking.start",
                 ),
                 "$action resumes after a fresh, clean online-menu observation",
             )
@@ -190,6 +191,7 @@ class ActionDispatchGateTest {
                     working = true,
                     mandatoryRankSurrenderPending = true,
                     rankBarrierState = MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+                    selectedModeStartPermitValid = action == "matchmaking.start",
                 ),
                 "$action is outside gameplay rank authorization",
             )
@@ -627,6 +629,7 @@ class ActionDispatchGateTest {
                     paused = false,
                     working = true,
                     currentSessionReady = true,
+                    selectedModeStartPermitValid = true,
                 ),
                 "a ready current-session log restores queue dispatch",
             )

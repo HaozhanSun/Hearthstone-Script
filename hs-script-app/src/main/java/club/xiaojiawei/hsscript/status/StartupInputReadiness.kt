@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicReference
 /** Fresh, process-bound proof that the visible client is at an online menu. */
 internal object StartupInputReadiness {
     private data class Proof(val pid: Int, val hwnd: String, val screen: String, val observedAt: Long)
+    private data class SelectedModePermit(val pid: Int, val hwnd: String, val mode: String, val observedAt: Long)
     private data class ReconnectPermit(
         val pid: Int,
         val hwnd: String,
@@ -20,6 +21,7 @@ internal object StartupInputReadiness {
     )
 
     private val proof = AtomicReference<Proof?>(null)
+    private val selectedModePermit = AtomicReference<SelectedModePermit?>(null)
     private val reconnectPermit = AtomicReference<ReconnectPermit?>(null)
     private val noticeDismissPermit = AtomicReference<NoticeDismissPermit?>(null)
     private val betaResultConfirmationPermit = AtomicReference<NoticeDismissPermit?>(null)
@@ -28,6 +30,34 @@ internal object StartupInputReadiness {
     const val HUB_MODE_CHOOSER_PROOF_MAX_AGE_MS = 30_000L
     const val DECK_SELECTION_START_PROOF_MAX_AGE_MS = 8_000L
     const val DECK_MODE_NAVIGATION_PROOF_MAX_AGE_MS = 30_000L
+    const val SELECTED_MODE_START_PERMIT_MAX_AGE_MS = 30_000L
+
+    /** Recent exact selector observation; permits only the Start action in the same client window. */
+    fun recordSelectedTournamentMode(pid: Int, hwnd: String, mode: String, now: Long = System.currentTimeMillis()) {
+        if (pid <= 0 || hwnd.isBlank() || mode !in CONFIRMABLE_TOURNAMENT_MODES) {
+            clearSelectedTournamentMode(pid, hwnd)
+            return
+        }
+        selectedModePermit.set(SelectedModePermit(pid, hwnd, mode, now))
+    }
+
+    fun hasSelectedTournamentModeStartPermit(
+        pid: Int,
+        hwnd: String,
+        mode: String?,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean = selectedModePermit.get()?.let {
+        it.pid == pid && it.hwnd == hwnd && it.mode == mode && now >= it.observedAt &&
+            now - it.observedAt <= SELECTED_MODE_START_PERMIT_MAX_AGE_MS
+    } == true
+
+    fun clearSelectedTournamentMode(pid: Int? = null, hwnd: String? = null) {
+        selectedModePermit.updateAndGet { current ->
+            if (current != null && (pid == null || current.pid == pid) &&
+                (hwnd == null || current.hwnd == hwnd)
+            ) null else current
+        }
+    }
 
     fun recordOnlineMenu(
         pid: Int,
@@ -177,6 +207,7 @@ internal object StartupInputReadiness {
                 (hwnd == null || current.hwnd == hwnd)
             ) null else current
         }
+        clearSelectedTournamentMode(pid, hwnd)
     }
 
     fun isMenuReady(pid: Int, hwnd: String, mode: String?): Boolean =
@@ -195,6 +226,7 @@ internal object StartupInputReadiness {
     fun issueReconnectPermit(pid: Int, hwnd: String, point: Point, now: Long): Boolean {
         if (pid <= 0 || hwnd.isBlank() || point.x < 0 || point.y < 0) return false
         proof.set(null)
+        selectedModePermit.set(null)
         reconnectPermit.set(ReconnectPermit(pid, hwnd, Point(point), now + RECONNECT_PERMIT_LIFETIME_MS))
         return true
     }
@@ -340,6 +372,7 @@ internal object StartupInputAuthorizationPolicy {
         betaResultConfirmationPermitValid: Boolean = false,
         startupQuestOverlayDismissPermitValid: Boolean = false,
         freshDeckSelectionStartReady: Boolean = false,
+        selectedModeStartPermitValid: Boolean = false,
         startupDeckSelectionModeNavigationReady: Boolean = false,
     ): Boolean = if (action == StartupNoticeRecoveryPolicy.DISPATCH_ACTION) {
         // A non-empty Power.log can make the session model ready while the
@@ -352,8 +385,11 @@ internal object StartupInputAuthorizationPolicy {
         startupDeckSelectionModeNavigationReady
     } else if (action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION) {
         startupQuestOverlayDismissPermitValid
+    } else if (action == "matchmaking.start") {
+        // Current-session/Power.log readiness is not mode proof. Start requires
+        // either a fresh image-matched deck screen or a recent exact mode-selector observation.
+        freshDeckSelectionStartReady || selectedModeStartPermitValid
     } else currentSessionReady || freshOnlineMenuReady ||
-        (action == "matchmaking.start" && freshDeckSelectionStartReady) ||
         (action.startsWith("startup.") && action != StartupNoticeRecoveryPolicy.DISPATCH_ACTION) ||
         (action == StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION &&
             startupTraditionalBattleSelectionReady) ||

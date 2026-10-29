@@ -30,7 +30,8 @@ class StartupDeckModeNavigationIntegrationTest {
         assertEquals("DECK_SELECTION", screen)
         assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
         assertTrue(ScreenStateRecovery.wrongModeTooltipVisualForTest(image))
-        assertEquals("UNKNOWN", TournamentModeConfirmation.observeImage(image).observedMode.name)
+        val observed = TournamentModeConfirmation.observeImage(image)
+        assertEquals("STANDARD", observed.observedMode.name)
 
         val decision = StartupDeckModeNavigationPolicy.decide(
             purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE.name,
@@ -38,7 +39,7 @@ class StartupDeckModeNavigationIntegrationTest {
             confidence = 94,
             evidence = "deck-selection-start-control-visual",
             expectedRunMode = RunModeEnum.WILD.name,
-            observedRunMode = "UNKNOWN",
+            observedRunMode = observed.observedMode.name,
             enabledStartButtonVisible = true,
             modalVisible = false,
             currentSessionReady = false,
@@ -61,7 +62,7 @@ class StartupDeckModeNavigationIntegrationTest {
         assertFalse(StartupInputAuthorizationPolicy.allowsDeckSelectionStart(
             action = "matchmaking.start", processId = 9704, hwnd = "live-v709",
             exactWindowVerified = true, freshDeckSelectionStartReady = false,
-        ), "UNKNOWN mode on the live Standard selector must never dispatch Start")
+        ), "confirmed Standard mode on the live frame must never authorize Wild Start")
     }
 
     @Test
@@ -74,7 +75,7 @@ class StartupDeckModeNavigationIntegrationTest {
         assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
         assertTrue(ScreenStateRecovery.wrongModeTooltipVisualForTest(image))
         val visibleWrongMode = TournamentModeConfirmation.observeImage(image)
-        assertEquals("UNKNOWN", visibleWrongMode.observedMode.name)
+        assertEquals("STANDARD", visibleWrongMode.observedMode.name)
 
         val decision = StartupDeckModeNavigationPolicy.decide(
             purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE.name,
@@ -193,7 +194,7 @@ class StartupDeckModeNavigationIntegrationTest {
         val standardLiveFrame = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/standard-deck-selection-live-20261029-063038.png",
         )))
-        assertEquals("UNKNOWN", TournamentModeConfirmation.observeImage(standardLiveFrame).observedMode.name)
+        assertEquals("STANDARD", TournamentModeConfirmation.observeImage(standardLiveFrame).observedMode.name)
         assertFalse(StartupInputAuthorizationPolicy.dispatchDeckSelectionRecoveryIfReady(
             startupScreenConfirmed = false,
         ) { deckSelectionOrStartDispatches++ }, "UNKNOWN Standard frame must not enter deck recovery or Start")
@@ -225,7 +226,7 @@ class StartupDeckModeNavigationIntegrationTest {
         assertTrue(StartupDeckModeNavigationPolicy.isModeProofProbe(ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE))
         assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("", image))
         assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
-        assertEquals("UNKNOWN", TournamentModeConfirmation.observeImage(image).observedMode.name)
+        assertEquals("STANDARD", TournamentModeConfirmation.observeImage(image).observedMode.name)
         assertFalse(StartupInputReadiness.recordStartupOnlineScreen(
             pid = 25948,
             hwnd = "captured-live-window",
@@ -267,7 +268,7 @@ class StartupDeckModeNavigationIntegrationTest {
         ), "IDLE_CLIENT_PROBE is capture-only by contract")
         assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("", image))
         assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
-        assertEquals("UNKNOWN", TournamentModeConfirmation.observeImage(image).observedMode.name)
+        assertEquals("STANDARD", TournamentModeConfirmation.observeImage(image).observedMode.name)
 
         var startDispatches = 0
         assertFalse(StartupInputAuthorizationPolicy.dispatchDeckSelectionRecoveryIfReady(
@@ -295,6 +296,80 @@ class StartupDeckModeNavigationIntegrationTest {
         val recoveryApplied = source.indexOf("SCREEN_RECOVERY_APPLIED screen=DECK_SELECTION next=START_MATCHING")
         assertTrue(startProofCheck >= 0 && recoveryApplied > startProofCheck,
             "upstream apply must require fresh configured-mode proof before logging/scheduling Start")
+    }
+
+    @Test
+    fun `fresh Standard title frame takes bounded selector return and cannot dispatch Wild Start`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/wild-config-standard-live-20261029-091917.png",
+        )))
+        assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("=", image))
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+        assertFalse(ScreenStateRecovery.wrongModeTooltipVisualForTest(image))
+        val observed = TournamentModeConfirmation.observeImage(image)
+        assertEquals("STANDARD", observed.observedMode.name)
+        assertEquals("title-visual-template-standard", observed.evidence)
+
+        val decision = StartupDeckModeNavigationPolicy.decide(
+            purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY.name,
+            screenKind = "DECK_SELECTION",
+            confidence = 100,
+            evidence = "deck-selection-title",
+            expectedRunMode = "WILD",
+            observedRunMode = observed.observedMode.name,
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            currentSessionReady = false,
+            activeGame = false,
+            activeMatchmaking = false,
+            terminal = false,
+            trustedCurrentWindow = true,
+        )
+        assertTrue(decision.allowed)
+        var returnDispatches = 0
+        var selectorReprobes = 0
+        assertTrue(StartupDeckModeNavigationPolicy.dispatchWrongModeTooltipReturn(
+            image = image,
+            expectedMode = "WILD",
+            decision = decision,
+            dispatchReturn = { returnDispatches++; true },
+            requestFreshSelectorProbe = { selectorReprobes++ },
+        ), "confirmed Standard title should dispatch the bounded Back action without tooltip/OCR")
+        assertEquals(1, returnDispatches)
+        assertEquals(1, selectorReprobes)
+        assertFalse(StartupInputReadiness.recordDeckSelectionStart(
+            pid = 16992,
+            hwnd = "live-standard-window",
+            confidence = 100,
+            evidence = "deck-selection-title",
+            expectedRunMode = "WILD",
+            observedRunMode = observed.observedMode.name,
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+        ))
+        assertFalse(StartupInputAuthorizationPolicy.allows(
+            action = "matchmaking.start",
+            currentSessionReady = true,
+            freshOnlineMenuReady = false,
+            freshDeckSelectionStartReady = false,
+            selectedModeStartPermitValid = false,
+        ), "current-session readiness cannot bypass a confirmed opposite mode")
+        assertFalse(StartupDeckModeNavigationPolicy.decide(
+            purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY.name,
+            screenKind = "DECK_SELECTION",
+            confidence = 100,
+            evidence = "deck-selection-title",
+            expectedRunMode = "WILD",
+            observedRunMode = observed.observedMode.name,
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            currentSessionReady = false,
+            activeGame = true,
+            activeMatchmaking = false,
+            terminal = false,
+            trustedCurrentWindow = true,
+        ).allowed, "active gameplay remains fenced from mode navigation")
+        StartupInputReadiness.resetForTest()
     }
 
     @Test

@@ -7,7 +7,8 @@ internal object StartupDeckModeNavigationPolicy {
     fun isModeProofProbe(purpose: ScreenRecoveryCapturePurpose): Boolean =
         purpose == ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE ||
             purpose == ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE ||
-            purpose == ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE
+            purpose == ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE ||
+            purpose == ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY
 
     fun requiresClassificationOnly(
         purpose: ScreenRecoveryCapturePurpose,
@@ -50,7 +51,7 @@ internal object StartupDeckModeNavigationPolicy {
         trustedCurrentWindow: Boolean,
     ): Decision {
         val denial = when {
-            purpose !in setOf("STARTUP_CLIENT_PROBE", "STALE_CLIENT_PROBE") -> Denial.WRONG_PURPOSE
+            purpose !in setOf("STARTUP_CLIENT_PROBE", "STALE_CLIENT_PROBE", "SCREEN_STATE_RECOVERY") -> Denial.WRONG_PURPOSE
             screenKind != "DECK_SELECTION" -> Denial.WRONG_SCREEN
             confidence < 90 || evidence !in setOf(
                 "deck-selection-title", "deck-selection-title-roi", "deck-selection-start-control-visual",
@@ -86,7 +87,7 @@ internal object StartupDeckModeNavigationPolicy {
     fun dispatchIfAllowed(decision: Decision, dispatch: () -> Boolean): Boolean =
         decision.allowed && dispatch()
 
-    /** Production/test seam: the tooltip-specific image proof permits only Return, then demands re-probe. */
+    /** Production/test seam: exact tooltip or confirmed Standard title permits Return, then demands re-probe. */
     fun dispatchWrongModeTooltipReturn(
         image: java.awt.image.BufferedImage,
         expectedMode: String?,
@@ -94,7 +95,11 @@ internal object StartupDeckModeNavigationPolicy {
         dispatchReturn: () -> Boolean,
         requestFreshSelectorProbe: () -> Unit,
     ): Boolean {
-        if (expectedMode != "WILD" || !ScreenStateRecovery.isWrongModeDeckTooltip(image) || !decision.allowed) return false
+        val exactModeMismatch = TournamentModeConfirmation.isConfirmedModeMismatch(image, expectedMode)
+        if (expectedMode != "WILD" ||
+            (!ScreenStateRecovery.isWrongModeDeckTooltip(image) && !exactModeMismatch) ||
+            !decision.allowed
+        ) return false
         val accepted = dispatchReturn()
         if (accepted) requestFreshSelectorProbe()
         return accepted

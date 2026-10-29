@@ -7,6 +7,9 @@ import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
 import club.xiaojiawei.hsscriptstrategysdk.DeckStrategy
 import club.xiaojiawei.hsscript.utils.SystemUtil
+import club.xiaojiawei.hsscript.utils.GameUtil
+import club.xiaojiawei.hsscript.status.ScriptStatus
+import club.xiaojiawei.hsscript.status.StartupInputReadiness
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
 import java.awt.Robot
@@ -14,6 +17,7 @@ import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.File
 import java.util.Locale
+import javax.imageio.ImageIO
 import net.sourceforge.tess4j.Tesseract
 
 enum class ObservedTournamentMode {
@@ -57,6 +61,17 @@ object TournamentModeConfirmation {
     @Volatile
     private var lastOperatorAlertMode: String? = null
     private const val OCR_MAX_WIDTH = 960
+    private const val STANDARD_TITLE_X = 620
+    private const val STANDARD_TITLE_Y = 18
+    private const val STANDARD_TITLE_WIDTH = 190
+    private const val STANDARD_TITLE_HEIGHT = 50
+    private const val STANDARD_TITLE_MAX_MEAN_RGB_DELTA = 1.0
+    private val standardTitleTemplate: BufferedImage? by lazy {
+        runCatching {
+            javaClass.getResourceAsStream("/club/xiaojiawei/hsscript/status/standard-mode-title-template.png")
+                ?.use { stream -> ImageIO.read(stream) }
+        }.getOrNull()
+    }
     fun classifyModeTitle(ocrText: String): ObservedTournamentMode {
         val text = ocrText.lowercase(Locale.ROOT)
             .replace(Regex("\\s+"), "")
@@ -127,6 +142,9 @@ object TournamentModeConfirmation {
         sleeper: (Long) -> Unit = { millis -> Thread.sleep(millis) },
         shouldContinue: () -> Boolean = { true },
     ): Boolean {
+        currentModeSelectionIdentity()?.let { (pid, hwnd) ->
+            StartupInputReadiness.clearSelectedTournamentMode(pid.toInt(), hwnd.toString())
+        }
         var lastResult: TournamentModeConfirmationResult? = null
         repeat(attempts.coerceAtLeast(1)) { attempt ->
             if (!shouldContinue()) {
@@ -164,6 +182,14 @@ object TournamentModeConfirmation {
                 TournamentModeConfirmationState.UNSUPPORTED_TARGET,
                 -> {
                     lastOperatorAlertMode = null
+                    if (result.state == TournamentModeConfirmationState.CONFIRMED &&
+                        !recordConfirmedModeSelection(expectedMode)
+                    ) {
+                        log.warn {
+                            "TOURNAMENT_MODE_START_PERMIT_NOT_RECORDED reason=exact-client-window-unverified " +
+                                "expectedMode=${expectedMode.name} action=START_REQUIRES_FRESH_DECK_SCREEN_PROOF"
+                        }
+                    }
                     return true
                 }
 
@@ -219,12 +245,56 @@ object TournamentModeConfirmation {
 
     /** Classify only the visible title ROI from an authorized fresh client capture. */
     internal fun observeImage(image: BufferedImage): TournamentModeObservation {
+        if (classifyStandardTitleVisual(image)) {
+            return TournamentModeObservation(
+                observedMode = ObservedTournamentMode.STANDARD,
+                ocrText = "",
+                evidence = "title-visual-template-standard",
+            )
+        }
         val titleText = runOCR(cropTitleRegion(image), "tournament-mode-title-frame")
         return TournamentModeObservation(
             observedMode = classifyModeTitle(titleText),
             ocrText = titleText,
             evidence = "title-roi-ocr-frame",
         )
+    }
+
+    /** One-sided exact-title classifier: a known Standard glyph template, otherwise UNKNOWN/OCR. */
+    internal fun classifyStandardTitleVisual(image: BufferedImage): Boolean {
+        val template = standardTitleTemplate ?: return false
+        if (image.width != 1920 || image.height != 1080 ||
+            template.width != STANDARD_TITLE_WIDTH || template.height != STANDARD_TITLE_HEIGHT
+        ) return false
+        val title = image.getSubimage(STANDARD_TITLE_X, STANDARD_TITLE_Y, STANDARD_TITLE_WIDTH, STANDARD_TITLE_HEIGHT)
+        var totalDelta = 0L
+        val channelCount = STANDARD_TITLE_WIDTH * STANDARD_TITLE_HEIGHT * 3
+        for (y in 0 until STANDARD_TITLE_HEIGHT) {
+            for (x in 0 until STANDARD_TITLE_WIDTH) {
+                val actual = title.getRGB(x, y)
+                val expected = template.getRGB(x, y)
+                totalDelta += kotlin.math.abs(((actual ushr 16) and 0xff) - ((expected ushr 16) and 0xff))
+                totalDelta += kotlin.math.abs(((actual ushr 8) and 0xff) - ((expected ushr 8) and 0xff))
+                totalDelta += kotlin.math.abs((actual and 0xff) - (expected and 0xff))
+            }
+        }
+        return totalDelta.toDouble() / channelCount <= STANDARD_TITLE_MAX_MEAN_RGB_DELTA
+    }
+
+    internal fun isConfirmedModeMismatch(image: BufferedImage, expectedMode: String?): Boolean =
+        expectedMode == RunModeEnum.WILD.name && classifyStandardTitleVisual(image)
+
+    private fun recordConfirmedModeSelection(expectedMode: RunModeEnum): Boolean {
+        val (pid, hwnd) = currentModeSelectionIdentity() ?: return false
+        if (!GameUtil.isVerifiedCurrentGameWindow(hwnd, pid)) return false
+        StartupInputReadiness.recordSelectedTournamentMode(pid.toInt(), hwnd.toString(), expectedMode.name)
+        return true
+    }
+
+    private fun currentModeSelectionIdentity(): Pair<Long, com.sun.jna.platform.win32.WinDef.HWND>? {
+        val pid = runCatching { GameUtil.findGameProcessIdForDiagnostics() }.getOrNull() ?: return null
+        val hwnd = ScriptStatus.gameHWND ?: return null
+        return pid to hwnd
     }
 
     internal fun reportUnconfirmedDeckSelection(expectedMode: String?, observedMode: String?, reason: String) {
