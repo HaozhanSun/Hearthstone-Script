@@ -206,6 +206,50 @@ class ActionDispatchGateTest {
     }
 
     @Test
+    fun `fresh deck start remains rank independent while post-start gameplay stays behind rank preflight`() {
+        listOf(
+            MulliganRankDispatchBarrier.State.PENDING,
+            MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+        ).forEach { rankState ->
+            assertTrue(
+                ActionDispatchGate.allowForState(
+                    action = "matchmaking.start",
+                    paused = false,
+                    working = true,
+                    mandatoryRankSurrenderPending = rankState ==
+                        MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+                    rankBarrierState = rankState,
+                    currentSessionReady = false,
+                    freshDeckSelectionStartReady = true,
+                ),
+                "queue Start must remain available for rank 9 or unknown pre-match rank ($rankState)",
+            )
+        }
+        listOf("mulligan.confirm", "strategy.card.play", "strategy.turn-end").forEach { action ->
+            assertFalse(
+                ActionDispatchGate.allowForState(
+                    action = action,
+                    paused = false,
+                    working = true,
+                    currentSessionReady = true,
+                    rankBarrierState = MulliganRankDispatchBarrier.State.PENDING,
+                ),
+                "after game entry, rank preflight remains authoritative for $action",
+            )
+        }
+        assertFalse(
+            ActionDispatchGate.allowForState(
+                action = "mouse.left",
+                paused = false,
+                working = true,
+                currentSessionReady = false,
+                freshDeckSelectionStartReady = true,
+            ),
+            "deck Start proof does not authorize arbitrary input",
+        )
+    }
+
+    @Test
     fun `missing game clears stale rank state then fresh pre-mulligan decision fences gameplay`() {
         MandatoryRankSurrenderGuard.resetForTest()
         MulliganRankDispatchBarrier.resetForTest()

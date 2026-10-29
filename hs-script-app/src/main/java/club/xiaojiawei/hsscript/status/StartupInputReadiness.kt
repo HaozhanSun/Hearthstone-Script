@@ -252,6 +252,16 @@ internal object StartupInputReadiness {
 
 /** Pure startup barrier shared by the last dispatch gate and offline policy tests. */
 internal object StartupInputAuthorizationPolicy {
+    fun allowsDeckSelectionStart(
+        action: String,
+        processId: Int?,
+        hwnd: String?,
+        exactWindowVerified: Boolean,
+        freshDeckSelectionStartReady: Boolean,
+    ): Boolean = action == "matchmaking.start" &&
+        processId != null && processId > 0 && !hwnd.isNullOrBlank() && exactWindowVerified &&
+        freshDeckSelectionStartReady
+
     fun allows(
         action: String,
         currentSessionReady: Boolean,

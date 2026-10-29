@@ -74,6 +74,57 @@ class StartupInputReadinessTest {
     }
 
     @Test
+    fun `deck start proof survives stale game phase and is independent of pre-match rank`() {
+        assertTrue(
+            StartupInputReadiness.recordDeckSelectionStart(
+                pid = 50992,
+                hwnd = "exact-game-window",
+                confidence = 96,
+                evidence = "deck-selection-title-roi",
+                enabledStartButtonVisible = true,
+                modalVisible = false,
+                now = 50_000L,
+            ),
+        )
+        val proof = StartupInputReadiness.isDeckSelectionStartReady(50992, "exact-game-window", 50_100L)
+
+        // Rank 9 and an unrecognized pre-match rank are both irrelevant until
+        // CREATE_GAME reaches the in-game mulligan preflight.
+        listOf("rank-9", "unknown-rank").forEach { rankObservation ->
+            assertTrue(
+                StartupInputAuthorizationPolicy.allowsDeckSelectionStart(
+                    action = "matchmaking.start",
+                    processId = 50992,
+                    hwnd = "exact-game-window",
+                    exactWindowVerified = true,
+                    freshDeckSelectionStartReady = proof,
+                ),
+                "$rankObservation cannot veto the exact, fresh deck-selection Start proof",
+            )
+        }
+        assertFalse(
+            StartupInputAuthorizationPolicy.allowsDeckSelectionStart(
+                action = "mouse.left",
+                processId = 50992,
+                hwnd = "exact-game-window",
+                exactWindowVerified = true,
+                freshDeckSelectionStartReady = proof,
+            ),
+            "the proof is exclusive to queue Start",
+        )
+        assertFalse(
+            StartupInputAuthorizationPolicy.allowsDeckSelectionStart(
+                action = "matchmaking.start",
+                processId = 50992,
+                hwnd = "other-window",
+                exactWindowVerified = false,
+                freshDeckSelectionStartReady = proof,
+            ),
+            "a different or unverified game window cannot use the proof",
+        )
+    }
+
+    @Test
     fun `empty current Power log permits mode input only after fresh online HUB proof`() {
         val startupPurpose = ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
             tournamentMode = false,

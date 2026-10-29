@@ -71,11 +71,16 @@ object ActionDispatchGate {
                 gameWindow.toString(),
                 Mode.currMode?.name,
             )
-        val freshDeckSelectionStartReady = action == "matchmaking.start" &&
-            processId != null && gameWindow != null && !WarEx.inWar &&
-            !runCatching { GameUtil.isTerminalGameState() }.getOrDefault(true) &&
-            runCatching { GameUtil.isVerifiedCurrentGameWindow(gameWindow) }.getOrDefault(false) &&
-            StartupInputReadiness.isDeckSelectionStartReady(processId, gameWindow.toString())
+        val exactGameWindowVerified = gameWindow != null &&
+            runCatching { GameUtil.isVerifiedCurrentGameWindow(gameWindow) }.getOrDefault(false)
+        val freshDeckSelectionStartReady = StartupInputAuthorizationPolicy.allowsDeckSelectionStart(
+            action = action,
+            processId = processId,
+            hwnd = gameWindow?.toString(),
+            exactWindowVerified = exactGameWindowVerified,
+            freshDeckSelectionStartReady = processId != null && gameWindow != null &&
+                StartupInputReadiness.isDeckSelectionStartReady(processId, gameWindow.toString()),
+        )
         val startupTraditionalBattleSelectionReady = action == StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION &&
             processId != null && gameWindow != null && !WarEx.inWar &&
             !runCatching { GameUtil.isTerminalGameState() }.getOrDefault(true) &&
