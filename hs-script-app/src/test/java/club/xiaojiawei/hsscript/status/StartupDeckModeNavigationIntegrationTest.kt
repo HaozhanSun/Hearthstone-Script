@@ -10,6 +10,60 @@ import javax.imageio.ImageIO
 
 class StartupDeckModeNavigationIntegrationTest {
     @Test
+    fun `fresh selector observation renews exactly one wrong-mode Return attempt`() {
+        val attempts = StartupDeckModeNavigationAttemptGate()
+        assertTrue(attempts.tryBegin(9704, "live-v709").allowed)
+        assertFalse(attempts.tryBegin(9704, "live-v709").allowed)
+        // Runtime calls reset only after the exact HUB chooser proof is accepted.
+        attempts.reset()
+        assertTrue(attempts.tryBegin(9704, "live-v709").allowed)
+        assertFalse(attempts.tryBegin(9704, "live-v709").allowed)
+    }
+
+    @Test
+    fun `v709 live standard selector frame reaches bounded Return action`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/standard-deck-selection-live-20261029-063038.png",
+        )))
+        val screen = UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("二=", image)
+        assertEquals("DECK_SELECTION", screen)
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+        assertTrue(ScreenStateRecovery.wrongModeTooltipVisualForTest(image))
+        assertEquals("UNKNOWN", TournamentModeConfirmation.observeImage(image).observedMode.name)
+
+        val decision = StartupDeckModeNavigationPolicy.decide(
+            purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE.name,
+            screenKind = screen.orEmpty(),
+            confidence = 94,
+            evidence = "deck-selection-start-control-visual",
+            expectedRunMode = RunModeEnum.WILD.name,
+            observedRunMode = "UNKNOWN",
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            currentSessionReady = false,
+            activeGame = false,
+            activeMatchmaking = false,
+            terminal = false,
+            trustedCurrentWindow = true,
+        )
+        var returnDispatches = 0
+        var selectorReprobes = 0
+        assertTrue(StartupDeckModeNavigationPolicy.dispatchWrongModeTooltipReturn(
+            image = image,
+            expectedMode = "WILD",
+            decision = decision,
+            dispatchReturn = { returnDispatches++; true },
+            requestFreshSelectorProbe = { selectorReprobes++ },
+        ))
+        assertEquals(1, returnDispatches)
+        assertEquals(1, selectorReprobes)
+        assertFalse(StartupInputAuthorizationPolicy.allowsDeckSelectionStart(
+            action = "matchmaking.start", processId = 9704, hwnd = "live-v709",
+            exactWindowVerified = true, freshDeckSelectionStartReady = false,
+        ), "UNKNOWN mode on the live Standard selector must never dispatch Start")
+    }
+
+    @Test
     fun `live standard deck chooser with unrecognized mode dispatches only bounded back navigation`() {
         val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/standard-deck-selection-live-20261029-045427.png",

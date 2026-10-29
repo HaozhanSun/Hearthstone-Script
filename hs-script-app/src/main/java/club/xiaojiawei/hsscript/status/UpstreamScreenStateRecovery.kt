@@ -286,8 +286,9 @@ object UpstreamScreenStateRecovery {
                 detection?.confidence ?: 0, detection?.evidence, true,
             ) + " purpose=${authorizedCapture.purpose}"
         }
-        if (detection != null) {
-            unknownStartupRestartPolicy.reset()
+        val safeIdleMenuCandidate = isSafeIdleUnblockScreen(detection, capture.visual)
+        if (detection != null) unknownStartupRestartPolicy.reset()
+        if (detection != null && !(safeIdleMenuCandidate && stuckForMs >= StuckScreenUnblockPolicy.DEFAULT_FIRST_THRESHOLD_MS)) {
             if (stuckScreenUnblockPolicy.hasProgress()) {
                 log.warn {
                     "STUCK_SCREEN_UNBLOCK_RECHECK result=UNBLOCKED newScreen=${detection.kind.code} " +
@@ -351,6 +352,14 @@ object UpstreamScreenStateRecovery {
                 GameUtil.isVerifiedCurrentGameWindow(authorizedCapture.gameWindow),
         )
         if (startupHubModeChooser) {
+            // A verified return to the selector ends the previous deck-screen
+            // attempt window. A later fresh wrong-mode deck frame may safely
+            // get its one bounded Return attempt again.
+            startupDeckModeNavigationAttempts.reset()
+            log.info {
+                "STARTUP_DECK_MODE_NAVIGATION_BUDGET_RESET reason=fresh-hub-mode-chooser " +
+                    "pid=$currentPid hwnd=$currentHwnd action=ALLOW_ONE_NEW_RETURN_AFTER_REENTRY"
+            }
             StartupInputReadiness.recordHubModeChooser(currentPid!!, currentHwnd)
             startupClassificationOnly = true
             log.warn {
@@ -557,6 +566,19 @@ object UpstreamScreenStateRecovery {
                 stuckForMs = stuckForMs,
             )
         ) return true
+
+        // A known startup menu can remain unresponsive without becoming UNKNOWN.
+        // Let the bounded idle ladder act on that exact current screen after the
+        // same 60-second threshold used for unidentified blockers.
+        if (safeIdleMenuCandidate && stuckForMs >= StuckScreenUnblockPolicy.DEFAULT_FIRST_THRESHOLD_MS &&
+            handleGenericIdleUnblock(
+                authorizedCapture = authorizedCapture,
+                detection = detection,
+                currentPid = currentPid,
+                stateFingerprint = stateFingerprint,
+                stuckForMs = stuckForMs,
+            )
+        ) return false
 
         // Keep one durable, categorized copy for every 30-second recovery
         // inspection.  The existing DebugScreenshotRing remains the compact
@@ -2264,15 +2286,14 @@ object UpstreamScreenStateRecovery {
         val evidence = StuckScreenUnblockPolicy.Evidence(
             nowMs = System.currentTimeMillis(),
             stableForMs = stuckForMs,
-            fingerprint = "$stateFingerprint|${stuckScreenPerceptualFingerprint(capture.image)}",
+            fingerprint = "${currentPid ?: 0}|${authorizedCapture.gameWindow}|${stuckScreenPerceptualFingerprint(capture.image)}",
             // Capture authority minted this exact probe; long OCR must not
             // make its screen classification retroactively stale. Before any
             // click below we acquire a second, immediately fresh frame.
             captureFresh = eligiblePurpose,
             exactWindowVerified = exactWindow,
             eligibleIdleProbe = eligiblePurpose,
-            recognizedSafeBlocker = (detection == null || exactReconnect) &&
-                !capture.visual.startupQuestOverlayVisual &&
+            recognizedSafeBlocker = (detection == null || exactReconnect || isSafeIdleUnblockScreen(detection, capture.visual)) &&
                 (!capture.visual.reconnectDialogVisual || exactReconnect) && !capture.visual.battleNetLauncherVisual &&
                 !capture.visual.amazonAppstoreSunsetNoticeVisual && !capture.visual.matchmakingSearchVisual &&
                 !resultOrTerminal,
@@ -2289,7 +2310,7 @@ object UpstreamScreenStateRecovery {
             matchmakingScreen = activeQueue,
         )
         // Non-modal unknown frames retain the older classification-only/restart policy.
-        if (!evidence.recognizedSafeBlocker && !evidence.modeMismatchDeck) return false
+        if (!evidence.recognizedSafeBlocker) return false
         val decision = stuckScreenUnblockPolicy.observe(evidence)
         val point = StartupQuestOverlayDismissPolicy.topLeftPixel(capture.bounds)
         log.warn {
@@ -2317,7 +2338,7 @@ object UpstreamScreenStateRecovery {
                     )
                 }
                 val freshFingerprint = fresh?.let {
-                    "$stateFingerprint|${stuckScreenPerceptualFingerprint(it.capture.image)}"
+                    "${currentPid ?: 0}|${fresh.gameWindow}|${stuckScreenPerceptualFingerprint(it.capture.image)}"
                 }
                 val freshAuthorized = fresh != null && currentPid != null &&
                     fresh.gameWindow.toString() == authorizedCapture.gameWindow.toString() &&
@@ -2326,8 +2347,9 @@ object UpstreamScreenStateRecovery {
                     System.nanoTime() - fresh.capture.capturedAtNanos <= 5_000_000_000L &&
                     freshFingerprint == evidence.fingerprint &&
                     (freshVisualDetection == null || exactReconnect &&
-                        freshVisualDetection.kind == ScreenKind.RECONNECT && fresh.capture.visual.reconnectDialogVisual) &&
-                    !fresh.capture.visual.startupQuestOverlayVisual &&
+                        freshVisualDetection.kind == ScreenKind.RECONNECT && fresh.capture.visual.reconnectDialogVisual ||
+                        isSafeIdleUnblockScreen(freshVisualDetection, fresh.capture.visual) &&
+                        freshVisualDetection?.kind == detection?.kind) &&
                     (!fresh.capture.visual.reconnectDialogVisual || exactReconnect) &&
                     !fresh.capture.visual.battleNetLauncherVisual && !fresh.capture.visual.matchmakingSearchVisual &&
                     !ScreenStateRecovery.looksLikeResultVisual(
@@ -2411,13 +2433,15 @@ object UpstreamScreenStateRecovery {
                 val finalSafe = fresh != null && currentPid != null &&
                     fresh.gameWindow.toString() == authorizedCapture.gameWindow.toString() &&
                     System.nanoTime() - fresh.capture.capturedAtNanos <= 5_000_000_000L &&
-                    "$stateFingerprint|${stuckScreenPerceptualFingerprint(fresh.capture.image)}" == evidence.fingerprint &&
+                    "${currentPid ?: 0}|${fresh.gameWindow}|${stuckScreenPerceptualFingerprint(fresh.capture.image)}" == evidence.fingerprint &&
                     !fresh.capture.visual.startupQuestOverlayVisual &&
                     (!fresh.capture.visual.reconnectDialogVisual || exactReconnect) &&
                     !fresh.capture.visual.matchmakingSearchVisual &&
                     !fresh.capture.visual.battleNetLauncherVisual && !fresh.capture.visual.amazonAppstoreSunsetNoticeVisual &&
                     (if (exactReconnect) freshDetection?.kind == ScreenKind.RECONNECT &&
-                        fresh.capture.visual.reconnectDialogVisual else freshDetection == null) &&
+                        fresh.capture.visual.reconnectDialogVisual else freshDetection == null ||
+                        isSafeIdleUnblockScreen(freshDetection, fresh.capture.visual) &&
+                        freshDetection?.kind == detection?.kind) &&
                     !ScreenStateRecovery.hasAuthoritativeCurrentGameEvidenceForReconnect() &&
                     !PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence() &&
                     !ScreenStateRecovery.isCurrentGameSessionReadyForStart() &&
@@ -2453,20 +2477,46 @@ object UpstreamScreenStateRecovery {
         val x1 = (image.width * 0.88).toInt()
         val y0 = (image.height * 0.08).toInt()
         val y1 = (image.height * 0.90).toInt()
-        for (row in 0 until 9) {
-            for (column in 0 until 12) {
-                val x = (x0 + ((column + 0.5) / 12.0 * (x1 - x0))).toInt().coerceIn(0, image.width - 1)
-                val y = (y0 + ((row + 0.5) / 9.0 * (y1 - y0))).toInt().coerceIn(0, image.height - 1)
-                val rgb = image.getRGB(x, y)
-                val r = (rgb ushr 16) and 0xff
-                val g = (rgb ushr 8) and 0xff
-                val b = rgb and 0xff
-                val quantized = ((r / 32) shl 6) or ((g / 32) shl 3) or (b / 32)
+        // Average broad cells and quantize coarsely so animated glows and
+        // small effects do not reset the unchanged-screen timer.
+        val columns = 6
+        val rows = 5
+        for (row in 0 until rows) {
+            for (column in 0 until columns) {
+                val left = (x0 + column * (x1 - x0) / columns).coerceIn(0, image.width - 1)
+                val right = (x0 + (column + 1) * (x1 - x0) / columns).coerceIn(left + 1, image.width)
+                val top = (y0 + row * (y1 - y0) / rows).coerceIn(0, image.height - 1)
+                val bottom = (y0 + (row + 1) * (y1 - y0) / rows).coerceIn(top + 1, image.height)
+                var red = 0L
+                var green = 0L
+                var blue = 0L
+                var count = 0L
+                val stepX = ((right - left) / 12).coerceAtLeast(1)
+                val stepY = ((bottom - top) / 12).coerceAtLeast(1)
+                for (y in top until bottom step stepY) for (x in left until right step stepX) {
+                    val rgb = image.getRGB(x, y)
+                    red += (rgb ushr 16) and 0xff
+                    green += (rgb ushr 8) and 0xff
+                    blue += rgb and 0xff
+                    count++
+                }
+                val r = (red / count).toInt()
+                val g = (green / count).toInt()
+                val b = (blue / count).toInt()
+                val quantized = ((r / 64) shl 4) or ((g / 64) shl 2) or (b / 64)
                 hash = (hash xor quantized.toLong()) * 0x100000001b3L
             }
         }
         return java.lang.Long.toUnsignedString(hash, 16)
     }
+
+    private fun isSafeIdleUnblockScreen(detection: Detection?, visual: VisualSignature): Boolean =
+        SafeIdleUnblockScreenPolicy.matches(
+            screenKind = detection?.kind?.code,
+            screenMode = detection?.mode?.name,
+            hubModeChooserVisual = visual.hubModeChooserVisual,
+            eventQuestOverlayVisual = detection?.kind == ScreenKind.EVENT_QUEST_OVERLAY,
+        )
 
     private fun shouldAttemptReconnect(now: Long): Boolean {
         // Exact RECONNECT is observed during a bounded grace period, then

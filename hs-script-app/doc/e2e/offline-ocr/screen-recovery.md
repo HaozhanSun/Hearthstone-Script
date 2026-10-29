@@ -515,8 +515,11 @@ this deletion boundary.
   veto for the named Return-to-selector action; never waive it for Start or
   another action.
 - The generic idle stuck-screen ladder applies only to a fresh, exact-window,
-  same-fingerprint unknown blocker or exact reconnect dialog in a confirmed
-  non-game, non-queue state.
+  same-fingerprint unknown blocker, exact reconnect dialog, or structurally
+  confirmed HUB mode chooser in a confirmed non-game, non-queue state. A HUB
+  chooser requires its dedicated visual signature and Mode=HUB; OCR labels such
+  as PACKOPENING or HUB alone cannot qualify. Event Quest retains its dedicated
+  exact-overlay recovery path.
   After 60 seconds, click the exact client origin three times, logging each
   dispatch and re-capturing after the sequence. A changed fingerprint ends the
   ladder. If the same blocker remains for another 60 seconds, re-capture and
@@ -525,10 +528,19 @@ this deletion boundary.
   queue and pause remain owned by their dedicated recovery paths. Exact
   reconnect uses the staged top-left-only ladder; never click Reconnect or
   Cancel. Reconfirm current PID and Power.log/session evidence immediately
-  before its final restart.
+  before its final restart. The unchanged-screen fingerprint must tolerate
+  small animation/glow changes but distinguish a real screen transition; it is
+  bound to PID/HWND rather than lifecycle phase labels.
 - For an exact reconnect screen, the 60-second no-pause restart grace must
   schedule its own fresh authorized capture at the threshold rather than wait
   for the next slow periodic OCR pass. Re-evaluate current active-game,
   matchmaking-screen/short-race, and terminal fences on that capture and again
   before restarting. Cover the timer cadence deterministically; OCR latency or
   a delayed global probe must not silently extend the configured grace.
+- Once a fresh exact HUB mode chooser is confirmed after a deck-mode Return,
+  reset that deck-screen's one-attempt navigation budget. This permits one new
+  bounded Return only after the app re-enters a fresh wrong-mode deck screen;
+  an unchanged deck frame cannot create repeated Back clicks. Regression should
+  replay the live Standard chooser with its configured Wild deck tooltip,
+  assert Return reaches the dispatcher, confirm the fresh selector stage, and
+  keep Start denied until fresh WILD mode and deck proof exist.
