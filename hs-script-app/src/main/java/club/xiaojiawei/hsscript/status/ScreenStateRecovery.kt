@@ -158,6 +158,7 @@ object ScreenStateRecovery {
         val resultBannerLowSaturationRatio: Double,
         val resultBannerWarmRatio: Double = 0.0,
         val centeredModalPanelVisual: Boolean = false,
+        val startupQuestOverlayVisual: Boolean = false,
         val reconnectDialogVisual: Boolean = false,
         val matchmakingSearchVisual: Boolean = false,
     ) {
@@ -1125,6 +1126,7 @@ object ScreenStateRecovery {
                 darkRatio = reconnectDialogPanelSignal.darkRatio,
                 warmRatio = reconnectDialogPanelSignal.warmRatio,
             ),
+            startupQuestOverlayVisual = StartupQuestOverlayVisualClassifier.isQuestOverlay(image),
             reconnectDialogVisual = looksLikeReconnectDialogVisual(image),
             matchmakingSearchVisual = MatchmakingSearchVisualPolicy.isVisible(image),
         )
@@ -1182,7 +1184,19 @@ object ScreenStateRecovery {
         detect(OcrEvidence(ocrText, emptyMap()), visual)
 
     private fun detect(evidence: OcrEvidence, visual: VisualSignature): Detection? {
-        targetedScreenDetection(evidence.targeted, visual)?.let { return it }
+        val targetedDetection = targetedScreenDetection(evidence.targeted, visual)
+        if (targetedDetection?.kind in setOf(
+                ScreenKind.SERVER_UNAVAILABLE,
+                ScreenKind.RECONNECT,
+                ScreenKind.RECONNECT_FAILURE,
+            )
+        ) return targetedDetection
+        // The recorded exact quest-modal visual must preempt an underlay deck
+        // or Hub label from a targeted ROI, but never a reconnect/server dialog.
+        if (visual.startupQuestOverlayVisual) {
+            return Detection(ScreenKind.HOME_TASK_OVERLAY, ModeEnum.HUB, 96, "startup-your-quests-overlay")
+        }
+        targetedDetection?.let { return it }
 
         val ocrText = evidence.text
         val text = ocrText.lowercase(Locale.ROOT)
@@ -1240,21 +1254,23 @@ object ScreenStateRecovery {
         ) {
             return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
         }
-        if (visual.matchmakingSearchVisual) {
-            return Detection(ScreenKind.MATCHMAKING, ModeEnum.TOURNAMENT, 98, "matchmaking-search-visual")
-        }
         // A real result panel may also satisfy the generic centered-modal
         // guard. Let only the stronger terminal evidence above take priority;
         // all other unrecognized modal overlays remain unresolved.
+        if (visual.startupQuestOverlayVisual ||
+            (!visual.centeredModalPanelVisual && looksLikeStartupQuestOverlayText(text))
+        ) {
+            return Detection(ScreenKind.HOME_TASK_OVERLAY, ModeEnum.HUB, 96, "startup-your-quests-overlay")
+        }
+        if (visual.matchmakingSearchVisual) {
+            return Detection(ScreenKind.MATCHMAKING, ModeEnum.TOURNAMENT, 98, "matchmaking-search-visual")
+        }
         if (visual.centeredModalPanelVisual) return null
         if (text.contains("选择套牌") || has("套牌", "狂野对战")) {
             return Detection(ScreenKind.DECK_SELECTION, ModeEnum.TOURNAMENT, 100, "deck-selection-title")
         }
         if (looksLikeShopOverlayText(text) && looksLikeShopOverlayVisual(visual)) {
             return Detection(ScreenKind.SHOP_OVERLAY, ModeEnum.HUB, 94, "shop-overlay-text-and-visual")
-        }
-        if (looksLikeStartupQuestOverlayText(text)) {
-            return Detection(ScreenKind.HOME_TASK_OVERLAY, ModeEnum.HUB, 96, "startup-your-quests-overlay")
         }
         // The live client uses "搜寻对手" while some localized/client builds
         // use "寻找对手". OCR also commonly separates the cancel label, so
@@ -1406,7 +1422,7 @@ object ScreenStateRecovery {
         val normalized = ocrText.lowercase(Locale.ROOT)
             .replace(Regex("[\\s\\p{Punct}，。、“”‘’：:！!？?]"), "")
         return normalized.contains("你的活动任务") || normalized.contains("你的活動任務") ||
-            normalized.contains("你的任务") || normalized.contains("yourquests")
+            normalized.contains("yourquests")
     }
 
     internal fun looksLikeReconnectFailureDialogRoiText(ocrText: String): Boolean {
@@ -1567,6 +1583,9 @@ object ScreenStateRecovery {
     internal fun hasCenteredModalPanel(image: BufferedImage): Boolean =
         visualSignature(image).centeredModalPanelVisual
 
+    internal fun hasExactStartupQuestOverlayVisual(image: BufferedImage): Boolean =
+        visualSignature(image).startupQuestOverlayVisual
+
     internal fun looksLikeLoadingText(ocrText: String): Boolean {
         val text = ocrText.lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
         return text.contains("正在加载") ||
@@ -1708,6 +1727,7 @@ object ScreenStateRecovery {
     internal fun recoveryTransitionForTest(
         ocrText: String,
         targeted: Map<String, String> = emptyMap(),
+        centeredModalPanelVisual: Boolean = false,
     ): RecoveryTransitionForTest? = detect(
         OcrEvidence(ocrText, targeted),
         VisualSignature(
@@ -1717,6 +1737,7 @@ object ScreenStateRecovery {
             loadingCentralDarkRatio = 0.0,
             resultContinueGrayLightRatio = 0.0,
             resultBannerLowSaturationRatio = 0.0,
+            centeredModalPanelVisual = centeredModalPanelVisual,
         ),
     )?.let { detection ->
         RecoveryTransitionForTest(
@@ -2097,14 +2118,14 @@ object ScreenStateRecovery {
             if (!StartupQuestOverlayRecoveryFence.tryBeginObservation()) return@schedule
             try {
                 val observations = StartupQuestOverlayRecoveryFence.recordObservation()
-                if (observations > STARTUP_QUEST_OVERLAY_MAX_PROBES) {
+                if (observations % STARTUP_QUEST_OVERLAY_MAX_PROBES == 0) {
                     log.warn {
-                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_UNRESOLVED reason=reobservation-budget-exhausted " +
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_REOBSERVATION_WINDOW_EXHAUSTED " +
+                            "continuing=bounded-10s-reobserve " +
                             "taps=${StartupQuestOverlayRecoveryFence.tapsAttempted()} " +
-                            "observations=${observations - 1} pause=${PauseStatus.isPause} " +
+                            "observations=$observations pause=${PauseStatus.isPause} " +
                             "ordinaryDispatch=blocked"
                     }
-                    return@schedule
                 }
                 if (PauseStatus.isPause || !WorkTimeListener.working || Mode.currMode != ModeEnum.HUB) {
                     log.info {
@@ -2113,12 +2134,7 @@ object ScreenStateRecovery {
                             "pause=${PauseStatus.isPause} mode=${Mode.currMode?.name ?: "NONE"} " +
                             "taps=${StartupQuestOverlayRecoveryFence.tapsAttempted()}"
                     }
-                    if (observations < STARTUP_QUEST_OVERLAY_MAX_PROBES) {
-                        scheduleHomeTaskOverlayRecovery(
-                            recoveryToken,
-                            10_000L,
-                        )
-                    }
+                    scheduleHomeTaskOverlayRecovery(recoveryToken, 10_000L)
                     return@schedule
                 }
 
@@ -2129,12 +2145,7 @@ object ScreenStateRecovery {
                         "SCREEN_RECOVERY_HOME_TASK_OVERLAY_UNRESOLVED reason=game-window-unavailable " +
                             "pause=${PauseStatus.isPause} ordinaryDispatch=blocked"
                     }
-                    if (observations < STARTUP_QUEST_OVERLAY_MAX_PROBES) {
-                        scheduleHomeTaskOverlayRecovery(
-                            recoveryToken,
-                            10_000L,
-                        )
-                    }
+                    scheduleHomeTaskOverlayRecovery(recoveryToken, 10_000L)
                     return@schedule
                 }
                 val frameResult = MouseUtil.withRecoveryForeground(hwnd) {
@@ -2161,16 +2172,12 @@ object ScreenStateRecovery {
                             "foregroundConfirmed=${frameResult.foregroundConfirmed} capture=${freshCapture != null} " +
                             "probe=$observations pause=${PauseStatus.isPause} ordinaryDispatch=blocked"
                     }
-                    if (observations < STARTUP_QUEST_OVERLAY_MAX_PROBES) {
-                        scheduleHomeTaskOverlayRecovery(
-                            recoveryToken,
-                            10_000L,
-                        )
-                    }
+                    scheduleHomeTaskOverlayRecovery(recoveryToken, 10_000L)
                     return@schedule
                 }
 
                 val capture = requireNotNull(freshCapture)
+                StartupQuestOverlayRecoveryFence.observeSession(sourcePid, hwnd.toString())
                 val evidence = runOCR(capture)
                 val currentPid = GameUtil.findGameProcessIdForDiagnostics()
                 val currentHwnd = resolveLiveGameWindow()
@@ -2182,12 +2189,13 @@ object ScreenStateRecovery {
                 val gameIntent = WarEx.inWar || GameUtil.isTerminalGameState() ||
                     Mode.currMode == ModeEnum.GAMEPLAY || Mode.nextMode == ModeEnum.GAMEPLAY
                 if (activeMatchmaking || gameIntent) {
-                    StartupQuestOverlayRecoveryFence.resolve()
                     log.warn {
-                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_STOPPED reason=${if (activeMatchmaking) "recent-matchmaking-intent" else "game-or-terminal-intent"} " +
+                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_DEFERRED reason=${if (activeMatchmaking) "recent-matchmaking-intent" else "game-or-terminal-intent"} " +
                             "detected=${detection?.kind?.code ?: "UNKNOWN"} pid=$sourcePid hwnd=$hwnd " +
-                            "pause=${PauseStatus.isPause} ordinaryDispatch=enabled input=not-sent"
+                            "pause=${PauseStatus.isPause} ordinaryDispatch=blocked input=not-sent " +
+                            "clearFence=verified-transition-only"
                     }
+                    scheduleHomeTaskOverlayRecovery(recoveryToken, 10_000L)
                     return@schedule
                 }
 
@@ -2288,21 +2296,77 @@ object ScreenStateRecovery {
                                 "confidence=${detection?.confidence ?: 0} pause=${PauseStatus.isPause} " +
                                 "ordinaryDispatch=blocked"
                         }
+                        if (decision.reason == "max-taps-reached") {
+                            val escalation = StartupQuestOverlayRecoveryFence.escalationDecision(
+                                StartupQuestOverlayEscalationPolicy.Evidence(
+                                    nowMs = nowMs,
+                                    pid = sourcePid,
+                                    window = hwnd.toString(),
+                                    exactTrustedQuestOverlay = captureStillTrusted &&
+                                        captureAgeMs <= StartupQuestOverlayDismissPolicy.MAX_CAPTURE_AGE_MS &&
+                                        isExactOverlay,
+                                    tapsAttempted = StartupQuestOverlayRecoveryFence.tapsAttempted(),
+                                    observations = observations,
+                                    noActiveQueue = !activeMatchmaking,
+                                    noActiveGameOrTerminal = !gameIntent,
+                                    working = WorkTimeListener.working,
+                                    paused = PauseStatus.isPause,
+                                ),
+                            )
+                            when (escalation.action) {
+                                StartupQuestOverlayEscalationPolicy.Action.RESTART_CLIENT -> {
+                                    val restartStillSafe = ScreenRecoveryRuntime.isCurrent(recoveryToken) &&
+                                        !PauseStatus.isPause && WorkTimeListener.working &&
+                                        Mode.currMode == ModeEnum.HUB && !WarEx.inWar &&
+                                        !GameUtil.isTerminalGameState() &&
+                                        !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+                                        !LifecycleTrace.hasRecentMatchmakingInputIntent() &&
+                                        GameUtil.findGameProcessIdForDiagnostics() == sourcePid &&
+                                        resolveLiveGameWindow()?.toString() == hwnd.toString() &&
+                                        GameUtil.isVerifiedCurrentGameWindow(hwnd, sourcePid)
+                                    log.warn {
+                                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_ESCALATION " +
+                                            "action=${if (restartStillSafe) "RESTART_CLIENT" else "WAIT"} " +
+                                            "request=${if (restartStillSafe) "idle-watchdog" else "none"} " +
+                                            "restartGuard=$restartStillSafe " +
+                                            "reason=${escalation.reason} attempt=${escalation.restartAttempt} " +
+                                            "thresholdMs=${StartupQuestOverlayEscalationPolicy.DEFAULT_STUCK_THRESHOLD_MS} " +
+                                            "pid=$sourcePid hwnd=$hwnd pause=${PauseStatus.isPause}"
+                                    }
+                                    if (restartStillSafe) {
+                                        Core.restartFromIdleWatchdog()
+                                    }
+                                }
+                                StartupQuestOverlayEscalationPolicy.Action.ALERT_OPERATOR -> {
+                                    log.warn {
+                                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_ESCALATION " +
+                                            "action=ALERT_OPERATOR reason=${escalation.reason} " +
+                                            "attempts=${escalation.restartAttempt} pause=${PauseStatus.isPause} " +
+                                            "ordinaryDispatch=blocked"
+                                    }
+                                    SystemUtil.notice(
+                                        "The Hearthstone startup quest overlay remains unresolved after bounded " +
+                                            "verified dismissal and restart attempts. Automation remains unpaused " +
+                                            "but gameplay actions stay fenced until a verified screen transition.",
+                                        forceNotify = true,
+                                    )
+                                }
+                                StartupQuestOverlayEscalationPolicy.Action.WAIT,
+                                StartupQuestOverlayEscalationPolicy.Action.ALREADY_ALERTED,
+                                -> log.info {
+                                    "SCREEN_RECOVERY_HOME_TASK_OVERLAY_ESCALATION " +
+                                        "action=${escalation.action} reason=${escalation.reason} " +
+                                        "attempts=${escalation.restartAttempt} pause=${PauseStatus.isPause}"
+                                }
+                            }
+                        }
                     }
                 }
-                if (StartupQuestOverlayRecoveryFence.isActive() &&
-                    observations < STARTUP_QUEST_OVERLAY_MAX_PROBES
-                ) {
+                if (StartupQuestOverlayRecoveryFence.isActive()) {
                     scheduleHomeTaskOverlayRecovery(
                         recoveryToken,
                         if (decision.action == StartupQuestOverlayDismissPolicy.Action.TAP_TOP_LEFT) 450L else 10_000L,
                     )
-                } else if (StartupQuestOverlayRecoveryFence.isActive()) {
-                    log.warn {
-                        "SCREEN_RECOVERY_HOME_TASK_OVERLAY_UNRESOLVED reason=reobservation-budget-exhausted " +
-                            "taps=${StartupQuestOverlayRecoveryFence.tapsAttempted()} " +
-                            "pause=${PauseStatus.isPause} ordinaryDispatch=blocked"
-                    }
                 }
             } finally {
                 StartupQuestOverlayRecoveryFence.finishObservation()

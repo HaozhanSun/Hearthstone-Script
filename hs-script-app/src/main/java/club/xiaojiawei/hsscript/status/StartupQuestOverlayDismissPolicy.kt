@@ -108,11 +108,15 @@ internal object StartupQuestOverlayRecoveryFence {
     private val inFlight = AtomicBoolean(false)
     private val taps = AtomicInteger(0)
     private val observations = AtomicInteger(0)
+    private val escalation = StartupQuestOverlayEscalationPolicy()
+    @Volatile private var sessionIdentity: Pair<Long, String>? = null
 
     fun begin() {
         if (active.compareAndSet(false, true)) {
             taps.set(0)
             observations.set(0)
+            sessionIdentity = null
+            escalation.reset()
         }
     }
 
@@ -120,6 +124,19 @@ internal object StartupQuestOverlayRecoveryFence {
     fun tapsAttempted() = taps.get()
     fun recordTapAttempt() = taps.incrementAndGet()
     fun recordObservation() = observations.incrementAndGet()
+    fun observeSession(pid: Long, window: String) {
+        val identity = pid to window
+        if (sessionIdentity != identity) {
+            synchronized(this) {
+                if (sessionIdentity != identity) {
+                    sessionIdentity = identity
+                    taps.set(0)
+                    escalation.reset()
+                }
+            }
+        }
+    }
+    fun escalationDecision(evidence: StartupQuestOverlayEscalationPolicy.Evidence) = escalation.observe(evidence)
     fun tryBeginObservation() = active.get() && inFlight.compareAndSet(false, true)
     fun finishObservation() { inFlight.set(false) }
 
@@ -128,6 +145,8 @@ internal object StartupQuestOverlayRecoveryFence {
         inFlight.set(false)
         taps.set(0)
         observations.set(0)
+        sessionIdentity = null
+        escalation.reset()
         StartupQuestOverlayDismissAuthorization.permits.revoke()
     }
 

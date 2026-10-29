@@ -20,9 +20,118 @@ class StartupQuestOverlayDismissPolicyTest {
         )
         assertEquals(1920, image.width)
         assertEquals(1080, image.height)
-        val detection = ScreenStateRecovery.recoveryTransitionForTest("你的活动任务 每周任务 进度")
+        assertTrue(ScreenStateRecovery.hasExactStartupQuestOverlayVisual(image), "fixture must pass the exact image classifier used by live recovery")
+        val detection = ScreenStateRecovery.recoveryTransitionForImageForTest(
+            image,
+            "你的活动任务 每周任务 进度",
+            emptyMap(),
+        )
         assertEquals("HOME_TASK_OVERLAY", detection?.screen)
         assertEquals("DISMISS_HOME_TASK_OVERLAY", detection?.action)
+        val underlayDeckRoi = ScreenStateRecovery.recoveryTransitionForImageForTest(
+            image,
+            "选择套牌 狂野对战",
+            mapOf(ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI to "选择套牌 狂野对战"),
+        )
+        assertEquals("HOME_TASK_OVERLAY", underlayDeckRoi?.screen)
+    }
+
+    @Test
+    fun `generic centered modal and quest-like underlay text remain unknown`() {
+        assertEquals(
+            null,
+            ScreenStateRecovery.recoveryTransitionForTest(
+                "你的活动任务 每周任务",
+                centeredModalPanelVisual = true,
+            ),
+        )
+        assertEquals(
+            null,
+            ScreenStateRecovery.recoveryTransitionForTest(
+                "传统对战 酒馆战棋 竞技模式",
+                centeredModalPanelVisual = true,
+            ),
+        )
+        val genericModal = ImageIO.read(
+            requireNotNull(javaClass.getResourceAsStream(
+                "/offline-ocr/screen-recovery/start-game-error-dialog-over-deck-selection.png",
+            )),
+        )
+        assertFalse(ScreenStateRecovery.hasExactStartupQuestOverlayVisual(genericModal))
+        assertTrue(ScreenStateRecovery.hasCenteredModalPanel(genericModal))
+        assertFalse(
+            ScreenStateRecovery.recoveryTransitionForImageForTest(
+                genericModal,
+                "你的活动任务 每周任务",
+                emptyMap(),
+            )?.screen == "HOME_TASK_OVERLAY",
+            "quest-like underlay OCR must not turn a different modal into the dismiss target",
+        )
+        assertEquals(
+            StartupQuestOverlayDismissPolicy.Action.STOP,
+            StartupQuestOverlayDismissPolicy.decide(
+                0,
+                observation(exactQuestOverlay = false, confidence = 0, safeTransition = false),
+            ).action,
+        )
+    }
+
+    @Test
+    fun `client restart escalation waits for exact trusted same session and all safety guards`() {
+        val policy = StartupQuestOverlayEscalationPolicy()
+        val baseline = escalationEvidence(nowMs = 1_000L)
+        assertEquals(
+            "exact-trusted-current-session-required",
+            policy.observe(baseline.copy(exactTrustedQuestOverlay = false)).reason,
+        )
+        assertEquals(
+            "exact-trusted-current-session-required",
+            policy.observe(baseline.copy(pid = null)).reason,
+        )
+        assertEquals("dismiss-tap-budget-not-exhausted", policy.observe(baseline.copy(tapsAttempted = 2)).reason)
+        assertEquals("probe-budget-not-exhausted", policy.observe(baseline.copy(observations = 11)).reason)
+        assertEquals("active-queue", policy.observe(baseline.copy(noActiveQueue = false)).reason)
+        assertEquals("active-game-or-terminal", policy.observe(baseline.copy(noActiveGameOrTerminal = false)).reason)
+        assertEquals("paused-by-user-or-operator", policy.observe(baseline.copy(paused = true)).reason)
+        assertEquals("script-not-working", policy.observe(baseline.copy(working = false)).reason)
+        assertEquals("stuck-threshold-not-reached", policy.observe(baseline.copy(nowMs = 60_999L)).reason)
+        assertEquals(
+            StartupQuestOverlayEscalationPolicy.Action.RESTART_CLIENT,
+            policy.observe(baseline.copy(nowMs = 61_000L)).action,
+        )
+    }
+
+    @Test
+    fun `restart escalation is bounded and alerts once without clearing the fence or pausing`() {
+        val policy = StartupQuestOverlayEscalationPolicy()
+        val evidence = escalationEvidence(nowMs = 1_000L)
+        assertEquals("stuck-threshold-not-reached", policy.observe(evidence).reason)
+        assertEquals(StartupQuestOverlayEscalationPolicy.Action.RESTART_CLIENT, policy.observe(evidence.copy(nowMs = 61_000L)).action)
+        assertEquals("restart-cooldown", policy.observe(evidence.copy(nowMs = 100_000L)).reason)
+        assertEquals(StartupQuestOverlayEscalationPolicy.Action.RESTART_CLIENT, policy.observe(evidence.copy(nowMs = 181_000L)).action)
+        assertEquals(StartupQuestOverlayEscalationPolicy.Action.ALERT_OPERATOR, policy.observe(evidence.copy(nowMs = 301_000L)).action)
+        assertEquals(StartupQuestOverlayEscalationPolicy.Action.ALREADY_ALERTED, policy.observe(evidence.copy(nowMs = 311_000L)).action)
+
+        val pausedBefore = PauseStatus.isPause
+        val automaticPauseBefore = PauseStatus.isAutomaticPause
+        val workingBefore = WorkTimeListener.working
+        try {
+            WorkTimeListener.working = true
+            PauseStatus.setAutomaticPause(false)
+            StartupQuestOverlayRecoveryFence.begin()
+            StartupQuestOverlayRecoveryFence.observeSession(44L, "window-55")
+            repeat(StartupQuestOverlayDismissPolicy.MAX_TAPS) { StartupQuestOverlayRecoveryFence.recordTapAttempt() }
+            assertTrue(StartupQuestOverlayRecoveryFence.isActive(), "failed escalation does not clear the fence")
+            assertFalse(PauseStatus.isPause, "recovery must not synthesize F2 or auto-pause")
+        } finally {
+            StartupQuestOverlayRecoveryFence.resetForTest()
+            WorkTimeListener.working = workingBefore
+            when {
+                pausedBefore && automaticPauseBefore -> PauseStatus.setAutomaticPause(true)
+                pausedBefore -> PauseStatus.setManualPause(true)
+                else -> PauseStatus.setAutomaticPause(false)
+            }
+        }
     }
 
     @Test
@@ -192,5 +301,18 @@ class StartupQuestOverlayDismissPolicyTest {
         noRecentMatchmakingIntent = noRecentMatchmakingIntent,
         noGameIntent = noGameIntent,
         safeTransition = safeTransition,
+    )
+
+    private fun escalationEvidence(nowMs: Long) = StartupQuestOverlayEscalationPolicy.Evidence(
+        nowMs = nowMs,
+        pid = 44L,
+        window = "window-55",
+        exactTrustedQuestOverlay = true,
+        tapsAttempted = StartupQuestOverlayDismissPolicy.MAX_TAPS,
+        observations = StartupQuestOverlayRecoveryFence.MAX_REOBSERVATIONS,
+        noActiveQueue = true,
+        noActiveGameOrTerminal = true,
+        working = true,
+        paused = false,
     )
 }

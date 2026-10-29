@@ -131,7 +131,7 @@ class ScreenStateRecoveryTest {
         assertEquals("WAIT_FOR_CLIENT", loading?.action)
 
         val questOverlay = ScreenStateRecovery.recoveryTransitionForTest(
-            "你的任务 召唤10个紫罗兰监狱的随从 4/10 施放12个火焰或自然法术 0/12",
+            "你的活动任务 召唤10个紫罗兰监狱的随从 4/10 施放12个火焰或自然法术 0/12",
         )
         assertEquals("HOME_TASK_OVERLAY", questOverlay?.screen)
         assertEquals(ModeEnum.HUB, questOverlay?.mode)
