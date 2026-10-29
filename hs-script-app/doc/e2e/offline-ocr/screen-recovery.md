@@ -387,8 +387,11 @@ this deletion boundary.
 - When a current foreground/PID capture confirms DECK_SELECTION, reconcile the
   same game's terminal cleanup capability before mode, deck, or queue actions.
   Unknown mode-title OCR does not confirm the requested mode and must block
-  deck selection without pausing; a positive mode mismatch also remains
-  blocked. A fresh deck-selection title and enabled Start control authorize
+  deck selection without pausing; after three unknown title observations it
+  emits a bounded operator notice and returns without dispatching input. A
+  positive mode mismatch also remains blocked with an operator notice. Notices
+  are deduplicated by expected mode until a valid mode is observed; neither
+  condition changes the user's pause state. A fresh deck-selection title and enabled Start control authorize
   only `matchmaking.start` after the observed mode matches the selected run
   mode. Do not carry the previous game's cleanup fence into the next queue.
 - A victory page can leave all OCR/screen classifiers UNKNOWN even while the

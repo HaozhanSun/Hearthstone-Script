@@ -173,7 +173,7 @@ class TournamentModeConfirmationTest {
     }
 
     @Test
-    fun `three unknown mode observations block deck selection without pausing`() {
+    fun `three unknown mode observations block deck selection and leave pause to the operator`() {
         var observations = 0
         try {
             PauseStatus.setAutomaticPause(false)

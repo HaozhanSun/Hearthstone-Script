@@ -53,6 +53,9 @@ data class TournamentModeConfirmationResult(
 }
 
 object TournamentModeConfirmation {
+
+    @Volatile
+    private var lastOperatorAlertMode: String? = null
     private const val OCR_MAX_WIDTH = 960
     fun classifyModeTitle(ocrText: String): ObservedTournamentMode {
         val text = ocrText.lowercase(Locale.ROOT)
@@ -159,7 +162,10 @@ object TournamentModeConfirmation {
             when (result.state) {
                 TournamentModeConfirmationState.CONFIRMED,
                 TournamentModeConfirmationState.UNSUPPORTED_TARGET,
-                -> return true
+                -> {
+                    lastOperatorAlertMode = null
+                    return true
+                }
 
                 TournamentModeConfirmationState.MISMATCH -> {
                     if (shouldContinue()) reportUnsafeMode(result) else logStateChanged(result)
@@ -182,9 +188,14 @@ object TournamentModeConfirmation {
                     "expectedMode=${lastResult?.expectedMode?.name ?: "n/a"} " +
                     "strategy=${lastResult?.strategyId ?: "n/a"} deckSlot=${lastResult?.deckSlot ?: "n/a"} " +
                     "reason=${lastResult?.reason ?: "mode-title-unrecognized"} " +
-                    "visibleModeRequired=true " +
+                    "visibleModeRequired=true recovery=operator-confirm-mode-and-retry " +
                     "ocr=${lastResult?.ocrText?.ifBlank { "<empty>" }?.take(160) ?: "<empty>"}"
             }
+            notifyOperatorOnce(
+                expectedMode = lastResult?.expectedMode?.name ?: expectedMode.name,
+                message = "Hearthstone's game mode could not be identified after 3 checks. " +
+                    "Deck selection is blocked; select the configured mode visibly and retry. Automation was not paused.",
+            )
             return false
         }
         if (shouldContinue()) reportUnsafeMode(lastResult) else logStateChanged(lastResult)
@@ -234,20 +245,26 @@ object TournamentModeConfirmation {
             visual = result?.reason.orEmpty(),
         )
         log.warn {
-            // Keep a confirmed mismatch fail-closed for deck selection, but
-            // never synthesize a pause. The user retains pause ownership.
             "TOURNAMENT_MODE_CONFIRMATION_FAILED action=BLOCK_DECK_SELECTION_NO_PAUSE " +
                 "expectedMode=${result?.expectedMode?.name ?: "n/a"} " +
                 "observedMode=${result?.observedMode?.name ?: "UNKNOWN"} " +
                 "strategy=${result?.strategyId ?: "n/a"} strategyName=${result?.strategyName ?: "n/a"} " +
                 "deckSlot=${result?.deckSlot ?: "n/a"} reason=${result?.reason ?: "no-observation"} " +
                 "ocr=${result?.ocrText?.ifBlank { "<empty>" }?.take(160) ?: "<empty>"} " +
-                "boundedAttempts=true screenshot=${evidence?.file?.absolutePath ?: "not-saved"}"
+                "boundedAttempts=true recovery=operator-confirm-mode-and-retry " +
+                "screenshot=${evidence?.file?.absolutePath ?: "not-saved"}"
         }
-        SystemUtil.notice(
-            "The selected game mode could not be confirmed. Deck selection was blocked; automation was not paused. " +
-                "Check Hearthstone and click Start to retry.",
+        notifyOperatorOnce(
+            expectedMode = result?.expectedMode?.name ?: "UNKNOWN",
+            message = "The selected game mode does not match the configured mode. " +
+                "Deck selection is blocked; select the configured mode visibly and retry. Automation was not paused.",
         )
+    }
+
+    private fun notifyOperatorOnce(expectedMode: String, message: String) {
+        if (lastOperatorAlertMode == expectedMode) return
+        lastOperatorAlertMode = expectedMode
+        SystemUtil.notice(message)
     }
 
     private fun logStateChanged(result: TournamentModeConfirmationResult?) {
