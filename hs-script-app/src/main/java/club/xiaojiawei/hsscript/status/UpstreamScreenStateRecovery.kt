@@ -295,7 +295,14 @@ object UpstreamScreenStateRecovery {
                 detection?.confidence ?: 0, detection?.evidence, true,
             ) + " purpose=${authorizedCapture.purpose}"
         }
-        val safeIdleMenuCandidate = isSafeIdleUnblockScreen(detection, capture.visual)
+        val expectedDeckModeForUnblock = DeckStrategyManager.currentRunMode?.name
+        val observedDeckModeForUnblock = if (detection?.kind == ScreenKind.DECK_SELECTION) {
+            TournamentModeConfirmation.observeImage(capture.image).observedMode.name
+        } else null
+        val wrongModeDeckCandidate = isConfirmedWrongModeDeck(
+            detection, capture.image, expectedDeckModeForUnblock, observedDeckModeForUnblock,
+        )
+        val safeIdleMenuCandidate = isSafeIdleUnblockScreen(detection, capture.visual) || wrongModeDeckCandidate
         val exactReconnectCandidate = detection?.kind == ScreenKind.RECONNECT && capture.visual.reconnectDialogVisual
         val observedStuckFrame = StuckScreenUnblockFrameIdentity.create(
             processId = capture.processId.toInt(),
@@ -2107,6 +2114,16 @@ object UpstreamScreenStateRecovery {
                 capturedAtNanos = authorizedCapture.capture.capturedAtNanos,
             ))
         }
+        if (visual.startupQuestOverlayVisual) {
+            decisionPath = "EXACT_EVENT_QUEST_VISUAL"
+            log.info { "SCREEN_RECOVERY_RESULT_FAST_OVERLAY kind=EVENT_QUEST_OVERLAY ocr=skipped" }
+            return@runCatching report(ResultScreenObservation(
+                resultVisible = null,
+                captureAuthorized = true,
+                gameMenuOverlayVisible = true,
+                capturedAtNanos = authorizedCapture.capture.capturedAtNanos,
+            ))
+        }
         val visualDecisionStartedAt = System.nanoTime()
         val fastVisual = ResultPageEvidencePolicy.fastVisualObservation(
             visual.resultContinueGrayLightRatio,
@@ -2299,10 +2316,23 @@ object UpstreamScreenStateRecovery {
                     "staleIntentIgnored=${LifecycleTrace.hasRecentMatchmakingInputIntent()}"
             }
         }
+        val expectedModeForLadder = DeckStrategyManager.currentRunMode?.name
+        val observedModeForLadder = if (detection?.kind == ScreenKind.DECK_SELECTION) {
+            TournamentModeConfirmation.observeImage(capture.image).observedMode.name
+        } else null
+        val wrongModeDeckCandidate = isConfirmedWrongModeDeck(
+            detection, capture.image, expectedModeForLadder, observedModeForLadder,
+        )
         if (detection?.kind == ScreenKind.DECK_SELECTION) {
-            stuckScreenUnblockPolicy.reset()
-            log.info { "STUCK_SCREEN_UNBLOCK_SKIPPED reason=deck-mode-has-dedicated-recovery action=NO_GENERIC_CLICK" }
-            return true
+            if (!wrongModeDeckCandidate) {
+                stuckScreenUnblockPolicy.reset()
+                log.info { "STUCK_SCREEN_UNBLOCK_SKIPPED reason=deck-mode-not-confirmed-opposite action=NO_GENERIC_CLICK" }
+                return true
+            }
+            log.warn {
+                "STUCK_SCREEN_UNBLOCK_MODE_MISMATCH recognized=true expectedMode=$expectedModeForLadder " +
+                    "observedMode=$observedModeForLadder action=BOUNDED_TOP_LEFT_LADDER start=BLOCKED"
+            }
         }
         val eligiblePurpose = authorizedCapture.purpose in setOf(
             ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
@@ -2334,7 +2364,7 @@ object UpstreamScreenStateRecovery {
             captureFresh = eligiblePurpose,
             exactWindowVerified = exactWindow,
             eligibleIdleProbe = eligiblePurpose,
-            recognizedSafeBlocker = (detection == null || exactReconnect || isSafeIdleUnblockScreen(detection, capture.visual)) &&
+            recognizedSafeBlocker = (detection == null || exactReconnect || isSafeIdleUnblockScreen(detection, capture.visual) || wrongModeDeckCandidate) &&
                 (!capture.visual.reconnectDialogVisual || exactReconnect) && !capture.visual.battleNetLauncherVisual &&
                 !capture.visual.amazonAppstoreSunsetNoticeVisual && !capture.visual.matchmakingSearchVisual &&
                 !resultOrTerminal,
@@ -2343,14 +2373,14 @@ object UpstreamScreenStateRecovery {
             activeQueue = activeQueue,
             terminal = resultOrTerminal,
             paused = PauseStatus.isPause,
-            modeMismatchDeck = detection?.kind == ScreenKind.DECK_SELECTION,
+            modeMismatchDeck = wrongModeDeckCandidate,
             reconnect = false,
             resultOrTerminalScreen = detection?.kind in setOf(ScreenKind.RESULT, ScreenKind.BETA_RESULT_CONFIRMATION,
                 ScreenKind.RANK_PROGRESS_CONTINUATION) || resultOrTerminal,
             activeGameplayScreen = activeGame,
             matchmakingScreen = activeQueue,
         )
-        // Non-modal unknown frames retain the older classification-only/restart policy.
+        // Non-modal unknown and exact wrong-mode deck frames use the bounded, fresh-frame ladder.
         if (!evidence.recognizedSafeBlocker) return false
         val decision = stuckScreenUnblockPolicy.observe(evidence)
         val point = StartupQuestOverlayDismissPolicy.topLeftPixel(capture.bounds)
@@ -2397,7 +2427,10 @@ object UpstreamScreenStateRecovery {
                     freshFrame != null && StuckScreenUnblockFrameIdentity.isSameClientScreen(currentFrameProof, freshFrame) &&
                     (freshVisualDetection == null || exactReconnect &&
                         freshVisualDetection.kind == ScreenKind.RECONNECT && fresh.capture.visual.reconnectDialogVisual ||
-                        isSafeIdleUnblockScreen(freshVisualDetection, fresh.capture.visual) &&
+                        (isSafeIdleUnblockScreen(freshVisualDetection, fresh.capture.visual) ||
+                            isConfirmedWrongModeDeck(
+                                freshVisualDetection, fresh.capture.image, expectedModeForLadder,
+                            )) &&
                         freshVisualDetection?.kind == detection?.kind) &&
                     (!fresh.capture.visual.reconnectDialogVisual || exactReconnect) &&
                     !fresh.capture.visual.battleNetLauncherVisual && !fresh.capture.visual.matchmakingSearchVisual &&
@@ -2514,7 +2547,8 @@ object UpstreamScreenStateRecovery {
                     !fresh.capture.visual.battleNetLauncherVisual && !fresh.capture.visual.amazonAppstoreSunsetNoticeVisual &&
                     (if (exactReconnect) freshDetection?.kind == ScreenKind.RECONNECT &&
                         fresh.capture.visual.reconnectDialogVisual else freshDetection == null ||
-                        isSafeIdleUnblockScreen(freshDetection, fresh.capture.visual) &&
+                        (isSafeIdleUnblockScreen(freshDetection, fresh.capture.visual) ||
+                            isConfirmedWrongModeDeck(freshDetection, fresh.capture.image, expectedModeForLadder)) &&
                         freshDetection?.kind == detection?.kind) &&
                     !ScreenStateRecovery.hasAuthoritativeCurrentGameEvidenceForReconnect() &&
                     !PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence() &&
@@ -2599,6 +2633,18 @@ object UpstreamScreenStateRecovery {
             eventQuestOverlayVisual = detection?.kind == ScreenKind.EVENT_QUEST_OVERLAY,
         )
 
+    private fun isConfirmedWrongModeDeck(
+        detection: Detection?,
+        image: BufferedImage,
+        expectedMode: String?,
+        observedMode: String? = if (detection?.kind == ScreenKind.DECK_SELECTION) {
+            TournamentModeConfirmation.observeImage(image).observedMode.name
+        } else null,
+    ): Boolean = detection?.kind == ScreenKind.DECK_SELECTION &&
+        ScreenWatchdog.hasEnabledDeckSelectionStartButton(image) &&
+        expectedMode in setOf("STANDARD", "WILD") && observedMode in setOf("STANDARD", "WILD") &&
+        observedMode != expectedMode
+
     private fun shouldAttemptReconnect(now: Long): Boolean {
         // Exact RECONNECT is observed during a bounded grace period, then
         // handled by the client restart policy. Never click dialog controls.
@@ -2636,7 +2682,8 @@ object UpstreamScreenStateRecovery {
                 "clicksMax=${EventQuestOverlayRecoveryPolicy.MAX_CLICKS} " +
                 "secondStageMs=${EventQuestOverlayRecoveryPolicy.SECOND_STAGE_DELAY_MS} ocr=skipped"
         }
-        scheduleEventQuestOverlayRecovery(pid, hwnd, stuckForMs, stateStillCurrent, 0L)
+        val recoveryStartedAtMs = System.currentTimeMillis() - stuckForMs.coerceAtLeast(0L)
+        scheduleEventQuestOverlayRecovery(pid, hwnd, stuckForMs, stateStillCurrent, recoveryStartedAtMs, 0L)
         return true
     }
 
@@ -2672,6 +2719,7 @@ object UpstreamScreenStateRecovery {
         expectedWindow: WinDef.HWND,
         stuckForMs: Long,
         stateStillCurrent: () -> Boolean,
+        recoveryStartedAtMs: Long,
         delayMs: Long,
     ) {
         if (!eventQuestOverlayRecoveryInFlight.compareAndSet(false, true)) return
@@ -2714,7 +2762,7 @@ object UpstreamScreenStateRecovery {
                 val terminalOrResult = GameUtil.isTerminalGameState() ||
                     club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending() ||
                     club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isTerminalCleanupPending()
-                val deckReadyVisible = !capture.visual.startupQuestOverlayVisual && currentSessionReady &&
+                val deckReadyVisible = !capture.visual.startupQuestOverlayVisual &&
                     Mode.currMode === ModeEnum.TOURNAMENT && WarEx.war.currentPhase == WarPhaseEnum.FILL_DECK &&
                     club.xiaojiawei.hsscript.status.ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image)
                 val protectedTransition = activeGame || activeQueue || terminalOrResult
@@ -2727,6 +2775,7 @@ object UpstreamScreenStateRecovery {
                         working = WorkTimeListener.working, paused = PauseStatus.isPause,
                         activeGame = activeGame, activeQueue = activeQueue,
                         terminalOrResult = terminalOrResult,
+                        stableForMs = (System.currentTimeMillis() - recoveryStartedAtMs).coerceAtLeast(stuckForMs),
                     ),
                 )
                 StartupQuestOverlayRecoveryFence.recordObservation()
@@ -2804,7 +2853,9 @@ object UpstreamScreenStateRecovery {
             } finally {
                 eventQuestOverlayRecoveryInFlight.set(false)
                 retryAfterMs?.let {
-                    scheduleEventQuestOverlayRecovery(expectedPid, expectedWindow, stuckForMs, stateStillCurrent, it)
+                    scheduleEventQuestOverlayRecovery(
+                        expectedPid, expectedWindow, stuckForMs, stateStillCurrent, recoveryStartedAtMs, it,
+                    )
                 }
             }
         }, delayMs, TimeUnit.MILLISECONDS)

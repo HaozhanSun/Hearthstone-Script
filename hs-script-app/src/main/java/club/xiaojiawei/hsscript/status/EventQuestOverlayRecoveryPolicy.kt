@@ -18,6 +18,7 @@ internal class EventQuestOverlayRecoveryPolicy(
         val activeGame: Boolean,
         val activeQueue: Boolean,
         val terminalOrResult: Boolean,
+        val stableForMs: Long = FIRST_STAGE_DELAY_MS,
     )
 
     data class Decision(val action: Action, val clickNumber: Int, val reason: String)
@@ -41,6 +42,16 @@ internal class EventQuestOverlayRecoveryPolicy(
         if (!evidence.safeMenuOrDeckState) return Decision(Action.STOP, clicksAttempted, "unsafe-underlay-state")
         if (!evidence.exactQuestOverlay) return Decision(Action.STOP, clicksAttempted, "exact-overlay-not-confirmed")
         if (restartIssued) return Decision(Action.STOP, clicksAttempted, "restart-already-issued")
+
+        val stableForMs = evidence.stableForMs.coerceAtLeast(0L)
+        val firstSeenAtMs = evidence.nowMs - stableForMs
+        if (firstStageStartedAt <= 0L) firstStageStartedAt = firstSeenAtMs
+        if (firstStageStartedAt != firstSeenAtMs && clicksAttempted == 0) {
+            firstStageStartedAt = firstSeenAtMs
+        }
+        if (evidence.nowMs - firstStageStartedAt < FIRST_STAGE_DELAY_MS) {
+            return Decision(Action.WAIT_AND_REPROBE, clicksAttempted, "first-stage-minute-pending")
+        }
 
         if (clicksAttempted < maxClicks) {
             clicksAttempted++
@@ -67,14 +78,18 @@ internal class EventQuestOverlayRecoveryPolicy(
     @Synchronized
     fun reset() {
         clicksAttempted = 0
+        firstStageStartedAt = 0L
         secondStageStartedAt = 0L
         restartIssued = false
     }
 
     companion object {
+        const val FIRST_STAGE_DELAY_MS = 60_000L
         const val MAX_CLICKS = 3
         const val SECOND_STAGE_DELAY_MS = 60_000L
     }
+
+    private var firstStageStartedAt = 0L
 }
 
 internal object EventQuestOverlayRecoveryContextPolicy {
@@ -93,7 +108,9 @@ internal object EventQuestOverlayRecoveryContextPolicy {
         paused: Boolean,
     ): Boolean {
         val safeHub = mode == "HUB"
-        val safeDeckSelection = mode == "TOURNAMENT" && phase == "FILL_DECK" && currentSessionReady
+        // Exact visible Event Quest structure over Tournament/FILL_DECK is
+        // sufficient safe-underlay proof; Power.log may still be empty after launch.
+        val safeDeckSelection = mode == "TOURNAMENT" && phase == "FILL_DECK"
         val activeQueue = activeQueueScreen || matchmakingSearchVisual ||
             if (safeDeckSelection) shortRaceWindow else recentInputIntent
         return (safeHub || safeDeckSelection) && !nextModeGameplay && !activeGame && !activeQueue &&

@@ -2,6 +2,8 @@ package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
 import java.io.File
+import java.awt.Point
+import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -32,6 +34,22 @@ class StartupDeckModeNavigationIntegrationTest {
         assertTrue(ScreenStateRecovery.wrongModeTooltipVisualForTest(image))
         val observed = TournamentModeConfirmation.observeImage(image)
         assertEquals("STANDARD", observed.observedMode.name)
+        StartupInputReadiness.recordSelectedTournamentMode(9042, "rank-nine-standard", "WILD", 50_000L)
+        assertFalse(StartupInputReadiness.recordStartupOnlineScreen(
+            pid = 9042,
+            hwnd = "rank-nine-standard",
+            screen = "DECK_SELECTION",
+            confidence = 94,
+            evidence = "deck-selection-start-control-visual",
+            expectedRunMode = "WILD",
+            observedRunMode = observed.observedMode.name,
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            now = 50_001L,
+        ))
+        assertFalse(StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+            9042, "rank-nine-standard", "WILD", 50_002L,
+        ), "fresh opposite-mode screen revokes any prior selected-mode permit")
 
         val decision = StartupDeckModeNavigationPolicy.decide(
             purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE.name,
@@ -369,6 +387,85 @@ class StartupDeckModeNavigationIntegrationTest {
             terminal = false,
             trustedCurrentWindow = true,
         ).allowed, "active gameplay remains fenced from mode navigation")
+        StartupInputReadiness.resetForTest()
+    }
+
+    @Test
+    fun `stale exact Standard frame reaches bounded top left ladder without Start`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/wild-config-standard-live-20261029-103217.png",
+        )))
+        val screen = UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("", image)
+        val expected = "WILD"
+        val observed = TournamentModeConfirmation.observeImage(image).observedMode.name
+        assertEquals("DECK_SELECTION", screen)
+        assertEquals("STANDARD", observed)
+        val startProof = StartupInputReadiness.recordStartupOnlineScreen(
+            pid = 20352,
+            hwnd = "v713-standard-selector",
+            screen = "DECK_SELECTION",
+            confidence = 94,
+            evidence = "deck-selection-start-control-visual",
+            expectedRunMode = expected,
+            observedRunMode = observed,
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            now = 100_000L,
+        )
+        assertFalse(startProof, "the v713 Standard frame must not produce Wild Start proof")
+        assertFalse(StartupInputReadiness.isDeckSelectionStartReady(20352, "v713-standard-selector", 100_001L))
+
+        val stableFingerprint = StuckScreenUnblockFrameIdentity.create(
+            processId = 20352,
+            windowId = "v713-standard-selector",
+            perceptualFingerprint = "exact-standard-frame",
+            exactReconnectDialog = false,
+        ).fingerprint
+        val policy = StuckScreenUnblockPolicy()
+        val decision = policy.observe(StuckScreenUnblockPolicy.Evidence(
+            nowMs = 151_210L,
+            stableForMs = 151_210L,
+            fingerprint = stableFingerprint,
+            captureFresh = true,
+            exactWindowVerified = true,
+            eligibleIdleProbe = true,
+            recognizedSafeBlocker = true,
+            currentSessionReady = false,
+            activeGame = false,
+            activeQueue = false,
+            terminal = false,
+            paused = false,
+            modeMismatchDeck = true,
+        ))
+        assertEquals(StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT, decision.action)
+        val points = mutableListOf<Point>()
+        assertTrue(StuckScreenUnblockDispatch.dispatchTopLeftBatch(
+            batchInFlight = AtomicBoolean(false),
+            action = decision.action,
+            firstClick = decision.clickNumber,
+            freshCaptureAuthorized = true,
+            point = Point(0, 0),
+            expectedFingerprint = stableFingerprint,
+            completionTimeMs = { 151_300L },
+            dispatchClick = { point, _ -> points += point; true },
+            completeBatch = policy::completeTopLeftClickBatch,
+            requestFreshRecheck = {},
+        ))
+        assertEquals(listOf(Point(0, 0), Point(0, 0), Point(0, 0)), points)
+        assertEquals(StuckScreenUnblockPolicy.Action.REPROBE,
+            policy.observe(StuckScreenUnblockPolicy.Evidence(
+                nowMs = 211_299L, stableForMs = 211_299L, fingerprint = stableFingerprint,
+                captureFresh = true, exactWindowVerified = true, eligibleIdleProbe = true,
+                recognizedSafeBlocker = true, currentSessionReady = false, activeGame = false,
+                activeQueue = false, terminal = false, paused = false, modeMismatchDeck = true,
+            )).action)
+        assertEquals(StuckScreenUnblockPolicy.Action.RESTART_CLIENT,
+            policy.observe(StuckScreenUnblockPolicy.Evidence(
+                nowMs = 211_300L, stableForMs = 211_300L, fingerprint = stableFingerprint,
+                captureFresh = true, exactWindowVerified = true, eligibleIdleProbe = true,
+                recognizedSafeBlocker = true, currentSessionReady = false, activeGame = false,
+                activeQueue = false, terminal = false, paused = false, modeMismatchDeck = true,
+            )).action)
         StartupInputReadiness.resetForTest()
     }
 

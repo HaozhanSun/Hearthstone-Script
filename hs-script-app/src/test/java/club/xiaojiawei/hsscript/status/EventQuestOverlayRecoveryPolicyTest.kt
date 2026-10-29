@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.status
 
 import java.awt.Point
 import java.awt.Rectangle
+import java.io.File
 import javax.imageio.ImageIO
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -10,6 +11,34 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class EventQuestOverlayRecoveryPolicyTest {
+    @Test
+    fun `exact Event Quest screenshot alone routes to three top left clicks then minute recheck`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/event-quest-overlay-deck-selection-20261029.png",
+        )))
+        assertTrue(StartupQuestOverlayVisualClassifier.isQuestOverlay(image),
+            "screen structure alone is authoritative; no client-log event is required")
+        val screenKind = UpstreamScreenStateRecovery.classifyImageForTest("", image)
+        assertEquals("EVENT_QUEST_OVERLAY", screenKind)
+        val safePoint = StartupQuestOverlayDismissPolicy.topLeftPixel(Rectangle(0, 0, image.width, image.height))
+        assertEquals(Point(0, 0), safePoint)
+        assertTrue(UpstreamScreenStateRecovery.dispatchEventQuestRecovery(screenKind) {
+            val policy = EventQuestOverlayRecoveryPolicy()
+            val points = mutableListOf<Point?>()
+            repeat(3) { index ->
+                val decision = policy.observe(evidence(nowMs = 60_000L + index * 10L))
+                assertEquals(EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT, decision.action)
+                points += safePoint
+            }
+            assertEquals(listOf(Point(0, 0), Point(0, 0), Point(0, 0)), points)
+            assertEquals(EventQuestOverlayRecoveryPolicy.Action.WAIT_AND_REPROBE,
+                policy.observe(evidence(nowMs = 120_019L)).action)
+            assertEquals(EventQuestOverlayRecoveryPolicy.Action.RESTART_CLIENT,
+                policy.observe(evidence(nowMs = 120_020L)).action)
+            true
+        })
+    }
+
     @Test
     fun `live event quest overlay fixture is recognized by the upstream Beta classifier`() {
         val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
@@ -48,6 +77,21 @@ class EventQuestOverlayRecoveryPolicyTest {
         })
         assertTrue(attachedRecoveryStarted)
 
+        val upstreamSource = File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt").readText()
+        val upstreamResultProbe = upstreamSource.substring(
+            upstreamSource.indexOf("internal fun observeResultScreenForRecovery(): ResultScreenObservation"),
+        )
+        assertTrue(upstreamResultProbe.indexOf("if (visual.startupQuestOverlayVisual)") <
+            upstreamResultProbe.indexOf("val ocrText = runOCR"),
+            "the exact live overlay classifier must short-circuit the 15s result OCR route")
+        val legacySource = File("src/main/java/club/xiaojiawei/hsscript/status/ScreenStateRecovery.kt").readText()
+        val legacyResultProbe = legacySource.substring(
+            legacySource.indexOf("internal fun observeResultScreenForRecovery(): ResultScreenObservation"),
+        )
+        assertTrue(legacyResultProbe.indexOf("if (capture.visual.startupQuestOverlayVisual)") <
+            legacyResultProbe.indexOf("val ocrEvidence = runOCR"),
+            "the fallback result observer must use the same visual-first short circuit")
+
         val laterReconnect = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/reconnect-failure-dialog-over-deck-selection.png",
         )))
@@ -76,6 +120,15 @@ class EventQuestOverlayRecoveryPolicyTest {
         assertEquals("exact-overlay-persisted-after-second-stage", restart.reason)
         policy.confirmRestartIssued()
         assertEquals(EventQuestOverlayRecoveryPolicy.Action.STOP, policy.observe(evidence(nowMs = 63_000L)).action)
+    }
+
+    @Test
+    fun `exact quest overlay waits until one minute stuck before first click`() {
+        val policy = EventQuestOverlayRecoveryPolicy()
+        assertEquals(EventQuestOverlayRecoveryPolicy.Action.WAIT_AND_REPROBE,
+            policy.observe(evidence(nowMs = 100_000L, stableForMs = 59_999L)).action)
+        assertEquals(EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT,
+            policy.observe(evidence(nowMs = 100_001L, stableForMs = 60_000L)).action)
     }
 
     @Test
@@ -148,7 +201,7 @@ class EventQuestOverlayRecoveryPolicyTest {
         assertFalse(allows(recentIntent = true, shortRace = true), "the short input race window remains fenced")
         assertTrue(allows(mode = "HUB", phase = "NONE", session = false))
         assertFalse(allows(phase = "MULLIGAN"))
-        assertFalse(allows(session = false))
+        assertTrue(allows(session = false), "exact Tournament/FILL_DECK underlay does not require a current Power.log")
         assertFalse(allows(mode = "GAMEPLAY"))
         assertFalse(allows(game = true))
         assertFalse(allows(queueScreen = true), "a currently observed matchmaking screen remains fenced")
@@ -196,6 +249,7 @@ class EventQuestOverlayRecoveryPolicyTest {
 
     private fun evidence(
         nowMs: Long,
+        stableForMs: Long = EventQuestOverlayRecoveryPolicy.FIRST_STAGE_DELAY_MS,
         exact: Boolean = true,
         safeTransition: Boolean = false,
         trusted: Boolean = true,
@@ -214,5 +268,6 @@ class EventQuestOverlayRecoveryPolicyTest {
         activeGame = activeGame,
         activeQueue = activeQueue,
         terminalOrResult = terminal,
+        stableForMs = stableForMs,
     )
 }

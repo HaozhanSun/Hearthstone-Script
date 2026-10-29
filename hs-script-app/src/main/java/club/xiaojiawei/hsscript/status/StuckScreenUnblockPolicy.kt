@@ -35,7 +35,7 @@ internal class StuckScreenUnblockPolicy(
 
     @Synchronized
     fun observe(e: Evidence): Decision {
-        val excluded = e.modeMismatchDeck || e.resultOrTerminalScreen ||
+        val excluded = e.resultOrTerminalScreen ||
             e.activeGameplayScreen || e.matchmakingScreen
         val safe = e.nowMs > 0 && e.fingerprint.isNotBlank() && e.captureFresh && e.exactWindowVerified &&
             e.eligibleIdleProbe && e.recognizedSafeBlocker && !e.currentSessionReady && !e.activeGame &&

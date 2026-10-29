@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.status
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class StuckScreenUnblockPolicyTest {
@@ -60,6 +61,9 @@ class StuckScreenUnblockPolicyTest {
         policy.observe(evidence(1_000))
         assertEquals(StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT, policy.observe(evidence(61_000)).action)
         assertEquals(StuckScreenUnblockPolicy.Action.UNBLOCKED, policy.observe(evidence(62_000, fingerprint = "unblocked" )).action)
+        assertEquals(StuckScreenUnblockPolicy.Action.WAIT,
+            policy.observe(evidence(62_001, stableForMs = 1_000, fingerprint = "unblocked")).action,
+            "a different stable identity begins its own fresh 60 second first stage")
         assertEquals("click-dispatch-failed", policy.observe(
             evidence(123_000, fingerprint = "unblocked", dispatchAccepted = false),
         ).reason)
@@ -71,7 +75,6 @@ class StuckScreenUnblockPolicyTest {
             evidence(61_000, paused = true), evidence(61_000, activeGame = true),
             evidence(61_000, activeQueue = true), evidence(61_000, terminal = true),
             evidence(61_000, currentSessionReady = true),
-            evidence(61_000, modeMismatchDeck = true),
             evidence(61_000, result = true), evidence(61_000, gameplay = true),
             evidence(61_000, queueScreen = true), evidence(61_000, fresh = false),
             evidence(61_000, exactWindow = false), evidence(61_000, eligible = false),
@@ -81,6 +84,32 @@ class StuckScreenUnblockPolicyTest {
         assertEquals(StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT,
             StuckScreenUnblockPolicy().observe(evidence(61_000, stableForMs = 60_000, reconnect = true)).action,
             "fresh exact reconnect may use the shared top-left ladder")
+    }
+
+    @Test
+    fun `exact confirmed wrong mode deck can use ladder but never becomes start proof`() {
+        val policy = StuckScreenUnblockPolicy()
+        val first = evidence(61_000, stableForMs = 61_000, modeMismatchDeck = true)
+        assertEquals(StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT, policy.observe(first).action)
+        assertTrue(policy.completeTopLeftClickBatch(first.fingerprint, 61_100))
+        assertEquals(StuckScreenUnblockPolicy.Action.REPROBE,
+            policy.observe(evidence(121_099, modeMismatchDeck = true)).action)
+        assertEquals(StuckScreenUnblockPolicy.Action.RESTART_CLIENT,
+            policy.observe(evidence(121_100, modeMismatchDeck = true)).action)
+        assertEquals(StuckScreenUnblockPolicy.Action.STOP,
+            policy.observe(evidence(121_200, modeMismatchDeck = true, activeGame = true)).action)
+    }
+
+    @Test
+    fun `unknown but stable exact client frame reaches bounded ladder`() {
+        val policy = StuckScreenUnblockPolicy()
+        val decision = policy.observe(evidence(
+            now = 60_001L,
+            stableForMs = 60_001L,
+            fingerprint = "pid-55|hwnd-77|unknown-stable-frame-a91f",
+            knownBlocker = true,
+        ))
+        assertEquals(StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT, decision.action)
     }
 
     @Test

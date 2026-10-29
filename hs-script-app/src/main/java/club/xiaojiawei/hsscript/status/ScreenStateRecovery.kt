@@ -1985,6 +1985,16 @@ object ScreenStateRecovery {
                     capturedAtNanos = capture.capturedAtNanos,
                 ))
             }
+            if (capture.visual.startupQuestOverlayVisual) {
+                decisionPath = "EXACT_EVENT_QUEST_VISUAL"
+                log.info { "SCREEN_RECOVERY_RESULT_FAST_OVERLAY kind=EVENT_QUEST_OVERLAY ocr=skipped" }
+                return@runCatching report(ResultScreenObservation(
+                    resultVisible = null,
+                    captureAuthorized = true,
+                    gameMenuOverlayVisible = true,
+                    capturedAtNanos = capture.capturedAtNanos,
+                ))
+            }
             val visualDecisionStartedAt = System.nanoTime()
             val fastVisual = ResultPageEvidencePolicy.fastVisualObservation(
                 capture.visual.resultContinueGrayLightRatio,
