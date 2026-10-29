@@ -69,6 +69,19 @@ class TerminalResultDismissalFixtureTest {
     }
 
     @Test
+    fun `rank medal signature outranks hub background without relabeling the true mode chooser`() {
+        val rankTen = requireNotNull(
+            javaClass.getResourceAsStream("/fixtures/screen-recovery/rank10-result-v698-20261026-093304.png"),
+        ).use { requireNotNull(ImageIO.read(it)) }
+        val modeChooser = requireNotNull(
+            javaClass.getResourceAsStream("/offline-ocr/screen-recovery/traditional-battle-screen.png"),
+        ).use { requireNotNull(ImageIO.read(it)) }
+
+        assertEquals("RANK_PROGRESS_CONTINUATION", UpstreamScreenStateRecovery.classifyImageForResultFixture(rankTen))
+        assertEquals("TOURNAMENT", UpstreamScreenStateRecovery.classifyImageForResultFixture(modeChooser))
+    }
+
+    @Test
     fun `incident screenshot and PowerLog fixture drive bounded inputs then require observed transition`() {
         val screenshot = requireNotNull(javaClass.getResourceAsStream(FIXTURE_SCREENSHOT)).use { it.readBytes() }
         assertEquals(SCREENSHOT_SHA256, sha256(screenshot), "fixture must remain the exact live incident screenshot")

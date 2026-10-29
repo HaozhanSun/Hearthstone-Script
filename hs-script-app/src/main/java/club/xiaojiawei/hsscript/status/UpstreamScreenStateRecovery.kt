@@ -1339,6 +1339,23 @@ object UpstreamScreenStateRecovery {
         if (looksLikeStalledReconnectLoadingText(text)) {
             return Detection(ScreenKind.LOADING, ModeEnum.STARTUP, 95, "reconnect-slow-loading-text")
         }
+        // The rank medal and lower-center Continue signature is specific to
+        // the post-result reward page. Check it before broad hub/deck
+        // geometry, which can overlap the blurred game background.
+        if (ResultPageEvidencePolicy.looksLikeRankProgressContinuationVisual(
+                visual.resultContinueGrayLightRatio,
+                visual.resultBannerLowSaturationRatio,
+                visual.loadingCentralDarkRatio,
+                visual.resultBannerWarmRatio,
+            )
+        ) {
+            return Detection(
+                ScreenKind.RANK_PROGRESS_CONTINUATION,
+                ModeEnum.GAMEPLAY,
+                93,
+                "post-result-rank-progress-visual",
+            )
+        }
         val hubModeChoiceText = listOf("传统对战", "酒馆战棋", "竞技模式", "其他模式")
             .any(text::contains)
         // This structural four-button signature identifies the HUB chooser
@@ -1354,20 +1371,6 @@ object UpstreamScreenStateRecovery {
         }
         if (text.contains("选择套牌") || has("套牌", "狂野对战")) {
             return Detection(ScreenKind.DECK_SELECTION, ModeEnum.TOURNAMENT, 100, "deck-selection-title")
-        }
-        if (ResultPageEvidencePolicy.looksLikeRankProgressContinuationVisual(
-                visual.resultContinueGrayLightRatio,
-                visual.resultBannerLowSaturationRatio,
-                visual.loadingCentralDarkRatio,
-                visual.resultBannerWarmRatio,
-            )
-        ) {
-            return Detection(
-                ScreenKind.RANK_PROGRESS_CONTINUATION,
-                ModeEnum.GAMEPLAY,
-                93,
-                "post-result-rank-progress-visual",
-            )
         }
         if (ResultPageEvidencePolicy.looksLikeResultText(text)) {
             return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 95, "result-text")
