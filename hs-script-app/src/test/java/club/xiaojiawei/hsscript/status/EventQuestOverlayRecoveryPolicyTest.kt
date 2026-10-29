@@ -5,6 +5,7 @@ import java.awt.Rectangle
 import javax.imageio.ImageIO
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -33,6 +34,29 @@ class EventQuestOverlayRecoveryPolicyTest {
         val liveEvidence = StartupQuestOverlayVisualClassifier.inspect(liveCapture)
         assertTrue(liveEvidence.isQuestOverlay, "live saved capture should match classifier; evidence=$liveEvidence")
         assertEquals("EVENT_QUEST_OVERLAY", UpstreamScreenStateRecovery.classifyImageForTest("", liveCapture))
+
+        val attachedQuestScreenshot = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/event-quest-overlay-live-clipboard-20261029.png",
+        )))
+        assertTrue(StartupQuestOverlayVisualClassifier.isQuestOverlay(attachedQuestScreenshot))
+        val attachedClassification = UpstreamScreenStateRecovery.classifyImageForTest("", attachedQuestScreenshot)
+        assertEquals("EVENT_QUEST_OVERLAY", attachedClassification)
+        var attachedRecoveryStarted = false
+        assertTrue(UpstreamScreenStateRecovery.dispatchEventQuestRecovery(attachedClassification) {
+            attachedRecoveryStarted = true
+            true
+        })
+        assertTrue(attachedRecoveryStarted)
+
+        val laterReconnect = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/reconnect-failure-dialog-over-deck-selection.png",
+        )))
+        val laterReconnectClassification = UpstreamScreenStateRecovery.classifyImageForTest("", laterReconnect)
+        assertNotEquals("EVENT_QUEST_OVERLAY", laterReconnectClassification,
+            "the later reconnect frame must be freshly classified, never inherit the quest-overlay label")
+        assertFalse(UpstreamScreenStateRecovery.dispatchEventQuestRecovery(laterReconnectClassification) {
+            error("reconnect classification must not dispatch stale quest-overlay recovery")
+        })
     }
 
     @Test

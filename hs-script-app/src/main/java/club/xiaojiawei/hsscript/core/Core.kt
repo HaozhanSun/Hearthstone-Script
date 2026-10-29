@@ -154,6 +154,10 @@ object Core {
      * pause transitions while recovering a confirmed home screen.
      */
     fun restartFromIdleWatchdog(sync: Boolean = false) {
+        log.warn {
+            "CORE_IDLE_WATCHDOG_RESTART_REQUEST sync=$sync pause=${PauseStatus.isPause} " +
+                "working=${WorkTimeListener.working} action=FORCE_CLOSE_THEN_STARTER_CHAIN"
+        }
         restartInternal(sync = sync, source = "idle-watchdog")
     }
 
@@ -167,9 +171,24 @@ object Core {
         Mode.reset()
         val exec = {
             try {
-                GameUtil.killGame(true)
-                log.info { "${GAME_CN_NAME}重启中…… source=$source pauseBeforeRestart=false" }
-                StarterConfig.starter.start()
+                if (source == "idle-watchdog") {
+                    IdleWatchdogRestartSequence.dispatch(
+                        forceCloseClient = { GameUtil.killGame(true) },
+                        startStarterChain = {
+                            log.info { "${GAME_CN_NAME}重启中…… source=$source pauseBeforeRestart=false" }
+                            log.warn {
+                                "CORE_RESTART_STARTER_CHAIN_DISPATCH source=$source " +
+                                    "starter=${StarterConfig.starter.javaClass.simpleName} " +
+                                    "acceptance=awaiting-game-process-window"
+                            }
+                            StarterConfig.starter.start()
+                        },
+                    )
+                } else {
+                    GameUtil.killGame(true)
+                    log.info { "${GAME_CN_NAME}重启中…… source=$source pauseBeforeRestart=false" }
+                    StarterConfig.starter.start()
+                }
             } catch (fault: Throwable) {
                 log.error(fault) { "CORE_RESTART_FAILED action=release-restart-gate" }
                 throw fault

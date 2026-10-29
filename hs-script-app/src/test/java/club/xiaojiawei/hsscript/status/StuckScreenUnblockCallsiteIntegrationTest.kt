@@ -190,25 +190,98 @@ class StuckScreenUnblockCallsiteIntegrationTest {
     }
 
     @Test
-    fun `same exact frame reclassified UNKNOWN to RECONNECT preserves one staged ladder`() {
-        assertLiveChooserClassifiesAsStructurallyVerifiedHub()
-        val policy = StuckScreenUnblockPolicy()
-        val fingerprint = "9704|native@0x44c086e|same-visible-frame"
-        val initialUnknownFrame = evidence(now = 61_000L, fingerprint = fingerprint)
-        assertEquals(StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT, policy.observe(initialUnknownFrame).action)
-        assertTrue(policy.completeTopLeftClickBatch(fingerprint, 61_000L))
+    fun `live reconnect animation fingerprints keep one exact three-click batch and guarded restart stage`() {
+        val sourceFrame = StuckScreenUnblockFrameIdentity.create(
+            processId = 29_000,
+            windowId = "native@0x44c086e",
+            perceptualFingerprint = "9b65c04348f33aed",
+            exactReconnectDialog = true,
+        )
+        val freshAnimatedFrame = StuckScreenUnblockFrameIdentity.create(
+            processId = 29_000,
+            windowId = "native@0x44c086e",
+            perceptualFingerprint = "9b61da4348ef7e44",
+            exactReconnectDialog = true,
+        )
+        assertEquals("exact-reconnect-dialog", sourceFrame.screenIdentity)
+        assertEquals(sourceFrame.fingerprint, freshAnimatedFrame.fingerprint)
+        assertTrue(StuckScreenUnblockFrameIdentity.isSameClientScreen(sourceFrame, freshAnimatedFrame))
+        assertFalse(StuckScreenUnblockFrameIdentity.isSameClientScreen(
+            sourceFrame,
+            StuckScreenUnblockFrameIdentity.create(
+                processId = 29_000,
+                windowId = "native@0x44c086e",
+                perceptualFingerprint = "different-screen-hash",
+                exactReconnectDialog = false,
+            ),
+        ), "a changed or no-longer-verified screen cannot reuse the reconnect identity")
+        assertFalse(StuckScreenUnblockFrameIdentity.isSameClientScreen(
+            sourceFrame,
+            StuckScreenUnblockFrameIdentity.create(
+                processId = 29_001,
+                windowId = "native@0x44c086e",
+                perceptualFingerprint = "9b61da4348ef7e44",
+                exactReconnectDialog = true,
+            ),
+        ), "a new game process cannot inherit the previous dialog ladder")
+        assertFalse(StuckScreenUnblockFrameIdentity.isSameClientScreen(
+            sourceFrame,
+            StuckScreenUnblockFrameIdentity.create(
+                processId = 29_000,
+                windowId = "native@0x44c086f",
+                perceptualFingerprint = "9b61da4348ef7e44",
+                exactReconnectDialog = true,
+            ),
+        ), "a different game window cannot inherit the previous dialog ladder")
 
-        // Runtime reclassification may change from UNKNOWN to RECONNECT on a
-        // later OCR pass. It is not progress unless the perceptual frame changes.
-        assertTrue(policy.hasProgressFor(fingerprint))
-        assertFalse(policy.hasProgressFor("9704|native@0x44c086e|changed-frame"))
-        val reconnectReclassification = policy.observe(
-            evidence(now = 120_999L, stableForMs = 119_999L, fingerprint = fingerprint),
+        val policy = StuckScreenUnblockPolicy()
+        val fingerprint = sourceFrame.fingerprint
+        val decision = policy.observe(evidence(now = 61_000L, fingerprint = fingerprint))
+        assertEquals(StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT, decision.action)
+        val clicks = mutableListOf<Pair<Int, Point>>()
+        var rechecks = 0
+        assertTrue(StuckScreenUnblockDispatch.dispatchTopLeftBatch(
+            batchInFlight = AtomicBoolean(false),
+            action = decision.action,
+            firstClick = decision.clickNumber,
+            freshCaptureAuthorized = StuckScreenUnblockFrameIdentity.isSameClientScreen(
+                sourceFrame, freshAnimatedFrame,
+            ),
+            point = Point(0, 0),
+            expectedFingerprint = fingerprint,
+            completionTimeMs = { 61_000L },
+            dispatchClick = { point, number -> clicks += number to point; true },
+            completeBatch = policy::completeTopLeftClickBatch,
+            requestFreshRecheck = { rechecks++ },
+        ))
+        assertEquals(listOf(1, 2, 3), clicks.map { it.first })
+        assertEquals(listOf(Point(0, 0), Point(0, 0), Point(0, 0)), clicks.map { it.second })
+        assertEquals(1, rechecks)
+
+        // The recheck sees a different perceptual hash from dialog animation,
+        // but the exact same PID/HWND/structural reconnect identity.
+        val recheckFrame = StuckScreenUnblockFrameIdentity.create(
+            processId = 29_000,
+            windowId = "native@0x44c086e",
+            perceptualFingerprint = "9b61da4348ef7e44",
+            exactReconnectDialog = true,
         )
-        assertEquals(StuckScreenUnblockPolicy.Action.REPROBE, reconnectReclassification.action)
-        val oneMinuteLaterSameFrame = policy.observe(
-            evidence(now = 121_000L, stableForMs = 120_000L, fingerprint = fingerprint),
+        assertTrue(policy.hasProgressFor(recheckFrame.fingerprint))
+        assertEquals(StuckScreenUnblockPolicy.Action.REPROBE, policy.observe(
+            evidence(now = 120_999L, stableForMs = 119_999L, fingerprint = recheckFrame.fingerprint),
+        ).action)
+        val oneMinuteLaterSameDialog = policy.observe(
+            evidence(now = 121_000L, stableForMs = 120_000L, fingerprint = recheckFrame.fingerprint),
         )
-        assertEquals(StuckScreenUnblockPolicy.Action.RESTART_CLIENT, oneMinuteLaterSameFrame.action)
+        assertEquals(StuckScreenUnblockPolicy.Action.RESTART_CLIENT, oneMinuteLaterSameDialog.action)
+        var restartDispatches = 0
+        assertFalse(StuckScreenUnblockDispatch.dispatchRestartIfAuthorized(
+            oneMinuteLaterSameDialog.action, false,
+        ) { restartDispatches++ })
+        assertEquals(0, restartDispatches, "fresh active-game/queue/pause/result fences still defer restart")
+        assertTrue(StuckScreenUnblockDispatch.dispatchRestartIfAuthorized(
+            oneMinuteLaterSameDialog.action, true,
+        ) { restartDispatches++ })
+        assertEquals(1, restartDispatches)
     }
 }

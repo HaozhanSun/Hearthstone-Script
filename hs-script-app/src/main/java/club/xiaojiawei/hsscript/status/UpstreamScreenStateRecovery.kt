@@ -296,9 +296,14 @@ object UpstreamScreenStateRecovery {
             ) + " purpose=${authorizedCapture.purpose}"
         }
         val safeIdleMenuCandidate = isSafeIdleUnblockScreen(detection, capture.visual)
-        val observedStuckFingerprint = "${capture.processId}|${authorizedCapture.gameWindow}|" +
-            stuckScreenPerceptualFingerprint(capture.image)
         val exactReconnectCandidate = detection?.kind == ScreenKind.RECONNECT && capture.visual.reconnectDialogVisual
+        val observedStuckFrame = StuckScreenUnblockFrameIdentity.create(
+            processId = capture.processId.toInt(),
+            windowId = authorizedCapture.gameWindow.toString(),
+            perceptualFingerprint = stuckScreenPerceptualFingerprint(capture.image),
+            exactReconnectDialog = exactReconnectCandidate,
+        )
+        val observedStuckFingerprint = observedStuckFrame.fingerprint
         val sameScreenLadderInProgress = stuckScreenUnblockPolicy.hasProgressFor(observedStuckFingerprint)
         if (detection != null) unknownStartupRestartPolicy.reset()
         if (detection != null &&
@@ -2265,6 +2270,12 @@ object UpstreamScreenStateRecovery {
     ): Boolean {
         val capture = authorizedCapture.capture
         val exactReconnect = detection?.kind == ScreenKind.RECONNECT && capture.visual.reconnectDialogVisual
+        val currentFrameProof = StuckScreenUnblockFrameIdentity.create(
+            processId = currentPid ?: capture.processId.toInt(),
+            windowId = authorizedCapture.gameWindow.toString(),
+            perceptualFingerprint = stuckScreenPerceptualFingerprint(capture.image),
+            exactReconnectDialog = exactReconnect,
+        )
         val staleQueueHistoryCleared = if (exactReconnect) {
             LifecycleTrace.supersedeActiveMatchmakingScreenForReconnect()
         } else false
@@ -2302,7 +2313,7 @@ object UpstreamScreenStateRecovery {
         val evidence = StuckScreenUnblockPolicy.Evidence(
             nowMs = System.currentTimeMillis(),
             stableForMs = stuckForMs,
-            fingerprint = "${currentPid ?: 0}|${authorizedCapture.gameWindow}|${stuckScreenPerceptualFingerprint(capture.image)}",
+            fingerprint = currentFrameProof.fingerprint,
             // Capture authority minted this exact probe; long OCR must not
             // make its screen classification retroactively stale. Before any
             // click below we acquire a second, immediately fresh frame.
@@ -2333,6 +2344,8 @@ object UpstreamScreenStateRecovery {
             "STUCK_SCREEN_UNBLOCK_DECISION action=${decision.action} reason=${decision.reason} " +
                 "click=${decision.clickNumber}/${StuckScreenUnblockPolicy.MAX_TOP_LEFT_CLICKS} " +
                 "fingerprint=${evidence.fingerprint} purpose=${authorizedCapture.purpose} " +
+                "perceptualFingerprint=${currentFrameProof.perceptualFingerprint} " +
+                "frameIdentityReason=${currentFrameProof.reason} screen=${detection?.kind?.code ?: "UNKNOWN"} " +
                 "fresh=${evidence.captureFresh} exactWindow=$exactWindow activeGame=$activeGame " +
                 "activeQueue=$activeQueue terminal=$resultOrTerminal paused=${PauseStatus.isPause} " +
                 "point=$point"
@@ -2353,15 +2366,21 @@ object UpstreamScreenStateRecovery {
                             DeckStrategyManager.currentRunMode != null,
                     )
                 }
-                val freshFingerprint = fresh?.let {
-                    "${currentPid ?: 0}|${fresh.gameWindow}|${stuckScreenPerceptualFingerprint(it.capture.image)}"
+                val freshFrame = fresh?.let {
+                    val isSameExactReconnectDialog = exactReconnect && fresh.capture.visual.reconnectDialogVisual
+                    StuckScreenUnblockFrameIdentity.create(
+                        processId = it.capture.processId.toInt(),
+                        windowId = it.gameWindow.toString(),
+                        perceptualFingerprint = stuckScreenPerceptualFingerprint(it.capture.image),
+                        exactReconnectDialog = isSameExactReconnectDialog,
+                    )
                 }
                 val freshAuthorized = fresh != null && currentPid != null &&
                     fresh.gameWindow.toString() == authorizedCapture.gameWindow.toString() &&
                     fresh.purpose in setOf(ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
                         ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE, ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE) &&
                     System.nanoTime() - fresh.capture.capturedAtNanos <= 5_000_000_000L &&
-                    freshFingerprint == evidence.fingerprint &&
+                    freshFrame != null && StuckScreenUnblockFrameIdentity.isSameClientScreen(currentFrameProof, freshFrame) &&
                     (freshVisualDetection == null || exactReconnect &&
                         freshVisualDetection.kind == ScreenKind.RECONNECT && fresh.capture.visual.reconnectDialogVisual ||
                         isSafeIdleUnblockScreen(freshVisualDetection, fresh.capture.visual) &&
@@ -2427,7 +2446,10 @@ object UpstreamScreenStateRecovery {
                 log.warn {
                     "STUCK_SCREEN_UNBLOCK_BATCH complete=$accepted clickCount=$dispatchedClickCount " +
                         "reason=${if (accepted) "dispatched" else "not-accepted-fresh-evidence-click-or-overlap"} " +
-                        "sourcePoint=$point freshPoint=$freshPoint fingerprint=${evidence.fingerprint}"
+                        "sourcePoint=$point freshPoint=$freshPoint fingerprint=${evidence.fingerprint} " +
+                        "perceptualFingerprint=${currentFrameProof.perceptualFingerprint} " +
+                        "freshPerceptualFingerprint=${freshFrame?.perceptualFingerprint ?: "none"} " +
+                        "frameIdentityReason=${freshFrame?.reason ?: "fresh-capture-unavailable"}"
                 }
                 true
             }
@@ -2457,10 +2479,21 @@ object UpstreamScreenStateRecovery {
                             DeckStrategyManager.currentRunMode != null,
                     )
                 }
+                val freshIsSameExactReconnectDialog = exactReconnect &&
+                    fresh != null &&
+                    fresh.capture.visual.reconnectDialogVisual
+                val finalFrame = fresh?.let {
+                    StuckScreenUnblockFrameIdentity.create(
+                        processId = it.capture.processId.toInt(),
+                        windowId = it.gameWindow.toString(),
+                        perceptualFingerprint = stuckScreenPerceptualFingerprint(it.capture.image),
+                        exactReconnectDialog = freshIsSameExactReconnectDialog,
+                    )
+                }
                 val finalSafe = fresh != null && currentPid != null &&
                     fresh.gameWindow.toString() == authorizedCapture.gameWindow.toString() &&
                     System.nanoTime() - fresh.capture.capturedAtNanos <= 5_000_000_000L &&
-                    "${currentPid ?: 0}|${fresh.gameWindow}|${stuckScreenPerceptualFingerprint(fresh.capture.image)}" == evidence.fingerprint &&
+                    finalFrame != null && StuckScreenUnblockFrameIdentity.isSameClientScreen(currentFrameProof, finalFrame) &&
                     !fresh.capture.visual.startupQuestOverlayVisual &&
                     (!fresh.capture.visual.reconnectDialogVisual || exactReconnect) &&
                     !fresh.capture.visual.matchmakingSearchVisual &&
@@ -2485,6 +2518,9 @@ object UpstreamScreenStateRecovery {
                     "STUCK_SCREEN_UNBLOCK_RESTART decision=${if (restartAccepted) "RESTART_CLIENT" else "DEFER"} " +
                         "reason=${if (!finalSafe) decision.reason else if (!restartAccepted) "client-restart-in-flight" else "final-fences-cleared"} " +
                         "finalGuard=$finalSafe freshScreen=${freshDetection?.kind?.code ?: "UNKNOWN"} " +
+                        "fingerprint=${evidence.fingerprint} " +
+                        "freshPerceptualFingerprint=${finalFrame?.perceptualFingerprint ?: "none"} " +
+                        "frameIdentityReason=${finalFrame?.reason ?: "fresh-capture-unavailable"} " +
                         "pause=${PauseStatus.isPause} action=${if (restartAccepted) "idle-watchdog" else "NO_ACTION"}"
                 }
                 StuckScreenUnblockDispatch.dispatchRestartIfAuthorized(
