@@ -5,10 +5,17 @@ object MatchmakingDialogRecoveryPolicy {
     const val MAX_ATTEMPTS = 20
     const val MIN_OCR_CONFIDENCE = 0.55
 
-    enum class Probe { ERROR_DIALOG_VISIBLE, KNOWN_FOUR_CARD_NOTICE_VISIBLE, NO_ERROR_DIALOG, UNKNOWN }
+    enum class Probe {
+        ERROR_DIALOG_VISIBLE,
+        WRONG_MODE_DECK_NOTICE_VISIBLE,
+        KNOWN_FOUR_CARD_NOTICE_VISIBLE,
+        NO_ERROR_DIALOG,
+        UNKNOWN,
+    }
     enum class Action {
         CLICK_CONFIRM,
         DISMISS_KNOWN_NOTICE,
+        OPERATOR_ACTION_REQUIRED,
         WAIT_AND_RETRY,
         CONFIRMED_DISMISSED,
         STOP_NOT_PRESENT,
@@ -38,9 +45,16 @@ object MatchmakingDialogRecoveryPolicy {
                 Decision(Action.STOP_NOT_PRESENT, "dialog-not-present")
             }
         }
+        if (probe == Probe.WRONG_MODE_DECK_NOTICE_VISIBLE) {
+            return Decision(Action.OPERATOR_ACTION_REQUIRED, "configured-deck-mode-mismatch")
+        }
         if (completedAttempts >= MAX_ATTEMPTS) return Decision(Action.EXHAUSTED, "attempt-limit")
         return when (probe) {
             Probe.ERROR_DIALOG_VISIBLE -> Decision(Action.CLICK_CONFIRM, "exact-error-dialog-visible")
+            Probe.WRONG_MODE_DECK_NOTICE_VISIBLE -> Decision(
+                Action.OPERATOR_ACTION_REQUIRED,
+                "configured-deck-mode-mismatch",
+            )
             Probe.KNOWN_FOUR_CARD_NOTICE_VISIBLE -> if (priorClickSent) {
                 Decision(Action.WAIT_AND_RETRY, "known-notice-awaiting-dismissal-postcheck")
             } else {

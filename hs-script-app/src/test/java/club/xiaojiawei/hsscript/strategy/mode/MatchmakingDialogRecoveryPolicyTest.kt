@@ -182,6 +182,39 @@ class MatchmakingDialogRecoveryPolicyTest {
     }
 
     @Test
+    fun `live standard screen with Wild deck notice is classified as operator action and sends no input`() {
+        val image = fixture(
+            "/offline-ocr/screen-recovery/tournament-wild-deck-standard-mode-20261029.png",
+        )
+        assertTrue(
+            club.xiaojiawei.hsscript.status.ScreenWatchdog.hasEnabledDeckSelectionStartButton(image),
+            "captured live screen has the deck-selection Start control",
+        )
+        var clickCount = 0
+        val probe = ScreenStateRecovery.probeStartGameErrorDialogForImage(
+            image,
+            "deployed-705-live-frame",
+        ) { _, _ ->
+            OcrRecognition("狂野模式套牌无法用于标准模式模式。or40暗牧海盗DK60Cann获胜野兽猎任务术", 0.999989)
+        }
+
+        assertEquals(MatchmakingDialogRecoveryPolicy.Probe.WRONG_MODE_DECK_NOTICE_VISIBLE, probe.state)
+        assertEquals("high-confidence-wild-deck-standard-mode-notice-with-deck-selection-start", probe.reason)
+        val decision = MatchmakingDialogRecoveryPolicy.decide(
+            active,
+            probe.state,
+            completedAttempts = 0,
+            priorClickSent = false,
+        )
+        assertEquals(MatchmakingDialogRecoveryPolicy.Action.OPERATOR_ACTION_REQUIRED, decision.action)
+        assertEquals(null, MatchmakingDialogRecoveryPolicy.dispatchConfirm(decision) {
+            clickCount++
+            true
+        })
+        assertEquals(0, clickCount, "wrong-mode tooltip never authorizes a click or Start")
+    }
+
+    @Test
     fun `known notice visual signature excludes deck selection and existing error modal fixtures`() {
         val controls = listOf(
             "/offline-ocr/screen-recovery/deck-selection-screen.png",

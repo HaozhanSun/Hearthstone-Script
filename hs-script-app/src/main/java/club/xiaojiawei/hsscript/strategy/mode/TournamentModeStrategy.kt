@@ -17,6 +17,7 @@ import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
 import club.xiaojiawei.hsscript.status.TerminalCleanupQueueResumePolicy
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
+import club.xiaojiawei.hsscript.strategy.mode.MatchmakingDialogRecoveryTaskGate
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.strategy.AbstractModeStrategy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
@@ -43,6 +44,7 @@ import java.util.concurrent.atomic.AtomicLong
  */
 object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
     private val matchmakingTraceSequence = AtomicLong()
+    private val matchmakingDialogRecoveryTaskGate = MatchmakingDialogRecoveryTaskGate()
 
     val START_RECT: GameRect by lazy { GameRect(0.2586, 0.3459, 0.2706, 0.3794) }
 
@@ -503,18 +505,29 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
      * fresh capture positively matches the title, body, and confirm label.
      */
     private fun scheduleMatchmakingDialogRecovery(traceId: Long) {
+        if (!matchmakingDialogRecoveryTaskGate.tryAcquire()) {
+            log.warn {
+                "MATCHMAKING_ERROR_DIALOG_RECOVERY_DEDUPLICATED trace=$traceId " +
+                    "reason=existing-recovery-task action=NO_SECOND_PROBE_LOOP"
+            }
+            return
+        }
         var attempts = 0
         var priorClickSent = false
         val retrySupervisor = MatchmakingDialogRecoveryRetrySupervisor()
         lateinit var recoveryTask: ScheduledFuture<*>
+        fun stopRecoveryTask() {
+            recoveryTask.cancel(false)
+            matchmakingDialogRecoveryTaskGate.release()
+        }
         recoveryTask = EXTRA_THREAD_POOL.scheduleWithFixedDelay(
             LRunnable {
                 if (PauseStatus.isPause || Mode.currMode !== ModeEnum.TOURNAMENT) {
-                    recoveryTask.cancel(false)
+                    stopRecoveryTask()
                     return@LRunnable
                 }
                 if (abortMatchmakingIfGameStarted(traceId, "popup-recovery")) {
-                    recoveryTask.cancel(false)
+                    stopRecoveryTask()
                     return@LRunnable
                 }
                 val probe = ScreenStateRecovery.probeStartGameErrorDialogForMatchmaking()
@@ -574,9 +587,26 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                         "screenshot=${probe.screenshot ?: "none"}"
                 }
                 when (decision.action) {
+                    MatchmakingDialogRecoveryPolicy.Action.OPERATOR_ACTION_REQUIRED -> {
+                        val configuredMode = DeckStrategyManager.currentRunMode?.name
+                        TournamentModeConfirmation.reportUnconfirmedDeckSelection(
+                            expectedMode = configuredMode,
+                            observedMode = if (probe.reason.contains("wild-deck-standard-mode")) "STANDARD" else "UNKNOWN",
+                            reason = probe.reason,
+                        )
+                        log.error {
+                            "MATCHMAKING_WRONG_MODE_NOTICE trace=$traceId expectedMode=${configuredMode ?: "UNKNOWN"} " +
+                                "state=${probe.state} reason=${probe.reason} " +
+                                "action=NO_CLICK_NO_START_NO_PAUSE operatorRequired=true " +
+                                "screenshot=${probe.screenshot ?: "none"}"
+                        }
+                        cancelAllEnteredTasks()
+                        stopRecoveryTask()
+                    }
+
                     MatchmakingDialogRecoveryPolicy.Action.CLICK_CONFIRM -> {
                         if (abortMatchmakingIfGameStarted(traceId, "popup-recovery-before-error-click")) {
-                            recoveryTask.cancel(false)
+                            stopRecoveryTask()
                             return@LRunnable
                         }
                         val accepted = MatchmakingDialogRecoveryPolicy.dispatchConfirm(decision) {
@@ -593,7 +623,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
 
                     MatchmakingDialogRecoveryPolicy.Action.DISMISS_KNOWN_NOTICE -> {
                         if (abortMatchmakingIfGameStarted(traceId, "popup-recovery-before-notice-dismissal")) {
-                            recoveryTask.cancel(false)
+                            stopRecoveryTask()
                             return@LRunnable
                         }
                         val accepted = MatchmakingDialogRecoveryPolicy.dispatchKnownNoticeDismissal(decision) {
@@ -621,7 +651,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                             "MATCHMAKING_ERROR_DIALOG_CONFIRMED trace=$traceId " +
                                 "evidence=fresh-post-click-visual-state input=none"
                         }
-                        recoveryTask.cancel(false)
+                        stopRecoveryTask()
                     }
 
                     MatchmakingDialogRecoveryPolicy.Action.STOP_NOT_PRESENT -> {
@@ -629,14 +659,14 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                             "MATCHMAKING_ERROR_DIALOG_NOT_PRESENT trace=$traceId " +
                                 "evidence=positive-non-error-screen input=none"
                         }
-                        recoveryTask.cancel(false)
+                        stopRecoveryTask()
                     }
 
                     MatchmakingDialogRecoveryPolicy.Action.CANCEL -> {
                         log.info {
                             "MATCHMAKING_ERROR_DIALOG_CANCELLED trace=$traceId reason=${decision.reason} input=none"
                         }
-                        recoveryTask.cancel(false)
+                        stopRecoveryTask()
                     }
 
                     MatchmakingDialogRecoveryPolicy.Action.EXHAUSTED -> {
@@ -659,7 +689,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                 }
             },
             800,
-            1_000,
+            10_000,
             TimeUnit.MILLISECONDS,
         )
     }

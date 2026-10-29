@@ -365,6 +365,20 @@ object UpstreamScreenStateRecovery {
                         "proof=${if (currentDetection.kind == ScreenKind.DECK_SELECTION) "MATCHMAKING_START_ONLY" else "ONLINE_MENU"} " +
                         "provider=UPSTREAM"
                 }
+                if (currentDetection.kind == ScreenKind.DECK_SELECTION && !readinessRecorded) {
+                    startupClassificationOnly = true
+                    TournamentModeConfirmation.reportUnconfirmedDeckSelection(
+                        expectedMode = expectedDeckMode,
+                        observedMode = deckModeObservation?.observedMode?.name,
+                        reason = deckModeObservation?.evidence ?: "fresh-mode-proof-missing",
+                    )
+                    log.warn {
+                        "SCREEN_RECOVERY_DECK_SELECTION_CLASSIFICATION_ONLY " +
+                            "expectedRunMode=${expectedDeckMode ?: "UNKNOWN"} " +
+                            "observedRunMode=${deckModeObservation?.observedMode?.name ?: "UNKNOWN"} " +
+                            "action=NO_INPUT_NO_START provider=UPSTREAM"
+                    }
+                }
             } else {
                 StartupInputReadiness.invalidate(pid, hwnd)
                 startupClassificationOnly = !isReconnectState

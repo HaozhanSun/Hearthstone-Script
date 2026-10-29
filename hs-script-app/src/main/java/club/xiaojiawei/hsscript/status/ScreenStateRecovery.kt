@@ -583,6 +583,13 @@ object ScreenStateRecovery {
                         "observedRunMode=${deckModeObservation?.observedMode?.name ?: "n/a"} " +
                         "proof=${if (detection.kind == ScreenKind.DECK_SELECTION) "MATCHMAKING_START_ONLY" else "ONLINE_MENU"}"
                 }
+                if (detection.kind == ScreenKind.DECK_SELECTION && !readinessRecorded) {
+                    TournamentModeConfirmation.reportUnconfirmedDeckSelection(
+                        expectedMode = expectedDeckMode,
+                        observedMode = deckModeObservation?.observedMode?.name,
+                        reason = deckModeObservation?.evidence ?: "fresh-mode-proof-missing",
+                    )
+                }
             } else {
                 StartupInputReadiness.invalidate(captureTarget?.processId, currentHwnd)
             }
@@ -797,10 +804,12 @@ object ScreenStateRecovery {
         val recognition = recognize(crop(image, roi.bounds), roi.name)
         val text = recognition.text
         val modalVisible = visualSignature(image).centeredModalPanelVisual
+        val deckSelectionStartVisible = ScreenWatchdog.hasEnabledDeckSelectionStartButton(image)
         val state = StartGameErrorDialogClassifier.classifyModalText(
             text = text,
             confidence = recognition.confidence,
             modalVisible = modalVisible,
+            deckSelectionStartVisible = deckSelectionStartVisible,
         )
         val normalized = text.replace(Regex("\\s+"), "")
         return StartGameErrorDialogProbe(
@@ -812,6 +821,8 @@ object ScreenStateRecovery {
             provider = OcrRuntime.lastProviderUsed().name,
             reason = if (state == MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN) {
                 "ocr-unverified-or-low-confidence"
+            } else if (state == MatchmakingDialogRecoveryPolicy.Probe.WRONG_MODE_DECK_NOTICE_VISIBLE) {
+                "high-confidence-wild-deck-standard-mode-notice-with-deck-selection-start"
             } else {
                 "ocr-complete"
             },

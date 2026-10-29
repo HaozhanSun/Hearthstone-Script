@@ -227,6 +227,19 @@ object TournamentModeConfirmation {
         )
     }
 
+    internal fun reportUnconfirmedDeckSelection(expectedMode: String?, observedMode: String?, reason: String) {
+        val expected = expectedMode?.takeIf { it.isNotBlank() } ?: "UNKNOWN"
+        log.warn {
+            "TOURNAMENT_MODE_START_BLOCKED expectedMode=$expected observedMode=${observedMode ?: "UNKNOWN"} " +
+                "reason=$reason action=NO_INPUT_NO_START recovery=operator-select-mode-and-retry"
+        }
+        notifyOperatorOnce(
+            expectedMode = expected,
+            message = "The configured game mode ($expected) is not visibly confirmed. Start is blocked. " +
+                "Select the configured mode in Hearthstone, then retry; automation was not paused.",
+        )
+    }
+
     private fun reportUnsafeMode(result: TournamentModeConfirmationResult?) {
         if (WarEx.inWar) {
             logStateChanged(result)

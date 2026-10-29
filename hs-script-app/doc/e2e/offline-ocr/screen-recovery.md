@@ -394,6 +394,17 @@ this deletion boundary.
   condition changes the user's pause state. A fresh deck-selection title and enabled Start control authorize
   only `matchmaking.start` after the observed mode matches the selected run
   mode. Do not carry the previous game's cleanup fence into the next queue.
+  The startup mode-switch sequence uses generic mouse input after leaving the
+  HUB chooser; the final dispatch gate can reject those clicks until a narrow
+  mode-selector proof exists. If mode-title OCR is UNKNOWN, do not let upstream
+  recovery call `startMatching` merely because the structural deck-selection
+  classifier succeeded. Keep it classification-only, notify the operator once,
+  and require manual mode correction/retry. The visible tooltip
+  `狂野模式套牌无法用于标准模式` with an exact deck-selection Start signature is
+  a specific wrong-mode terminal state for the matchmaking-error probe: emit
+  `OPERATOR_ACTION_REQUIRED`, send no confirm/Start input, and stop retry timers.
+  Keep one error-dialog recovery task active so PaddleX latency cannot create a
+  swarm of overlapping OCR probes.
 - A victory page can leave all OCR/screen classifiers UNKNOWN even while the
   exact current game is complete and the authorized frame visibly contains
   Hearthstone's lower-center Continue band. Keep a distinct Continue-band

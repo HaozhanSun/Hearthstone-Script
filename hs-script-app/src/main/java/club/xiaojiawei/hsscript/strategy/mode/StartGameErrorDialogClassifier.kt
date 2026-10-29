@@ -6,6 +6,7 @@ internal object StartGameErrorDialogClassifier {
         text: String,
         confidence: Double? = null,
         modalVisible: Boolean = false,
+        deckSelectionStartVisible: Boolean = false,
     ): MatchmakingDialogRecoveryPolicy.Probe {
         if (confidence != null && (!confidence.isFinite() ||
                 confidence < MatchmakingDialogRecoveryPolicy.MIN_OCR_CONFIDENCE)
@@ -13,6 +14,12 @@ internal object StartGameErrorDialogClassifier {
             return MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN
         }
         val normalized = normalize(text)
+        if (deckSelectionStartVisible && confidence != null &&
+            confidence >= MatchmakingDialogRecoveryPolicy.MIN_OCR_CONFIDENCE &&
+            normalized.contains("狂野模式套牌无法用于标准模式")
+        ) {
+            return MatchmakingDialogRecoveryPolicy.Probe.WRONG_MODE_DECK_NOTICE_VISIBLE
+        }
         val hasErrorHeading = normalized.contains("发生错误")
         val hasConfirm = normalized.contains("确定")
         val legacyStartFailure = normalized.contains("开始游戏") && normalized.contains("几分钟")
