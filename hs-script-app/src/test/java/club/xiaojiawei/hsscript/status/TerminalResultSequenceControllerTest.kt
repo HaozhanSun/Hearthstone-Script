@@ -18,6 +18,49 @@ import org.junit.jupiter.api.Test
 
 class TerminalResultSequenceControllerTest {
     @Test
+    fun `verified game menu gets one escape then requires a fresh result capture before continue`() {
+        val observerExecutor = Executors.newSingleThreadScheduledExecutor()
+        val inputExecutor = Executors.newSingleThreadScheduledExecutor()
+        val captures = AtomicInteger()
+        val escapes = AtomicInteger()
+        val continues = CountDownLatch(1)
+        val controller = TerminalResultSequenceController(
+            observerExecutor = observerExecutor,
+            inputExecutor = inputExecutor,
+            initialInputCount = 0,
+            initialRetryIntervalMillis = 0L,
+            retryIntervalMillis = { 60_000L },
+            observerIntervalMillis = 50L,
+            monitorIntervalMillis = 10L,
+            maxDurationMillis = 10_000L,
+            observe = {
+                val count = captures.incrementAndGet()
+                if (count == 1) ResultScreenObservation(null, true, gameMenuOverlayVisible = true)
+                else ResultScreenObservation(null, true, continueControlVisible = true)
+            },
+            terminalProofValid = { true }, paused = { false }, sameGame = { true },
+            dispatchContinue = { _, _, _, mark ->
+                mark()
+                continues.countDown()
+                TerminalResultSequenceController.DispatchOutcome(true, true)
+            },
+            confirmDestination = { false },
+            onStopped = { _, _ -> },
+            dispatchDismissGameMenu = { escapes.incrementAndGet(); true },
+        )
+        try {
+            controller.start()
+            assertTrue(continues.await(3, TimeUnit.SECONDS))
+            assertTrue(captures.get() >= 2, "continue requires a fresh observation after menu classification")
+            assertEquals(1, escapes.get(), "the menu gets one bounded Escape attempt")
+        } finally {
+            controller.cancel("test-cleanup")
+            observerExecutor.shutdownNow()
+            inputExecutor.shutdownNow()
+        }
+    }
+
+    @Test
     fun `v705 gold victory measurements authorize only the bounded unknown Continue path`() {
         val measurements = requireNotNull(
             javaClass.getResourceAsStream("/offline-ocr/result-flow/rc-v705-terminal-recovery/incident-evidence.txt"),

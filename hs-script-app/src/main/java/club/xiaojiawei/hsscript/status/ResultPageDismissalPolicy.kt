@@ -194,6 +194,8 @@ internal data class ResultScreenObservation(
     val continueControlVisible: Boolean = false,
     val destinationScreen: String? = null,
     val destinationConfidence: Int = 0,
+    /** Exact centered game-menu overlay; it must be dismissed before result controls are actionable. */
+    val gameMenuOverlayVisible: Boolean = false,
     /** Monotonic time at which the authorized client pixels were captured. */
     val capturedAtNanos: Long = System.nanoTime(),
 )

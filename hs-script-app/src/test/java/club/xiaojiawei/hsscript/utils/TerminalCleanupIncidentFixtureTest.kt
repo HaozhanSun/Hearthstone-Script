@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
 import club.xiaojiawei.hsscript.status.ResultScreenObservation
 import club.xiaojiawei.hsscript.status.PostResultRankProgressPolicy
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
+import club.xiaojiawei.hsscript.status.ScreenWatchdog
 import club.xiaojiawei.hsscript.status.UpstreamScreenStateRecovery
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
@@ -16,6 +17,15 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class TerminalCleanupIncidentFixtureTest {
+    @Test
+    fun `v569 post-terminal game menu overlay has an exact visual signature`() {
+        val menu = loadImage(SCREENSHOT)
+        assertTrue(
+            ScreenWatchdog.hasVerifiedGameMenuOverlay(menu),
+            ScreenWatchdog.settingsOverlayDiagnosticsForTest(menu),
+        )
+    }
+
     @Test
     fun `v570 pre-overlay board is rejected but fresh defeat panel dispatches once after same-game proof`() {
         val preOverlayBytes = requireNotNull(javaClass.getResourceAsStream(V570_PRE_OVERLAY)).use { it.readBytes() }

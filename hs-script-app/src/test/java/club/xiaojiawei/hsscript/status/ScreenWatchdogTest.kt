@@ -349,6 +349,7 @@ class ScreenWatchdogTest {
         )?.use(ImageIO::read) ?: error("missing captured v4.16.697 rank-nine settings screenshot")
         val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true|warCount=0"
         assertTrue(ScreenWatchdog.hasSettingsOverlayVisualForTest(screenshot))
+        assertTrue(ScreenWatchdog.hasVerifiedGameMenuOverlay(screenshot))
         assertEquals(ScreenWatchdogKind.SETTINGS, ScreenWatchdog.fastVisualKindForSurrenderForTest(state, screenshot))
 
         val probe = ScreenWatchdog.MandatorySurrenderPostClickProbe()

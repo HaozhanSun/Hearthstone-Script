@@ -400,6 +400,23 @@ object ScreenWatchdog {
     internal fun hasSettingsOverlayVisualForTest(image: BufferedImage): Boolean =
         settingsOverlayMetrics(image).accepted
 
+    /** Exact menu frame and all three fixed button ROIs; safe for result recovery classification. */
+    internal fun hasVerifiedGameMenuOverlay(image: BufferedImage): Boolean {
+        val metrics = settingsOverlayMetrics(image)
+        if (metrics.accepted) return true
+        // Older client menu layout has only Options and Exit. It omits the
+        // centered red Concede row and uses a shallower frame, so require the
+        // distinctive header and both stacked button color bands together.
+        return image.width >= 800 && image.height >= 450 &&
+            metrics.headerBeige >= 0.35 &&
+            metrics.surrenderRed <= 0.05 &&
+            metrics.optionsBeige >= 0.30 &&
+            metrics.exitBeige >= 0.30 &&
+            metrics.frameTop >= 0.55 &&
+            metrics.frameLeft >= 0.55 &&
+            metrics.frameRight >= 0.55
+    }
+
     internal fun surrenderConfirmationDiagnosticsForTest(image: BufferedImage): String =
         surrenderConfirmationMetrics(image).toString()
 

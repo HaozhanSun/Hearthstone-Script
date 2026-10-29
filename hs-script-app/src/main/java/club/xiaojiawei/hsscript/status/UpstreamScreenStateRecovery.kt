@@ -1751,6 +1751,15 @@ object UpstreamScreenStateRecovery {
             authorizedCaptureMs = ResultScreenProbeTelemetry.elapsedMs(captureStartedAt),
         )
         val visual = authorizedCapture.capture.visual
+        if (ScreenWatchdog.hasVerifiedGameMenuOverlay(authorizedCapture.capture.image)) {
+            decisionPath = "VERIFIED_GAME_MENU_OVERLAY"
+            return@runCatching report(ResultScreenObservation(
+                resultVisible = null,
+                captureAuthorized = true,
+                gameMenuOverlayVisible = true,
+                capturedAtNanos = authorizedCapture.capture.capturedAtNanos,
+            ))
+        }
         val visualDecisionStartedAt = System.nanoTime()
         val fastVisual = ResultPageEvidencePolicy.fastVisualObservation(
             visual.resultContinueGrayLightRatio,

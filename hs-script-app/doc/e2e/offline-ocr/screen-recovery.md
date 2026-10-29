@@ -61,6 +61,12 @@ this deletion boundary.
   clear and no game is active. Keep the Power.log terminal-tail fence until a
   new `CREATE_GAME`; clearing queue-input recovery must not release stale-tail
   parsing or add a pre-mulligan rank gate.
+- In terminal result cleanup, classify the centered game-menu overlay before
+  destination detection or Continue-band dispatch. Support both the current
+  three-button menu and the older two-button Options/Exit layout. With fresh
+  authorized pixels and valid same-game terminal proof, permit one Escape
+  dismissal attempt, then require a new authorized capture before any result
+  Continue action. Never click Concede, Options, or Exit as recovery controls.
 
 - A callback that first sees `FINAL_GAMEOVER` without a terminal `PLAYSTATE`
   starts the bounded result wait. Every later `GAME_OVER` callback must reread

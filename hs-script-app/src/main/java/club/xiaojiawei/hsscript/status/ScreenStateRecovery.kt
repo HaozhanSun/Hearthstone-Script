@@ -1872,6 +1872,15 @@ object ScreenStateRecovery {
                 decisionPath = "RUNTIME_TOKEN_INVALID"
                 return@runCatching report(ResultScreenObservation(null, captureAuthorized = false))
             }
+            if (ScreenWatchdog.hasVerifiedGameMenuOverlay(capture.image)) {
+                decisionPath = "VERIFIED_GAME_MENU_OVERLAY"
+                return@runCatching report(ResultScreenObservation(
+                    resultVisible = null,
+                    captureAuthorized = true,
+                    gameMenuOverlayVisible = true,
+                    capturedAtNanos = capture.capturedAtNanos,
+                ))
+            }
             val visualDecisionStartedAt = System.nanoTime()
             val fastVisual = ResultPageEvidencePolicy.fastVisualObservation(
                 capture.visual.resultContinueGrayLightRatio,
