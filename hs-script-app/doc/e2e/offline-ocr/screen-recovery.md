@@ -494,3 +494,20 @@ this deletion boundary.
   input-intent history through the 60-second restart, and retain negative cases
   for a current queue, authoritative live game, and terminal proof. No
   reconnect click or pause is part of this escalation.
+
+- Beta startup deck-selection regression (2026-10-29): when broad OCR returns
+  UNKNOWN but a fresh, exact client capture has the fixed enabled Start-control
+  visual, no modal/quest/queue visual, and a configured deck, classify only the
+  deck-selection screen. The Start proof still requires an independently
+  confirmed configured format; unknown or mismatched format may authorize one
+  bounded Back-to-format-selector action only. Recheck the mode after selection
+  before deck selection or Start, and retain active-game, current-queue,
+  terminal, exact-window, and post-mulligan surrender fences. Regression must
+  use the saved live frame and assert that the named navigation dispatch is
+  reached while `matchmaking.start` remains blocked for UNKNOWN mode.
+- For an exact reconnect screen, the 60-second no-pause restart grace must
+  schedule its own fresh authorized capture at the threshold rather than wait
+  for the next slow periodic OCR pass. Re-evaluate current active-game,
+  matchmaking-screen/short-race, and terminal fences on that capture and again
+  before restarting. Cover the timer cadence deterministically; OCR latency or
+  a delayed global probe must not silently extend the configured grace.
