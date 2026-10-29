@@ -14,6 +14,7 @@ import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.GameWindowReadiness
+import club.xiaojiawei.hsscript.status.EventQuestOverlayRecoveryContextPolicy
 import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
@@ -768,11 +769,20 @@ object MouseUtil {
                 GameUtil.findGameProcessIdForDiagnostics() == expectedPid &&
                 GameUtil.isVerifiedCurrentGameWindow(expectedHwnd, expectedPid) &&
                 clientBounds.contains(pos) &&
-                Mode.currMode === ModeEnum.HUB && Mode.nextMode !== ModeEnum.GAMEPLAY &&
-                !WarEx.inWar && !GameUtil.isTerminalGameState() &&
-                !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
-                !LifecycleTrace.hasRecentMatchmakingInputIntent() &&
-                WorkTimeListener.working && !PauseStatus.isPause
+                EventQuestOverlayRecoveryContextPolicy.allowsDismiss(
+                    mode = Mode.currMode?.name,
+                    phase = WarEx.war.currentPhase?.name,
+                    currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+                    nextModeGameplay = Mode.nextMode === ModeEnum.GAMEPLAY,
+                    activeGame = WarEx.inWar || Mode.currMode === ModeEnum.GAMEPLAY,
+                    activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                        LifecycleTrace.hasRecentMatchmakingInputIntent(),
+                    terminalOrResult = GameUtil.isTerminalGameState() ||
+                        club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+                            .isTerminalCleanupPending(),
+                    working = WorkTimeListener.working,
+                    paused = PauseStatus.isPause,
+                )
 
         val permitValid = ActionDispatchGate.startupQuestOverlayPermitValid(
             permit,

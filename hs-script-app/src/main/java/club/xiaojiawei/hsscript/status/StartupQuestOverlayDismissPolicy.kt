@@ -62,6 +62,11 @@ internal object StartupQuestOverlayDismissPolicy {
         if (clientBounds.width <= TOP_LEFT_INSET_PX || clientBounds.height <= TOP_LEFT_INSET_PX) return null
         return Point(clientBounds.x + TOP_LEFT_INSET_PX, clientBounds.y + TOP_LEFT_INSET_PX)
     }
+
+    fun topLeftPixel(clientBounds: Rectangle): Point? {
+        if (clientBounds.width <= 0 || clientBounds.height <= 0) return null
+        return Point(clientBounds.x, clientBounds.y)
+    }
 }
 
 /** A short-lived, single-use authorization tied to one current game window and point. */

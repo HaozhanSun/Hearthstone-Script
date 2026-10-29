@@ -62,6 +62,8 @@ object UpstreamScreenStateRecovery {
     private val indefiniteReconnectRestartPolicy = IndefiniteReconnectRestartPolicy()
     private val clientRestartInFlight = ClientRestartRequestGate()
     private val exactCaptureOcrReuse = ExactCaptureOcrReuse()
+    private val eventQuestOverlayRecoveryInFlight = AtomicBoolean(false)
+    private val eventQuestOverlayRecoveryPolicy = EventQuestOverlayRecoveryPolicy()
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
@@ -73,6 +75,7 @@ object UpstreamScreenStateRecovery {
         RECONNECT("RECONNECT"),
         RECONNECT_FAILURE("RECONNECT_FAILURE"),
         AMAZON_APPSTORE_NOTICE("AMAZON_APPSTORE_NOTICE"),
+        EVENT_QUEST_OVERLAY("EVENT_QUEST_OVERLAY"),
         BETA_RESULT_CONFIRMATION("BETA_RESULT_CONFIRMATION"),
         SERVER_UNAVAILABLE("SERVER_UNAVAILABLE"),
         LOGIN("LOGIN"),
@@ -125,6 +128,7 @@ object UpstreamScreenStateRecovery {
         val matchmakingSearchVisual: Boolean = false,
         val hubModeChooserVisual: Boolean = false,
         val amazonAppstoreSunsetNoticeVisual: Boolean = false,
+        val startupQuestOverlayVisual: Boolean = false,
     ) {
         override fun toString(): String =
             "hash=${java.lang.Long.toUnsignedString(sampleHash, 16)} " +
@@ -137,7 +141,8 @@ object UpstreamScreenStateRecovery {
                 "reconnectDialogVisual=$reconnectDialogVisual " +
                 "matchmakingSearchVisual=$matchmakingSearchVisual " +
                 "hubModeChooserVisual=$hubModeChooserVisual " +
-                "amazonAppstoreSunsetNoticeVisual=$amazonAppstoreSunsetNoticeVisual"
+                "amazonAppstoreSunsetNoticeVisual=$amazonAppstoreSunsetNoticeVisual " +
+                "startupQuestOverlayVisual=$startupQuestOverlayVisual"
     }
 
     private data class RegionSignal(
@@ -224,7 +229,8 @@ object UpstreamScreenStateRecovery {
                 "visual=${capture.visual}"
         }
 
-        val ocrText = runOCR(capture, File(TESS_DATA_PATH)) { ocrTimings = it }
+        val questOverlayVisual = capture.visual.startupQuestOverlayVisual
+        val ocrText = if (questOverlayVisual) "" else runOCR(capture, File(TESS_DATA_PATH)) { ocrTimings = it }
         if (!stateStillCurrent()) {
             log.info {
                 "SCREEN_RECOVERY_PROBE_TIMING " + ResultScreenProbeTelemetry.formatScreenRecovery(
@@ -372,6 +378,10 @@ object UpstreamScreenStateRecovery {
         if (detection?.kind == ScreenKind.AMAZON_APPSTORE_NOTICE &&
             dismissFreshAmazonAppstoreNotice(authorizedCapture)
         ) return true
+        if (dispatchEventQuestRecovery(detection?.kind?.code) {
+                startEventQuestOverlayRecovery(authorizedCapture, stuckForMs, stateStillCurrent)
+            }
+        ) return true
         if (detection?.kind == ScreenKind.BETA_RESULT_CONFIRMATION &&
             dismissFreshBetaResultConfirmation(authorizedCapture)
         ) return true
@@ -413,6 +423,9 @@ object UpstreamScreenStateRecovery {
         if (detection == null || detection.confidence < 85) {
             log.warn {
                 "SCREEN_RECOVERY_UNRESOLVED confidence=${detection?.confidence ?: 0} " +
+                    "reason=${if (detection == null) "no-screen-classifier-matched" else "classifier-below-confidence-threshold"} " +
+                    "purpose=${authorizedCapture.purpose} questOverlayVisual=${capture.visual.startupQuestOverlayVisual} " +
+                    "capture=${capture.image.width}x${capture.image.height} " +
                     "screenshot=${capture.file?.absolutePath ?: "not-saved"} " +
                     "screenshotLink=${capture.file?.toURI()?.toString() ?: "none"} " +
                     "unknownStateScreenshot=${evidence?.file?.absolutePath ?: "not-saved"} " +
@@ -1074,6 +1087,7 @@ object UpstreamScreenStateRecovery {
             matchmakingSearchVisual = MatchmakingSearchVisualPolicy.isVisible(image),
             hubModeChooserVisual = HubModeChooserVisualPolicy.isVisible(image),
             amazonAppstoreSunsetNoticeVisual = ScreenStateRecovery.looksLikeAmazonAppstoreSunsetNoticeVisual(image),
+            startupQuestOverlayVisual = StartupQuestOverlayVisualClassifier.isQuestOverlay(image),
         )
     }
 
@@ -1436,6 +1450,14 @@ object UpstreamScreenStateRecovery {
             )
         ) {
             return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
+        }
+        if (visual.startupQuestOverlayVisual) {
+            return Detection(
+                ScreenKind.EVENT_QUEST_OVERLAY,
+                ModeEnum.TOURNAMENT,
+                96,
+                "event-quest-overlay-structural-visual",
+            )
         }
         val hubModeChoiceText = listOf("传统对战", "酒馆战棋", "竞技模式", "其他模式")
             .any(text::contains)
@@ -1926,6 +1948,209 @@ object UpstreamScreenStateRecovery {
         // Exact RECONNECT is observed during a bounded grace period, then
         // handled by the client restart policy. Never click dialog controls.
         return false
+    }
+
+    private fun startEventQuestOverlayRecovery(
+        authorizedCapture: AuthorizedCapture,
+        stuckForMs: Long,
+        stateStillCurrent: () -> Boolean,
+    ): Boolean {
+        val capture = authorizedCapture.capture
+        val pid = GameUtil.findGameProcessIdForDiagnostics() ?: return false
+        val hwnd = authorizedCapture.gameWindow
+        val safeContext = eventQuestSafeContext()
+        if (!capture.visual.startupQuestOverlayVisual || !safeContext ||
+            !GameUtil.isVerifiedCurrentGameWindow(hwnd, pid)
+        ) {
+            log.warn {
+                "EVENT_QUEST_RECOVERY_BLOCKED stage=admission exactVisual=${capture.visual.startupQuestOverlayVisual} " +
+                    "safeContext=$safeContext mode=${Mode.currMode?.name} phase=${WarEx.war.currentPhase?.name} " +
+                    "pause=${PauseStatus.isPause} pid=$pid hwnd=$hwnd action=NO_CLICK_NO_RESTART"
+            }
+            return false
+        }
+        if (!StartupQuestOverlayRecoveryFence.isActive()) {
+            eventQuestOverlayRecoveryPolicy.reset()
+            StartupQuestOverlayRecoveryFence.begin()
+            StartupQuestOverlayRecoveryFence.observeSession(pid, hwnd.toString())
+        }
+        log.warn {
+            "EVENT_QUEST_RECOVERY_STARTED stuckForMs=$stuckForMs pid=$pid hwnd=$hwnd " +
+                "mode=${Mode.currMode?.name} phase=${WarEx.war.currentPhase?.name} " +
+                "evidence=event-quest-overlay-structural-visual " +
+                "clicksMax=${EventQuestOverlayRecoveryPolicy.MAX_CLICKS} " +
+                "secondStageMs=${EventQuestOverlayRecoveryPolicy.SECOND_STAGE_DELAY_MS} ocr=skipped"
+        }
+        scheduleEventQuestOverlayRecovery(pid, hwnd, stuckForMs, stateStillCurrent, 0L)
+        return true
+    }
+
+    /** Shared live callsite routing seam; the callback is invoked only for the exact classified screen kind. */
+    internal fun dispatchEventQuestRecovery(screenKind: String?, dispatch: () -> Boolean): Boolean {
+        if (screenKind != ScreenKind.EVENT_QUEST_OVERLAY.code) return false
+        return dispatch()
+    }
+
+    private fun eventQuestSafeContext(): Boolean {
+        val activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+            LifecycleTrace.hasRecentMatchmakingInputIntent()
+        val activeGame = WarEx.inWar || Mode.currMode === ModeEnum.GAMEPLAY || Mode.nextMode === ModeEnum.GAMEPLAY
+        val terminalOrResult = GameUtil.isTerminalGameState() ||
+            club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending() ||
+            club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isTerminalCleanupPending()
+        return EventQuestOverlayRecoveryContextPolicy.allowsDismiss(
+            mode = Mode.currMode?.name,
+            phase = WarEx.war.currentPhase?.name,
+            currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+            nextModeGameplay = Mode.nextMode === ModeEnum.GAMEPLAY,
+            activeGame = activeGame,
+            activeQueue = activeQueue,
+            terminalOrResult = terminalOrResult,
+            working = WorkTimeListener.working,
+            paused = PauseStatus.isPause,
+        )
+    }
+
+    private fun scheduleEventQuestOverlayRecovery(
+        expectedPid: Long,
+        expectedWindow: WinDef.HWND,
+        stuckForMs: Long,
+        stateStillCurrent: () -> Boolean,
+        delayMs: Long,
+    ) {
+        if (!eventQuestOverlayRecoveryInFlight.compareAndSet(false, true)) return
+        EXTRA_THREAD_POOL.schedule({
+            var retryAfterMs: Long? = null
+            try {
+                val livePid = GameUtil.findGameProcessIdForDiagnostics()
+                val liveWindow = ScriptStatus.gameHWND
+                if (livePid != expectedPid || liveWindow?.toString() != expectedWindow.toString() ||
+                    !GameUtil.isVerifiedCurrentGameWindow(expectedWindow, expectedPid) || !stateStillCurrent()
+                ) {
+                    StartupQuestOverlayRecoveryFence.resolve()
+                    eventQuestOverlayRecoveryPolicy.reset()
+                    log.warn {
+                        "EVENT_QUEST_RECOVERY_UNBLOCKED reason=client-or-state-changed expectedPid=$expectedPid " +
+                            "livePid=${livePid ?: "none"} expectedHwnd=$expectedWindow " +
+                            "liveHwnd=${liveWindow ?: "none"} action=FENCE_RELEASED"
+                    }
+                    return@schedule
+                }
+                val authorized = captureVerifiedGameScreen(stuckForMs = stuckForMs)
+                if (authorized == null || authorized.gameWindow.toString() != expectedWindow.toString()) {
+                    log.warn {
+                        "EVENT_QUEST_RECOVERY_PROBE_BLOCKED reason=fresh-authorized-capture-unavailable " +
+                            "pid=$expectedPid hwnd=$expectedWindow action=NO_CLICK_NO_RESTART"
+                    }
+                    retryAfterMs = 10_000L
+                    return@schedule
+                }
+
+                val capture = authorized.capture
+                val captureTrusted = GameUtil.findGameProcessIdForDiagnostics() == expectedPid &&
+                    ScriptStatus.gameHWND?.toString() == expectedWindow.toString() &&
+                    GameUtil.isVerifiedCurrentGameWindow(expectedWindow, expectedPid)
+                val exactOverlay = captureTrusted && capture.visual.startupQuestOverlayVisual
+                val currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart()
+                val activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                    LifecycleTrace.hasRecentMatchmakingInputIntent() || capture.visual.matchmakingSearchVisual
+                val activeGame = WarEx.inWar || Mode.currMode === ModeEnum.GAMEPLAY || Mode.nextMode === ModeEnum.GAMEPLAY
+                val terminalOrResult = GameUtil.isTerminalGameState() ||
+                    club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending() ||
+                    club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isTerminalCleanupPending()
+                val deckReadyVisible = !capture.visual.startupQuestOverlayVisual && currentSessionReady &&
+                    Mode.currMode === ModeEnum.TOURNAMENT && WarEx.war.currentPhase == WarPhaseEnum.FILL_DECK &&
+                    club.xiaojiawei.hsscript.status.ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image)
+                val protectedTransition = activeGame || activeQueue || terminalOrResult
+                val decision = eventQuestOverlayRecoveryPolicy.observe(
+                    EventQuestOverlayRecoveryPolicy.Evidence(
+                        nowMs = System.currentTimeMillis(), captureTrusted = captureTrusted,
+                        exactQuestOverlay = exactOverlay,
+                        safeMenuOrDeckState = eventQuestSafeContext() || protectedTransition,
+                        verifiedSafeTransition = protectedTransition || deckReadyVisible,
+                        working = WorkTimeListener.working, paused = PauseStatus.isPause,
+                        activeGame = activeGame, activeQueue = activeQueue,
+                        terminalOrResult = terminalOrResult,
+                    ),
+                )
+                StartupQuestOverlayRecoveryFence.recordObservation()
+                log.warn {
+                    "EVENT_QUEST_RECOVERY_DECISION action=${decision.action} reason=${decision.reason} " +
+                        "click=${decision.clickNumber}/${EventQuestOverlayRecoveryPolicy.MAX_CLICKS} " +
+                        "stuckForMs=$stuckForMs currentSessionReady=$currentSessionReady " +
+                        "activeGame=$activeGame activeQueue=$activeQueue terminalOrResult=$terminalOrResult " +
+                        "paused=${PauseStatus.isPause} exactOverlay=$exactOverlay deckReadyVisible=$deckReadyVisible " +
+                        "pid=$expectedPid hwnd=$expectedWindow screenshot=${capture.file?.absolutePath ?: "none"}"
+                }
+                when (decision.action) {
+                    EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT -> {
+                        val point = StartupQuestOverlayDismissPolicy.topLeftPixel(capture.bounds)
+                        val permit = point?.let {
+                            StartupQuestOverlayDismissAuthorization.permits.issue(
+                                expectedPid, expectedWindow.toString(), it, System.currentTimeMillis(),
+                            )
+                        }
+                        val accepted = if (point == null || permit == null) false else runCatching {
+                            MouseUtil.leftButtonClickForStartupQuestOverlayRecovery(
+                                point, capture.bounds, expectedPid, expectedWindow, permit,
+                            )
+                        }.onFailure { error ->
+                            log.warn(error) { "EVENT_QUEST_RECOVERY_CLICK_FAILED error=${error.javaClass.simpleName}" }
+                        }.getOrDefault(false)
+                        StartupQuestOverlayRecoveryFence.recordTapAttempt()
+                        log.warn {
+                            "EVENT_QUEST_RECOVERY_TOP_LEFT_CLICK click=${decision.clickNumber}/" +
+                                "${EventQuestOverlayRecoveryPolicy.MAX_CLICKS} point=$point accepted=$accepted " +
+                                "pid=$expectedPid hwnd=$expectedWindow action=${StartupQuestOverlayDismissPolicy.DISPATCH_ACTION}"
+                        }
+                        retryAfterMs = 500L
+                    }
+                    EventQuestOverlayRecoveryPolicy.Action.WAIT_AND_REPROBE,
+                    EventQuestOverlayRecoveryPolicy.Action.DEFER,
+                    -> retryAfterMs = 10_000L
+                    EventQuestOverlayRecoveryPolicy.Action.UNBLOCK_SAFE_TRANSITION -> {
+                        StartupQuestOverlayRecoveryFence.resolve()
+                        log.warn {
+                            "EVENT_QUEST_RECOVERY_UNBLOCKED reason=${decision.reason} " +
+                                "clicks=${eventQuestOverlayRecoveryPolicy.clicksAttempted()} " +
+                                "deckReadyVisible=$deckReadyVisible activeGame=$activeGame activeQueue=$activeQueue " +
+                                "terminalOrResult=$terminalOrResult action=FENCE_RELEASED"
+                        }
+                    }
+                    EventQuestOverlayRecoveryPolicy.Action.RESTART_CLIENT -> {
+                        val stillSafe = captureTrusted && exactOverlay && eventQuestSafeContext() &&
+                            GameUtil.findGameProcessIdForDiagnostics() == expectedPid &&
+                            ScriptStatus.gameHWND?.toString() == expectedWindow.toString() &&
+                            GameUtil.isVerifiedCurrentGameWindow(expectedWindow, expectedPid) && stateStillCurrent()
+                        log.error {
+                            "EVENT_QUEST_RECOVERY_SECOND_STAGE action=${if (stillSafe) "RESTART_CLIENT" else "DEFER"} " +
+                                "reason=${decision.reason} thresholdMs=${EventQuestOverlayRecoveryPolicy.SECOND_STAGE_DELAY_MS} " +
+                                "clicks=${decision.clickNumber} finalGuard=$stillSafe pid=$expectedPid hwnd=$expectedWindow " +
+                                "pause=${PauseStatus.isPause} activeGame=$activeGame activeQueue=$activeQueue " +
+                                "terminalOrResult=$terminalOrResult"
+                        }
+                        if (stillSafe) {
+                            eventQuestOverlayRecoveryPolicy.confirmRestartIssued()
+                            Core.restartFromIdleWatchdog()
+                        } else retryAfterMs = 10_000L
+                    }
+                    EventQuestOverlayRecoveryPolicy.Action.STOP -> {
+                        if (exactOverlay || PauseStatus.isPause || !captureTrusted) retryAfterMs = 10_000L
+                    }
+                }
+            } catch (error: Throwable) {
+                log.warn(error) {
+                    "EVENT_QUEST_RECOVERY_PROBE_FAILED pid=$expectedPid hwnd=$expectedWindow " +
+                        "error=${error.javaClass.simpleName} action=NO_UNGUARDED_INPUT"
+                }
+                retryAfterMs = 10_000L
+            } finally {
+                eventQuestOverlayRecoveryInFlight.set(false)
+                retryAfterMs?.let {
+                    scheduleEventQuestOverlayRecovery(expectedPid, expectedWindow, stuckForMs, stateStillCurrent, it)
+                }
+            }
+        }, delayMs, TimeUnit.MILLISECONDS)
     }
 
     private fun apply(detection: Detection): Boolean {

@@ -4,6 +4,17 @@
 
 ## Required evidence
 
+- The Beta upstream stale-screen probe must populate its visual signature with
+  `StartupQuestOverlayVisualClassifier` and let that exact event-quest match
+  outrank OCR and background deck/menu labels. Regression-test both the captured
+  live event-quest frame and the shared recovery dispatch callsite; if the
+  classifier is false, `SCREEN_RECOVERY_UNRESOLVED` must include the probe
+  purpose, classifier result, and frame dimensions. Never send top-left clicks
+  or restart unless a fresh same-window capture confirms the exact modal and a
+  safe HUB or current-session Tournament `FILL_DECK` context. Keep the three
+  click attempts, 60-second re-probe stage, and active-game/queue/result/pause
+  fences covered by deterministic tests.
+
 Every `ScreenStateRecovery` trigger attempts a screenshot before safety gates
 and records one structured log trail containing `runId`, `sessionId`, trigger,
 elapsed time, observed/target state, provider, action or block reason, and the
