@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
+import java.io.File
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -278,6 +279,22 @@ class StartupDeckModeNavigationIntegrationTest {
         ) { startDispatches++ })
         assertEquals(0, startDispatches, "repeated idle probes must not repeatedly request a queue input")
         StartupInputReadiness.resetForTest()
+    }
+
+    @Test
+    fun `upstream idle probe and final apply callsites share the mode proof gate`() {
+        val source = File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt")
+            .readText()
+        assertTrue(source.contains(
+            "val startupClientProbe = StartupDeckModeNavigationPolicy.isModeProofProbe(authorizedCapture.purpose)",
+        ), "upstream startup/stale/idle captures must enter the common mode proof branch")
+        assertTrue(source.contains("purpose = authorizedCapture.purpose"), "classification policy receives exact probe purpose")
+        assertTrue(source.contains("StartupDeckModeNavigationPolicy.requiresClassificationOnly("),
+            "deck classification cannot flow directly to apply on unknown mode")
+        val startProofCheck = source.indexOf("if (!ActionDispatchGate.isFreshConfiguredDeckSelectionStartProofReady())")
+        val recoveryApplied = source.indexOf("SCREEN_RECOVERY_APPLIED screen=DECK_SELECTION next=START_MATCHING")
+        assertTrue(startProofCheck >= 0 && recoveryApplied > startProofCheck,
+            "upstream apply must require fresh configured-mode proof before logging/scheduling Start")
     }
 
     @Test
