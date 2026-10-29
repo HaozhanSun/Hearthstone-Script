@@ -115,12 +115,16 @@ internal object StartupDeckModeNavigationPolicy {
         image: java.awt.image.BufferedImage,
         expectedMode: String?,
         decision: Decision,
+        freshWildControlProof: Boolean = false,
         openSelectorAndSelectMode: () -> Boolean,
         requestFreshModeProbe: () -> Unit,
     ): Boolean {
         val exactOppositeMode = expectedMode == "WILD" &&
             TournamentModeConfirmation.isConfirmedModeMismatch(image, expectedMode)
-        if (!exactOppositeMode || !decision.allowed) return false
+        // The deck frame proves only the mismatch. It does not prove where the
+        // Wild option is in the selector opened by the next click. Require a
+        // separate fresh selector capture before any Wild-coordinate dispatch.
+        if (!exactOppositeMode || !decision.allowed || !freshWildControlProof) return false
         val accepted = openSelectorAndSelectMode()
         if (accepted) requestFreshModeProbe()
         return accepted

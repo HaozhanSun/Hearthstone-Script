@@ -13,6 +13,95 @@ import javax.imageio.ImageIO
 
 class StartupDeckModeNavigationIntegrationTest {
     @Test
+    fun `user supplied 1919px Standard ranked screen is recognized but cannot dispatch unverified Wild selector coordinates`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/standard-ranked-deck-selection-user-20261029.png",
+        )))
+        assertEquals(1919, image.width)
+        assertEquals(1079, image.height)
+        assertTrue(TournamentModeConfirmation.classifyStandardTitleVisual(image),
+            "the exact Standard title template must still classify when the capture omits the last row/column")
+        assertEquals("STANDARD", TournamentModeConfirmation.observeImage(image).observedMode.name)
+        assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("", image))
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+
+        val pid = 29_428
+        val hwnd = "user-supplied-standard-deck-window"
+        StartupInputReadiness.resetForTest()
+        try {
+            assertFalse(StartupInputReadiness.recordDeckSelectionStart(
+                pid = pid,
+                hwnd = hwnd,
+                confidence = 96,
+                evidence = "deck-selection-start-control-visual",
+                expectedRunMode = "WILD",
+                observedRunMode = "STANDARD",
+                enabledStartButtonVisible = true,
+                modalVisible = false,
+            ), "Standard screen proof cannot authorize Wild Start")
+
+            val mismatchDecision = StartupDeckModeNavigationPolicy.decide(
+                purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE.name,
+                screenKind = "DECK_SELECTION",
+                confidence = 96,
+                evidence = "deck-selection-start-control-visual",
+                expectedRunMode = "WILD",
+                observedRunMode = "STANDARD",
+                enabledStartButtonVisible = true,
+                modalVisible = false,
+                currentSessionReady = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                terminal = false,
+                trustedCurrentWindow = true,
+            )
+            assertTrue(mismatchDecision.allowed, "fresh exact mismatch is recognized for classification/recovery policy")
+            var wildClicks = 0
+            var modeReprobes = 0
+            assertFalse(StartupDeckModeNavigationPolicy.dispatchConfiguredModeCorrection(
+                image = image,
+                expectedMode = "WILD",
+                decision = mismatchDecision,
+                openSelectorAndSelectMode = { wildClicks++; true },
+                requestFreshModeProbe = { modeReprobes++ },
+            ), "deck-page screenshot does not prove the opened selector's Wild-control location")
+            assertEquals(0, wildClicks)
+            assertEquals(0, modeReprobes)
+
+            val confirmedWild = TournamentModeConfirmation.evaluate(
+                expectedMode = RunModeEnum.WILD,
+                observation = TournamentModeObservation(
+                    ObservedTournamentMode.WILD,
+                    "狂野对战",
+                    "fresh-mode-selector-postcheck",
+                ),
+                strategyId = "configured-wild",
+                strategyName = "configured-wild",
+                deckSlot = 2,
+            )
+            assertEquals(TournamentModeConfirmationState.CONFIRMED, confirmedWild.state)
+            assertTrue(StartupInputReadiness.recordDeckSelectionStart(
+                pid = pid,
+                hwnd = hwnd,
+                confidence = 96,
+                evidence = "deck-selection-start-control-visual",
+                expectedRunMode = "WILD",
+                observedRunMode = "WILD",
+                enabledStartButtonVisible = true,
+                modalVisible = false,
+            ), "only a fresh subsequent capture confirming WILD can mint Start proof")
+            assertTrue(StartupInputAuthorizationPolicy.allows(
+                action = "matchmaking.start",
+                currentSessionReady = false,
+                freshOnlineMenuReady = false,
+                freshDeckSelectionStartReady = StartupInputReadiness.isDeckSelectionStartReady(pid, hwnd),
+            ))
+        } finally {
+            StartupInputReadiness.resetForTest()
+        }
+    }
+
+    @Test
     fun `fresh selector observation renews exactly one wrong-mode Return attempt`() {
         val attempts = StartupDeckModeNavigationAttemptGate()
         assertTrue(attempts.tryBegin(9704, "live-v709").allowed)
@@ -440,6 +529,7 @@ class StartupDeckModeNavigationIntegrationTest {
             image = image,
             expectedMode = "WILD",
             decision = decision,
+            freshWildControlProof = true,
             openSelectorAndSelectMode = { correctionDispatches++; true },
             requestFreshModeProbe = { modeReprobes++ },
         ), "fresh exact opposite-mode deck proof may open the format menu and select only configured Wild")

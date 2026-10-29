@@ -263,7 +263,10 @@ object TournamentModeConfirmation {
     /** One-sided exact-title classifier: a known Standard glyph template, otherwise UNKNOWN/OCR. */
     internal fun classifyStandardTitleVisual(image: BufferedImage): Boolean {
         val template = standardTitleTemplate ?: return false
-        if (image.width != 1920 || image.height != 1080 ||
+        // Clipboard/window captures may omit the final desktop row and column
+        // (1919x1079); the title ROI remains at the same origin and is still
+        // compared pixel-for-pixel with the known Standard template.
+        if (image.width !in 1919..1920 || image.height !in 1079..1080 ||
             template.width != STANDARD_TITLE_WIDTH || template.height != STANDARD_TITLE_HEIGHT
         ) return false
         val title = image.getSubimage(STANDARD_TITLE_X, STANDARD_TITLE_Y, STANDARD_TITLE_WIDTH, STANDARD_TITLE_HEIGHT)

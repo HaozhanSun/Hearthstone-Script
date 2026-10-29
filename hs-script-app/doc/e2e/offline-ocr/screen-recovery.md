@@ -400,10 +400,15 @@ this deletion boundary.
   recovery call `startMatching` merely because the structural deck-selection
   classifier succeeded. Keep it classification-only, notify the operator once,
   and require manual mode correction/retry. We do not currently have an
-  authorized capture of the tournament mode selector after opening it, so a
-  deck-selection frame cannot authorize either opening that selector or
-  selecting Wild. Resume only after a new exact deck-selection capture confirms
-  the configured mode. The visible tooltip
+  authorized capture of the tournament mode selector after opening it. A
+  Standard deck screenshot may identify the mismatch, but cannot authorize
+  selector or Wild-option coordinates; require a fresh selector screenshot and
+  exact Wild-control classifier before either click. The supplied 1919x1079
+  Standard deck frame matches the existing title template and is now accepted
+  despite its missing final row/column. Its `CHANGE_MODE_RECT` target maps near
+  the rank badge, and the screenshot does not show an in-game Wild control, so
+  automatic correction remains blocked pending selector evidence. Resume only
+  after a new exact deck-selection capture confirms the configured mode. The visible tooltip
   `狂野模式套牌无法用于标准模式` with an exact deck-selection Start signature is
   a specific wrong-mode terminal state for the matchmaking-error probe: emit
   `OPERATOR_ACTION_REQUIRED`, send no confirm/Start input, and stop retry timers.

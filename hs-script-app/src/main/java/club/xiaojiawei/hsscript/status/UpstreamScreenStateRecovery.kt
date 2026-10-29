@@ -519,6 +519,10 @@ object UpstreamScreenStateRecovery {
                                 image = capture.image,
                                 expectedMode = expectedMode,
                                 decision = navigationDecision,
+                                // This capture is the Standard deck page, not the
+                                // mode selector. A selector-specific visual proof
+                                // must be added before dispatching the Wild target.
+                                freshWildControlProof = false,
                                 openSelectorAndSelectMode = {
                                     TournamentModeStrategy.correctVerifiedDeckSelectionToWild()
                                 },
@@ -535,15 +539,15 @@ object UpstreamScreenStateRecovery {
                         modeNavigationAttempted = accepted
                         log.warn {
                             "STARTUP_DECK_MODE_NAVIGATION decision=${if (accepted) "MODE_CORRECTION_DISPATCHED" else "BLOCKED"} " +
-                                "reason=${if (accepted) "fresh-opposite-mode-deck-proof" else if (!attempt.allowed) attempt.reason else if (!proofRecorded) "proof-not-recorded" else "final-state-or-dispatch-gate"} " +
+                                "reason=${if (accepted) "fresh-opposite-mode-deck-proof" else if (!attempt.allowed) attempt.reason else if (!proofRecorded) "proof-not-recorded" else if (!navigationDecision.allowed) navigationDecision.denial.name.lowercase() else "wild-selector-control-not-visually-confirmed"} " +
                                 "attempt=${attempt.attempt} expectedMode=${expectedMode ?: "UNKNOWN"} " +
                                 "observedMode=${observedMode ?: "UNKNOWN"} pid=$pid hwnd=$hwnd " +
                                 "confidence=${currentDetection.confidence} evidence=${currentDetection.evidence} " +
                                 "startVisible=$startVisible wrongModeDeckTooltip=$wrongModeDeckTooltip " +
                                 "activeGame=$activeGame activeQueue=$activeQueue " +
                                 "terminal=$terminal exactWindow=$trustedWindow " +
-                                "action=${StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION}+${StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION} " +
-                                "inputAccepted=$accepted"
+                                "action=${if (accepted) "${StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION}+${StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION}" else "NO_MODE_INPUT"} " +
+                                "freshWildControlProof=false inputAccepted=$accepted"
                         }
                     } else {
                         log.warn {
