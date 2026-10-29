@@ -341,6 +341,14 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
             }
             return
         }
+        if (!ActionDispatchGate.isStartupScreenConfirmedForAction("matchmaking.start")) {
+            cancelAllEnteredTasks()
+            log.warn {
+                "MATCHMAKING_BLOCKED trace=$traceId reason=startup-screen-not-confirmed " +
+                    "action=NO_QUEUE_INPUT_NO_DECK_COMPLETION pause=${PauseStatus.isPause}"
+            }
+            return
+        }
         log.info { "开始匹配 trace=$traceId" }
         val dispatchMatchmaking = MatchmakingGuardPolicy.runtimeAllowsInput(
             working = WorkTimeListener.working,
@@ -370,27 +378,43 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         // automatic deck-completion dialog.  A single start click can leave
         // the client on the deck-selection page while the script has already
         // logged START_MATCHING, which is not a real state transition.
-        clickMatchmakingControl(START_RECT)
-        LifecycleTrace.markMatchmakingInputDispatched()
+        val startDispatched = clickMatchmakingControl(START_RECT)
+        if (!startDispatched) {
+            cancelAllEnteredTasks()
+            LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = false)
+            return
+        }
+        LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = true)
         logMatchmakingCheckpoint(traceId, "after-start-click")
         SystemUtil.delayLong()
         if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-start-click")) return
         log.info { "尝试确认自动补全套牌弹窗" }
         logMatchmakingCheckpoint(traceId, "before-complete-deck-click-1")
-        clickMatchmakingControl(COMPLETE_DECK_CONFIRM_RECT)
+        if (!clickMatchmakingControl(COMPLETE_DECK_CONFIRM_RECT)) {
+            cancelAllEnteredTasks()
+            return
+        }
         logMatchmakingCheckpoint(traceId, "after-complete-deck-click-1")
         SystemUtil.delayShortMedium()
         if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-complete-deck-click-1")) return
         log.info { "重试确认自动补全套牌弹窗" }
         logMatchmakingCheckpoint(traceId, "before-complete-deck-click-2")
-        clickMatchmakingControl(COMPLETE_DECK_CONFIRM_RECT)
+        if (!clickMatchmakingControl(COMPLETE_DECK_CONFIRM_RECT)) {
+            cancelAllEnteredTasks()
+            return
+        }
         logMatchmakingCheckpoint(traceId, "after-complete-deck-click-2")
         SystemUtil.delayShortMedium()
         if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-complete-deck-click-2")) return
         log.info { "确认补全后再次点击开始" }
         logMatchmakingCheckpoint(traceId, "before-final-start-click")
-        clickMatchmakingControl(START_RECT)
-        LifecycleTrace.markMatchmakingInputDispatched()
+        val finalStartDispatched = clickMatchmakingControl(START_RECT)
+        if (!finalStartDispatched) {
+            cancelAllEnteredTasks()
+            LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = false)
+            return
+        }
+        LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = true)
         logMatchmakingCheckpoint(traceId, "after-final-start-click")
         captureMatchmakingCheckpoint(traceId, "after-final-start-click")
         if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-final-start-click")) return
@@ -494,15 +518,19 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
     private fun clickMatchmakingControl(rect: GameRect): Boolean {
         val pos = rect.getCenterClickPos()
         log.info {
-            "MATCHMAKING_INPUT_DISPATCH mode=normal pos=(${pos.x},${pos.y}) " +
+            "MATCHMAKING_INPUT_REQUEST mode=normal pos=(${pos.x},${pos.y}) " +
                 "gameHwnd=${ScriptStatus.gameHWND}"
         }
-        MouseUtil.leftButtonClick(
+        val accepted = MouseUtil.leftButtonClick(
             pos,
             ScriptStatus.gameHWND,
             dispatchActionOverride = "matchmaking.start",
         )
-        return true
+        log.info {
+            "MATCHMAKING_INPUT_RESULT accepted=$accepted pos=(${pos.x},${pos.y}) " +
+                "gameHwnd=${ScriptStatus.gameHWND}"
+        }
+        return accepted
     }
 
     private fun captureMatchmakingCheckpoint(traceId: Long, stage: String) {

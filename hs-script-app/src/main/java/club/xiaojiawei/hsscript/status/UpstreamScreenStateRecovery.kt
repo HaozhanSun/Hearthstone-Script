@@ -129,6 +129,7 @@ object UpstreamScreenStateRecovery {
         val hubModeChooserVisual: Boolean = false,
         val amazonAppstoreSunsetNoticeVisual: Boolean = false,
         val startupQuestOverlayVisual: Boolean = false,
+        val battleNetLauncherVisual: Boolean = false,
     ) {
         override fun toString(): String =
             "hash=${java.lang.Long.toUnsignedString(sampleHash, 16)} " +
@@ -142,7 +143,8 @@ object UpstreamScreenStateRecovery {
                 "matchmakingSearchVisual=$matchmakingSearchVisual " +
                 "hubModeChooserVisual=$hubModeChooserVisual " +
                 "amazonAppstoreSunsetNoticeVisual=$amazonAppstoreSunsetNoticeVisual " +
-                "startupQuestOverlayVisual=$startupQuestOverlayVisual"
+                "startupQuestOverlayVisual=$startupQuestOverlayVisual " +
+                "battleNetLauncherVisual=$battleNetLauncherVisual"
     }
 
     private data class RegionSignal(
@@ -1112,6 +1114,7 @@ object UpstreamScreenStateRecovery {
             hubModeChooserVisual = HubModeChooserVisualPolicy.isVisible(image),
             amazonAppstoreSunsetNoticeVisual = ScreenStateRecovery.looksLikeAmazonAppstoreSunsetNoticeVisual(image),
             startupQuestOverlayVisual = StartupQuestOverlayVisualClassifier.isQuestOverlay(image),
+            battleNetLauncherVisual = BattleNetLauncherVisualPolicy.isVisible(image),
         )
     }
 
@@ -1407,6 +1410,7 @@ object UpstreamScreenStateRecovery {
     }
 
     private fun detect(ocrText: String, visual: VisualSignature): Detection? {
+        if (visual.battleNetLauncherVisual) return null
         val text = ocrText.lowercase(Locale.ROOT)
         fun has(vararg terms: String): Boolean = terms.all { text.contains(it) }
 

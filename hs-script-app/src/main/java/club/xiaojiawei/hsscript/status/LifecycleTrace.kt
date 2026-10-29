@@ -366,7 +366,14 @@ object LifecycleTrace {
     }
 
     /** A recent Start dispatch permits capture while the new queue has no Power.log yet. */
-    fun markMatchmakingInputDispatched(now: Long = System.currentTimeMillis()) {
+    fun markMatchmakingInputDispatched(
+        dispatchAccepted: Boolean,
+        now: Long = System.currentTimeMillis(),
+    ) {
+        if (!dispatchAccepted) {
+            mark("matchmaking-input-dispatch-rejected; queue intent not recorded")
+            return
+        }
         matchmakingInputIntentAt = now
         PowerLogListener.markNewMatchmakingInputAfterTerminalResult()
         mark("matchmaking-input-dispatched; pre-session capture enabled for ${MATCHMAKING_INPUT_INTENT_WINDOW_MS}ms")

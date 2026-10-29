@@ -234,7 +234,7 @@ internal object StartupInputReadiness {
     }
 
     private val ONLINE_MENU_SCREENS = setOf(
-        "HOME", "TOURNAMENT", "DECK_SELECTION", "HOME_TASK_OVERLAY", "MATCHMAKING",
+        "HOME", "TOURNAMENT", "DECK_SELECTION", "HOME_TASK_OVERLAY",
         "GAME_MODE", "COLLECTION", "PACK_OPENING", "SHOP_OVERLAY",
     )
 
@@ -248,7 +248,6 @@ internal object StartupInputReadiness {
         "HOME_TASK_OVERLAY" to setOf("HUB"),
         "TOURNAMENT" to setOf("TOURNAMENT"),
         "DECK_SELECTION" to setOf("TOURNAMENT"),
-        "MATCHMAKING" to setOf("TOURNAMENT"),
         "GAME_MODE" to setOf("GAME_MODE"),
         "COLLECTION" to setOf("COLLECTIONMANAGER"),
         "PACK_OPENING" to setOf("PACKOPENING"),

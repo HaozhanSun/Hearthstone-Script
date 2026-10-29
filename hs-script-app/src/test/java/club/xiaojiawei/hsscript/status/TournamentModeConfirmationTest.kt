@@ -255,6 +255,50 @@ class TournamentModeConfirmationTest {
     }
 
     @Test
+    fun `latest live Standard deck frame cannot authorize Wild and startMatching preflights readiness`() {
+        val image = javax.imageio.ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/standard-deck-selection-live-20261029-040056.png",
+        )))
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+        val observation = TournamentModeConfirmation.observeImage(image)
+        val result = TournamentModeConfirmation.evaluate(
+            expectedMode = RunModeEnum.WILD,
+            observation = observation,
+            strategyId = "test-wild-deck",
+            strategyName = "test Wild deck",
+            deckSlot = 1,
+        )
+        assertTrue(
+            result.state == TournamentModeConfirmationState.MISMATCH ||
+                result.state == TournamentModeConfirmationState.UNRECOGNIZED,
+            "the live Standard screenshot may be read as Standard or unknown, but never as confirmed Wild: ${result.observedMode}",
+        )
+        assertFalse(StartupInputReadiness.recordDeckSelectionStart(
+            pid = 25948,
+            hwnd = "captured-game-window",
+            confidence = 100,
+            evidence = "deck-selection-title-roi",
+            expectedRunMode = RunModeEnum.WILD.name,
+            observedRunMode = result.observedMode.name,
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            now = 30_000L,
+        ))
+        assertFalse(StartupInputReadiness.isDeckSelectionStartReady(25948, "captured-game-window", 30_001L))
+
+        val root = moduleRoot()
+        val source = Files.readString(root.resolve(Path.of(
+            "src", "main", "java", "club", "xiaojiawei", "hsscript", "strategy", "mode", "TournamentModeStrategy.kt",
+        )))
+        val startMatching = source.substring(source.indexOf("fun startMatching()"))
+        assertTrue(startMatching.indexOf("isStartupScreenConfirmedForAction(\"matchmaking.start\")") >= 0)
+        assertTrue(startMatching.indexOf("isStartupScreenConfirmedForAction(\"matchmaking.start\")") <
+            startMatching.indexOf("clickMatchmakingControl(START_RECT)"),
+            "readiness rejection must stop before Start and automatic deck completion inputs")
+        StartupInputReadiness.resetForTest()
+    }
+
+    @Test
     fun `wrong mode deck frame authorizes neither selector click nor Start without mode-selector proof`() {
         val image = javax.imageio.ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/tournament-wild-deck-standard-mode-20261029.png",

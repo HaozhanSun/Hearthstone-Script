@@ -6,6 +6,7 @@ import java.awt.image.BufferedImage
 internal object MatchmakingSearchVisualPolicy {
     fun isVisible(image: BufferedImage): Boolean {
         if (image.width <= 0 || image.height <= 0) return false
+        if (BattleNetLauncherVisualPolicy.isVisible(image)) return false
         val aspect = image.width.toDouble() / image.height
         if (aspect !in 1.70..1.80) return false
 

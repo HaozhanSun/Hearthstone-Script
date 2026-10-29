@@ -19,10 +19,36 @@ import javax.imageio.ImageIO
 
 class MatchmakingSearchRecoveryTest {
     @Test
+    fun `rejected start dispatch records no matchmaking intent but accepted start still does`() {
+        LifecycleTrace.resetMatchmakingEvidenceForTest()
+        try {
+            LifecycleTrace.markMatchmakingInputDispatched(now = 100_000L, dispatchAccepted = false)
+            assertFalse(LifecycleTrace.hasRecentMatchmakingInputIntent(now = 100_001L))
+            assertFalse(LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(now = 100_001L))
+            assertFalse(
+                ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
+                    tournamentMode = true,
+                    activeGame = false,
+                    mulligan = false,
+                    terminal = false,
+                    recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(now = 100_001L),
+                ) == ScreenRecoveryCapturePurpose.MATCHMAKING_SEARCH,
+                "rejected input cannot grant matchmaking capture authority or defer stale-screen recovery",
+            )
+
+            LifecycleTrace.markMatchmakingInputDispatched(now = 101_000L, dispatchAccepted = true)
+            assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(now = 101_001L))
+            assertTrue(LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(now = 101_001L))
+        } finally {
+            LifecycleTrace.resetMatchmakingEvidenceForTest()
+        }
+    }
+
+    @Test
     fun `mode changing recovery guard is limited to one minute after matchmaking dispatch`() {
         LifecycleTrace.clearActiveMatchmakingScreenObserved("entry-guard-test-reset")
         try {
-            LifecycleTrace.markMatchmakingInputDispatched(now = 100_000L)
+            LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = true, now = 100_000L)
             assertTrue(LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(now = 159_999L))
             assertFalse(LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(now = 160_000L))
             assertFalse(LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(now = 99_999L))
@@ -198,6 +224,55 @@ class MatchmakingSearchRecoveryTest {
             val image = requireNotNull(javaClass.getResourceAsStream(path)) { "missing fixture $path" }
                 .use(ImageIO::read)
             assertFalse(MatchmakingSearchVisualPolicy.isVisible(image), "false search classification for $name")
+        }
+    }
+
+    @Test
+    fun `saved Battle net launcher capture cannot classify as queue or grant startup menu proof`() {
+        val path = "/offline-ocr/screen-recovery/battlenet-launcher-home-20261029-035301.png"
+        val image = requireNotNull(javaClass.getResourceAsStream(path)) { "missing fixture $path" }
+            .use(ImageIO::read)
+        assertTrue(BattleNetLauncherVisualPolicy.isVisible(image))
+        assertFalse(MatchmakingSearchVisualPolicy.isVisible(image))
+        assertNull(UpstreamScreenStateRecovery.classifyImageForTest("搜寻对手 取消", image))
+        assertNull(ScreenStateRecovery.recoveryTransitionForImageForTest(image, "搜寻对手 取消", emptyMap()))
+        assertFalse(
+            StartupInputReadiness.recordStartupOnlineScreen(
+                pid = 7188,
+                hwnd = "native@0x1605ca",
+                screen = "MATCHMAKING",
+                confidence = 98,
+                evidence = "matchmaking-search-visual",
+                enabledStartButtonVisible = false,
+                modalVisible = false,
+                now = 100L,
+            ),
+            "queue visuals must not mint generic startup online-menu readiness",
+        )
+        assertFalse(StartupInputReadiness.isMenuReady(7188, "native@0x1605ca", "TOURNAMENT"))
+    }
+
+    @Test
+    fun `saved Hearthstone hub chooser keeps its narrow configured mode entry proof`() {
+        val path = "/offline-ocr/screen-recovery/hub-mode-chooser-live-20261029-035630.png"
+        val image = requireNotNull(javaClass.getResourceAsStream(path)) { "missing fixture $path" }
+            .use(ImageIO::read)
+        assertFalse(BattleNetLauncherVisualPolicy.isVisible(image))
+        assertEquals("TOURNAMENT", UpstreamScreenStateRecovery.classifyImageForTest("", image))
+        StartupInputReadiness.resetForTest()
+        try {
+            StartupInputReadiness.recordHubModeChooser(7188, "native@0x1605ca", now = 1_000L)
+            assertTrue(StartupInputReadiness.isHubTraditionalBattleSelectionReady(
+                7188, "native@0x1605ca", "HUB", now = 2_000L,
+            ))
+            var dispatched: String? = null
+            assertTrue(StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
+                chooserProofFresh = true,
+                paused = false,
+            ) { dispatched = it })
+            assertEquals(StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION, dispatched)
+        } finally {
+            StartupInputReadiness.resetForTest()
         }
     }
 

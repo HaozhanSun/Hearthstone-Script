@@ -138,7 +138,7 @@ class EventQuestOverlayRecoveryPolicyTest {
         val now = System.currentTimeMillis()
         LifecycleTrace.resetMatchmakingEvidenceForTest()
         try {
-            LifecycleTrace.markMatchmakingInputDispatched(now - 90_000L)
+            LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = true, now = now - 90_000L)
             assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(now))
             assertFalse(LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(now))
             assertTrue(EventQuestOverlayRecoveryContextPolicy.allowsDismiss(

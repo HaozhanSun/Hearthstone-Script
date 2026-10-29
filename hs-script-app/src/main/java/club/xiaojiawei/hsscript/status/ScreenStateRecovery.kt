@@ -162,6 +162,7 @@ object ScreenStateRecovery {
         val startupQuestOverlayVisual: Boolean = false,
         val reconnectDialogVisual: Boolean = false,
         val matchmakingSearchVisual: Boolean = false,
+        val battleNetLauncherVisual: Boolean = false,
     ) {
         override fun toString(): String =
             "hash=${java.lang.Long.toUnsignedString(sampleHash, 16)} " +
@@ -173,7 +174,8 @@ object ScreenStateRecovery {
                 "resultBannerWarm=${"%.3f".format(Locale.ROOT, resultBannerWarmRatio)} " +
                 "centeredModalPanel=$centeredModalPanelVisual " +
                 "reconnectDialogVisual=$reconnectDialogVisual " +
-                "matchmakingSearchVisual=$matchmakingSearchVisual"
+                "matchmakingSearchVisual=$matchmakingSearchVisual " +
+                "battleNetLauncherVisual=$battleNetLauncherVisual"
     }
 
     private data class RegionSignal(
@@ -1184,6 +1186,7 @@ object ScreenStateRecovery {
                 warmRatio = reconnectDialogPanelSignal.warmRatio,
             ),
             startupQuestOverlayVisual = StartupQuestOverlayVisualClassifier.isQuestOverlay(image),
+            battleNetLauncherVisual = BattleNetLauncherVisualPolicy.isVisible(image),
             reconnectDialogVisual = looksLikeReconnectDialogVisual(image),
             matchmakingSearchVisual = MatchmakingSearchVisualPolicy.isVisible(image),
         )
@@ -1241,6 +1244,7 @@ object ScreenStateRecovery {
         detect(OcrEvidence(ocrText, emptyMap()), visual)
 
     private fun detect(evidence: OcrEvidence, visual: VisualSignature): Detection? {
+        if (visual.battleNetLauncherVisual) return null
         val targetedDetection = targetedScreenDetection(evidence.targeted, visual)
         if (targetedDetection?.kind in setOf(
                 ScreenKind.SERVER_UNAVAILABLE,

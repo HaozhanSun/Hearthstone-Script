@@ -202,7 +202,7 @@ class OfflineReconnectRecoveryTest {
     fun `stale matchmaking intent and screen latch do not fence an exact reconnect`() {
         val observedAt = 100_000L
         LifecycleTrace.markActiveMatchmakingScreenObserved(observedAt)
-        LifecycleTrace.markMatchmakingInputDispatched(observedAt)
+        LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = true, now = observedAt)
         val reconnectAt = observedAt + 120_001L
 
         assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(reconnectAt))
@@ -225,7 +225,7 @@ class OfflineReconnectRecoveryTest {
     fun `exact reconnect clears a recent queue-screen latch and restarts after 60 seconds despite stale intent`() {
         val queueObservedAt = 100_000L
         LifecycleTrace.markActiveMatchmakingScreenObserved(queueObservedAt)
-        LifecycleTrace.markMatchmakingInputDispatched(queueObservedAt)
+        LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = true, now = queueObservedAt)
         val reconnectObservedAt = queueObservedAt + 30_000L
         assertTrue(LifecycleTrace.hasRecentActiveMatchmakingScreen(reconnectObservedAt))
         assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(reconnectObservedAt))

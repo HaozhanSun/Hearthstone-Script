@@ -1318,7 +1318,7 @@ object MouseUtil {
         recoveryCapability: MandatoryRankSurrenderGuard.RecoveryCapability? = null,
         terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
         dispatchActionOverride: String? = null,
-    ) {
+    ): Boolean {
         val dispatchAction = dispatchActionOverride ?: when {
             terminalCleanupCapability != null -> "terminal-result.dismiss"
             recoveryCapability != null -> "rank-surrender.mouse.left"
@@ -1329,7 +1329,7 @@ object MouseUtil {
                 recoveryCapability,
                 terminalCleanupCapability,
             )
-        ) return
+        ) return false
         val environmentValid = validateEnv(hwnd)
         if (e2eInputEnabled()) {
                 log.info {
@@ -1340,7 +1340,7 @@ object MouseUtil {
         }
         if (!environmentValid) {
             if (e2eInputEnabled()) log.warn { "E2E_INPUT_CLICK_SKIPPED envValid=false pos=$pos hwnd=$hwnd" }
-            return
+            return false
         }
         if (validatePoint(pos)) {
             val lockWaitStartedAt = if (e2eInputEnabled()) System.nanoTime() else 0L
@@ -1379,7 +1379,7 @@ object MouseUtil {
                         log.warn { "E2E_INPUT_LOCK_TIMEOUT pos=(${pos.x},${pos.y})" }
                     }
                 }
-                return
+                return false
             }
             try {
                 if (!ActionDispatchGate.allow(
@@ -1387,8 +1387,8 @@ object MouseUtil {
                         recoveryCapability,
                         terminalCleanupCapability,
                     )
-                ) return
-                if (!WorkTimeListener.working && !ScriptStatus.testMode) return
+                ) return false
+                if (!WorkTimeListener.working && !ScriptStatus.testMode) return false
 
                 if (e2eNativeClickEnabled() && hwnd != null) {
                     try {
@@ -1397,7 +1397,7 @@ object MouseUtil {
                                 recoveryCapability,
                                 terminalCleanupCapability,
                             )
-                        ) return
+                        ) return false
                         val foregroundFocused = focusE2EWindow(hwnd)
                         log.info {
                             "E2E_INPUT_SENDINPUT_FOREGROUND hwnd=$hwnd confirmed=$foregroundFocused"
@@ -1413,7 +1413,7 @@ object MouseUtil {
                                 "E2E_INPUT_SENDINPUT_BLOCKED hwnd=$hwnd " +
                                     "reason=foreground-unconfirmed input=not-sent"
                             }
-                            return
+                            return false
                         }
                         if (prevPoint != pos) {
                             moveNativeAlongCurve(prevPoint, pos, hwnd, mouseMode)
@@ -1423,19 +1423,19 @@ object MouseUtil {
                                 recoveryCapability,
                                 terminalCleanupCapability,
                             )
-                        ) return
+                        ) return false
                         val sent = sendE2eWindowsClick(pos)
                         log.info {
                             "E2E_INPUT_SENDINPUT_SENT pos=(${pos.x},${pos.y}) hwnd=$hwnd " +
                                 "mode=$mouseMode accepted=$sent"
                         }
                         savePos(pos)
-                        return
+                        return sent
                     } catch (error: Throwable) {
                         log.error(error) {
                             "E2E_INPUT_NATIVE_FAILED pos=(${pos.x},${pos.y}) hwnd=$hwnd"
                         }
-                        return
+                        return false
                     }
                 }
 
@@ -1448,7 +1448,7 @@ object MouseUtil {
                     )
                 ) {
                     savePos(pos)
-                    return
+                    return true
                 }
 
                 if (e2eInputEnabled()) {
@@ -1468,22 +1468,24 @@ object MouseUtil {
                             "E2E_INPUT_FAILED_NO_NATIVE_FALLBACK pos=(${pos.x},${pos.y}) hwnd=$hwnd"
                         }
                     }
-                    return
+                    return false
                 }
 
                 if (prevPoint != pos) {
                     moveNativeAlongCurve(prevPoint, pos, hwnd, mouseMode)
                 }
-                if (!ActionDispatchGate.allow("$dispatchAction.before-native", recoveryCapability)) return
+                if (!ActionDispatchGate.allow("$dispatchAction.before-native", recoveryCapability)) return false
                 CSystemDll.INSTANCE.leftClick(pos.x.toLong(), pos.y.toLong(), hwnd, mouseMode)
                 if (e2eInputEnabled()) {
                     log.info { "E2E_INPUT_NATIVE_SENT pos=(${pos.x},${pos.y}) hwnd=$hwnd mode=$mouseMode" }
                 }
                 savePos(pos)
+                return true
             } finally {
                 DRIVER_LOCK.unlock()
             }
         }
+        return false
     }
 
     /**

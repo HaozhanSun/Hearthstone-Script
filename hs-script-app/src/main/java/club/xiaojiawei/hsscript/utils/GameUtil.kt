@@ -693,13 +693,14 @@ object GameUtil {
         point: Point,
         recoveryCapability: MandatoryRankSurrenderGuard.RecoveryCapability? = null,
         dispatchAction: String? = null,
-    ) =
+    ) {
         MouseUtil.leftButtonClick(
             point,
             ScriptStatus.gameHWND,
             recoveryCapability = recoveryCapability,
             dispatchActionOverride = dispatchAction,
         )
+    }
 
     fun rightButtonClick(point: Point) = MouseUtil.rightButtonClick(point, ScriptStatus.gameHWND)
 
