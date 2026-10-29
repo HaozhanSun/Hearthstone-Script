@@ -417,6 +417,45 @@ object ScreenWatchdog {
             metrics.frameRight >= 0.55
     }
 
+    /** Bright blue Start-button halo in the fixed right-side deck-selection control ROI. */
+    internal fun deckSelectionStartButtonDiagnosticsForTest(image: BufferedImage): String =
+        deckSelectionStartButtonMetrics(image).toString()
+
+    internal fun hasEnabledDeckSelectionStartButton(image: BufferedImage): Boolean =
+        deckSelectionStartButtonMetrics(image).accepted
+
+    private data class DeckSelectionStartButtonMetrics(
+        val width: Int,
+        val height: Int,
+        val blueHalo: Double,
+        val lightLabel: Double,
+        val accepted: Boolean,
+    ) {
+        override fun toString(): String =
+            "size=${width}x$height blueHalo=${"%.4f".format(Locale.ROOT, blueHalo)} " +
+                "lightLabel=${"%.4f".format(Locale.ROOT, lightLabel)} accepted=$accepted"
+    }
+
+    private fun deckSelectionStartButtonMetrics(image: BufferedImage): DeckSelectionStartButtonMetrics {
+        if (image.width < 800 || image.height < 450) {
+            return DeckSelectionStartButtonMetrics(image.width, image.height, 0.0, 0.0, false)
+        }
+        val blueHalo = colorRatio(image, 0.674, 0.731, 0.795, 0.919) { red, green, blue ->
+            blue >= 125 && blue > red * 1.28 && blue > green * 1.04
+        }
+        val lightLabel = colorRatio(image, 0.697, 0.795, 0.779, 0.858) { red, green, blue ->
+            red >= 175 && green >= 175 && blue >= 175 &&
+                maxOf(red, green, blue) - minOf(red, green, blue) <= 55
+        }
+        return DeckSelectionStartButtonMetrics(
+            image.width,
+            image.height,
+            blueHalo,
+            lightLabel,
+            blueHalo >= 0.10 && lightLabel >= 0.006,
+        )
+    }
+
     internal fun surrenderConfirmationDiagnosticsForTest(image: BufferedImage): String =
         surrenderConfirmationMetrics(image).toString()
 

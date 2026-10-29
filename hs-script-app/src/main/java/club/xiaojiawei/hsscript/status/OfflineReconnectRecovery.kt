@@ -130,8 +130,17 @@ internal class OfflineReconnectRecovery(
  * not veto this narrowly classified recovery. Queue and terminal evidence do.
  */
 internal object ReconnectRestartSafetyPolicy {
-    fun mayRestart(exactReconnectVisible: Boolean, activeMatchmaking: Boolean, terminalState: Boolean): Boolean =
-        exactReconnectVisible && !activeMatchmaking && !terminalState
+    fun mayRestart(
+        exactReconnectVisible: Boolean,
+        activeGame: Boolean = false,
+        activeMatchmaking: Boolean,
+        terminalState: Boolean,
+    ): Boolean = exactReconnectVisible && !activeGame && !activeMatchmaking && !terminalState
+}
+
+internal object ReconnectActiveGameEvidencePolicy {
+    fun isAuthoritative(warLatch: Boolean, currentSessionPowerLog: Boolean): Boolean =
+        warLatch && currentSessionPowerLog
 }
 
 internal class IndefiniteReconnectRestartPolicy(

@@ -26,6 +26,54 @@ class StartupInputReadinessTest {
     }
 
     @Test
+    fun `fresh enabled deck selection proof grants only matchmaking start with empty Power log`() {
+        assertTrue(
+            StartupInputReadiness.recordDeckSelectionStart(
+                pid = 101,
+                hwnd = "hwnd-a",
+                confidence = 100,
+                evidence = "deck-selection-title-roi",
+                enabledStartButtonVisible = true,
+                modalVisible = false,
+                now = 10_000L,
+            ),
+        )
+        val proof = StartupInputReadiness.isDeckSelectionStartReady(101, "hwnd-a", 10_001L)
+        assertTrue(proof)
+        assertFalse(StartupInputReadiness.isMenuReady(101, "hwnd-a", "TOURNAMENT"))
+
+        assertTrue(
+            StartupInputAuthorizationPolicy.allows(
+                action = "matchmaking.start",
+                currentSessionReady = false,
+                freshOnlineMenuReady = false,
+                freshDeckSelectionStartReady = proof,
+            ),
+            "an authorized deck-selection capture can start a match before Power.log has bytes",
+        )
+        listOf("mouse.left", "strategy.card.play", "surrender.request").forEach { action ->
+            assertFalse(
+                StartupInputAuthorizationPolicy.allows(
+                    action = action,
+                    currentSessionReady = false,
+                    freshOnlineMenuReady = false,
+                    freshDeckSelectionStartReady = proof,
+                ),
+                "deck-selection readiness must not authorize $action",
+            )
+        }
+        assertFalse(StartupInputReadiness.isDeckSelectionStartReady(102, "hwnd-a", 10_001L))
+        assertFalse(StartupInputReadiness.isDeckSelectionStartReady(101, "hwnd-b", 10_001L))
+        assertFalse(
+            StartupInputReadiness.isDeckSelectionStartReady(
+                101,
+                "hwnd-a",
+                10_000L + StartupInputReadiness.DECK_SELECTION_START_PROOF_MAX_AGE_MS + 1,
+            ),
+        )
+    }
+
+    @Test
     fun `empty current Power log permits mode input only after fresh online HUB proof`() {
         val startupPurpose = ScreenRecoveryCapturePurposePolicy.purposeForStateRecovery(
             tournamentMode = false,

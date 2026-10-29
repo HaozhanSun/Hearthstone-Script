@@ -87,15 +87,22 @@ class OfflineReconnectRecoveryTest {
     }
 
     @Test
-    fun `legacy reconnect restart permits stale in-game latch but defers active queue and terminal evidence`() {
+    fun `reconnect restart defers active game queue and terminal evidence`() {
         assertTrue(
             ReconnectRestartSafetyPolicy.mayRestart(
                 exactReconnectVisible = true,
+                activeGame = false,
                 activeMatchmaking = false,
                 terminalState = false,
             ),
-            "WarEx.inWar is deliberately not a restart veto for an exact indefinite reconnect screen",
+            "an exact offline modal restarts after the bounded policy grace when all safety fences are clear",
         )
+        assertFalse(ReconnectRestartSafetyPolicy.mayRestart(
+            exactReconnectVisible = true,
+            activeGame = true,
+            activeMatchmaking = false,
+            terminalState = false,
+        ))
         assertFalse(ReconnectRestartSafetyPolicy.mayRestart(
             exactReconnectVisible = true,
             activeMatchmaking = true,
@@ -111,6 +118,77 @@ class OfflineReconnectRecoveryTest {
             activeMatchmaking = false,
             terminalState = false,
         ))
+    }
+
+    @Test
+    fun `stale WarEx latch with empty current process log does not block exact reconnect restart`() {
+        val currentSessionPowerLog = PowerLogSessionBindingPolicy.isCurrentSession(
+            powerLogPath = "C:/Game/Logs/Power.log",
+            gameLogsRoot = "C:/Game/Logs",
+            length = 0L,
+            lastModifiedMs = 2_000_000L,
+            processStartedAtMs = 1_999_000L,
+        )
+        val activeGameEvidence = ReconnectActiveGameEvidencePolicy.isAuthoritative(
+            warLatch = true,
+            currentSessionPowerLog = currentSessionPowerLog,
+        )
+        assertFalse(currentSessionPowerLog, "empty Power.log is not current game evidence")
+        assertFalse(activeGameEvidence, "WarEx alone may be stale after a client replacement")
+        assertTrue(
+            ReconnectRestartSafetyPolicy.mayRestart(
+                exactReconnectVisible = true,
+                activeGame = activeGameEvidence,
+                activeMatchmaking = false,
+                terminalState = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `fresh current process log confirms active WarEx game and defers reconnect restart`() {
+        val currentSessionPowerLog = PowerLogSessionBindingPolicy.isCurrentSession(
+            powerLogPath = "C:/Game/Logs/Power.log",
+            gameLogsRoot = "C:/Game/Logs",
+            length = 512L,
+            lastModifiedMs = 2_000_000L,
+            processStartedAtMs = 1_999_000L,
+        )
+        val activeGameEvidence = ReconnectActiveGameEvidencePolicy.isAuthoritative(
+            warLatch = true,
+            currentSessionPowerLog = currentSessionPowerLog,
+        )
+        assertTrue(currentSessionPowerLog)
+        assertTrue(activeGameEvidence)
+        assertFalse(
+            ReconnectRestartSafetyPolicy.mayRestart(
+                exactReconnectVisible = true,
+                activeGame = activeGameEvidence,
+                activeMatchmaking = false,
+                terminalState = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `ten minute exact offline observation escalates to restart when safety fences are clear`() {
+        val policy = IndefiniteReconnectRestartPolicy()
+        val observedAt = 21L * 60 * 60 * 1_000 + 56L * 60 * 1_000 + 11_000L
+        assertEquals(
+            IndefiniteReconnectRestartPolicy.Decision.WAIT,
+            policy.observe(true, observedAt, activeQueue = false, terminalState = false),
+        )
+        assertEquals(
+            IndefiniteReconnectRestartPolicy.Decision.RESTART_CLIENT_NO_PAUSE,
+            policy.observe(
+                true,
+                observedAt + 10 * 60_000L,
+                activeQueue = false,
+                terminalState = false,
+            ),
+            "the persisted exact offline prompt restarts without waiting on the unrelated matchmaking-error probe",
+        )
+        assertEquals(1, policy.attempts())
     }
 
     @Test

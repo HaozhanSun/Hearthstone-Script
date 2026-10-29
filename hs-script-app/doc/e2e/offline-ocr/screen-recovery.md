@@ -325,21 +325,26 @@ this deletion boundary.
   loosen the ordinary `mouse.left` gate.
   UNKNOWN/modal captures stay input-free; preserve rank and terminal gates, do
   not block matchmaking on rank, and never synthesize a pause.
-- An exact RECONNECT screen can represent a pending game while `WarEx.inWar`
-  is true. Keep that screen classification read-only until the bounded
-  60-second indefinite-reconnect policy fires; then shut down/restart the
-  client with `Core.restartFromIdleWatchdog()` without clicking Reconnect or
-  pausing. Active matchmaking and terminal proof still defer the restart, and
-  the policy caps retries. A transient reconnect must not restart the client.
+- An exact RECONNECT screen is classified from the fresh foreground capture,
+  then passed through the regular screen-recovery route. The narrow
+  `MATCHMAKING_ERROR_DIALOG_PROBE` may correctly return UNKNOWN for this
+  non-matchmaking offline prompt; that result must not prevent the separate
+  reconnect route from seeing the screen. After the bounded 60-second
+  indefinite-reconnect policy fires, shut down/restart the client with
+  `Core.restartFromIdleWatchdog()` without clicking Reconnect or pausing.
+  Active game evidence requires both the `WarEx.inWar` latch and a non-empty
+  Power.log proven to belong to the current Hearthstone process; an empty or
+  stale log cannot make a stale latch authoritative. Recent matchmaking and
+  terminal evidence also defer the restart, and the policy caps retries. A
+  transient reconnect must not restart the client.
   Reconnect routing depends on `BETA_RECOVERY_EXTENSIONS_ENABLED`: disabled
   routes `ScreenStateRecovery.inspectAndRecover` to
   `UpstreamScreenStateRecovery`; enabled uses the Beta `ScreenStateRecovery`
   implementation. Keep both paths aligned: exact RECONNECT is classification
   only during a 60-second grace period, then restart Hearthstone without
-  clicking Reconnect or Cancel. `WarEx.inWar` alone must not
-  suppress that exact stuck-reconnect restart; recent matchmaking and terminal
-  evidence still defer it. `Core.restartFromIdleWatchdog()` kills/restarts the
-  client without changing the script's pause state. The separate generic
+  clicking Reconnect or Cancel. Active game, recent matchmaking, and terminal
+  evidence defer the restart; `WarEx.inWar` alone does not. `Core.restartFromIdleWatchdog()`
+  kills/restarts the client without changing the script's pause state. The separate generic
   loading-screen threshold remains 120 seconds.
 - Missing-client recovery must treat matchmaking/game latches as live-client
   evidence only while the exact Hearthstone process is present. If the process

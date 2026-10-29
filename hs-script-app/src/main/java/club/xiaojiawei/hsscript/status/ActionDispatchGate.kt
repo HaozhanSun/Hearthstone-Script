@@ -71,6 +71,11 @@ object ActionDispatchGate {
                 gameWindow.toString(),
                 Mode.currMode?.name,
             )
+        val freshDeckSelectionStartReady = action == "matchmaking.start" &&
+            processId != null && gameWindow != null && !WarEx.inWar &&
+            !runCatching { GameUtil.isTerminalGameState() }.getOrDefault(true) &&
+            runCatching { GameUtil.isVerifiedCurrentGameWindow(gameWindow) }.getOrDefault(false) &&
+            StartupInputReadiness.isDeckSelectionStartReady(processId, gameWindow.toString())
         val startupTraditionalBattleSelectionReady = action == StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION &&
             processId != null && gameWindow != null && !WarEx.inWar &&
             !runCatching { GameUtil.isTerminalGameState() }.getOrDefault(true) &&
@@ -106,11 +111,13 @@ object ActionDispatchGate {
                 ),
             startupQuestOverlayDismissPermitValid = action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION &&
                 startupQuestOverlayDispatchScope.get() == true,
+            freshDeckSelectionStartReady = freshDeckSelectionStartReady,
         )
         if (!startupGateAllowed) {
             log.warn {
                 "ACTION_BLOCKED action=$action reason=startup-screen-not-confirmed " +
                     "currentSessionReady=$currentSessionReady freshOnlineMenuReady=$freshOnlineMenuReady " +
+                    "freshDeckSelectionStartReady=$freshDeckSelectionStartReady " +
                     "dispatch=false"
             }
             return false
@@ -143,6 +150,7 @@ object ActionDispatchGate {
                 ),
             startupQuestOverlayDismissPermitValid = action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION &&
                 startupQuestOverlayDispatchScope.get() == true,
+            freshDeckSelectionStartReady = freshDeckSelectionStartReady,
         )
         if (!allowed) return false
         if (action == "surrender.request" && rankSurrenderCapability != null &&
@@ -250,6 +258,7 @@ object ActionDispatchGate {
         startupNoticeDismissPermitValid: Boolean = false,
         betaResultConfirmationPermitValid: Boolean = false,
         startupQuestOverlayDismissPermitValid: Boolean = false,
+        freshDeckSelectionStartReady: Boolean = false,
     ): Boolean {
         if (paused || !working) {
             log.warn {
@@ -269,11 +278,13 @@ object ActionDispatchGate {
                 startupNoticeDismissPermitValid = startupNoticeDismissPermitValid,
                 betaResultConfirmationPermitValid = betaResultConfirmationPermitValid,
                 startupQuestOverlayDismissPermitValid = startupQuestOverlayDismissPermitValid,
+                freshDeckSelectionStartReady = freshDeckSelectionStartReady,
             )
         ) {
             log.warn {
                 "ACTION_BLOCKED action=$action reason=startup-screen-not-confirmed " +
                     "currentSessionReady=$currentSessionReady freshOnlineMenuReady=$freshOnlineMenuReady " +
+                    "freshDeckSelectionStartReady=$freshDeckSelectionStartReady " +
                     "dispatch=false"
             }
             return false

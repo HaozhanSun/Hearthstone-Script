@@ -26,6 +26,7 @@ internal object StartupInputReadiness {
 
     const val HUB_TRADITIONAL_BATTLE_ACTION = "mode.select-traditional"
     const val HUB_MODE_CHOOSER_PROOF_MAX_AGE_MS = 8_000L
+    const val DECK_SELECTION_START_PROOF_MAX_AGE_MS = 8_000L
 
     fun recordOnlineMenu(
         pid: Int,
@@ -58,6 +59,63 @@ internal object StartupInputReadiness {
         betaResultConfirmationPermit.set(null)
         proof.set(Proof(pid, hwnd, HUB_MODE_CHOOSER_SCREEN, now))
     }
+
+    /** Narrow startup proof for the enabled Start control on an exact deck-selection screen. */
+    fun recordDeckSelectionStart(
+        pid: Int,
+        hwnd: String,
+        confidence: Int,
+        evidence: String,
+        enabledStartButtonVisible: Boolean,
+        modalVisible: Boolean,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean {
+        if (pid <= 0 || hwnd.isBlank() || confidence < 90 ||
+            evidence !in DECK_SELECTION_START_EVIDENCE || !enabledStartButtonVisible || modalVisible
+        ) {
+            invalidate(pid, hwnd)
+            return false
+        }
+        reconnectPermit.set(null)
+        noticeDismissPermit.set(null)
+        betaResultConfirmationPermit.set(null)
+        proof.set(Proof(pid, hwnd, DECK_SELECTION_START_SCREEN, now))
+        return true
+    }
+
+    fun recordStartupOnlineScreen(
+        pid: Int,
+        hwnd: String,
+        screen: String,
+        confidence: Int,
+        evidence: String,
+        enabledStartButtonVisible: Boolean,
+        modalVisible: Boolean,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean = if (screen == "DECK_SELECTION") {
+        recordDeckSelectionStart(
+            pid = pid,
+            hwnd = hwnd,
+            confidence = confidence,
+            evidence = evidence,
+            enabledStartButtonVisible = enabledStartButtonVisible,
+            modalVisible = modalVisible,
+            now = now,
+        )
+    } else {
+        val valid = pid > 0 && hwnd.isNotBlank() && screen in ONLINE_MENU_SCREENS && !modalVisible
+        recordOnlineMenu(pid, hwnd, screen, modalVisible, now)
+        valid
+    }
+
+    fun isDeckSelectionStartReady(
+        pid: Int,
+        hwnd: String,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean = proof.get()?.let {
+        it.pid == pid && it.hwnd == hwnd && it.screen == DECK_SELECTION_START_SCREEN &&
+            now >= it.observedAt && now - it.observedAt <= DECK_SELECTION_START_PROOF_MAX_AGE_MS
+    } == true
 
     fun invalidate(pid: Int? = null, hwnd: String? = null) {
         proof.updateAndGet { current ->
@@ -174,6 +232,8 @@ internal object StartupInputReadiness {
     )
 
     private const val HUB_MODE_CHOOSER_SCREEN = "HUB_MODE_CHOOSER"
+    private const val DECK_SELECTION_START_SCREEN = "DECK_SELECTION_START"
+    private val DECK_SELECTION_START_EVIDENCE = setOf("deck-selection-title", "deck-selection-title-roi")
 
     private val allowedModesByScreen = mapOf(
         "HOME" to setOf("HUB"),
@@ -203,6 +263,7 @@ internal object StartupInputAuthorizationPolicy {
         startupNoticeDismissPermitValid: Boolean = false,
         betaResultConfirmationPermitValid: Boolean = false,
         startupQuestOverlayDismissPermitValid: Boolean = false,
+        freshDeckSelectionStartReady: Boolean = false,
     ): Boolean = if (action == StartupNoticeRecoveryPolicy.DISPATCH_ACTION) {
         // A non-empty Power.log can make the session model ready while the
         // client is still on this modal. The exact permit plus final active
@@ -213,6 +274,7 @@ internal object StartupInputAuthorizationPolicy {
     } else if (action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION) {
         startupQuestOverlayDismissPermitValid
     } else currentSessionReady || freshOnlineMenuReady ||
+        (action == "matchmaking.start" && freshDeckSelectionStartReady) ||
         (action.startsWith("startup.") && action != StartupNoticeRecoveryPolicy.DISPATCH_ACTION) ||
         (action == StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION &&
             startupTraditionalBattleSelectionReady) ||

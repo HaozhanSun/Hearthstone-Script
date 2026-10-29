@@ -329,10 +329,22 @@ object UpstreamScreenStateRecovery {
                 // list, not the tournament strategy screen. Keep it classification-
                 // only; its exact first action is authorized separately.
             } else if (cleanMenu) {
-                StartupInputReadiness.recordOnlineMenu(pid!!, hwnd, detection!!.kind.code, modalVisible = false)
+                val currentDetection = detection!!
+                val readinessRecorded = StartupInputReadiness.recordStartupOnlineScreen(
+                    pid = pid!!,
+                    hwnd = hwnd,
+                    screen = currentDetection.kind.code,
+                    confidence = currentDetection.confidence,
+                    evidence = currentDetection.evidence,
+                    enabledStartButtonVisible = currentDetection.kind == ScreenKind.DECK_SELECTION &&
+                        ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image),
+                    modalVisible = false,
+                )
                 log.warn {
-                    "STARTUP_INPUT_READINESS_CONFIRMED screen=${detection.kind.code} pid=$pid hwnd=$hwnd " +
-                        "evidence=${detection.evidence} provider=UPSTREAM action=ALLOW_MODE_STRATEGIES"
+                    "STARTUP_INPUT_READINESS_CONFIRMED screen=${currentDetection.kind.code} pid=$pid hwnd=$hwnd " +
+                        "evidence=${currentDetection.evidence} recorded=$readinessRecorded " +
+                        "proof=${if (currentDetection.kind == ScreenKind.DECK_SELECTION) "MATCHMAKING_START_ONLY" else "ONLINE_MENU"} " +
+                        "provider=UPSTREAM"
                 }
             } else {
                 StartupInputReadiness.invalidate(pid, hwnd)
@@ -1242,11 +1254,16 @@ object UpstreamScreenStateRecovery {
                     }
                 }
                 StartupNoticePostcheckProofPolicy.Proof.ONLINE_MENU -> {
-                    StartupInputReadiness.recordOnlineMenu(
-                        currentPid,
-                        expectedWindow.toString(),
-                        afterDetection!!.kind.code,
-                        modalVisible = false,
+                    val postcheck = afterDetection!!
+                    StartupInputReadiness.recordStartupOnlineScreen(
+                        pid = currentPid,
+                        hwnd = expectedWindow.toString(),
+                        screen = postcheck.kind.code,
+                        confidence = postcheck.confidence,
+                        evidence = postcheck.evidence,
+                        enabledStartButtonVisible = postcheck.kind == ScreenKind.DECK_SELECTION &&
+                            ScreenWatchdog.hasEnabledDeckSelectionStartButton(after.capture.image),
+                        modalVisible = ScreenStateRecovery.hasCenteredModalPanel(after.capture.image),
                     )
                     log.warn {
                         "STARTUP_NOTICE_DISMISS_POSTCHECK result=CLOSED screen=${afterDetection.kind.code} " +
@@ -1394,6 +1411,18 @@ object UpstreamScreenStateRecovery {
                 "post-result-rank-progress-visual",
             )
         }
+        // Defeat result banners can coexist with Hub/deck geometry in the
+        // blurred board behind them. Preserve the dedicated result signature
+        // before classifying those broader destination layouts.
+        if (looksLikeResultVisual(
+                visual.resultContinueGrayLightRatio,
+                visual.resultBannerLowSaturationRatio,
+                visual.loadingCentralDarkRatio,
+                visual.resultBannerWarmRatio,
+            )
+        ) {
+            return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
+        }
         val hubModeChoiceText = listOf("传统对战", "酒馆战棋", "竞技模式", "其他模式")
             .any(text::contains)
         // This structural four-button signature identifies the HUB chooser
@@ -1412,15 +1441,6 @@ object UpstreamScreenStateRecovery {
         }
         if (ResultPageEvidencePolicy.looksLikeResultText(text)) {
             return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 95, "result-text")
-        }
-        if (looksLikeResultVisual(
-                visual.resultContinueGrayLightRatio,
-                visual.resultBannerLowSaturationRatio,
-                visual.loadingCentralDarkRatio,
-                visual.resultBannerWarmRatio,
-            )
-        ) {
-            return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
         }
         // The HUB chooser's red ornament and dark lower-right background can
         // satisfy the queue color heuristic. Conflicting same-frame text is
@@ -1846,8 +1866,9 @@ object UpstreamScreenStateRecovery {
         val hwnd = ScriptStatus.gameHWND
         val activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
             LifecycleTrace.hasRecentMatchmakingInputIntent()
+        val activeGameEvidence = ScreenStateRecovery.hasAuthoritativeCurrentGameEvidenceForReconnect()
         val terminalState = runCatching { GameUtil.isTerminalGameState() }.getOrDefault(true)
-        if (!WorkTimeListener.working || PauseStatus.isPause || terminalState || activeQueue ||
+        if (!WorkTimeListener.working || PauseStatus.isPause || terminalState || activeQueue || activeGameEvidence ||
             pid == null || pid <= 0 || hwnd == null ||
             GameUtil.findGameProcessIdForDiagnostics() != pid.toLong() ||
             !GameUtil.isVerifiedCurrentGameWindow(hwnd)
@@ -1855,7 +1876,7 @@ object UpstreamScreenStateRecovery {
             log.warn {
                 "SCREEN_RECOVERY_RECONNECT_RESTART_DEFERRED reason=final-safety-check " +
                     "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} " +
-                    "terminal=$terminalState activeQueue=$activeQueue activeGame=${WarEx.inWar} " +
+                "terminal=$terminalState activeQueue=$activeQueue activeGameEvidence=$activeGameEvidence staleWarLatch=${WarEx.inWar} " +
                     "pid=${pid ?: "none"} hwnd=${hwnd ?: "none"}"
             }
             return false
@@ -2066,11 +2087,12 @@ object UpstreamScreenStateRecovery {
             ScreenKind.RECONNECT -> {
                 val activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
                     LifecycleTrace.hasRecentMatchmakingInputIntent()
+                val activeGameEvidence = ScreenStateRecovery.hasAuthoritativeCurrentGameEvidenceForReconnect()
                 val terminalState = GameUtil.isTerminalGameState()
-                if (terminalState || activeQueue) {
+                if (terminalState || activeQueue || activeGameEvidence) {
                     log.warn {
-                        "SCREEN_RECOVERY_RECONNECT_DEFERRED reason=${if (terminalState) "terminal" else "active-matchmaking"} " +
-                            "action=NO_INPUT_NO_RESTART activeGame=${WarEx.inWar}"
+                        "SCREEN_RECOVERY_RECONNECT_DEFERRED reason=${when { terminalState -> "terminal"; activeQueue -> "active-matchmaking"; else -> "current-session-gameplay" }} " +
+                            "action=NO_INPUT_NO_RESTART activeGameEvidence=$activeGameEvidence staleWarLatch=${WarEx.inWar}"
                     }
                     return false
                 }
@@ -2078,14 +2100,15 @@ object UpstreamScreenStateRecovery {
                 when (indefiniteReconnectRestartPolicy.observe(
                     exactReconnectVisible = true,
                     nowMs = now,
-                    activeQueue = activeQueue,
+                    activeQueue = activeQueue || activeGameEvidence,
                     terminalState = terminalState,
                 )) {
                     IndefiniteReconnectRestartPolicy.Decision.RESTART_CLIENT_NO_PAUSE -> {
                         log.error {
                             "SCREEN_RECOVERY_RECONNECT_INDEFINITE decision=RESTART_CLIENT_NO_PAUSE " +
                                 "thresholdMs=${IndefiniteReconnectRestartPolicy.DEFAULT_THRESHOLD_MS} " +
-                                "attempt=${indefiniteReconnectRestartPolicy.attempts()} activeGame=${WarEx.inWar} " +
+                                "attempt=${indefiniteReconnectRestartPolicy.attempts()} " +
+                                "activeGameEvidence=$activeGameEvidence staleWarLatch=${WarEx.inWar} " +
                                 "action=SHUTDOWN_HEARTHSTONE_AND_RESTART"
                         }
                         return restartClientForIndefiniteReconnect(now)

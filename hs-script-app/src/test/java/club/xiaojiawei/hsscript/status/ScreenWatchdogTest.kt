@@ -377,6 +377,15 @@ class ScreenWatchdogTest {
     }
 
     @Test
+    fun `deck selection start button fixture has a visible enabled control signature`() {
+        val screenshot = javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/deck-selection-screen.png",
+        )?.use(ImageIO::read) ?: error("missing captured deck-selection screenshot")
+        val diagnostics = ScreenWatchdog.deckSelectionStartButtonDiagnosticsForTest(screenshot)
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(screenshot), diagnostics)
+    }
+
+    @Test
     fun `watchdog uses local OCR even when PaddleX is selected`() {
         OcrRuntime.providerModeProvider = { OcrProviderMode.PADDLEX_ONLY }
 

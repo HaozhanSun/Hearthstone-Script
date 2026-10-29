@@ -65,9 +65,14 @@ class ScreenStateRecoveryTest {
     fun `recognizes the offline reconnect page without confusing login or reconnecting states`() {
         assertTrue(ScreenStateRecovery.looksLikeReconnectText("游戏连接中断。重新接..."))
         assertTrue(ScreenStateRecovery.looksLikeReconnectText("当前处于离线状态，请重新连接"))
+        assertTrue(ScreenStateRecovery.looksLikeReconnectText("当前处于离线状态距离你的上一次操作已经过了很长时间，游戏连接中断。"))
         assertTrue(ScreenStateRecovery.looksLikeReconnectText("你已离线太久，需要重新连接"))
         assertTrue(ScreenStateRecovery.looksLikeReconnectText("You have been offline too long. You need to reconnect."))
         assertEquals("RECONNECT", ScreenStateRecovery.classifyForTest("你已离线太久，需要重新连接"))
+        assertEquals(
+            "RECONNECT",
+            ScreenStateRecovery.classifyForTest("当前处于离线状态距离你的上一次操作已经过了很长时间，游戏连接中断。"),
+        )
         assertFalse(ScreenStateRecovery.looksLikeReconnectText("登录 Battle.net"))
         assertFalse(ScreenStateRecovery.looksLikeReconnectText("正在重新连接"))
         assertFalse(ScreenStateRecovery.looksLikeReconnectText("选择套牌 狂野对战"))

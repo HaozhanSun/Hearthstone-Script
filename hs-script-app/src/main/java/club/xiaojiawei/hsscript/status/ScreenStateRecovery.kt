@@ -86,6 +86,7 @@ object ScreenStateRecovery {
     private val reconnectAcceptedAt = AtomicLong(0L)
     private val reconnectProbeGeneration = AtomicLong(0L)
     private val offlineReconnectRecovery = OfflineReconnectRecovery()
+    private val indefiniteReconnectRestartPolicy = IndefiniteReconnectRestartPolicy()
     private val reconnectFailureRecoveryPolicy = ReconnectFailureRecoveryPolicy()
     private val slowReconnectWarningObservedAt = AtomicLong(0L)
     /**
@@ -310,6 +311,31 @@ object ScreenStateRecovery {
     /** Read-only process/log boundary used to distinguish an explicit rearm from a healthy heartbeat. */
     internal fun isCurrentGameSessionReadyForStart(): Boolean = currentSessionModelReady()
 
+    /** A stale WarEx latch is not game evidence when the live process has no current-session log. */
+    internal fun hasAuthoritativeCurrentGameEvidenceForReconnect(): Boolean {
+        if (!WarEx.inWar) return false
+        val pid = GameUtil.findGameProcessIdForDiagnostics() ?: return false
+        val startedAt = runCatching { GameUtil.findProcessStartedAtForDiagnostics(pid) }.getOrNull()
+            ?: return false
+        val attached = PowerLogListener.logFile?.let { File(it.path()) } ?: return false
+        val latest = GameUtil.getLatestLogDir()?.resolve(GAME_WAR_LOG_NAME) ?: return false
+        val currentSessionPowerLog = runCatching {
+            attached.isFile && attached.canRead() && attached.length() > 0L &&
+                attached.canonicalFile == latest.canonicalFile &&
+                PowerLogSessionBindingPolicy.isCurrentSession(
+                    powerLogPath = attached.absolutePath,
+                    gameLogsRoot = latest.parentFile?.parent,
+                    length = attached.length(),
+                    lastModifiedMs = attached.lastModified(),
+                    processStartedAtMs = startedAt,
+                )
+        }.getOrDefault(false)
+        return ReconnectActiveGameEvidencePolicy.isAuthoritative(
+            warLatch = WarEx.inWar,
+            currentSessionPowerLog = currentSessionPowerLog,
+        )
+    }
+
     /** Re-observe the same verified client after the single authorized HUB entry click. */
     fun scheduleStartupMenuReprobeAfterModeSelection() {
         if (!startupMenuReprobeInFlight.compareAndSet(false, true)) return
@@ -529,22 +555,29 @@ object ScreenStateRecovery {
             val cleanOnlineMenu = captureTarget != null && currentHwnd.isNotBlank() && !WarEx.inWar &&
                 !capture.visual.centeredModalPanelVisual &&
                 ScreenRecoveryCapturePurposePolicy.allowsStartupOnlineMenu(detection.kind.code)
+            var readinessRecorded = false
             if (cleanOnlineMenu) {
-                StartupInputReadiness.recordOnlineMenu(
+                readinessRecorded = StartupInputReadiness.recordStartupOnlineScreen(
                     pid = captureTarget!!.processId,
                     hwnd = currentHwnd,
                     screen = detection.kind.code,
+                    confidence = detection.confidence,
+                    evidence = detection.evidence,
+                    enabledStartButtonVisible = detection.kind == ScreenKind.DECK_SELECTION &&
+                        ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image),
                     modalVisible = false,
                 )
                 log.warn {
                     "STARTUP_INPUT_READINESS_CONFIRMED screen=${detection.kind.code} " +
                         "pid=${captureTarget.processId} hwnd=$currentHwnd " +
-                        "evidence=${detection.evidence} action=ALLOW_MODE_STRATEGIES"
+                        "evidence=${detection.evidence} recorded=$readinessRecorded " +
+                        "proof=${if (detection.kind == ScreenKind.DECK_SELECTION) "MATCHMAKING_START_ONLY" else "ONLINE_MENU"}"
                 }
             } else {
                 StartupInputReadiness.invalidate(captureTarget?.processId, currentHwnd)
             }
-            val startupRecoveryScreen = cleanOnlineMenu || detection.kind in setOf(
+            val startupRecoveryScreen = (cleanOnlineMenu &&
+                (detection.kind != ScreenKind.DECK_SELECTION || readinessRecorded)) || detection.kind in setOf(
                 ScreenKind.RECONNECT,
                 ScreenKind.RECONNECT_FAILURE,
                 ScreenKind.RECONNECT_SPINNER,
@@ -1196,6 +1229,17 @@ object ScreenStateRecovery {
         if (visual.startupQuestOverlayVisual) {
             return Detection(ScreenKind.HOME_TASK_OVERLAY, ModeEnum.HUB, 96, "startup-your-quests-overlay")
         }
+        // A fresh result banner/Continue signature must outrank a noisy
+        // targeted deck or Hub chooser ROI from the underlying game board.
+        if (looksLikeResultVisual(
+                visual.resultContinueGrayLightRatio,
+                visual.resultBannerLowSaturationRatio,
+                visual.loadingCentralDarkRatio,
+                visual.resultBannerWarmRatio,
+            )
+        ) {
+            return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
+        }
         targetedDetection?.let { return it }
 
         val ocrText = evidence.text
@@ -1244,15 +1288,6 @@ object ScreenStateRecovery {
         }
         if (ResultPageEvidencePolicy.looksLikeResultText(text)) {
             return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 95, "result-text")
-        }
-        if (looksLikeResultVisual(
-                visual.resultContinueGrayLightRatio,
-                visual.resultBannerLowSaturationRatio,
-                visual.loadingCentralDarkRatio,
-                visual.resultBannerWarmRatio,
-            )
-        ) {
-            return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
         }
         // A real result panel may also satisfy the generic centered-modal
         // guard. Let only the stronger terminal evidence above take priority;
@@ -2660,11 +2695,13 @@ object ScreenStateRecovery {
             ScreenKind.RECONNECT -> {
                 val activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
                     LifecycleTrace.hasRecentMatchmakingInputIntent()
+                val activeGameEvidence = hasAuthoritativeCurrentGameEvidenceForReconnect()
                 val terminalState = GameUtil.isTerminalGameState() ||
                     club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
                         .isTerminalCleanupPending()
                 if (!ReconnectRestartSafetyPolicy.mayRestart(
                         exactReconnectVisible = true,
+                        activeGame = activeGameEvidence,
                         activeMatchmaking = activeMatchmaking,
                         terminalState = terminalState,
                     )
@@ -2681,10 +2718,34 @@ object ScreenStateRecovery {
                     OfflineReconnectRecovery.Screen.OFFLINE_PROMPT,
                     now,
                 )
+                val restartDecision = indefiniteReconnectRestartPolicy.observe(
+                    exactReconnectVisible = true,
+                    nowMs = now,
+                    activeQueue = activeMatchmaking,
+                    terminalState = terminalState,
+                )
                 log.warn {
                     "SCREEN_RECOVERY_RECONNECT_STATE state=${reconnectDecision.state} " +
                         "action=${reconnectDecision.action} attempt=${reconnectDecision.attempt} " +
-                        "reason=${reconnectDecision.reason} result=prompt-detected"
+                        "reason=${reconnectDecision.reason} restartDecision=$restartDecision result=prompt-detected"
+                }
+                when (restartDecision) {
+                    IndefiniteReconnectRestartPolicy.Decision.RESTART_CLIENT_NO_PAUSE -> {
+                        log.error {
+                            "SCREEN_RECOVERY_RECONNECT_ESCALATED reason=persistent-exact-offline-prompt " +
+                                "thresholdMs=${IndefiniteReconnectRestartPolicy.DEFAULT_THRESHOLD_MS} " +
+                                "action=RESTART_CLIENT_NO_INPUT_NO_PAUSE"
+                        }
+                        if (ScreenRecoveryRuntime.isCurrent(recoveryToken)) Core.restartFromIdleWatchdog()
+                        return true
+                    }
+                    IndefiniteReconnectRestartPolicy.Decision.ALERT_OPERATOR -> {
+                        log.error { "SCREEN_RECOVERY_RECONNECT_RESTART_EXHAUSTED action=NO_PAUSE_NO_INPUT" }
+                        return false
+                    }
+                    IndefiniteReconnectRestartPolicy.Decision.DEFER_ACTIVE_QUEUE,
+                    IndefiniteReconnectRestartPolicy.Decision.DEFER_TERMINAL -> return false
+                    IndefiniteReconnectRestartPolicy.Decision.WAIT -> Unit
                 }
                 val acceptedReconnectAt = reconnectAcceptedAt.get()
                 if (acceptedReconnectAt > 0L &&
