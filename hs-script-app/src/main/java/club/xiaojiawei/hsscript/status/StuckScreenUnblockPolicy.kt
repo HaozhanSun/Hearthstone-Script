@@ -75,6 +75,10 @@ internal class StuckScreenUnblockPolicy(
 
     @Synchronized fun hasProgress(): Boolean = fingerprint != null
 
+    /** Keep the staged ladder when OCR reclassifies the same exact client frame. */
+    @Synchronized fun hasProgressFor(expectedFingerprint: String): Boolean =
+        fingerprint != null && fingerprint == expectedFingerprint
+
     companion object {
         const val DEFAULT_FIRST_THRESHOLD_MS = 60_000L
         const val DEFAULT_SECOND_STAGE_MS = 60_000L

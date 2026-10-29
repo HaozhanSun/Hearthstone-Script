@@ -70,6 +70,7 @@ object UpstreamScreenStateRecovery {
     private val eventQuestOverlayRecoveryPolicy = EventQuestOverlayRecoveryPolicy()
     private val startupDeckModeNavigationAttempts = StartupDeckModeNavigationAttemptGate()
     private val stuckScreenUnblockProbeInFlight = AtomicBoolean(false)
+    private val stuckScreenUnblockBatchInFlight = AtomicBoolean(false)
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
@@ -195,8 +196,16 @@ object UpstreamScreenStateRecovery {
         stateFingerprint: String,
         startupProbe: Boolean = false,
         exactReconnectRecheck: Boolean = false,
+        stuckScreenUnblockRecheck: Boolean = false,
         stateStillCurrent: () -> Boolean = { true },
     ): Boolean {
+        if (stuckScreenUnblockProbeInFlight.get() && !stuckScreenUnblockRecheck) {
+            log.warn {
+                "SCREEN_RECOVERY_SKIPPED reason=stuck-screen-post-click-recheck-in-flight " +
+                    "state=$stateFingerprint"
+            }
+            return false
+        }
         if (!WorkTimeListener.working || PauseStatus.isPause) {
             log.info {
                 "SCREEN_RECOVERY_SKIPPED reason=unsafe " +
@@ -287,8 +296,15 @@ object UpstreamScreenStateRecovery {
             ) + " purpose=${authorizedCapture.purpose}"
         }
         val safeIdleMenuCandidate = isSafeIdleUnblockScreen(detection, capture.visual)
+        val observedStuckFingerprint = "${capture.processId}|${authorizedCapture.gameWindow}|" +
+            stuckScreenPerceptualFingerprint(capture.image)
+        val exactReconnectCandidate = detection?.kind == ScreenKind.RECONNECT && capture.visual.reconnectDialogVisual
+        val sameScreenLadderInProgress = stuckScreenUnblockPolicy.hasProgressFor(observedStuckFingerprint)
         if (detection != null) unknownStartupRestartPolicy.reset()
-        if (detection != null && !(safeIdleMenuCandidate && stuckForMs >= StuckScreenUnblockPolicy.DEFAULT_FIRST_THRESHOLD_MS)) {
+        if (detection != null &&
+            !((safeIdleMenuCandidate || exactReconnectCandidate) &&
+                (stuckForMs >= StuckScreenUnblockPolicy.DEFAULT_FIRST_THRESHOLD_MS || sameScreenLadderInProgress))
+        ) {
             if (stuckScreenUnblockPolicy.hasProgress()) {
                 log.warn {
                     "STUCK_SCREEN_UNBLOCK_RECHECK result=UNBLOCKED newScreen=${detection.kind.code} " +
@@ -2364,43 +2380,54 @@ object UpstreamScreenStateRecovery {
                     WorkTimeListener.working && GameUtil.findGameProcessIdForDiagnostics() == currentPid.toLong() &&
                     GameUtil.isVerifiedCurrentGameWindow(authorizedCapture.gameWindow, currentPid.toLong())
                 val freshPoint = fresh?.let { StartupQuestOverlayDismissPolicy.topLeftPixel(it.capture.bounds) }
-                var accepted = freshAuthorized && freshPoint != null && currentPid != null
-                if (accepted && freshPoint != null && currentPid != null) {
-                    for (clickNumber in decision.clickNumber..StuckScreenUnblockPolicy.MAX_TOP_LEFT_CLICKS) {
-                        val clickAccepted = MouseUtil.leftButtonClickForIdleStuckRecovery(
-                            freshPoint, currentPid.toLong(), authorizedCapture.gameWindow,
+                var dispatchedClickCount = 0
+                val accepted = StuckScreenUnblockDispatch.dispatchTopLeftBatch(
+                    batchInFlight = stuckScreenUnblockBatchInFlight,
+                    action = decision.action,
+                    firstClick = decision.clickNumber,
+                    freshCaptureAuthorized = freshAuthorized,
+                    point = freshPoint,
+                    expectedFingerprint = evidence.fingerprint,
+                    completionTimeMs = { System.currentTimeMillis() },
+                    dispatchClick = { targetPoint, clickNumber ->
+                        val clickAccepted = currentPid != null && MouseUtil.leftButtonClickForIdleStuckRecovery(
+                            targetPoint, currentPid.toLong(), authorizedCapture.gameWindow,
                         )
+                        dispatchedClickCount++
                         log.warn {
-                            "STUCK_SCREEN_UNBLOCK_CLICK click=$clickNumber/3 point=$freshPoint " +
+                            "STUCK_SCREEN_UNBLOCK_CLICK click=$clickNumber/3 point=$targetPoint " +
                                 "accepted=$clickAccepted capture=${fresh?.capture?.file?.absolutePath ?: "not-saved"}"
                         }
-                        if (!clickAccepted) {
-                            accepted = false
-                            break
+                        clickAccepted
+                    },
+                    completeBatch = stuckScreenUnblockPolicy::completeTopLeftClickBatch,
+                    requestFreshRecheck = {
+                        if (stuckScreenUnblockProbeInFlight.compareAndSet(false, true)) {
+                            EXTRA_THREAD_POOL.schedule({
+                                try {
+                                    inspectAndRecover(
+                                        stuckForMs,
+                                        stateFingerprint,
+                                        startupProbe = true,
+                                        stuckScreenUnblockRecheck = true,
+                                    )
+                                } finally {
+                                    stuckScreenUnblockProbeInFlight.set(false)
+                                }
+                            }, 800L, TimeUnit.MILLISECONDS)
+                            log.warn {
+                                "STUCK_SCREEN_UNBLOCK_RECHECK scheduled=true delayMs=800 clickCount=3 action=FRESH_CAPTURE"
+                            }
+                        } else {
+                            log.warn { "STUCK_SCREEN_UNBLOCK_RECHECK scheduled=false reason=probe-in-flight clickCount=3" }
                         }
-                    }
-                }
-                if (accepted) {
-                    accepted = stuckScreenUnblockPolicy.completeTopLeftClickBatch(
-                        evidence.fingerprint, System.currentTimeMillis(),
-                    )
-                }
+                    },
+                )
                 if (!accepted) stuckScreenUnblockPolicy.reset()
                 log.warn {
-                    "STUCK_SCREEN_UNBLOCK_BATCH complete=$accepted clickCount=${if (accepted) 3 else decision.clickNumber} " +
+                    "STUCK_SCREEN_UNBLOCK_BATCH complete=$accepted clickCount=$dispatchedClickCount " +
+                        "reason=${if (accepted) "dispatched" else "not-accepted-fresh-evidence-click-or-overlap"} " +
                         "sourcePoint=$point freshPoint=$freshPoint fingerprint=${evidence.fingerprint}"
-                }
-                if (accepted && stuckScreenUnblockProbeInFlight.compareAndSet(false, true)) {
-                    EXTRA_THREAD_POOL.schedule({
-                        try {
-                            inspectAndRecover(stuckForMs, stateFingerprint, startupProbe = true)
-                        } finally {
-                            stuckScreenUnblockProbeInFlight.set(false)
-                        }
-                    }, 800L, TimeUnit.MILLISECONDS)
-                    log.warn {
-                        "STUCK_SCREEN_UNBLOCK_RECHECK scheduled=true delayMs=800 clickCount=3 action=FRESH_CAPTURE"
-                    }
                 }
                 true
             }
@@ -2460,7 +2487,11 @@ object UpstreamScreenStateRecovery {
                         "finalGuard=$finalSafe freshScreen=${freshDetection?.kind?.code ?: "UNKNOWN"} " +
                         "pause=${PauseStatus.isPause} action=${if (restartAccepted) "idle-watchdog" else "NO_ACTION"}"
                 }
-                if (restartAccepted) Core.restartFromIdleWatchdog()
+                StuckScreenUnblockDispatch.dispatchRestartIfAuthorized(
+                    action = decision.action,
+                    finalSafetyPassed = restartAccepted,
+                    restart = { Core.restartFromIdleWatchdog() },
+                )
                 true
             }
             StuckScreenUnblockPolicy.Action.WAIT,
