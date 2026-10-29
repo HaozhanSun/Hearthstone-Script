@@ -205,6 +205,13 @@ internal object ScreenRecoveryCapturePurposePolicy {
 
 /** Exact evidence needed to permit only HUB -> Traditional Battle pre-session entry. */
 internal object StartupHubModeChooserPolicy {
+    fun shouldDeferGenericIdleUnblock(
+        screenKind: String?,
+        screenMode: String?,
+        hubModeChooserVisual: Boolean,
+    ): Boolean = screenKind.equals("TOURNAMENT", ignoreCase = true) &&
+        screenMode == "HUB" && hubModeChooserVisual
+
     fun canAuthorizeTraditionalBattleSelection(
         purpose: ScreenRecoveryCapturePurpose,
         currentSessionReady: Boolean,

@@ -106,14 +106,26 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                         val dispatched = StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
                             chooserProofFresh = startupSelectionReady,
                             paused = PauseStatus.isPause,
+                            processId = gamePid ?: 0,
+                            hwnd = gameWindow?.toString().orEmpty(),
                         ) { action ->
-                            log.info { "STARTUP_MODE_ENTRY_ACTION_REQUEST action=$action" }
-                            TOURNAMENT_MODE_RECT.lClick(isCancel = false, dispatchAction = action)
+                            log.info {
+                                "STARTUP_MODE_ENTRY_ACTION_REQUEST action=$action pid=$gamePid hwnd=$gameWindow"
+                            }
+                            val accepted = TOURNAMENT_MODE_RECT.lClick(isCancel = false, dispatchAction = action)
+                            log.info {
+                                "STARTUP_MODE_ENTRY_INPUT_RESULT accepted=$accepted pid=$gamePid hwnd=$gameWindow " +
+                                    "action=$action"
+                            }
+                            accepted
                         }
                         if (!dispatched) {
                             log.info {
                                 "STARTUP_MODE_ENTRY_WAITING_FOR_PROOF pid=${gamePid ?: "none"} " +
-                                    "hwnd=${gameWindow ?: "none"} paused=${PauseStatus.isPause} action=NO_INPUT"
+                                    "hwnd=${gameWindow ?: "none"} paused=${PauseStatus.isPause} " +
+                                    "chooserProofFresh=$startupSelectionReady reason=" +
+                                    "${if (!startupSelectionReady) "chooser-proof-missing" else "input-not-accepted"} " +
+                                    "action=NO_INPUT"
                             }
                             return@LRunnable
                         }

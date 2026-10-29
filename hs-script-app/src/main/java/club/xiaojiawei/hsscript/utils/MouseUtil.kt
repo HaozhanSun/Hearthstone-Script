@@ -19,6 +19,7 @@ import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.StartupInputReadiness
+import club.xiaojiawei.hsscript.status.StartupModeEntryDispatchPolicy
 import club.xiaojiawei.hsscript.status.BetaStartupResultConfirmationPolicy
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
@@ -281,6 +282,28 @@ object MouseUtil {
         block: () -> T?,
     ): RecoveryForegroundResult<T> {
         val requestedTarget = hwnd ?: return RecoveryForegroundResult(false, null)
+        val processId = GameUtil.findGameProcessIdForDiagnostics()?.toInt()
+            ?: return RecoveryForegroundResult(false, null)
+        val coordinated = StartupModeEntryDispatchPolicy.withRecoveryCapture(
+            processId,
+            requestedTarget.toString(),
+        ) {
+            withRecoveryForegroundUnlocked(requestedTarget, block)
+        }
+        if (coordinated == null) {
+            log.info {
+                "E2E_RECOVERY_FOREGROUND_SKIPPED reason=focus-transaction-busy " +
+                    "pid=$processId hwnd=$requestedTarget"
+            }
+            return RecoveryForegroundResult(false, null)
+        }
+        return coordinated
+    }
+
+    private fun <T> withRecoveryForegroundUnlocked(
+        requestedTarget: HWND,
+        block: () -> T?,
+    ): RecoveryForegroundResult<T> {
         if (!forceFocusWindowForRecovery(requestedTarget)) {
             log.warn { "E2E_RECOVERY_FOREGROUND_HOLD_SKIPPED hwnd=$requestedTarget reason=focus-unconfirmed" }
             return RecoveryForegroundResult(false, null)

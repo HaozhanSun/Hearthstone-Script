@@ -173,6 +173,12 @@ object ActionDispatchGate {
                         gameWindow.toString(),
                         Mode.currMode?.name,
                     ),
+                currentSessionReady = currentSessionReady,
+                activeGame = WarEx.inWar || Mode.currMode == ModeEnum.GAMEPLAY || Mode.nextMode == ModeEnum.GAMEPLAY,
+                activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                    LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+                terminal = GameUtil.isTerminalGameState() || MandatoryRankSurrenderGuard.isPending() ||
+                    MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
             )
         val startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationReady(
             action, processId, gameWindow?.toString(), exactGameWindowVerified, currentSessionReady,

@@ -1,7 +1,10 @@
 package club.xiaojiawei.hsscript.status
 
 import java.awt.Point
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.atomic.AtomicReference
+import club.xiaojiawei.hsscriptbase.config.log
 
 /** Fresh, process-bound proof that the visible client is at an online menu. */
 internal object StartupInputReadiness {
@@ -359,9 +362,13 @@ internal object StartupInputAuthorizationPolicy {
         hwnd: String?,
         exactWindowVerified: Boolean,
         freshHubChooserReady: Boolean,
+        currentSessionReady: Boolean = false,
+        activeGame: Boolean = false,
+        activeMatchmaking: Boolean = false,
+        terminal: Boolean = false,
     ): Boolean = action == StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION &&
         processId != null && processId > 0 && !hwnd.isNullOrBlank() && exactWindowVerified &&
-        freshHubChooserReady
+        freshHubChooserReady && !currentSessionReady && !activeGame && !activeMatchmaking && !terminal
 
     fun allowsDeckSelectionStart(
         action: String,
@@ -423,13 +430,71 @@ internal object StartupInputAuthorizationPolicy {
 
 /** Call-site handoff keeps HUB entry on one named action and never falls back to a generic click. */
 internal object StartupModeEntryDispatchPolicy {
+    private val focusTransactionLock = ReentrantLock()
+    private val activeModeEntry = AtomicReference<Pair<Int, String>?>(null)
+
     fun dispatchTraditionalBattleIfReady(
         chooserProofFresh: Boolean,
         paused: Boolean,
-        dispatch: (String) -> Unit,
+        processId: Int,
+        hwnd: String,
+        dispatch: (String) -> Boolean,
     ): Boolean {
-        if (paused || !chooserProofFresh) return false
-        dispatch(StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION)
-        return true
+        if (paused || !chooserProofFresh || processId <= 0 || hwnd.isBlank()) {
+            log.info {
+                "STARTUP_MODE_ENTRY_DISPATCH_BLOCKED reason=" +
+                    when {
+                        paused -> "paused"
+                        !chooserProofFresh -> "chooser-proof-missing-or-stale"
+                        processId <= 0 -> "invalid-process"
+                        else -> "invalid-window"
+                    } + " pid=$processId hwnd=${hwnd.ifBlank { "none" }} action=" +
+                    StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION
+            }
+            return false
+        }
+        val waitStartedAt = System.nanoTime()
+        val acquired = try {
+            focusTransactionLock.tryLock(3, TimeUnit.SECONDS)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!acquired) {
+            log.warn {
+                "STARTUP_MODE_ENTRY_DISPATCH_BLOCKED reason=focus-transaction-timeout pid=$processId " +
+                    "hwnd=$hwnd waitMs=${(System.nanoTime() - waitStartedAt) / 1_000_000L} action=" +
+                    StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION
+            }
+            return false
+        }
+        val identity = processId to hwnd
+        activeModeEntry.set(identity)
+        return try {
+            val accepted = dispatch(StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION)
+            log.info {
+                "STARTUP_MODE_ENTRY_DISPATCH_RESULT result=${if (accepted) "ACCEPTED" else "REJECTED"} " +
+                    "pid=$processId hwnd=$hwnd waitMs=${(System.nanoTime() - waitStartedAt) / 1_000_000L} " +
+                    "action=${StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION}"
+            }
+            accepted
+        } finally {
+            activeModeEntry.compareAndSet(identity, null)
+            focusTransactionLock.unlock()
+        }
     }
+
+    /** Captures skip focus changes while mode-entry input owns the same HWND. */
+    fun <T> withRecoveryCapture(processId: Int, hwnd: String, capture: () -> T): T? {
+        if (activeModeEntry.get() == (processId to hwnd)) return null
+        if (!focusTransactionLock.tryLock()) return null
+        return try {
+            if (activeModeEntry.get() == (processId to hwnd)) null else capture()
+        } finally {
+            focusTransactionLock.unlock()
+        }
+    }
+
+    internal fun isModeEntryInFlight(processId: Int, hwnd: String): Boolean =
+        activeModeEntry.get() == (processId to hwnd)
 }

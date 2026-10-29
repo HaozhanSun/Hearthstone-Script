@@ -927,30 +927,30 @@ object UpstreamScreenStateRecovery {
         }
         var authorityRejected = false
         val foregroundResult = MouseUtil.withRecoveryForeground(gameWindow) {
-            val currentWindow = resolveVerifiedGameWindow()
-            val evidence = ScreenRecoveryAuthorityEvidence(
-                processAlive = GameUtil.isAliveOfGame(),
-                windowPresent = currentWindow != null,
-                windowVerified = currentWindow != null && GameUtil.isVerifiedCurrentGameWindow(currentWindow),
-                foregroundConfirmed = true,
-                sameWindow = currentWindow?.toString() == gameWindow.toString(),
-            )
-            // Pixel authority is necessarily false before capture. Validate
-            // process/window/foreground ownership first, then captureIfAuthorized
-            // independently verifies that the resulting pixels belong to this
-            // current Hearthstone client before any action can use them.
-            if (!ScreenRecoveryAuthorityGate.isCapturePreAuthorized(evidence)) {
-                authorityRejected = true
-                log.warn {
-                    "SCREEN_RECOVERY_BLOCKED reason=authority-lost-before-capture " +
-                        "gameWindow=$gameWindow currentWindow=$currentWindow"
+                val currentWindow = resolveVerifiedGameWindow()
+                val evidence = ScreenRecoveryAuthorityEvidence(
+                    processAlive = GameUtil.isAliveOfGame(),
+                    windowPresent = currentWindow != null,
+                    windowVerified = currentWindow != null && GameUtil.isVerifiedCurrentGameWindow(currentWindow),
+                    foregroundConfirmed = true,
+                    sameWindow = currentWindow?.toString() == gameWindow.toString(),
+                )
+                // Pixel authority is necessarily false before capture. Validate
+                // process/window/foreground ownership first, then captureIfAuthorized
+                // independently verifies that the resulting pixels belong to this
+                // current Hearthstone client before any action can use them.
+                if (!ScreenRecoveryAuthorityGate.isCapturePreAuthorized(evidence)) {
+                    authorityRejected = true
+                    log.warn {
+                        "SCREEN_RECOVERY_BLOCKED reason=authority-lost-before-capture " +
+                            "gameWindow=$gameWindow currentWindow=$currentWindow"
+                    }
+                    null
+                } else {
+                    ScreenRecoveryAuthorityGate.captureIfAuthorized(evidence) {
+                        captureScreen(gameWindow, purpose = capturePurpose, staleForMs = stuckForMs)
+                    }
                 }
-                null
-            } else {
-                ScreenRecoveryAuthorityGate.captureIfAuthorized(evidence) {
-                    captureScreen(gameWindow, purpose = capturePurpose, staleForMs = stuckForMs)
-                }
-            }
         }
         if (!foregroundResult.foregroundConfirmed) {
             log.warn {
@@ -2300,6 +2300,20 @@ object UpstreamScreenStateRecovery {
         stuckForMs: Long,
     ): Boolean {
         val capture = authorizedCapture.capture
+        if (StartupHubModeChooserPolicy.shouldDeferGenericIdleUnblock(
+                screenKind = detection?.kind?.code,
+                screenMode = detection?.mode?.name,
+                hubModeChooserVisual = capture.visual.hubModeChooserVisual,
+            )
+        ) {
+            stuckScreenUnblockPolicy.reset()
+            log.info {
+                "STUCK_SCREEN_UNBLOCK_SKIPPED reason=recognized-hub-mode-chooser " +
+                    "action=WAIT_FOR_AUTHORIZED_TRADITIONAL_ENTRY activeGame=${WarEx.inWar} " +
+                    "activeQueue=${capture.visual.matchmakingSearchVisual || LifecycleTrace.hasRecentActiveMatchmakingScreen()}"
+            }
+            return true
+        }
         val exactReconnect = detection?.kind == ScreenKind.RECONNECT && capture.visual.reconnectDialogVisual
         val currentFrameProof = StuckScreenUnblockFrameIdentity.create(
             processId = currentPid ?: capture.processId.toInt(),

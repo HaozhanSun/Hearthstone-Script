@@ -58,7 +58,7 @@ class MatchmakingSearchRecoveryTest {
     }
 
     @Test
-    fun `fresh visual queue evidence clears stale result cleanup and leaves queue input enabled`() {
+    fun `fresh visual queue evidence clears terminal cleanup but does not bypass start proof`() {
         val wasWorking = WorkTimeListener.working
         val wasPaused = PauseStatus.isPause
         MandatoryRankSurrenderGuard.resetForTest()
@@ -88,12 +88,12 @@ class MatchmakingSearchRecoveryTest {
             )
             assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
             assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCapability))
-            assertTrue(ActionDispatchGate.allowForState(
+            assertFalse(ActionDispatchGate.allowForState(
                 action = "matchmaking.start",
                 paused = false,
                 working = true,
                 currentSessionReady = true,
-            ))
+            ), "terminal cleanup release is separate from the required fresh configured-mode Start proof")
             assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
         } finally {
             MandatoryRankSurrenderGuard.resetForTest()
@@ -259,6 +259,12 @@ class MatchmakingSearchRecoveryTest {
             .use(ImageIO::read)
         assertFalse(BattleNetLauncherVisualPolicy.isVisible(image))
         assertEquals("TOURNAMENT", UpstreamScreenStateRecovery.classifyImageForTest("", image))
+        assertTrue(StartupHubModeChooserPolicy.shouldDeferGenericIdleUnblock(
+            screenKind = "TOURNAMENT", screenMode = "HUB", hubModeChooserVisual = true,
+        ), "the exact chooser has a specific authorized entry action; generic top-left clicks must defer")
+        assertFalse(StartupHubModeChooserPolicy.shouldDeferGenericIdleUnblock(
+            screenKind = "TOURNAMENT", screenMode = "TOURNAMENT", hubModeChooserVisual = true,
+        ), "a tournament screen does not inherit the HUB chooser exception")
         StartupInputReadiness.resetForTest()
         try {
             StartupInputReadiness.recordHubModeChooser(7188, "native@0x1605ca", now = 1_000L)
@@ -269,7 +275,9 @@ class MatchmakingSearchRecoveryTest {
             assertTrue(StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
                 chooserProofFresh = true,
                 paused = false,
-            ) { dispatched = it })
+                processId = 7188,
+                hwnd = "native@0x1605ca",
+            ) { dispatched = it; true })
             assertEquals(StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION, dispatched)
         } finally {
             StartupInputReadiness.resetForTest()
@@ -380,6 +388,22 @@ class MatchmakingSearchRecoveryTest {
             exactWindowVerified = false,
             freshHubChooserReady = true,
         ))
+        assertFalse(StartupInputAuthorizationPolicy.allowsHubTraditionalBattleSelection(
+            action = StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION,
+            processId = 26500,
+            hwnd = "current-game-window",
+            exactWindowVerified = true,
+            freshHubChooserReady = true,
+            activeMatchmaking = true,
+        ), "a previously fresh chooser proof cannot authorize entry after active queue evidence appears")
+        assertFalse(StartupInputAuthorizationPolicy.allowsHubTraditionalBattleSelection(
+            action = StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION,
+            processId = 26500,
+            hwnd = "current-game-window",
+            exactWindowVerified = true,
+            freshHubChooserReady = true,
+            activeGame = true,
+        ), "a previously fresh chooser proof cannot authorize entry after gameplay begins")
         // Startup's first capture can be a loading/ad frame. It must neither
         // mint readiness nor stop the bounded probe before the chooser settles.
         val initialLoadingFrame = BufferedImage(1280, 720, BufferedImage.TYPE_INT_RGB).apply {

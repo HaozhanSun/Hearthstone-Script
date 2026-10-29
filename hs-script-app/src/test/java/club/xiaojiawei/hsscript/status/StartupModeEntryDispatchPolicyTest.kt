@@ -13,7 +13,9 @@ class StartupModeEntryDispatchPolicyTest {
         val dispatched = StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
             chooserProofFresh = true,
             paused = false,
-            dispatch = actions::add,
+            processId = 33512,
+            hwnd = "game-hwnd",
+            dispatch = { action -> actions.add(action); true },
         )
 
         assertTrue(dispatched)
@@ -27,13 +29,56 @@ class StartupModeEntryDispatchPolicyTest {
         assertFalse(StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
             chooserProofFresh = false,
             paused = false,
-            dispatch = actions::add,
+            processId = 33512,
+            hwnd = "game-hwnd",
+            dispatch = { action -> actions.add(action); true },
         ))
         assertFalse(StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
             chooserProofFresh = true,
             paused = true,
-            dispatch = actions::add,
+            processId = 33512,
+            hwnd = "game-hwnd",
+            dispatch = { action -> actions.add(action); true },
         ))
         assertTrue(actions.isEmpty())
+    }
+
+    @Test
+    fun `mode click owns foreground transaction and concurrent recovery capture is deferred`() {
+        val actions = mutableListOf<String>()
+        var captureRan = false
+        val dispatched = StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
+            chooserProofFresh = true,
+            paused = false,
+            processId = 33512,
+            hwnd = "game-hwnd",
+        ) { action ->
+            actions += action
+            assertTrue(StartupModeEntryDispatchPolicy.isModeEntryInFlight(33512, "game-hwnd"))
+            assertEquals(null, StartupModeEntryDispatchPolicy.withRecoveryCapture(33512, "game-hwnd") {
+                captureRan = true
+            }, "an idle probe must not steal focus while the authorized selector click is in flight")
+            true
+        }
+
+        assertTrue(dispatched)
+        assertEquals(listOf(StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION), actions)
+        assertFalse(captureRan)
+        assertFalse(StartupModeEntryDispatchPolicy.isModeEntryInFlight(33512, "game-hwnd"))
+        assertEquals("captured", StartupModeEntryDispatchPolicy.withRecoveryCapture(33512, "game-hwnd") {
+            "captured"
+        })
+    }
+
+    @Test
+    fun `rejected selector input is not reported as dispatched`() {
+        val dispatched = StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
+            chooserProofFresh = true,
+            paused = false,
+            processId = 33512,
+            hwnd = "game-hwnd",
+            dispatch = { false },
+        )
+        assertFalse(dispatched)
     }
 }
