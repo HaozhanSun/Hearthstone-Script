@@ -19,6 +19,24 @@ object ActionDispatchGate {
     private val terminalCleanupBlockLogThrottle = TerminalCleanupBlockLogThrottle()
     private val startupQuestOverlayDispatchScope = ThreadLocal<Boolean>()
 
+    /** Mirrors normal-input startup readiness without emitting a block log or dispatching input. */
+    internal fun isStartupScreenConfirmedForAction(action: String): Boolean {
+        if (StartupQuestOverlayRecoveryFence.isActive()) return false
+        val currentSessionReady = runCatching { ScreenStateRecovery.isCurrentGameSessionReadyForStart() }
+            .getOrDefault(false)
+        val gameWindow = ScriptStatus.gameHWND
+        val processId = runCatching { GameUtil.findGameProcessIdForDiagnostics()?.toInt() }.getOrNull()
+        val freshOnlineMenuReady = processId != null && gameWindow != null &&
+            !WarEx.inWar && !runCatching { GameUtil.isTerminalGameState() }.getOrDefault(true) &&
+            runCatching { GameUtil.isVerifiedCurrentGameWindow(gameWindow) }.getOrDefault(false) &&
+            StartupInputReadiness.isMenuReady(processId, gameWindow.toString(), Mode.currMode?.name)
+        return StartupInputAuthorizationPolicy.allows(
+            action = action,
+            currentSessionReady = currentSessionReady,
+            freshOnlineMenuReady = freshOnlineMenuReady,
+        )
+    }
+
     fun allow(
         action: String,
         recoveryCapability: MandatoryRankSurrenderGuard.RecoveryCapability? = null,

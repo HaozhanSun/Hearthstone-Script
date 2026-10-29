@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
+import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.Mode
@@ -15,6 +16,7 @@ import club.xiaojiawei.hsscript.status.StartupInputReadiness
 import club.xiaojiawei.hsscript.status.StartupModeEntryDispatchPolicy
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
+import club.xiaojiawei.hsscript.status.TournamentModeEntryDispatchGuard
 import club.xiaojiawei.hsscript.status.TerminalCleanupQueueResumePolicy
 import club.xiaojiawei.hsscript.status.UnknownStateScreenshot
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingDialogRecoveryTaskGate
@@ -43,6 +45,7 @@ import java.util.concurrent.atomic.AtomicLong
  * @date 2022/11/25 12:39
  */
 object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
+    private val modeEntryDispatchGuard = TournamentModeEntryDispatchGuard()
     private val matchmakingTraceSequence = AtomicLong()
     private val matchmakingDialogRecoveryTaskGate = MatchmakingDialogRecoveryTaskGate()
 
@@ -150,6 +153,25 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                     return
                 }
                 if (!PowerLogListener.checkPowerLogSize()) {
+                    return
+                }
+                val dispatchReadiness = modeEntryDispatchGuard.decide(
+                    screenConfirmed = ActionDispatchGate.isStartupScreenConfirmedForAction("mouse.left"),
+                    nowMs = System.currentTimeMillis(),
+                )
+                if (!dispatchReadiness.allowed) {
+                    if (dispatchReadiness.emitNotice) {
+                        log.warn {
+                            "TOURNAMENT_MODE_ENTRY_BLOCKED reason=${dispatchReadiness.reason} " +
+                                "expectedMode=${runMode.name} strategy=${deckStrategy.id()} " +
+                                "suppressed=${dispatchReadiness.suppressedSinceNotice} " +
+                                "action=NO_MODE_INPUT_NO_START pause=${PauseStatus.isPause}"
+                        }
+                        SystemUtil.notice(
+                            "The tournament screen could not be verified. Mode selection and Start were not sent; " +
+                                "check Hearthstone and click Start to retry.",
+                        )
+                    }
                     return
                 }
                 SystemUtil.delayShort()
