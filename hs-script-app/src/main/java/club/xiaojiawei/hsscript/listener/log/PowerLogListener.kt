@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.PowerLogSessionBindingPolicy
 import club.xiaojiawei.hsscript.status.RuntimeFaultBackoff
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.FreshPostResultDestinationPolicy
@@ -341,25 +342,31 @@ object PowerLogListener :
     @Synchronized
     fun bindCurrentSessionIfAvailable(): Boolean {
         if (ScriptStatus.gameLogMode != GameLogModeEnum.DISK) return false
+        val pid = GameUtil.findGameProcessIdForDiagnostics() ?: return false
+        val processStartedAt = runCatching { GameUtil.findProcessStartedAtForDiagnostics(pid) }.getOrNull()
         val latestPowerLog = GameUtil.getLatestLogDir()
             ?.resolve(GAME_WAR_LOG_NAME)
-            ?.takeIf { it.isFile && it.canRead() && it.length() > 0L }
+            ?.takeIf {
+                it.isFile && it.canRead() && PowerLogSessionBindingPolicy.isSessionFileForProcess(
+                    powerLogPath = it.absolutePath,
+                    gameLogsRoot = it.parentFile?.parent,
+                    lastModifiedMs = it.lastModified(),
+                    processStartedAtMs = processStartedAt,
+                )
+            }
             ?: return false
         val currentPath = logFile?.path()?.let { File(it).absoluteFile.normalize().path }
         val latestPath = latestPowerLog.absoluteFile.normalize().path
         if (currentPath == latestPath) return true
-        if (currentPath != null) {
-            // The already-running listener rotates itself on its next poll;
-            // do not restart/replay it concurrently from the watchdog thread.
-            return false
-        }
 
         log.warn {
             "POWER_LOG_LATE_BIND_REQUEST current=${currentPath ?: "none"} " +
-                "latest=$latestPath reason=current-session-file-verified"
+                "latest=$latestPath length=${latestPowerLog.length()} pid=$pid " +
+                "reason=current-process-session-file-verified"
         }
-        // listen() applies the same unfinished-game replay semantics as a
-        // normal startup attach and rotates an already-running listener safely.
+        // listen() serializes with the poller, rotates an active listener, and
+        // applies the normal replay/reset semantics. Empty files attach but do
+        // not count as session progress or as game evidence.
         listen()
         return logFile?.path()?.let { File(it).absoluteFile.normalize().path } == latestPath
     }

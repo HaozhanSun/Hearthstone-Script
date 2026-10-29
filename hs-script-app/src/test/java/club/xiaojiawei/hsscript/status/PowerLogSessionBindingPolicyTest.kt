@@ -22,6 +22,28 @@ class PowerLogSessionBindingPolicyTest {
             PowerLogSessionBindingPolicy.isCurrentSession(path, root, 0L, lastModified, processStarted),
         )
     }
+
+    @Test
+    fun `new process empty Power log may be rebound but cannot count as current session evidence`() {
+        val path = "D:/Hearthstone/Logs/Hearthstone_2026_10_28_21_21_26/Power.log"
+        val root = "D:/Hearthstone/Logs"
+        val processStarted = 1_793_148_084_000L
+        val freshFileModified = processStarted + 2_000L
+        val previousSessionModified = processStarted - 60_000L
+
+        assertTrue(
+            PowerLogSessionBindingPolicy.isSessionFileForProcess(path, root, freshFileModified, processStarted),
+            "a zero-byte path from the current PID's session can be attached for future observation",
+        )
+        assertFalse(
+            PowerLogSessionBindingPolicy.isCurrentSession(path, root, 0L, freshFileModified, processStarted),
+            "empty bytes provide no current-session progress or game evidence",
+        )
+        assertFalse(
+            PowerLogSessionBindingPolicy.isSessionFileForProcess(path, root, previousSessionModified, processStarted),
+            "a stale previous-process log stays detached even when the current log is empty",
+        )
+    }
     @Test
     fun `accepts readable nonempty Power log modified during current game process`() {
         val root = Files.createTempDirectory("hs-game-logs")

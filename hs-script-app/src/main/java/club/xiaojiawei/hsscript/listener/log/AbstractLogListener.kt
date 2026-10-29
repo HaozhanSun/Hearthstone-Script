@@ -108,6 +108,16 @@ abstract class AbstractLogListener(
         synchronized(this) {
             logScheduledFuture?.let {
                 if (!it.isDone) {
+                    // A watchdog may explicitly request a rebind just after
+                    // Hearthstone creates a new (often empty) session file.
+                    // Rotate synchronously before reporting the existing
+                    // listener as already active; the normal poll remains a
+                    // fallback if no new session is visible yet.
+                    if (rotateToLatestDiskLog()) {
+                        log.info { "LOG_ACTIVE_LISTENER_REBOUND log=$logFileName reason=new-session-path" }
+                        listenNextListener()
+                        return
+                    }
                     log.warn { logFileName + "正在被监听，无法再次被监听" }
                     listenNextListener()
                     return
@@ -151,8 +161,10 @@ abstract class AbstractLogListener(
                         // the previous session otherwise reaches EOF forever,
                         // leaving the state machine in FILL_DECK while the
                         // pixels already show an active game.
-                        if (!rotateToLatestDiskLog()) {
-                            dealNewLog()
+                        synchronized(this) {
+                            if (!rotateToLatestDiskLog()) {
+                                dealNewLog()
+                            }
                         }
                     } catch (e: InterruptedException) {
                         log.warn(e) { logFileName + "监听中断" }

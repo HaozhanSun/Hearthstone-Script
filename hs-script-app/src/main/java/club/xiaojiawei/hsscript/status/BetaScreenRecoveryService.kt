@@ -255,12 +255,12 @@ internal object BetaScreenRecoveryService {
                 processStartedAtMs = processStartedAt,
             )
         }
-        if (sessionLog != null && sessionLog.length() > 0L &&
+        if (sessionLog != null &&
             PowerLogListener.logFile?.path() != sessionLog.absolutePath
         ) {
             val bound = runCatching { PowerLogListener.bindCurrentSessionIfAvailable() }.getOrDefault(false)
             log.info {
-                "BETA_STARTUP_POWER_LOG_BIND result=${if (bound) "BOUND" else "PENDING"} " +
+                "BETA_STARTUP_POWER_LOG_BIND result=${when { !bound -> "PENDING"; sessionLog.length() > 0L -> "BOUND"; else -> "ATTACHED_EMPTY" }} " +
                     "pid=${pid ?: "none"} path=${sessionLog.absolutePath} length=${sessionLog.length()}"
             }
         }
@@ -841,6 +841,14 @@ internal object BetaScreenRecoveryService {
         val processStartedAt = liveGamePid?.let { pid ->
             runCatching { GameUtil.findProcessStartedAtForDiagnostics(pid) }.getOrNull()
         }
+        val latestPowerLogCurrentProcess = latestPowerLog?.let { candidate ->
+            candidate.isFile && candidate.canRead() && PowerLogSessionBindingPolicy.isSessionFileForProcess(
+                powerLogPath = candidate.absolutePath,
+                gameLogsRoot = candidate.parentFile?.parent,
+                lastModifiedMs = candidate.lastModified(),
+                processStartedAtMs = processStartedAt,
+            )
+        } == true
         val latestPowerLogUsable = latestPowerLog?.let { candidate ->
             candidate.isFile && candidate.canRead() && PowerLogSessionBindingPolicy.isCurrentSession(
                 powerLogPath = candidate.absolutePath,
@@ -850,10 +858,10 @@ internal object BetaScreenRecoveryService {
                 processStartedAtMs = processStartedAt,
             )
         } == true
-        if (latestPowerLogUsable && PowerLogListener.logFile?.path() != latestPowerLog?.absolutePath) {
+        if (latestPowerLogCurrentProcess && PowerLogListener.logFile?.path() != latestPowerLog?.absolutePath) {
             val attached = runCatching { PowerLogListener.bindCurrentSessionIfAvailable() }.getOrDefault(false)
             log.info {
-                "POWER_LOG_CURRENT_SESSION_BIND result=${if (attached) "BOUND" else "PENDING"} " +
+                "POWER_LOG_CURRENT_SESSION_BIND result=${when { !attached -> "PENDING"; (latestPowerLog?.length() ?: 0L) > 0L -> "BOUND"; else -> "ATTACHED_EMPTY" }} " +
                     "pid=${liveGamePid ?: "none"} path=${latestPowerLog?.absolutePath} " +
                     "length=${latestPowerLog?.length() ?: 0L}"
             }
