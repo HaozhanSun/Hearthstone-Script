@@ -339,12 +339,20 @@ object UpstreamScreenStateRecovery {
                 // only; its exact first action is authorized separately.
             } else if (cleanMenu) {
                 val currentDetection = detection!!
+                val deckModeObservation = if (currentDetection.kind == ScreenKind.DECK_SELECTION) {
+                    TournamentModeConfirmation.observeImage(capture.image)
+                } else null
+                val expectedDeckMode = if (currentDetection.kind == ScreenKind.DECK_SELECTION) {
+                    DeckStrategyManager.currentRunMode?.name
+                } else null
                 val readinessRecorded = StartupInputReadiness.recordStartupOnlineScreen(
                     pid = pid!!,
                     hwnd = hwnd,
                     screen = currentDetection.kind.code,
                     confidence = currentDetection.confidence,
                     evidence = currentDetection.evidence,
+                    expectedRunMode = expectedDeckMode,
+                    observedRunMode = deckModeObservation?.observedMode?.name,
                     enabledStartButtonVisible = currentDetection.kind == ScreenKind.DECK_SELECTION &&
                         ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image),
                     modalVisible = false,
@@ -352,6 +360,8 @@ object UpstreamScreenStateRecovery {
                 log.warn {
                     "STARTUP_INPUT_READINESS_CONFIRMED screen=${currentDetection.kind.code} pid=$pid hwnd=$hwnd " +
                         "evidence=${currentDetection.evidence} recorded=$readinessRecorded " +
+                        "expectedRunMode=${expectedDeckMode ?: "n/a"} " +
+                        "observedRunMode=${deckModeObservation?.observedMode?.name ?: "n/a"} " +
                         "proof=${if (currentDetection.kind == ScreenKind.DECK_SELECTION) "MATCHMAKING_START_ONLY" else "ONLINE_MENU"} " +
                         "provider=UPSTREAM"
                 }
@@ -1283,19 +1293,28 @@ object UpstreamScreenStateRecovery {
                 }
                 StartupNoticePostcheckProofPolicy.Proof.ONLINE_MENU -> {
                     val postcheck = afterDetection!!
+                    val deckModeObservation = if (postcheck.kind == ScreenKind.DECK_SELECTION) {
+                        TournamentModeConfirmation.observeImage(after.capture.image)
+                    } else null
                     StartupInputReadiness.recordStartupOnlineScreen(
                         pid = currentPid,
                         hwnd = expectedWindow.toString(),
                         screen = postcheck.kind.code,
                         confidence = postcheck.confidence,
                         evidence = postcheck.evidence,
+                        expectedRunMode = if (postcheck.kind == ScreenKind.DECK_SELECTION) {
+                            DeckStrategyManager.currentRunMode?.name
+                        } else null,
+                        observedRunMode = deckModeObservation?.observedMode?.name,
                         enabledStartButtonVisible = postcheck.kind == ScreenKind.DECK_SELECTION &&
                             ScreenWatchdog.hasEnabledDeckSelectionStartButton(after.capture.image),
                         modalVisible = ScreenStateRecovery.hasCenteredModalPanel(after.capture.image),
                     )
                     log.warn {
                         "STARTUP_NOTICE_DISMISS_POSTCHECK result=CLOSED screen=${afterDetection.kind.code} " +
-                            "action=STARTUP_READINESS_RECONFIRMED"
+                            "action=STARTUP_READINESS_RECONFIRMED " +
+                            "expectedRunMode=${if (postcheck.kind == ScreenKind.DECK_SELECTION) DeckStrategyManager.currentRunMode?.name ?: "UNKNOWN" else "n/a"} " +
+                            "observedRunMode=${deckModeObservation?.observedMode?.name ?: "n/a"}"
                     }
                 }
                 StartupNoticePostcheckProofPolicy.Proof.NONE -> {

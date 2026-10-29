@@ -386,9 +386,11 @@ this deletion boundary.
   and its normal rank preflight.
 - When a current foreground/PID capture confirms DECK_SELECTION, reconcile the
   same game's terminal cleanup capability before mode, deck, or queue actions.
-  Unrecognized mode-title OCR after the deterministic mode click may continue
-  through the existing bounded fallback; a positive mode mismatch remains
-  blocked. Do not carry the previous game's cleanup fence into the next queue.
+  Unknown mode-title OCR does not confirm the requested mode and must block
+  deck selection without pausing; a positive mode mismatch also remains
+  blocked. A fresh deck-selection title and enabled Start control authorize
+  only `matchmaking.start` after the observed mode matches the selected run
+  mode. Do not carry the previous game's cleanup fence into the next queue.
 - A victory page can leave all OCR/screen classifiers UNKNOWN even while the
   exact current game is complete and the authorized frame visibly contains
   Hearthstone's lower-center Continue band. Keep a distinct Continue-band

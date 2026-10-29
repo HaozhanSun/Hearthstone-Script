@@ -173,7 +173,7 @@ class TournamentModeConfirmationTest {
     }
 
     @Test
-    fun `three unknown mode observations fall back to deterministic selection`() {
+    fun `three unknown mode observations block deck selection without pausing`() {
         var observations = 0
         try {
             PauseStatus.setAutomaticPause(false)
@@ -198,11 +198,59 @@ class TournamentModeConfirmationTest {
                 shouldContinue = { true },
             )
 
-            assertTrue(result)
+            assertFalse(result)
             assertEquals(3, observations)
             assertFalse(PauseStatus.isAutomaticPause)
         } finally {
             PauseStatus.setAutomaticPause(false)
+        }
+    }
+
+    @Test
+    fun `live standard deck screen with unknown expected Wild mode cannot authorize matchmaking`() {
+        val image = javax.imageio.ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/tournament-standard-deck-selection-20261029.png",
+        )))
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image), "saved frame contains an enabled Start control")
+        val observed = TournamentModeConfirmation.observeImage(image)
+        val result = TournamentModeConfirmation.evaluate(
+            expectedMode = RunModeEnum.WILD,
+            observation = observed,
+            strategyId = "test-wild-deck",
+            strategyName = "test Wild deck",
+            deckSlot = 1,
+        )
+        assertTrue(
+            result.state == TournamentModeConfirmationState.MISMATCH ||
+                result.state == TournamentModeConfirmationState.UNRECOGNIZED,
+            "the saved live frame must never confirm WILD; observed=${result.observedMode} ocr=${result.ocrText}",
+        )
+        try {
+            assertFalse(StartupInputReadiness.recordDeckSelectionStart(
+                pid = 25948,
+                hwnd = "captured-game-window",
+                confidence = 100,
+                evidence = "deck-selection-title-roi",
+                expectedRunMode = RunModeEnum.WILD.name,
+                observedRunMode = result.observedMode.name,
+                enabledStartButtonVisible = true,
+                modalVisible = false,
+                now = 10_000L,
+            ))
+            assertFalse(
+                ActionDispatchGate.allowForState(
+                    action = "matchmaking.start",
+                    paused = false,
+                    working = true,
+                    currentSessionReady = false,
+                    freshDeckSelectionStartReady = StartupInputReadiness.isDeckSelectionStartReady(
+                        25948, "captured-game-window", 10_001L,
+                    ),
+                ),
+                "the final action gate must block the saved Start control without target-mode proof",
+            )
+        } finally {
+            StartupInputReadiness.resetForTest()
         }
     }
 

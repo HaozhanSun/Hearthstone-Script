@@ -557,12 +557,20 @@ object ScreenStateRecovery {
                 ScreenRecoveryCapturePurposePolicy.allowsStartupOnlineMenu(detection.kind.code)
             var readinessRecorded = false
             if (cleanOnlineMenu) {
+                val deckModeObservation = if (detection.kind == ScreenKind.DECK_SELECTION) {
+                    TournamentModeConfirmation.observeImage(capture.image)
+                } else null
+                val expectedDeckMode = if (detection.kind == ScreenKind.DECK_SELECTION) {
+                    DeckStrategyManager.currentRunMode?.name
+                } else null
                 readinessRecorded = StartupInputReadiness.recordStartupOnlineScreen(
                     pid = captureTarget!!.processId,
                     hwnd = currentHwnd,
                     screen = detection.kind.code,
                     confidence = detection.confidence,
                     evidence = detection.evidence,
+                    expectedRunMode = expectedDeckMode,
+                    observedRunMode = deckModeObservation?.observedMode?.name,
                     enabledStartButtonVisible = detection.kind == ScreenKind.DECK_SELECTION &&
                         ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image),
                     modalVisible = false,
@@ -571,6 +579,8 @@ object ScreenStateRecovery {
                     "STARTUP_INPUT_READINESS_CONFIRMED screen=${detection.kind.code} " +
                         "pid=${captureTarget.processId} hwnd=$currentHwnd " +
                         "evidence=${detection.evidence} recorded=$readinessRecorded " +
+                        "expectedRunMode=${expectedDeckMode ?: "n/a"} " +
+                        "observedRunMode=${deckModeObservation?.observedMode?.name ?: "n/a"} " +
                         "proof=${if (detection.kind == ScreenKind.DECK_SELECTION) "MATCHMAKING_START_ONLY" else "ONLINE_MENU"}"
                 }
             } else {

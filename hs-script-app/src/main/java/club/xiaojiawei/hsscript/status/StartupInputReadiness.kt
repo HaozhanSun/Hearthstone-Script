@@ -66,12 +66,15 @@ internal object StartupInputReadiness {
         hwnd: String,
         confidence: Int,
         evidence: String,
+        expectedRunMode: String?,
+        observedRunMode: String?,
         enabledStartButtonVisible: Boolean,
         modalVisible: Boolean,
         now: Long = System.currentTimeMillis(),
     ): Boolean {
         if (pid <= 0 || hwnd.isBlank() || confidence < 90 ||
-            evidence !in DECK_SELECTION_START_EVIDENCE || !enabledStartButtonVisible || modalVisible
+            evidence !in DECK_SELECTION_START_EVIDENCE || !enabledStartButtonVisible || modalVisible ||
+            expectedRunMode !in CONFIRMABLE_TOURNAMENT_MODES || observedRunMode != expectedRunMode
         ) {
             invalidate(pid, hwnd)
             return false
@@ -89,6 +92,8 @@ internal object StartupInputReadiness {
         screen: String,
         confidence: Int,
         evidence: String,
+        expectedRunMode: String? = null,
+        observedRunMode: String? = null,
         enabledStartButtonVisible: Boolean,
         modalVisible: Boolean,
         now: Long = System.currentTimeMillis(),
@@ -98,6 +103,8 @@ internal object StartupInputReadiness {
             hwnd = hwnd,
             confidence = confidence,
             evidence = evidence,
+            expectedRunMode = expectedRunMode,
+            observedRunMode = observedRunMode,
             enabledStartButtonVisible = enabledStartButtonVisible,
             modalVisible = modalVisible,
             now = now,
@@ -233,6 +240,7 @@ internal object StartupInputReadiness {
 
     private const val HUB_MODE_CHOOSER_SCREEN = "HUB_MODE_CHOOSER"
     private const val DECK_SELECTION_START_SCREEN = "DECK_SELECTION_START"
+    private val CONFIRMABLE_TOURNAMENT_MODES = setOf("STANDARD", "WILD")
     private val DECK_SELECTION_START_EVIDENCE = setOf("deck-selection-title", "deck-selection-title-roi")
 
     private val allowedModesByScreen = mapOf(

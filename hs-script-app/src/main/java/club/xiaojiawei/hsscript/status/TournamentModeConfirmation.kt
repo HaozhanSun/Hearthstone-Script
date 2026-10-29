@@ -171,23 +171,21 @@ object TournamentModeConfirmation {
                 -> sleeper(450)
             }
         }
-        // The mode click immediately before this check is deterministic, and
-        // the upstream entry path does not put OCR on the critical path.  A
-        // narrow ornate title can still produce an unusable OCR string even
-        // when the selected mode is correct.  Do not turn that recognition
-        // miss into an automatic pause: retain the evidence, continue with
-        // the already-selected mode, and let the normal deck-selection and
-        // screen-recovery guards validate the next state.  A positive
-        // mismatch or an actively-open mode selector remains fail-safe.
+        // An unknown title is not mode confirmation. Recent live evidence
+        // showed the selected deck screen can be Standard while the requested
+        // run mode is Wild, so a successful mode click cannot substitute for
+        // fresh visible mode identity. Fail closed without taking pause
+        // ownership; the user can retry after the mode is visibly correct.
         if (lastResult?.state == TournamentModeConfirmationState.UNRECOGNIZED) {
             log.warn {
-                "TOURNAMENT_MODE_CONFIRMATION_FALLBACK action=CONTINUE_DETERMINISTIC_MODE " +
+                "TOURNAMENT_MODE_CONFIRMATION_FAILED action=BLOCK_DECK_SELECTION_NO_PAUSE " +
                     "expectedMode=${lastResult?.expectedMode?.name ?: "n/a"} " +
                     "strategy=${lastResult?.strategyId ?: "n/a"} deckSlot=${lastResult?.deckSlot ?: "n/a"} " +
                     "reason=${lastResult?.reason ?: "mode-title-unrecognized"} " +
+                    "visibleModeRequired=true " +
                     "ocr=${lastResult?.ocrText?.ifBlank { "<empty>" }?.take(160) ?: "<empty>"}"
             }
-            return true
+            return false
         }
         if (shouldContinue()) reportUnsafeMode(lastResult) else logStateChanged(lastResult)
         return false
@@ -205,6 +203,16 @@ object TournamentModeConfirmation {
             observedMode = classifyModeTitle(titleText),
             ocrText = titleText,
             evidence = "title-roi-ocr",
+        )
+    }
+
+    /** Classify only the visible title ROI from an authorized fresh client capture. */
+    internal fun observeImage(image: BufferedImage): TournamentModeObservation {
+        val titleText = runOCR(cropTitleRegion(image), "tournament-mode-title-frame")
+        return TournamentModeObservation(
+            observedMode = classifyModeTitle(titleText),
+            ocrText = titleText,
+            evidence = "title-roi-ocr-frame",
         )
     }
 
