@@ -84,13 +84,18 @@ internal object EventQuestOverlayRecoveryContextPolicy {
         currentSessionReady: Boolean,
         nextModeGameplay: Boolean,
         activeGame: Boolean,
-        activeQueue: Boolean,
+        activeQueueScreen: Boolean,
+        recentInputIntent: Boolean,
+        shortRaceWindow: Boolean,
+        matchmakingSearchVisual: Boolean,
         terminalOrResult: Boolean,
         working: Boolean,
         paused: Boolean,
     ): Boolean {
         val safeHub = mode == "HUB"
         val safeDeckSelection = mode == "TOURNAMENT" && phase == "FILL_DECK" && currentSessionReady
+        val activeQueue = activeQueueScreen || matchmakingSearchVisual ||
+            if (safeDeckSelection) shortRaceWindow else recentInputIntent
         return (safeHub || safeDeckSelection) && !nextModeGameplay && !activeGame && !activeQueue &&
             !terminalOrResult && working && !paused
     }

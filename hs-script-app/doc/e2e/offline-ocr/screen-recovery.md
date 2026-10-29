@@ -13,7 +13,10 @@
   or restart unless a fresh same-window capture confirms the exact modal and a
   safe HUB or current-session Tournament `FILL_DECK` context. Keep the three
   click attempts, 60-second re-probe stage, and active-game/queue/result/pause
-  fences covered by deterministic tests.
+  fences covered by deterministic tests. For current-session Tournament
+  `FILL_DECK`, the 15-minute matchmaking input-intent history alone is not
+  active queue evidence; only a recently observed matchmaking screen, the
+  60-second input race guard, or current `matchmakingSearchVisual` blocks.
 
 Every `ScreenStateRecovery` trigger attempts a screenshot before safety gates
 and records one structured log trail containing `runId`, `sessionId`, trigger,

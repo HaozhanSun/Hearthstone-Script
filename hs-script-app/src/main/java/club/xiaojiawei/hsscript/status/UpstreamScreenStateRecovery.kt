@@ -1958,7 +1958,7 @@ object UpstreamScreenStateRecovery {
         val capture = authorizedCapture.capture
         val pid = GameUtil.findGameProcessIdForDiagnostics() ?: return false
         val hwnd = authorizedCapture.gameWindow
-        val safeContext = eventQuestSafeContext()
+        val safeContext = eventQuestSafeContext(capture.visual.matchmakingSearchVisual)
         if (!capture.visual.startupQuestOverlayVisual || !safeContext ||
             !GameUtil.isVerifiedCurrentGameWindow(hwnd, pid)
         ) {
@@ -1991,9 +1991,7 @@ object UpstreamScreenStateRecovery {
         return dispatch()
     }
 
-    private fun eventQuestSafeContext(): Boolean {
-        val activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
-            LifecycleTrace.hasRecentMatchmakingInputIntent()
+    private fun eventQuestSafeContext(matchmakingSearchVisual: Boolean = false): Boolean {
         val activeGame = WarEx.inWar || Mode.currMode === ModeEnum.GAMEPLAY || Mode.nextMode === ModeEnum.GAMEPLAY
         val terminalOrResult = GameUtil.isTerminalGameState() ||
             club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending() ||
@@ -2004,7 +2002,10 @@ object UpstreamScreenStateRecovery {
             currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
             nextModeGameplay = Mode.nextMode === ModeEnum.GAMEPLAY,
             activeGame = activeGame,
-            activeQueue = activeQueue,
+            activeQueueScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
+            recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
+            shortRaceWindow = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+            matchmakingSearchVisual = matchmakingSearchVisual,
             terminalOrResult = terminalOrResult,
             working = WorkTimeListener.working,
             paused = PauseStatus.isPause,
@@ -2053,7 +2054,7 @@ object UpstreamScreenStateRecovery {
                 val exactOverlay = captureTrusted && capture.visual.startupQuestOverlayVisual
                 val currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart()
                 val activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
-                    LifecycleTrace.hasRecentMatchmakingInputIntent() || capture.visual.matchmakingSearchVisual
+                    LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() || capture.visual.matchmakingSearchVisual
                 val activeGame = WarEx.inWar || Mode.currMode === ModeEnum.GAMEPLAY || Mode.nextMode === ModeEnum.GAMEPLAY
                 val terminalOrResult = GameUtil.isTerminalGameState() ||
                     club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending() ||
@@ -2066,7 +2067,7 @@ object UpstreamScreenStateRecovery {
                     EventQuestOverlayRecoveryPolicy.Evidence(
                         nowMs = System.currentTimeMillis(), captureTrusted = captureTrusted,
                         exactQuestOverlay = exactOverlay,
-                        safeMenuOrDeckState = eventQuestSafeContext() || protectedTransition,
+                        safeMenuOrDeckState = eventQuestSafeContext(capture.visual.matchmakingSearchVisual) || protectedTransition,
                         verifiedSafeTransition = protectedTransition || deckReadyVisible,
                         working = WorkTimeListener.working, paused = PauseStatus.isPause,
                         activeGame = activeGame, activeQueue = activeQueue,
@@ -2118,7 +2119,8 @@ object UpstreamScreenStateRecovery {
                         }
                     }
                     EventQuestOverlayRecoveryPolicy.Action.RESTART_CLIENT -> {
-                        val stillSafe = captureTrusted && exactOverlay && eventQuestSafeContext() &&
+                        val stillSafe = captureTrusted && exactOverlay &&
+                            eventQuestSafeContext(capture.visual.matchmakingSearchVisual) &&
                             GameUtil.findGameProcessIdForDiagnostics() == expectedPid &&
                             ScriptStatus.gameHWND?.toString() == expectedWindow.toString() &&
                             GameUtil.isVerifiedCurrentGameWindow(expectedWindow, expectedPid) && stateStillCurrent()

@@ -92,13 +92,16 @@ class EventQuestOverlayRecoveryPolicyTest {
     }
 
     @Test
-    fun `recovery context permits only hub or current fill deck outside gameplay queue and result`() {
+    fun `recovery context permits fill deck with historical intent but fences current queue evidence`() {
         fun allows(
             mode: String = "TOURNAMENT",
             phase: String = "FILL_DECK",
             session: Boolean = true,
             game: Boolean = false,
-            queue: Boolean = false,
+            queueScreen: Boolean = false,
+            recentIntent: Boolean = false,
+            shortRace: Boolean = false,
+            queueVisual: Boolean = false,
             terminal: Boolean = false,
             paused: Boolean = false,
         ) = EventQuestOverlayRecoveryContextPolicy.allowsDismiss(
@@ -107,21 +110,58 @@ class EventQuestOverlayRecoveryPolicyTest {
             currentSessionReady = session,
             nextModeGameplay = false,
             activeGame = game,
-            activeQueue = queue,
+            activeQueueScreen = queueScreen,
+            recentInputIntent = recentIntent,
+            shortRaceWindow = shortRace,
+            matchmakingSearchVisual = queueVisual,
             terminalOrResult = terminal,
             working = true,
             paused = paused,
         )
 
         assertTrue(allows())
+        assertTrue(allows(recentIntent = true), "15-minute historical input intent alone must not veto current FILL_DECK")
+        assertFalse(allows(recentIntent = true, shortRace = true), "the short input race window remains fenced")
         assertTrue(allows(mode = "HUB", phase = "NONE", session = false))
         assertFalse(allows(phase = "MULLIGAN"))
         assertFalse(allows(session = false))
         assertFalse(allows(mode = "GAMEPLAY"))
         assertFalse(allows(game = true))
-        assertFalse(allows(queue = true))
+        assertFalse(allows(queueScreen = true), "a currently observed matchmaking screen remains fenced")
+        assertFalse(allows(queueVisual = true), "fresh matchmaking-search pixels remain fenced")
         assertFalse(allows(terminal = true))
         assertFalse(allows(paused = true))
+    }
+
+    @Test
+    fun `15 minute matchmaking intent alone does not veto fill deck but active screen does`() {
+        val now = System.currentTimeMillis()
+        LifecycleTrace.resetMatchmakingEvidenceForTest()
+        try {
+            LifecycleTrace.markMatchmakingInputDispatched(now - 90_000L)
+            assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(now))
+            assertFalse(LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(now))
+            assertTrue(EventQuestOverlayRecoveryContextPolicy.allowsDismiss(
+                mode = "TOURNAMENT", phase = "FILL_DECK", currentSessionReady = true,
+                nextModeGameplay = false, activeGame = false,
+                activeQueueScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen(now),
+                recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(now),
+                shortRaceWindow = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(now),
+                matchmakingSearchVisual = false, terminalOrResult = false, working = true, paused = false,
+            ))
+
+            LifecycleTrace.markActiveMatchmakingScreenObserved(now)
+            assertFalse(EventQuestOverlayRecoveryContextPolicy.allowsDismiss(
+                mode = "TOURNAMENT", phase = "FILL_DECK", currentSessionReady = true,
+                nextModeGameplay = false, activeGame = false,
+                activeQueueScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen(now),
+                recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(now),
+                shortRaceWindow = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(now),
+                matchmakingSearchVisual = false, terminalOrResult = false, working = true, paused = false,
+            ))
+        } finally {
+            LifecycleTrace.resetMatchmakingEvidenceForTest()
+        }
     }
 
     @Test

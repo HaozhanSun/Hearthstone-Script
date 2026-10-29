@@ -775,8 +775,10 @@ object MouseUtil {
                     currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
                     nextModeGameplay = Mode.nextMode === ModeEnum.GAMEPLAY,
                     activeGame = WarEx.inWar || Mode.currMode === ModeEnum.GAMEPLAY,
-                    activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
-                        LifecycleTrace.hasRecentMatchmakingInputIntent(),
+                    activeQueueScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
+                    recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
+                    shortRaceWindow = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+                    matchmakingSearchVisual = false,
                     terminalOrResult = GameUtil.isTerminalGameState() ||
                         club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
                             .isTerminalCleanupPending(),
