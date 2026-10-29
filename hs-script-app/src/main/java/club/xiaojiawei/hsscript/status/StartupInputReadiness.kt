@@ -27,6 +27,7 @@ internal object StartupInputReadiness {
     const val HUB_TRADITIONAL_BATTLE_ACTION = "mode.select-traditional"
     const val HUB_MODE_CHOOSER_PROOF_MAX_AGE_MS = 30_000L
     const val DECK_SELECTION_START_PROOF_MAX_AGE_MS = 8_000L
+    const val DECK_MODE_NAVIGATION_PROOF_MAX_AGE_MS = 30_000L
 
     fun recordOnlineMenu(
         pid: Int,
@@ -86,6 +87,32 @@ internal object StartupInputReadiness {
         return true
     }
 
+    /** Fresh exact deck-selection proof authorizes only the named Back-to-mode-selector action. */
+    fun recordDeckSelectionModeNavigation(
+        pid: Int,
+        hwnd: String,
+        expectedRunMode: String?,
+        observedRunMode: String?,
+        confidence: Int,
+        evidence: String,
+        enabledStartButtonVisible: Boolean,
+        modalVisible: Boolean,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean {
+        if (pid <= 0 || hwnd.isBlank() || confidence < 90 ||
+            evidence !in DECK_SELECTION_START_EVIDENCE || !enabledStartButtonVisible || modalVisible ||
+            expectedRunMode !in setOf("STANDARD", "WILD") || observedRunMode == expectedRunMode
+        ) {
+            invalidate(pid, hwnd)
+            return false
+        }
+        reconnectPermit.set(null)
+        noticeDismissPermit.set(null)
+        betaResultConfirmationPermit.set(null)
+        proof.set(Proof(pid, hwnd, DECK_SELECTION_MODE_NAV_SCREEN, now))
+        return true
+    }
+
     fun recordStartupOnlineScreen(
         pid: Int,
         hwnd: String,
@@ -122,6 +149,15 @@ internal object StartupInputReadiness {
     ): Boolean = proof.get()?.let {
         it.pid == pid && it.hwnd == hwnd && it.screen == DECK_SELECTION_START_SCREEN &&
             now >= it.observedAt && now - it.observedAt <= DECK_SELECTION_START_PROOF_MAX_AGE_MS
+    } == true
+
+    fun isDeckSelectionModeNavigationReady(
+        pid: Int,
+        hwnd: String,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean = proof.get()?.let {
+        it.pid == pid && it.hwnd == hwnd && it.screen == DECK_SELECTION_MODE_NAV_SCREEN &&
+            now >= it.observedAt && now - it.observedAt <= DECK_MODE_NAVIGATION_PROOF_MAX_AGE_MS
     } == true
 
     fun invalidate(pid: Int? = null, hwnd: String? = null) {
@@ -240,8 +276,11 @@ internal object StartupInputReadiness {
 
     private const val HUB_MODE_CHOOSER_SCREEN = "HUB_MODE_CHOOSER"
     private const val DECK_SELECTION_START_SCREEN = "DECK_SELECTION_START"
+    private const val DECK_SELECTION_MODE_NAV_SCREEN = "DECK_SELECTION_MODE_NAV"
     private val CONFIRMABLE_TOURNAMENT_MODES = setOf("STANDARD", "WILD")
-    private val DECK_SELECTION_START_EVIDENCE = setOf("deck-selection-title", "deck-selection-title-roi")
+    private val DECK_SELECTION_START_EVIDENCE = setOf(
+        "deck-selection-title", "deck-selection-title-roi", "deck-selection-start-control-visual",
+    )
 
     private val allowedModesByScreen = mapOf(
         "HOME" to setOf("HUB"),
@@ -291,6 +330,7 @@ internal object StartupInputAuthorizationPolicy {
         betaResultConfirmationPermitValid: Boolean = false,
         startupQuestOverlayDismissPermitValid: Boolean = false,
         freshDeckSelectionStartReady: Boolean = false,
+        startupDeckSelectionModeNavigationReady: Boolean = false,
     ): Boolean = if (action == StartupNoticeRecoveryPolicy.DISPATCH_ACTION) {
         // A non-empty Power.log can make the session model ready while the
         // client is still on this modal. The exact permit plus final active
@@ -298,6 +338,8 @@ internal object StartupInputAuthorizationPolicy {
         startupNoticeDismissPermitValid
     } else if (action == BetaStartupResultConfirmationPolicy.DISPATCH_ACTION) {
         betaResultConfirmationPermitValid
+    } else if (action == StartupDeckModeNavigationPolicy.ACTION) {
+        startupDeckSelectionModeNavigationReady
     } else if (action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION) {
         startupQuestOverlayDismissPermitValid
     } else currentSessionReady || freshOnlineMenuReady ||

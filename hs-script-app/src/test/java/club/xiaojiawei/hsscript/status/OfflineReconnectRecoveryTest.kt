@@ -91,6 +91,41 @@ class OfflineReconnectRecoveryTest {
     }
 
     @Test
+    fun `dedicated fresh recheck reaches restart at threshold independent of slow global probe cadence`() {
+        val schedule = ExactReconnectRecheckSchedule()
+        val policy = IndefiniteReconnectRestartPolicy()
+        val firstExactObservation = 10_000L
+        assertEquals(IndefiniteReconnectRestartPolicy.Decision.WAIT,
+            policy.observe(true, firstExactObservation, activeQueue = false, terminalState = false))
+        assertTrue(schedule.reserve(firstExactObservation))
+        assertFalse(schedule.reserve(firstExactObservation + 20_000L), "only one threshold probe may be queued")
+        assertFalse(schedule.isDue(firstExactObservation + 59_999L))
+
+        val dedicatedFreshProbeAt = firstExactObservation + ExactReconnectRecheckSchedule.RECHECK_DELAY_MS
+        assertTrue(schedule.isDue(dedicatedFreshProbeAt))
+        schedule.complete()
+        assertEquals(IndefiniteReconnectRestartPolicy.Decision.RESTART_CLIENT_NO_PAUSE,
+            policy.observe(true, dedicatedFreshProbeAt, activeQueue = false, terminalState = false),
+            "a fresh exact reconnect recheck restarts at 60 seconds even if the global OCR probe would arrive much later")
+        assertEquals(1, policy.attempts())
+        assertFalse(schedule.isDue(dedicatedFreshProbeAt + 120_000L))
+    }
+
+    @Test
+    fun `dedicated recheck preserves active queue terminal and non reconnect fences`() {
+        val policy = IndefiniteReconnectRestartPolicy()
+        policy.observe(true, 10_000L, activeQueue = false, terminalState = false)
+        assertEquals(IndefiniteReconnectRestartPolicy.Decision.DEFER_ACTIVE_QUEUE,
+            policy.observe(true, 70_000L, activeQueue = true, terminalState = false))
+        assertEquals(IndefiniteReconnectRestartPolicy.Decision.DEFER_TERMINAL,
+            policy.observe(true, 71_000L, activeQueue = false, terminalState = true))
+        assertEquals(0, policy.attempts())
+        assertEquals(IndefiniteReconnectRestartPolicy.Decision.WAIT,
+            policy.observe(false, 72_000L, activeQueue = false, terminalState = false))
+        assertEquals(0, policy.attempts())
+    }
+
+    @Test
     fun `reconnect restart defers active game queue and terminal evidence`() {
         assertTrue(
             ReconnectRestartSafetyPolicy.mayRestart(

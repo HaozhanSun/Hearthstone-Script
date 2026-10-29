@@ -213,3 +213,32 @@ internal class IndefiniteReconnectRestartPolicy(
         const val DEFAULT_MAX_RESTARTS = 2
     }
 }
+
+/** Schedules one fresh, authorized reconnect screen probe at the restart threshold. */
+internal class ExactReconnectRecheckSchedule(private val delayMs: Long = 60_000L) {
+    private var dueAtMs = 0L
+
+    @Synchronized
+    fun reserve(firstObservedAtMs: Long): Boolean {
+        if (firstObservedAtMs <= 0L || dueAtMs != 0L) return false
+        dueAtMs = firstObservedAtMs + delayMs
+        return true
+    }
+
+    @Synchronized
+    fun isDue(nowMs: Long): Boolean = dueAtMs > 0L && nowMs >= dueAtMs
+
+    @Synchronized
+    fun complete() {
+        dueAtMs = 0L
+    }
+
+    @Synchronized
+    fun reset() {
+        dueAtMs = 0L
+    }
+
+    companion object {
+        const val RECHECK_DELAY_MS = 60_000L
+    }
+}

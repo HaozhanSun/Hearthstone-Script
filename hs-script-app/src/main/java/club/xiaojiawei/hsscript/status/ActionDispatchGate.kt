@@ -8,6 +8,7 @@ import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
+import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 
 /**
  * The last, process-wide gate before an action can reach the desktop.  Phase
@@ -43,12 +44,41 @@ object ActionDispatchGate {
                     gameWindow.toString(),
                 ),
             )
+        val startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationReady(
+            action, processId, gameWindow?.toString(), exactGameWindowVerified, currentSessionReady,
+        )
         return StartupInputAuthorizationPolicy.allows(
             action = action,
             currentSessionReady = currentSessionReady,
             freshOnlineMenuReady = freshOnlineMenuReady,
             freshDeckSelectionStartReady = freshDeckSelectionStartReady,
+            startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationReady,
         )
+    }
+
+    private fun startupDeckSelectionModeNavigationReady(
+        action: String,
+        processId: Int?,
+        hwnd: String?,
+        exactWindowVerified: Boolean,
+        currentSessionReady: Boolean,
+    ): Boolean {
+        val activeGame = currentSessionReady || WarEx.inWar || Mode.currMode == ModeEnum.GAMEPLAY
+        val activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+            LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
+        val terminal = MandatoryRankSurrenderGuard.isPending() ||
+            MandatoryRankSurrenderGuard.isTerminalCleanupPending() ||
+            PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence()
+        return processId != null && !hwnd.isNullOrBlank() &&
+            StartupDeckModeNavigationPolicy.allowsDispatch(
+                action = action,
+                proofFresh = StartupInputReadiness.isDeckSelectionModeNavigationReady(processId, hwnd),
+                exactWindowVerified = exactWindowVerified,
+                currentSessionReady = currentSessionReady,
+                activeGame = activeGame,
+                activeMatchmaking = activeMatchmaking,
+                terminal = terminal,
+            )
     }
 
     fun allow(
@@ -126,6 +156,9 @@ object ActionDispatchGate {
                         Mode.currMode?.name,
                     ),
             )
+        val startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationReady(
+            action, processId, gameWindow?.toString(), exactGameWindowVerified, currentSessionReady,
+        )
         val startupGateAllowed = StartupInputAuthorizationPolicy.allows(
             action = action,
             currentSessionReady = currentSessionReady,
@@ -153,6 +186,7 @@ object ActionDispatchGate {
             startupQuestOverlayDismissPermitValid = action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION &&
                 startupQuestOverlayDispatchScope.get() == true,
             freshDeckSelectionStartReady = freshDeckSelectionStartReady,
+            startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationReady,
         )
         if (!startupGateAllowed) {
             log.warn {
@@ -192,6 +226,7 @@ object ActionDispatchGate {
             startupQuestOverlayDismissPermitValid = action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION &&
                 startupQuestOverlayDispatchScope.get() == true,
             freshDeckSelectionStartReady = freshDeckSelectionStartReady,
+            startupDeckSelectionModeNavigationPermitValid = startupDeckSelectionModeNavigationReady,
         )
         if (!allowed) return false
         if (action == "surrender.request" && rankSurrenderCapability != null &&
@@ -300,6 +335,7 @@ object ActionDispatchGate {
         betaResultConfirmationPermitValid: Boolean = false,
         startupQuestOverlayDismissPermitValid: Boolean = false,
         freshDeckSelectionStartReady: Boolean = false,
+        startupDeckSelectionModeNavigationPermitValid: Boolean = false,
     ): Boolean {
         if (paused || !working) {
             log.warn {
@@ -320,6 +356,7 @@ object ActionDispatchGate {
                 betaResultConfirmationPermitValid = betaResultConfirmationPermitValid,
                 startupQuestOverlayDismissPermitValid = startupQuestOverlayDismissPermitValid,
                 freshDeckSelectionStartReady = freshDeckSelectionStartReady,
+                startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationPermitValid,
             )
         ) {
             log.warn {

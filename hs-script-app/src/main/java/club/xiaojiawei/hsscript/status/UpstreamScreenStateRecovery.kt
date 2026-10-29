@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
+import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
 import club.xiaojiawei.hsscript.strategy.mode.LoginModeStrategy
 import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
@@ -20,6 +21,7 @@ import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
+import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import java.awt.Rectangle
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
@@ -60,10 +62,12 @@ object UpstreamScreenStateRecovery {
     private val slowReconnectWarningObservedAt = AtomicLong(0L)
     private val unknownStartupRestartPolicy = UnknownStartupRestartPolicy()
     private val indefiniteReconnectRestartPolicy = IndefiniteReconnectRestartPolicy()
+    private val exactReconnectRecheckSchedule = ExactReconnectRecheckSchedule()
     private val clientRestartInFlight = ClientRestartRequestGate()
     private val exactCaptureOcrReuse = ExactCaptureOcrReuse()
     private val eventQuestOverlayRecoveryInFlight = AtomicBoolean(false)
     private val eventQuestOverlayRecoveryPolicy = EventQuestOverlayRecoveryPolicy()
+    private val startupDeckModeNavigationAttempts = StartupDeckModeNavigationAttemptGate()
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
@@ -188,6 +192,7 @@ object UpstreamScreenStateRecovery {
         stuckForMs: Long,
         stateFingerprint: String,
         startupProbe: Boolean = false,
+        exactReconnectRecheck: Boolean = false,
         stateStillCurrent: () -> Boolean = { true },
     ): Boolean {
         if (!WorkTimeListener.working || PauseStatus.isPause) {
@@ -204,7 +209,7 @@ object UpstreamScreenStateRecovery {
         var captureTimings = ResultProbeCaptureTimings()
         var ocrTimings = ResultProbeOcrTimings()
         var decisionMs = 0L
-        val authorizedCapture = captureVerifiedGameScreen(stuckForMs, startupProbe)
+        val authorizedCapture = captureVerifiedGameScreen(stuckForMs, startupProbe, exactReconnectRecheck)
         if (authorizedCapture == null) {
             captureTimings = ResultProbeCaptureTimings(
                 authorizedCaptureMs = ResultScreenProbeTelemetry.elapsedMs(captureStartedAt),
@@ -232,7 +237,22 @@ object UpstreamScreenStateRecovery {
         }
 
         val questOverlayVisual = capture.visual.startupQuestOverlayVisual
-        val ocrText = if (questOverlayVisual) "" else runOCR(capture, File(TESS_DATA_PATH)) { ocrTimings = it }
+        val deckSelectionVisualCandidate = authorizedCapture.purpose in setOf(
+            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+        ) && !questOverlayVisual && !capture.visual.matchmakingSearchVisual &&
+            !ScreenStateRecovery.hasCenteredModalPanel(capture.image) &&
+            DeckStrategyManager.currentDeckStrategy != null && DeckStrategyManager.currentRunMode != null &&
+            ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image)
+        val ocrText = when {
+            questOverlayVisual -> ""
+            deckSelectionVisualCandidate -> {
+                log.info { "SCREEN_RECOVERY_OCR_SKIPPED reason=exact-deck-selection-start-control-visual" }
+                ""
+            }
+            else -> runOCR(capture, File(TESS_DATA_PATH)) { ocrTimings = it }
+        }
         if (!stateStillCurrent()) {
             log.info {
                 "SCREEN_RECOVERY_PROBE_TIMING " + ResultScreenProbeTelemetry.formatScreenRecovery(
@@ -244,7 +264,17 @@ object UpstreamScreenStateRecovery {
             return false
         }
         val decisionStartedAt = System.nanoTime()
-        val detection = detect(ocrText, capture.visual)
+        val ocrDetection = detect(ocrText, capture.visual)
+        val detection = ocrDetection ?: startupDeckSelectionVisualDetection(
+            purpose = authorizedCapture.purpose,
+            image = capture.image,
+            ocrUnknown = ocrDetection == null,
+            questOverlayVisible = capture.visual.startupQuestOverlayVisual,
+            matchmakingVisible = capture.visual.matchmakingSearchVisual,
+            modalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image),
+            configuredDeckSelected = DeckStrategyManager.currentDeckStrategy != null &&
+                DeckStrategyManager.currentRunMode != null,
+        )
         decisionMs = ResultScreenProbeTelemetry.elapsedMs(decisionStartedAt)
         log.info {
             "SCREEN_RECOVERY_PROBE_TIMING " + ResultScreenProbeTelemetry.formatScreenRecovery(
@@ -369,16 +399,93 @@ object UpstreamScreenStateRecovery {
                 }
                 if (currentDetection.kind == ScreenKind.DECK_SELECTION && !readinessRecorded) {
                     startupClassificationOnly = true
+                    val expectedMode = expectedDeckMode
+                    val observedMode = deckModeObservation?.observedMode?.name
+                    val startVisible = ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image)
+                    val activeGame = ScreenStateRecovery.isCurrentGameSessionReadyForStart() ||
+                        WarEx.inWar || Mode.currMode == ModeEnum.GAMEPLAY
+                    // A historical matchmaking intent is not a live queue. The current screen/short
+                    // entry guard, active-game state, and terminal evidence remain authoritative.
+                    val activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                        LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
+                    val terminal = GameUtil.isTerminalGameState() ||
+                        MandatoryRankSurrenderGuard.isPending() ||
+                        MandatoryRankSurrenderGuard.isTerminalCleanupPending() ||
+                        PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence()
+                    val trustedWindow = pid != null && currentHwnd == hwnd &&
+                        GameUtil.isVerifiedCurrentGameWindow(authorizedCapture.gameWindow)
+                    val navigationDecision = StartupDeckModeNavigationPolicy.decide(
+                        purpose = authorizedCapture.purpose.name,
+                        screenKind = currentDetection.kind.code,
+                        confidence = currentDetection.confidence,
+                        evidence = currentDetection.evidence,
+                        expectedRunMode = expectedMode,
+                        observedRunMode = observedMode,
+                        enabledStartButtonVisible = startVisible,
+                        modalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image),
+                        currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+                        activeGame = activeGame,
+                        activeMatchmaking = activeQueue,
+                        terminal = terminal,
+                        trustedCurrentWindow = trustedWindow,
+                    )
+                    var modeNavigationAttempted = false
+                    if (navigationDecision.allowed && pid != null && trustedWindow &&
+                        stateStillCurrent() && WorkTimeListener.working && !PauseStatus.isPause
+                    ) {
+                        val attempt = startupDeckModeNavigationAttempts.tryBegin(pid, hwnd)
+                        val proofRecorded = attempt.allowed && StartupInputReadiness.recordDeckSelectionModeNavigation(
+                            pid = pid,
+                            hwnd = hwnd,
+                            expectedRunMode = expectedMode,
+                            observedRunMode = observedMode,
+                            confidence = currentDetection.confidence,
+                            evidence = currentDetection.evidence,
+                            enabledStartButtonVisible = startVisible,
+                            modalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image),
+                        )
+                        val accepted = if (proofRecorded && stateStillCurrent() && !WarEx.inWar &&
+                            !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+                            !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() &&
+                            !GameUtil.isTerminalGameState()
+                        ) {
+                            StartupDeckModeNavigationPolicy.dispatchIfAllowed(navigationDecision) {
+                                MouseUtil.leftButtonClick(
+                                    TournamentModeStrategy.BACK_RECT.getCenterClickPos(),
+                                    authorizedCapture.gameWindow,
+                                    dispatchActionOverride = StartupDeckModeNavigationPolicy.ACTION,
+                                )
+                            }
+                        } else false
+                        modeNavigationAttempted = accepted
+                        log.warn {
+                            "STARTUP_DECK_MODE_NAVIGATION decision=${if (accepted) "DISPATCH_ACCEPTED" else "BLOCKED"} " +
+                                "reason=${if (!attempt.allowed) attempt.reason else if (!proofRecorded) "proof-not-recorded" else if (!accepted) "final-state-or-dispatch-gate" else "mode-unconfirmed"} " +
+                                "attempt=${attempt.attempt} expectedMode=${expectedMode ?: "UNKNOWN"} " +
+                                "observedMode=${observedMode ?: "UNKNOWN"} pid=$pid hwnd=$hwnd " +
+                                "confidence=${currentDetection.confidence} evidence=${currentDetection.evidence} " +
+                                "startVisible=$startVisible activeGame=$activeGame activeQueue=$activeQueue " +
+                                "terminal=$terminal exactWindow=$trustedWindow action=${StartupDeckModeNavigationPolicy.ACTION} " +
+                                "inputAccepted=$accepted"
+                        }
+                    } else {
+                        log.warn {
+                            "STARTUP_DECK_MODE_NAVIGATION decision=BLOCKED reason=${navigationDecision.denial.name.lowercase()} " +
+                                "expectedMode=${expectedMode ?: "UNKNOWN"} observedMode=${observedMode ?: "UNKNOWN"} " +
+                                "pid=${pid ?: "none"} hwnd=$hwnd activeGame=$activeGame activeQueue=$activeQueue " +
+                                "terminal=$terminal exactWindow=$trustedWindow action=NO_INPUT"
+                        }
+                    }
                     TournamentModeConfirmation.reportUnconfirmedDeckSelection(
-                        expectedMode = expectedDeckMode,
-                        observedMode = deckModeObservation?.observedMode?.name,
+                        expectedMode = expectedMode,
+                        observedMode = observedMode,
                         reason = deckModeObservation?.evidence ?: "fresh-mode-proof-missing",
                     )
                     log.warn {
                         "SCREEN_RECOVERY_DECK_SELECTION_CLASSIFICATION_ONLY " +
                             "expectedRunMode=${expectedDeckMode ?: "UNKNOWN"} " +
                             "observedRunMode=${deckModeObservation?.observedMode?.name ?: "UNKNOWN"} " +
-                            "action=NO_INPUT_NO_START provider=UPSTREAM"
+                            "action=${if (modeNavigationAttempted) "BACK_TO_MODE_SELECTOR_ONLY" else "NO_START"} provider=UPSTREAM"
                     }
                 }
             } else {
@@ -598,7 +705,11 @@ object UpstreamScreenStateRecovery {
     }
 
     /** Resolve a fresh process-owned HWND, hold it foreground through capture, then capture. */
-    private fun captureVerifiedGameScreen(stuckForMs: Long = 0L, startupProbe: Boolean = false): AuthorizedCapture? {
+    private fun captureVerifiedGameScreen(
+        stuckForMs: Long = 0L,
+        startupProbe: Boolean = false,
+        exactReconnectRecheck: Boolean = false,
+    ): AuthorizedCapture? {
         val gameWindow = resolveVerifiedGameWindow()
         if (gameWindow == null) {
             log.warn {
@@ -628,7 +739,8 @@ object UpstreamScreenStateRecovery {
         )
         val authoritativeTerminalState = currentWarModelAuthoritative && GameUtil.isTerminalGameState()
         val activeQueueEvidence = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
-            LifecycleTrace.hasRecentMatchmakingInputIntent()
+            LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() ||
+            !exactReconnectRecheck && LifecycleTrace.hasRecentMatchmakingInputIntent()
         val capturePurpose = if (
             !currentSessionReady && stuckForMs >= ScreenRecoveryCapturePurposePolicy.IDLE_CLIENT_PROBE_AFTER_MS &&
             Mode.currMode !== ModeEnum.GAMEPLAY && !authoritativeActiveGame && !authoritativeTerminalState &&
@@ -641,7 +753,7 @@ object UpstreamScreenStateRecovery {
             activeGame = authoritativeActiveGame,
             mulligan = currentWarModelAuthoritative && WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
             terminal = currentWarModelAuthoritative && GameUtil.isTerminalGameState(),
-            recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
+            recentInputIntent = !exactReconnectRecheck && LifecycleTrace.hasRecentMatchmakingInputIntent(),
             stuckForMs = stuckForMs,
             warModelAuthoritative = currentWarModelAuthoritative,
             startupProbe = startupProbe,
@@ -1739,6 +1851,44 @@ object UpstreamScreenStateRecovery {
         visualSignature(image),
     )?.kind?.code
 
+    private fun startupDeckSelectionVisualDetection(
+        purpose: ScreenRecoveryCapturePurpose,
+        image: BufferedImage,
+        ocrUnknown: Boolean,
+        questOverlayVisible: Boolean,
+        matchmakingVisible: Boolean,
+        modalVisible: Boolean,
+        configuredDeckSelected: Boolean,
+    ): Detection? {
+        val allowedPurpose = purpose in setOf(
+            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+        )
+        if (!allowedPurpose || !ocrUnknown || questOverlayVisible || matchmakingVisible || modalVisible ||
+            !configuredDeckSelected || !ScreenWatchdog.hasEnabledDeckSelectionStartButton(image)
+        ) return null
+        return Detection(ScreenKind.DECK_SELECTION, ModeEnum.TOURNAMENT, 94, "deck-selection-start-control-visual")
+    }
+
+    internal fun classifyStartupDeckSelectionVisualForTest(
+        ocrText: String,
+        image: BufferedImage,
+        purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+        configuredDeckSelected: Boolean = true,
+    ): String? {
+        val detected = detect(ocrText, visualSignature(image))
+        return (detected ?: startupDeckSelectionVisualDetection(
+            purpose = purpose,
+            image = image,
+            ocrUnknown = detected == null,
+            questOverlayVisible = StartupQuestOverlayVisualClassifier.isQuestOverlay(image),
+            matchmakingVisible = visualSignature(image).matchmakingSearchVisual,
+            modalVisible = ScreenStateRecovery.hasCenteredModalPanel(image),
+            configuredDeckSelected = configuredDeckSelected,
+        ))?.kind?.code
+    }
+
     internal fun classificationEvidenceForImageTest(ocrText: String, image: BufferedImage): String? = detect(
         ocrText,
         visualSignature(image),
@@ -1932,6 +2082,46 @@ object UpstreamScreenStateRecovery {
             text.contains("重新接") ||
             text.contains("离线")
         return disconnected && recoveryHint
+    }
+
+    private fun scheduleExactReconnectThresholdRecheck(firstObservedAtMs: Long) {
+        if (!exactReconnectRecheckSchedule.reserve(firstObservedAtMs)) return
+        val expectedPid = GameUtil.findGameProcessIdForDiagnostics()?.toInt()
+        log.warn {
+            "SCREEN_RECOVERY_RECONNECT_RECHECK_SCHEDULED delayMs=${ExactReconnectRecheckSchedule.RECHECK_DELAY_MS} " +
+                "expectedPid=${expectedPid ?: "none"} capture=FRESH_AUTHORIZED purpose=IDLE_CLIENT_PROBE"
+        }
+        EXTRA_THREAD_POOL.schedule({
+            val now = System.currentTimeMillis()
+            if (!exactReconnectRecheckSchedule.isDue(now)) return@schedule
+            exactReconnectRecheckSchedule.complete()
+            val currentPid = GameUtil.findGameProcessIdForDiagnostics()?.toInt()
+            if (!WorkTimeListener.working || PauseStatus.isPause || WarEx.inWar ||
+                expectedPid == null || currentPid != expectedPid ||
+                LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() ||
+                GameUtil.isTerminalGameState()
+            ) {
+                log.warn {
+                    "SCREEN_RECOVERY_RECONNECT_RECHECK_SKIPPED reason=final-safety-fence " +
+                        "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} inWar=${WarEx.inWar} " +
+                        "expectedPid=${expectedPid ?: "none"} currentPid=${currentPid ?: "none"} " +
+                        "activeQueue=${LifecycleTrace.hasRecentActiveMatchmakingScreen() || LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()} " +
+                        "terminal=${GameUtil.isTerminalGameState()} action=NO_RESTART"
+                }
+                return@schedule
+            }
+            log.warn {
+                "SCREEN_RECOVERY_RECONNECT_RECHECK_STARTED elapsedMs=${now - firstObservedAtMs} " +
+                    "expectedPid=$expectedPid capture=FRESH_AUTHORIZED"
+            }
+            inspectAndRecover(
+                stuckForMs = ExactReconnectRecheckSchedule.RECHECK_DELAY_MS,
+                stateFingerprint = "exact-reconnect-threshold-recheck",
+                startupProbe = true,
+                exactReconnectRecheck = true,
+            )
+        }, ExactReconnectRecheckSchedule.RECHECK_DELAY_MS, TimeUnit.MILLISECONDS)
     }
 
     private fun restartClientForIndefiniteReconnect(now: Long): Boolean {
@@ -2407,12 +2597,13 @@ object UpstreamScreenStateRecovery {
                     return false
                 }
                 val now = System.currentTimeMillis()
-                when (indefiniteReconnectRestartPolicy.observe(
+                val reconnectDecision = indefiniteReconnectRestartPolicy.observe(
                     exactReconnectVisible = true,
                     nowMs = now,
                     activeQueue = activeQueue,
                     terminalState = terminalState,
-                )) {
+                )
+                when (reconnectDecision) {
                     IndefiniteReconnectRestartPolicy.Decision.RESTART_CLIENT_NO_PAUSE -> {
                         log.error {
                             "SCREEN_RECOVERY_RECONNECT_INDEFINITE decision=RESTART_CLIENT_NO_PAUSE " +
@@ -2437,6 +2628,9 @@ object UpstreamScreenStateRecovery {
                     IndefiniteReconnectRestartPolicy.Decision.DEFER_ACTIVE_QUEUE,
                     IndefiniteReconnectRestartPolicy.Decision.DEFER_TERMINAL -> return false
                     IndefiniteReconnectRestartPolicy.Decision.WAIT -> Unit
+                }
+                if (reconnectDecision == IndefiniteReconnectRestartPolicy.Decision.WAIT) {
+                    scheduleExactReconnectThresholdRecheck(now)
                 }
                 if (WarEx.inWar) {
                     log.warn {
