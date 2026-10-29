@@ -142,9 +142,6 @@ object TournamentModeConfirmation {
         sleeper: (Long) -> Unit = { millis -> Thread.sleep(millis) },
         shouldContinue: () -> Boolean = { true },
     ): Boolean {
-        currentModeSelectionIdentity()?.let { (pid, hwnd) ->
-            StartupInputReadiness.clearSelectedTournamentMode(pid.toInt(), hwnd.toString())
-        }
         var lastResult: TournamentModeConfirmationResult? = null
         repeat(attempts.coerceAtLeast(1)) { attempt ->
             if (!shouldContinue()) {
@@ -194,6 +191,9 @@ object TournamentModeConfirmation {
                 }
 
                 TournamentModeConfirmationState.MISMATCH -> {
+                    currentModeSelectionIdentity()?.let { (pid, hwnd) ->
+                        StartupInputReadiness.clearSelectedTournamentMode(pid.toInt(), hwnd.toString())
+                    }
                     if (shouldContinue()) reportUnsafeMode(result) else logStateChanged(result)
                     return false
                 }

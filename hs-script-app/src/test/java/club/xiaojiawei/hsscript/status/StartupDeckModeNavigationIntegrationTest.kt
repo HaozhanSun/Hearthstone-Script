@@ -274,6 +274,62 @@ class StartupDeckModeNavigationIntegrationTest {
     }
 
     @Test
+    fun `fresh exact deck selection with unknown mode OCR dispatches only under independent selected mode proof`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/deck-selection-screen.png",
+        )))
+        assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("", image))
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+        val observedMode = TournamentModeConfirmation.observeImage(image).observedMode.name
+        assertEquals("UNKNOWN", observedMode, "fixture exercises exact screen evidence without usable mode OCR")
+
+        try {
+            StartupInputReadiness.recordSelectedTournamentMode(25948, "captured-live-window", "WILD", 50_000L)
+            assertTrue(StartupInputReadiness.recordStartupOnlineScreen(
+                pid = 25948,
+                hwnd = "captured-live-window",
+                screen = "DECK_SELECTION",
+                confidence = 94,
+                evidence = "deck-selection-start-control-visual",
+                expectedRunMode = "WILD",
+                observedRunMode = observedMode,
+                enabledStartButtonVisible = true,
+                modalVisible = false,
+                now = 50_001L,
+            ), "unknown OCR is usable only when an independent same-window mode selection is fresh")
+            assertTrue(StartupInputAuthorizationPolicy.allows(
+                action = "matchmaking.start",
+                currentSessionReady = false,
+                freshOnlineMenuReady = false,
+                freshDeckSelectionStartReady = StartupInputReadiness.isDeckSelectionStartReady(
+                    25948, "captured-live-window", 50_002L,
+                ),
+                selectedModeStartPermitValid = StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+                    25948, "captured-live-window", "WILD", 50_002L,
+                ),
+            ), "both proofs authorize only the named matchmaking start action")
+
+            var dispatches = 0
+            assertTrue(StartupInputAuthorizationPolicy.dispatchDeckSelectionRecoveryIfReady(
+                startupScreenConfirmed = StartupInputAuthorizationPolicy.allows(
+                    action = "matchmaking.start",
+                    currentSessionReady = false,
+                    freshOnlineMenuReady = false,
+                    freshDeckSelectionStartReady = StartupInputReadiness.isDeckSelectionStartReady(
+                        25948, "captured-live-window", 50_003L,
+                    ),
+                    selectedModeStartPermitValid = StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+                        25948, "captured-live-window", "WILD", 50_003L,
+                    ),
+                ),
+            ) { dispatches++ })
+            assertEquals(1, dispatches, "the integration callsite reaches the start dispatch once")
+        } finally {
+            StartupInputReadiness.resetForTest()
+        }
+    }
+
+    @Test
     fun `idle client deck classifier cannot apply recovery even when start button and mode look valid`() {
         val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/standard-deck-selection-live-20261029-063038.png",

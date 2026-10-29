@@ -103,11 +103,20 @@ internal object StartupInputReadiness {
         modalVisible: Boolean,
         now: Long = System.currentTimeMillis(),
     ): Boolean {
+        val modeIdentityReady = expectedRunMode in CONFIRMABLE_TOURNAMENT_MODES &&
+            (observedRunMode == expectedRunMode ||
+                (observedRunMode == "UNKNOWN" && hasSelectedTournamentModeStartPermit(
+                    pid, hwnd, expectedRunMode, now,
+                )))
         if (pid <= 0 || hwnd.isBlank() || confidence < 90 ||
             evidence !in DECK_SELECTION_START_EVIDENCE || !enabledStartButtonVisible || modalVisible ||
-            expectedRunMode !in CONFIRMABLE_TOURNAMENT_MODES || observedRunMode != expectedRunMode
+            !modeIdentityReady
         ) {
-            invalidate(pid, hwnd)
+            // A detected mismatch invalidates the independently selected mode.
+            // UNKNOWN OCR does not: a fresh exact deck-selection capture plus
+            // an unexpired, same-window selected-mode permit is sufficient.
+            if (observedRunMode != "UNKNOWN") clearSelectedTournamentMode(pid, hwnd)
+            invalidateScreenProof(pid, hwnd)
             return false
         }
         reconnectPermit.set(null)
@@ -191,6 +200,11 @@ internal object StartupInputReadiness {
     } == true
 
     fun invalidate(pid: Int? = null, hwnd: String? = null) {
+        invalidateScreenProof(pid, hwnd)
+        clearSelectedTournamentMode(pid, hwnd)
+    }
+
+    private fun invalidateScreenProof(pid: Int? = null, hwnd: String? = null) {
         proof.updateAndGet { current ->
             if (current != null && (pid == null || current.pid == pid) &&
                 (hwnd == null || current.hwnd == hwnd)
@@ -207,7 +221,6 @@ internal object StartupInputReadiness {
                 (hwnd == null || current.hwnd == hwnd)
             ) null else current
         }
-        clearSelectedTournamentMode(pid, hwnd)
     }
 
     fun isMenuReady(pid: Int, hwnd: String, mode: String?): Boolean =
