@@ -30,7 +30,7 @@ class ScreenStateRoiSelectorTest {
     fun selectsBoundedScreenStateRoisInsteadOfTheWholeDesktop() {
         val rois = ScreenStateRoiSelector.select(3840, 2160)
 
-        assertEquals(11, rois.size)
+        assertEquals(12, rois.size)
         assertTrue(rois.all { it.bounds.x >= 0 && it.bounds.y >= 0 })
         assertTrue(rois.all { it.bounds.maxX <= 3840 && it.bounds.maxY <= 2160 })
         assertTrue(rois.all { it.bounds.width < 3840 && it.bounds.height < 2160 })
@@ -45,6 +45,7 @@ class ScreenStateRoiSelectorTest {
                 ScreenStateRoiSelector.YOGG_SERVER_UNAVAILABLE_ROI,
                 ScreenStateRoiSelector.AMAZON_NOTICE_TITLE_ROI,
                 ScreenStateRoiSelector.AMAZON_NOTICE_CLOSE_ROI,
+                ScreenStateRoiSelector.BETA_RESULT_CONFIRMATION_ROI,
                 "screen-state-header",
                 "screen-state-footer",
             ),
@@ -65,6 +66,7 @@ class ScreenStateRoiSelectorTest {
                 Rectangle(1027, 280, 413, 281),
                 Rectangle(806, 307, 576, 114),
                 Rectangle(844, 734, 231, 97),
+                Rectangle(777, 486, 442, 43),
             ),
             ScreenStateRoiSelector.targetedBoundsForTest(1920, 1080),
         )
@@ -79,6 +81,7 @@ class ScreenStateRoiSelectorTest {
                 Rectangle(1026, 280, 413, 281),
                 Rectangle(805, 307, 576, 113),
                 Rectangle(844, 733, 230, 97),
+                Rectangle(777, 485, 441, 43),
             ),
             ScreenStateRoiSelector.targetedBoundsForTest(1919, 1079),
         )
