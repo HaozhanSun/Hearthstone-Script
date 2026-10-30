@@ -3499,7 +3499,18 @@ object UpstreamScreenStateRecovery {
                     }
                     return false
                 }
-                LifecycleTrace.markActiveMatchmakingScreenObserved()
+                if (!MatchmakingQueueLifecycleEvidencePolicy.propagateClassifiedSearchScreenIfAuthorized(
+                        screenKind = detection.kind.code,
+                        captureAuthorized = true,
+                        observedAt = System.currentTimeMillis(),
+                    )
+                ) {
+                    log.warn {
+                        "SCREEN_RECOVERY_MATCHMAKING_BLOCKED reason=screen-evidence-not-authorized " +
+                            "screen=${detection.kind.code} captureAuthorized=true dispatch=false"
+                    }
+                    return false
+                }
                 Mode.recover(ModeEnum.TOURNAMENT, "visible-matchmaking-screen", enterStrategy = false)
                 log.info {
                     "SCREEN_RECOVERY_APPLIED screen=MATCHMAKING action=WAIT_FOR_GAMEPLAY " +

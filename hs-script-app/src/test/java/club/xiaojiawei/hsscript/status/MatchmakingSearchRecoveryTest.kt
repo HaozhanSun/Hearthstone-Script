@@ -58,6 +58,13 @@ class MatchmakingSearchRecoveryTest {
                 provider = "VISUAL_SIGNATURE",
                 reason = "matchmaking-search-screen-visible",
             )
+            assertFalse(MatchmakingQueueLifecycleEvidencePolicy.propagateIfAuthoritative(
+                probe = visibleSearch,
+                captureAuthorized = false,
+                powerLogLength = 106_649L,
+                observedAt = confirmedAt,
+            ), "the ScreenStateRecovery probe callsite must require authorized current capture")
+            assertFalse(LifecycleTrace.hasRecentMatchmakingInputIntent(confirmedAt + 1))
             assertTrue(MatchmakingQueueLifecycleEvidencePolicy.propagateIfAuthoritative(
                 probe = visibleSearch,
                 captureAuthorized = true,
@@ -97,6 +104,7 @@ class MatchmakingSearchRecoveryTest {
     fun `fresh visual queue evidence clears terminal cleanup but does not bypass start proof`() {
         val wasWorking = WorkTimeListener.working
         val wasPaused = PauseStatus.isPause
+        LifecycleTrace.resetMatchmakingEvidenceForTest()
         MandatoryRankSurrenderGuard.resetForTest()
         MulliganRankDispatchBarrier.resetForTest()
         try {
@@ -114,6 +122,17 @@ class MatchmakingSearchRecoveryTest {
                 "matchmaking-search-visual",
                 UpstreamScreenStateRecovery.classificationEvidenceForImageTest("", searchScreen),
             )
+            assertFalse(MatchmakingQueueLifecycleEvidencePolicy.propagateClassifiedSearchScreenIfAuthorized(
+                screenKind = "MATCHMAKING",
+                captureAuthorized = false,
+                observedAt = 199_999L,
+            ), "an unverified upstream frame must not establish queue intent")
+            assertFalse(MatchmakingQueueLifecycleEvidencePolicy.propagateClassifiedSearchScreenIfAuthorized(
+                screenKind = "UNKNOWN",
+                captureAuthorized = true,
+                observedAt = 199_999L,
+            ), "a different classified screen must not establish queue intent")
+            assertFalse(LifecycleTrace.hasRecentMatchmakingInputIntent(200_000L))
 
             assertTrue(
                 UpstreamScreenStateRecovery.confirmPendingTerminalCleanupAtMatchmaking(
@@ -122,6 +141,13 @@ class MatchmakingSearchRecoveryTest {
                     freshCaptureAuthorized = true,
                 ),
             )
+            assertTrue(MatchmakingQueueLifecycleEvidencePolicy.propagateClassifiedSearchScreenIfAuthorized(
+                screenKind = "MATCHMAKING",
+                captureAuthorized = true,
+                observedAt = 200_000L,
+            ), "the Upstream recovery MATCHMAKING callsite must reconcile only the classified authorized search screen")
+            assertTrue(LifecycleTrace.hasRecentActiveMatchmakingScreen(200_001L))
+            assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(200_001L))
             assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
             assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCapability))
             assertFalse(ActionDispatchGate.allowForState(
@@ -132,6 +158,7 @@ class MatchmakingSearchRecoveryTest {
             ), "terminal cleanup release is separate from the required fresh configured-mode Start proof")
             assertEquals(MulliganRankDispatchBarrier.State.IDLE, MulliganRankDispatchBarrier.currentState())
         } finally {
+            LifecycleTrace.resetMatchmakingEvidenceForTest()
             MandatoryRankSurrenderGuard.resetForTest()
             MulliganRankDispatchBarrier.resetForTest()
             WorkTimeListener.working = wasWorking

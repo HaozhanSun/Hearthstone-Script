@@ -2,6 +2,16 @@ package club.xiaojiawei.hsscript.status
 
 /** Propagate only fresh, pixel-authorized active-search evidence to lifecycle recovery. */
 internal object MatchmakingQueueLifecycleEvidencePolicy {
+    fun propagateClassifiedSearchScreenIfAuthorized(
+        screenKind: String,
+        captureAuthorized: Boolean,
+        observedAt: Long,
+    ): Boolean {
+        if (!captureAuthorized || screenKind != "MATCHMAKING") return false
+        LifecycleTrace.markActiveMatchmakingScreenObserved(observedAt)
+        return true
+    }
+
     fun isAuthoritativeActiveSearch(
         probe: ScreenStateRecovery.StartGameErrorDialogProbe,
         captureAuthorized: Boolean,
