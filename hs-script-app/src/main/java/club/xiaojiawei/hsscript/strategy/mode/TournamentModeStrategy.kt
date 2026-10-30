@@ -379,9 +379,18 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
             isCancel = false,
             dispatchAction = StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION,
         )
+        val pid = GameUtil.findGameProcessIdForDiagnostics()?.toInt()
+        val hwnd = ScriptStatus.gameHWND
+        val selectedModeProofRecorded = selected && pid != null && hwnd != null &&
+            GameUtil.isVerifiedCurrentGameWindow(hwnd, pid.toLong()).also { verified ->
+                if (verified) StartupInputReadiness.recordSelectedTournamentMode(
+                    pid, hwnd.toString(), RunModeEnum.WILD.name,
+                )
+            }
         log.warn {
             "STARTUP_MODE_CORRECTION action=SELECT_CONFIGURED_MODE accepted=$selected target=WILD " +
-                "proof=FRESH_SELECTOR_MODAL_WITH_WILD_OPTION next=FRESH_MODE_PROBE_NO_START"
+                "selectedModeProofRecorded=$selectedModeProofRecorded proof=FRESH_SELECTOR_MODAL_WITH_WILD_OPTION " +
+                "next=FRESH_MODE_PROBE_NO_START"
         }
         return selected
     }

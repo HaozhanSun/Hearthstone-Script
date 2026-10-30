@@ -435,10 +435,15 @@ object UpstreamScreenStateRecovery {
                 ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
                 ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
             ) && !ScreenStateRecovery.isCurrentGameSessionReadyForStart() &&
-            detection?.kind != ScreenKind.TOURNAMENT_MODE_SELECTOR
+            detection?.kind != ScreenKind.TOURNAMENT_MODE_SELECTOR &&
+            detection?.kind != ScreenKind.DECK_SELECTION
         ) {
             // A fresh, process-bound reconnect/unknown/modal observation revokes
             // any prior startup menu authorization; it must not survive a UI change.
+            // Keep the separately selected mode permit through a deck observation
+            // so recordDeckSelectionStart can pair it with this exact fresh Start
+            // control capture when title OCR is UNKNOWN. A visible opposite-mode
+            // title still clears the permit in recordDeckSelectionStart itself.
             StartupInputReadiness.invalidate(currentPid, currentHwnd)
         }
         if (startupClientProbe) {
@@ -924,12 +929,13 @@ object UpstreamScreenStateRecovery {
         stuckForMs: Long = 0L,
         startupProbe: Boolean = false,
         exactReconnectRecheck: Boolean = false,
+        captureContext: String = "screen-recovery",
     ): AuthorizedCapture? {
         val gameWindow = resolveVerifiedGameWindow()
         if (gameWindow == null) {
             log.warn {
-                "SCREEN_RECOVERY_BLOCKED reason=hearthstone-window-unverified " +
-                    "processAlive=${GameUtil.isAliveOfGame()}"
+                "SCREEN_RECOVERY_CAPTURE_BLOCKED context=$captureContext reason=hearthstone-window-unverified " +
+                    "processAlive=${GameUtil.isAliveOfGame()} stuckForMs=$stuckForMs"
             }
             return null
         }
@@ -1023,8 +1029,15 @@ object UpstreamScreenStateRecovery {
         )
         if (preflightRejection != null) {
             log.info {
-                "SCREEN_RECOVERY_SKIPPED reason=$preflightRejection beforeForeground=true " +
-                    "purpose=${capturePurpose.name} stuckForMs=$stuckForMs " +
+                "SCREEN_RECOVERY_CAPTURE_BLOCKED context=$captureContext reason=$preflightRejection " +
+                    "beforeForeground=true purpose=${capturePurpose.name} stuckForMs=$stuckForMs " +
+                    "sessionReady=$currentSessionReady idleProbe=$preSessionIdleClientProbeAuthorized " +
+                    "startupProbe=$preSessionStartupClientProbeAuthorized staleProbe=$preSessionStaleClientProbeAuthorized " +
+                    "queueModal=$preSessionQueueModalAuthorized matchmaking=$preSessionMatchmakingAuthorized " +
+                    "pid=${GameUtil.findGameProcessIdForDiagnostics() ?: "none"} hwnd=$gameWindow " +
+                    "mode=${Mode.currMode?.name ?: "UNKNOWN"} phase=${WarEx.war.currentPhase?.name ?: "UNKNOWN"} " +
+                    "attachedPowerLog=${attachedPowerLog?.path() ?: "none"} " +
+                    "currentPowerLog=${currentPowerLog?.absolutePath ?: "none"} " +
                     "powerLogLength=${attachedPowerLog?.length() ?: 0L}"
             }
             return null
@@ -1046,8 +1059,9 @@ object UpstreamScreenStateRecovery {
                 if (!ScreenRecoveryAuthorityGate.isCapturePreAuthorized(evidence)) {
                     authorityRejected = true
                     log.warn {
-                        "SCREEN_RECOVERY_BLOCKED reason=authority-lost-before-capture " +
-                            "gameWindow=$gameWindow currentWindow=$currentWindow"
+                        "SCREEN_RECOVERY_CAPTURE_BLOCKED context=$captureContext reason=authority-lost-before-capture " +
+                            "gameWindow=$gameWindow currentWindow=$currentWindow purpose=${capturePurpose.name} " +
+                            "stuckForMs=$stuckForMs"
                     }
                     null
                 } else {
@@ -1058,12 +1072,22 @@ object UpstreamScreenStateRecovery {
         }
         if (!foregroundResult.foregroundConfirmed) {
             log.warn {
-                "SCREEN_RECOVERY_BLOCKED reason=game-foreground-unconfirmed gameWindow=$gameWindow"
+                "SCREEN_RECOVERY_CAPTURE_BLOCKED context=$captureContext reason=game-foreground-unconfirmed " +
+                    "gameWindow=$gameWindow purpose=${capturePurpose.name} stuckForMs=$stuckForMs"
             }
             return null
         }
         if (authorityRejected) return null
-        val capture = foregroundResult.value ?: return null
+        val capture = foregroundResult.value ?: run {
+            log.warn {
+                "SCREEN_RECOVERY_CAPTURE_BLOCKED context=$captureContext reason=authorized-frame-unavailable " +
+                    "purpose=${capturePurpose.name} pid=${GameUtil.findGameProcessIdForDiagnostics() ?: "none"} " +
+                    "hwnd=$gameWindow stuckForMs=$stuckForMs sessionReady=$currentSessionReady " +
+                    "powerLog=${currentPowerLog?.absolutePath ?: "none"} " +
+                    "powerLogLength=${attachedPowerLog?.length() ?: 0L}"
+            }
+            return null
+        }
         return AuthorizedCapture(gameWindow, capture, capturePurpose, foregroundVerified = true)
     }
 
@@ -3035,17 +3059,56 @@ object UpstreamScreenStateRecovery {
                     }
                     return@schedule
                 }
-                val authorized = captureVerifiedGameScreen(stuckForMs = stuckForMs)
+                // This callback is a fresh recheck of an already admitted, exact
+                // Event Quest overlay. Keep capture available while the new
+                // Power.log is still empty, even if a callback accidentally
+                // arrives with a zero elapsed-stuck value. The startup purpose
+                // is capture-only; the exact overlay and all context fences
+                // below still decide whether any input or restart is allowed.
+                log.info {
+                    "EVENT_QUEST_RECOVERY_CAPTURE_REQUESTED pid=$expectedPid hwnd=$expectedWindow " +
+                        "stuckForMs=$stuckForMs startupProbe=true currentSessionReady=" +
+                        "${ScreenStateRecovery.isCurrentGameSessionReadyForStart()} " +
+                        "activeQueueScreen=${LifecycleTrace.hasRecentActiveMatchmakingScreen()} " +
+                        "recentInputIntent=${LifecycleTrace.hasRecentMatchmakingInputIntent()} " +
+                        "shortRaceWindow=${LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()} " +
+                        "mode=${Mode.currMode?.name ?: "UNKNOWN"} " +
+                        "phase=${WarEx.war.currentPhase?.name ?: "UNKNOWN"} " +
+                        "paused=${PauseStatus.isPause} working=${WorkTimeListener.working}"
+                }
+                val authorized = captureVerifiedGameScreen(
+                    stuckForMs = stuckForMs,
+                    startupProbe = true,
+                    captureContext = "EVENT_QUEST_RETRY",
+                )
                 if (authorized == null || authorized.gameWindow.toString() != expectedWindow.toString()) {
+                    val captureFailureReason = if (authorized == null) {
+                        "capture-unavailable"
+                    } else {
+                        "captured-window-mismatch"
+                    }
                     log.warn {
-                        "EVENT_QUEST_RECOVERY_PROBE_BLOCKED reason=fresh-authorized-capture-unavailable " +
-                            "pid=$expectedPid hwnd=$expectedWindow action=NO_CLICK_NO_RESTART"
+                        "EVENT_QUEST_RECOVERY_PROBE_BLOCKED reason=$captureFailureReason " +
+                            "pid=$expectedPid hwnd=$expectedWindow " +
+                            "capturedHwnd=${authorized?.gameWindow ?: "none"} " +
+                            "capturePurpose=${authorized?.purpose?.name ?: "none"} " +
+                            "captureContext=EVENT_QUEST_RETRY " +
+                            "action=NO_CLICK_NO_RESTART"
                     }
                     retryAfterMs = 10_000L
                     return@schedule
                 }
 
                 val capture = authorized.capture
+                log.info {
+                    "EVENT_QUEST_RECOVERY_CAPTURE_AUTHORIZED pid=$expectedPid hwnd=$expectedWindow " +
+                        "capturePid=${capture.processId} captureHwnd=${capture.windowId} " +
+                        "purpose=${authorized.purpose.name} foregroundVerified=${authorized.foregroundVerified} " +
+                        "questOverlay=${capture.visual.startupQuestOverlayVisual} " +
+                        "matchmakingSearch=${capture.visual.matchmakingSearchVisual} " +
+                        "reconnect=${capture.visual.reconnectDialogVisual} " +
+                        "screenshot=${capture.file?.absolutePath ?: "none"}"
+                }
                 val captureTrusted = GameUtil.findGameProcessIdForDiagnostics() == expectedPid &&
                     ScriptStatus.gameHWND?.toString() == expectedWindow.toString() &&
                     GameUtil.isVerifiedCurrentGameWindow(expectedWindow, expectedPid)

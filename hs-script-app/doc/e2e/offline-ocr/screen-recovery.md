@@ -593,6 +593,23 @@ this deletion boundary.
   it. Regress the positive startup path, each fence, zero-byte process lineage,
   unchanged overlay through restart-cap alert, and verified overlay-absent
   fence release.
+- Event Quest retries that were admitted from an empty-session startup capture
+  must keep using a named startup-purpose capture on every retry, even if a
+  callback's stuck-duration argument is zero. That purpose authorizes capture
+  only; repeat the exact PID/HWND, current Power.log, foreground/pixel,
+  overlay, queue, gameplay, reconnect, rank, and pause checks before input or
+  restart. Log the retry context and the specific capture gate/purpose that
+  rejected it; do not collapse a preflight, foreground, window, or frame failure
+  into one generic unavailable reason. Regress the retry callsite with an empty
+  Power.log and verify it selects a pre-session probe without granting input.
+- An OCR `UNKNOWN` mode can support only `matchmaking.start` when the same
+  verified client has a recent independent configured-mode selection proof and
+  a fresh exact deck-selection frame with enabled Start. A fresh visible
+  opposite-mode title invalidates that proof and must block the actual Start
+  dispatcher even when the OCR string is `UNKNOWN`; test both the authorized
+  selected-mode path and the captured Standard screen with a configured Wild
+  run. Queue entry remains rank-independent before mulligan; mandatory
+  post-mulligan surrender guards retain their existing scope.
 - For an exact reconnect screen, the 60-second no-pause restart grace must
   schedule its own fresh authorized capture at the threshold rather than wait
   for the next slow periodic OCR pass. Re-evaluate current active-game,

@@ -106,6 +106,28 @@ class EventQuestOverlayRecoveryPolicyTest {
     }
 
     @Test
+    fun `event quest retry requests an empty session startup capture and reports the rejecting gate`() {
+        val source = File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt")
+            .readText()
+        val retry = source.substringAfter("private fun scheduleEventQuestOverlayRecovery(")
+            .substringBefore("private fun apply(detection: Detection)")
+
+        assertTrue(
+            retry.contains("captureVerifiedGameScreen(") &&
+                retry.contains("startupProbe = true") &&
+                retry.contains("captureContext = \"EVENT_QUEST_RETRY\""),
+            "the bounded retry must use the same pre-session capture lane that admitted the exact overlay",
+        )
+        assertTrue(retry.contains("freshEmptySessionLoginProof"),
+            "a startup-purpose capture remains read-only until the existing exact empty-session proof passes")
+        assertTrue(retry.contains("activeQueue") && retry.contains("activeGame") && retry.contains("reconnectDialogVisual"),
+            "queue, active-game, and reconnect fences remain in the retry decision")
+        assertTrue(source.contains(
+            "SCREEN_RECOVERY_CAPTURE_BLOCKED context=\$captureContext reason=\$preflightRejection",
+        ), "the capture log must name the gate and purpose that rejected the retry")
+    }
+
+    @Test
     fun `exactly three top-left click attempts precede the 60 second restart stage`() {
         val policy = EventQuestOverlayRecoveryPolicy()
         repeat(3) { index ->

@@ -677,6 +677,10 @@ class StartupDeckModeNavigationIntegrationTest {
         assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("二=", image))
         assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
         assertEquals("WILD", TournamentModeConfirmation.observeImage(image).observedMode.name)
+        val upstreamSource = File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt")
+            .readText()
+        assertTrue(upstreamSource.contains("detection?.kind != ScreenKind.DECK_SELECTION"),
+            "startup invalidation must preserve the independent mode permit until the exact deck/Start proof is evaluated")
 
         val pid = 29_428
         val hwnd = "live-wild-unknown-ocr-window"
@@ -1141,6 +1145,13 @@ class StartupDeckModeNavigationIntegrationTest {
         assertTrue(strategy.contains("CHANGE_MODE_RECT.lClick(isCancel = false"))
         assertTrue(strategy.contains("WILD_MODE_RECT.lClick("))
         assertTrue(strategy.contains("dispatchAction = StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION"))
+        val wildSelection = strategy.substringAfter("internal fun selectWildFromVerifiedModeSelector()")
+            .substringBefore("fun startMatching()")
+        assertTrue(wildSelection.contains("selectedModeProofRecorded") &&
+            wildSelection.contains("recordSelectedTournamentMode(") &&
+            wildSelection.contains("RunModeEnum.WILD.name"),
+            "only a dispatched selection from the exact verified selector may mint the short-lived mode identity " +
+                "used when the later deck title OCR is UNKNOWN")
         assertTrue(strategy.indexOf("selectWildFromVerifiedModeSelector()") <
             strategy.indexOf("fun startMatching()"))
     }
