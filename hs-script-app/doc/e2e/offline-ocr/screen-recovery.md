@@ -25,6 +25,14 @@
   pause, or non-working state must retain the fence. Log the detected evidence
   and each release/block reason so a visible chooser cannot remain hidden
   behind stale internal LOGIN state.
+- Keep deck Start authority tied to a fresh exact deck capture and configured
+  mode; do not relax its expiry to cover the automatic-deck-completion click
+  sequence. A rejected final Start click is not evidence that queue entry
+  failed: a later fresh authorized `MATCHMAKING` screen is authoritative and
+  must reconcile lifecycle queue intent and the terminal queue-input fence.
+  Log physical click acceptance separately from screen-confirmed queue entry.
+  Unknown OCR cannot reconcile queue intent, and a long OCR probe must not
+  silently renew Start proof.
 
 Every `ScreenStateRecovery` trigger attempts a screenshot before safety gates
 and records one structured log trail containing `runId`, `sessionId`, trigger,

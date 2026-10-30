@@ -342,7 +342,17 @@ object LifecycleTrace {
     /** The active queue UI is expected while Power.log still reports the previous FILL_DECK phase. */
     fun markActiveMatchmakingScreenObserved(now: Long = System.currentTimeMillis()) {
         activeMatchmakingScreenObservedAt = now
-        mark("visible-matchmaking-observed; suppressing stale-phase recovery for ${MATCHMAKING_SCREEN_RECOVERY_SUPPRESSION_MS}ms")
+        // A fresh, authoritative search-screen observation is stronger than
+        // a click result: a multi-step deck-completion flow can enter queue
+        // after its final Start proof has correctly expired. Reconcile the
+        // lifecycle intent from the screen without claiming that a click was
+        // accepted.
+        matchmakingInputIntentAt = now
+        PowerLogListener.markNewMatchmakingInputAfterTerminalResult()
+        mark(
+            "visible-matchmaking-screen-confirmed; queue intent reconciled from fresh screen; " +
+                "stale-phase recovery suppressed for ${MATCHMAKING_SCREEN_RECOVERY_SUPPRESSION_MS}ms",
+        )
     }
 
     /** A freshly confirmed deck-selection destination ends the prior queue-search evidence window. */
@@ -371,7 +381,7 @@ object LifecycleTrace {
         now: Long = System.currentTimeMillis(),
     ) {
         if (!dispatchAccepted) {
-            mark("matchmaking-input-dispatch-rejected; queue intent not recorded")
+            mark("matchmaking-input-dispatch-rejected; this click intent was not recorded")
             return
         }
         matchmakingInputIntentAt = now

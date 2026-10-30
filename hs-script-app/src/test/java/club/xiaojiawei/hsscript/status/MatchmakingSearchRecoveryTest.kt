@@ -45,6 +45,42 @@ class MatchmakingSearchRecoveryTest {
     }
 
     @Test
+    fun `fresh confirmed search screen reconciles queue intent after final start proof expires`() {
+        LifecycleTrace.resetMatchmakingEvidenceForTest()
+        try {
+            val rejectedAt = 100_000L
+            LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = false, now = rejectedAt)
+            assertFalse(LifecycleTrace.hasRecentMatchmakingInputIntent(rejectedAt + 1))
+
+            val confirmedAt = rejectedAt + 30_000L
+            val visibleSearch = ScreenStateRecovery.StartGameErrorDialogProbe(
+                state = MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG,
+                provider = "VISUAL_SIGNATURE",
+                reason = "matchmaking-search-screen-visible",
+            )
+            assertTrue(MatchmakingQueueLifecycleEvidencePolicy.propagateIfAuthoritative(
+                probe = visibleSearch,
+                captureAuthorized = true,
+                powerLogLength = 106_649L,
+                observedAt = confirmedAt,
+            ), "fresh authorized search-screen evidence is authoritative even after the final click gate rejects")
+            assertTrue(LifecycleTrace.hasRecentActiveMatchmakingScreen(confirmedAt + 1))
+            assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(confirmedAt + 1),
+                "a confirmed UI transition must establish queue intent without pretending the click succeeded")
+
+            val unknown = visibleSearch.copy(provider = "LEGACY", reason = "ocr-unknown")
+            assertFalse(MatchmakingQueueLifecycleEvidencePolicy.propagateIfAuthoritative(
+                probe = unknown,
+                captureAuthorized = false,
+                powerLogLength = 106_649L,
+                observedAt = confirmedAt + 1,
+            ), "unverified screen probes cannot establish queue intent")
+        } finally {
+            LifecycleTrace.resetMatchmakingEvidenceForTest()
+        }
+    }
+
+    @Test
     fun `mode changing recovery guard is limited to one minute after matchmaking dispatch`() {
         LifecycleTrace.clearActiveMatchmakingScreenObserved("entry-guard-test-reset")
         try {
