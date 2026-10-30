@@ -1939,6 +1939,19 @@ object UpstreamScreenStateRecovery {
         ) {
             return Detection(ScreenKind.RESULT, ModeEnum.GAMEPLAY, 92, "result-fixed-continue-visual")
         }
+        val hubModeChoiceText = listOf("传统对战", "酒馆战棋", "竞技模式", "其他模式")
+            .any(text::contains)
+        // A clear four-button HUB chooser is more specific than the broad
+        // single-card quest-overlay heuristic. A centered modal still wins,
+        // preserving event-quest and other popup handling over the HUB.
+        if (visual.hubModeChooserVisual && !modalVisible) {
+            return Detection(
+                ScreenKind.TOURNAMENT,
+                ModeEnum.HUB,
+                if (hubModeChoiceText) 96 else 94,
+                if (hubModeChoiceText) "hub-mode-chooser-visual-and-text" else "hub-mode-chooser-visual",
+            )
+        }
         if (visual.startupQuestOverlayVisual) {
             return Detection(
                 ScreenKind.EVENT_QUEST_OVERLAY,
@@ -1971,19 +1984,6 @@ object UpstreamScreenStateRecovery {
                 ModeEnum.TOURNAMENT,
                 96,
                 "mode-selector-centered-modal-with-standard-and-wild-target-label",
-            )
-        }
-        val hubModeChoiceText = listOf("传统对战", "酒馆战棋", "竞技模式", "其他模式")
-            .any(text::contains)
-        // This structural four-button signature identifies the HUB chooser
-        // even when OCR picks up unrelated deck/pack labels beneath it. Give
-        // the visible screen precedence over noisy global OCR.
-        if (visual.hubModeChooserVisual) {
-            return Detection(
-                ScreenKind.TOURNAMENT,
-                ModeEnum.HUB,
-                if (hubModeChoiceText) 96 else 94,
-                if (hubModeChoiceText) "hub-mode-chooser-visual-and-text" else "hub-mode-chooser-visual",
             )
         }
         if (text.contains("选择套牌") || has("套牌", "狂野对战")) {

@@ -18,6 +18,7 @@ class RcTerminalCleanupIncidentReplayTest {
         val image: BufferedImage = requireNotNull(ImageIO.read(ByteArrayInputStream(screenshotBytes)))
         assertEquals(1919, image.width)
         assertEquals(1079, image.height)
+        assertFalse(HubModeChooserVisualPolicy.isVisible(image), "result art has no four separated chooser button faces")
         assertEquals(null, ScreenStateRecovery.classifyImageForResultFixture(image), "the exact captured frame is the UNKNOWN OCR case")
         assertEquals(null, UpstreamScreenStateRecovery.classifyImageForResultFixture(image), "the frame remains UNKNOWN in the upstream classifier")
 

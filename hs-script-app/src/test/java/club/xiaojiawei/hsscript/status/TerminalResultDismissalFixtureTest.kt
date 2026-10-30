@@ -76,9 +76,17 @@ class TerminalResultDismissalFixtureTest {
         val modeChooser = requireNotNull(
             javaClass.getResourceAsStream("/offline-ocr/screen-recovery/traditional-battle-screen.png"),
         ).use { requireNotNull(ImageIO.read(it)) }
+        val eventQuest = requireNotNull(
+            javaClass.getResourceAsStream("/offline-ocr/screen-recovery/event-quest-overlay-live-005412.png"),
+        ).use { requireNotNull(ImageIO.read(it)) }
+        assertTrue(HubModeChooserVisualPolicy.isVisible(modeChooser), "the four-button chooser has separated, brighter button faces")
+        assertFalse(HubModeChooserVisualPolicy.isVisible(rankTen), "rank reward art is not a four-button chooser")
+        assertFalse(HubModeChooserVisualPolicy.isVisible(eventQuest), "the event-quest modal is not a four-button chooser")
 
         assertEquals("RANK_PROGRESS_CONTINUATION", UpstreamScreenStateRecovery.classifyImageForResultFixture(rankTen))
         assertEquals("TOURNAMENT", UpstreamScreenStateRecovery.classifyImageForResultFixture(modeChooser))
+        assertEquals("EVENT_QUEST_OVERLAY", UpstreamScreenStateRecovery.classifyImageForResultFixture(eventQuest),
+            "the real modal remains higher priority than the HUB chooser background")
     }
 
     @Test

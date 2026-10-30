@@ -13,12 +13,19 @@ internal object StartupDeckModeNavigationPolicy {
             purpose == ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE ||
             purpose == ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY
 
+    /**
+     * A deck-selection probe is read-only until a fresh, mode-matched Start proof
+     * exists. Once that exact proof is recorded, the normal final matchmaking
+     * dispatch gate is responsible for the one Start input, regardless of which
+     * probe discovered the screen. In particular, an idle probe must not route
+     * an already-confirmed mode into mismatch correction (or suppress Start).
+     */
     fun requiresClassificationOnly(
         purpose: ScreenRecoveryCapturePurpose,
         screenKind: String,
         freshConfiguredModeStartProof: Boolean,
     ): Boolean = screenKind == "DECK_SELECTION" &&
-        (purpose == ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE || !freshConfiguredModeStartProof)
+        (!isModeProofProbe(purpose) || !freshConfiguredModeStartProof)
 
     enum class Denial {
         NONE,

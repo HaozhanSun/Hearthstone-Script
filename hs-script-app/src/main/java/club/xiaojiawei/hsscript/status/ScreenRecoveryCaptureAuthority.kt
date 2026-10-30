@@ -17,7 +17,7 @@ internal enum class ScreenRecoveryCapturePurpose {
     STARTUP_CLIENT_PROBE,
     /** Narrow pre-session startup capture used to classify online menu, reconnect, or Yogg state. */
     STARTUP_YOGG_PROBE,
-    /** Read-only client probe after one minute without progress; never grants input. */
+    /** Client probe after one minute without progress; input still requires fresh screen proof and the final action gate. */
     IDLE_CLIENT_PROBE,
     /** Fresh SEARCHING observation immediately after a verified queue input. */
     MATCHMAKING_SEARCH,

@@ -794,30 +794,77 @@ class StartupDeckModeNavigationIntegrationTest {
     }
 
     @Test
-    fun `idle client deck classifier cannot apply recovery even when start button and mode look valid`() {
+    fun `idle probe permits verified Wild Start without consulting the pending rank barrier`() {
         val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
-            "/offline-ocr/screen-recovery/standard-deck-selection-live-20261029-063038.png",
+            "/offline-ocr/screen-recovery/deck-selection-screen.png",
         )))
         assertTrue(StartupDeckModeNavigationPolicy.isModeProofProbe(ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE))
         assertTrue(StartupDeckModeNavigationPolicy.requiresClassificationOnly(
             purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
             screenKind = "DECK_SELECTION",
+            freshConfiguredModeStartProof = false,
+        ), "an idle deck observation without fresh configured-mode/Start proof remains read-only")
+        assertFalse(StartupDeckModeNavigationPolicy.requiresClassificationOnly(
+            purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+            screenKind = "DECK_SELECTION",
             freshConfiguredModeStartProof = true,
-        ), "IDLE_CLIENT_PROBE is capture-only by contract")
+        ), "a fresh exact-mode/Start proof must leave classification-only mode even on an idle probe")
+        assertTrue(StartupDeckModeNavigationPolicy.requiresClassificationOnly(
+            purpose = ScreenRecoveryCapturePurpose.MATCHMAKING_SEARCH,
+            screenKind = "DECK_SELECTION",
+            freshConfiguredModeStartProof = true,
+        ), "a non-probe observation purpose cannot authorize startup dispatch")
         assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("", image))
         assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
-        assertEquals("STANDARD", TournamentModeConfirmation.observeImage(image).observedMode.name)
+        assertEquals("WILD", TournamentModeConfirmation.observeImage(image).observedMode.name)
 
-        var startDispatches = 0
-        assertFalse(StartupInputAuthorizationPolicy.dispatchDeckSelectionRecoveryIfReady(
-            startupScreenConfirmed = !StartupDeckModeNavigationPolicy.requiresClassificationOnly(
-                purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
-                screenKind = "DECK_SELECTION",
-                freshConfiguredModeStartProof = true,
-            ),
-        ) { startDispatches++ })
-        assertEquals(0, startDispatches, "repeated idle probes must not repeatedly request a queue input")
+        val pid = 25_951
+        val hwnd = "idle-confirmed-wild-window"
         StartupInputReadiness.resetForTest()
+        MulliganRankDispatchBarrier.resetForTest()
+        try {
+            assertTrue(StartupInputReadiness.recordStartupOnlineScreen(
+                pid = pid,
+                hwnd = hwnd,
+                screen = "DECK_SELECTION",
+                confidence = 100,
+                evidence = "deck-selection-start-control-visual",
+                expectedRunMode = "WILD",
+                observedRunMode = "WILD",
+                enabledStartButtonVisible = true,
+                modalVisible = false,
+                now = 70_001L,
+            ), "the current frame confirms the configured format and enabled Start control")
+
+            MulliganRankDispatchBarrier.beginCurrentGame()
+            assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState(),
+                "rank has not been evaluated before matchmaking")
+            val allowed = ActionDispatchGate.allowForState(
+                action = "matchmaking.start",
+                paused = false,
+                working = true,
+                currentSessionReady = false,
+                freshOnlineMenuReady = false,
+                freshDeckSelectionStartReady = StartupInputReadiness.isDeckSelectionStartReady(
+                    pid, hwnd, 70_002L,
+                ),
+                selectedModeStartPermitValid = StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+                    pid, hwnd, "WILD", 70_002L,
+                ),
+                rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+            )
+            var startDispatches = 0
+            assertTrue(TournamentModeStrategy.dispatchMatchmakingStartControlIfAuthorized(
+                isAuthorized = { allowed },
+                dispatchStartControl = { startDispatches++; true },
+            ), "fresh confirmed Wild mode + visible Start reaches the production pre-click gate")
+            assertEquals(1, startDispatches, "the confirmed Start control is dispatched exactly once")
+            assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState(),
+                "pre-match Start does not consume or consult the post-match rank decision")
+        } finally {
+            MulliganRankDispatchBarrier.resetForTest()
+            StartupInputReadiness.resetForTest()
+        }
     }
 
     @Test

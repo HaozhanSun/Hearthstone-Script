@@ -101,7 +101,7 @@ class MatchmakingSearchRecoveryTest {
     }
 
     @Test
-    fun `fresh visual queue evidence clears terminal cleanup but does not bypass start proof`() {
+    fun `game17 fresh queue screenshot supersedes unconfirmed result probe and stale FILL_DECK state`() {
         val wasWorking = WorkTimeListener.working
         val wasPaused = PauseStatus.isPause
         LifecycleTrace.resetMatchmakingEvidenceForTest()
@@ -113,6 +113,9 @@ class MatchmakingSearchRecoveryTest {
             val terminalCapability = beginTerminalCleanup()
             assertFalse(ActionDispatchGate.allow("matchmaking.start"))
 
+            // Game17's result probe saw TOURNAMENT but could not confirm the
+            // destination. The delayed watchdog still carried this terminal
+            // fingerprint after the UI had already moved into active search.
             val searchScreen = syntheticSearchScreen()
             assertEquals(
                 "MATCHMAKING",
@@ -122,6 +125,10 @@ class MatchmakingSearchRecoveryTest {
                 "matchmaking-search-visual",
                 UpstreamScreenStateRecovery.classificationEvidenceForImageTest("", searchScreen),
             )
+            val freshQueueTransition = ScreenStateRecovery.recoveryTransitionForTest("搜寻对手 取消")
+            assertEquals("MATCHMAKING", freshQueueTransition?.screen)
+            assertEquals("WAIT_FOR_GAMEPLAY", freshQueueTransition?.action)
+            assertFalse(freshQueueTransition?.enterStrategy ?: true)
             assertFalse(MatchmakingQueueLifecycleEvidencePolicy.propagateClassifiedSearchScreenIfAuthorized(
                 screenKind = "MATCHMAKING",
                 captureAuthorized = false,

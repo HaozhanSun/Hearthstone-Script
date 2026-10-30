@@ -687,7 +687,7 @@ class MandatoryRankSurrenderGuardTest {
     }
 
     @Test
-    fun `authoritative terminal deck selection reconciles cleanup before strategy queue input`() {
+    fun `game19 conceded result releases cleanup only at fresh deck selection before rank 10 queue input`() {
         val wasWorking = WorkTimeListener.working
         val wasPaused = PauseStatus.isPause
         val oldPauseOrigin = PauseStatus.pauseOrigin
@@ -695,7 +695,10 @@ class MandatoryRankSurrenderGuardTest {
             WorkTimeListener.working = true
             PauseStatus.setManualPause(false)
 
-            val gameIdentity = "game-20261022-1638:laz#12793"
+            // Live game19 was rank 9, conceded, and reached FINAL_GAMEOVER.
+            // The old build then showed the selected Wild deck and Start while
+            // terminal-result-cleanup-pending blocked input across later probes.
+            val gameIdentity = "game-20261030-092330:laz#12793"
             val gameTicket = MulliganRankDispatchBarrier.beginCurrentGame()
             assertTrue(MulliganRankDispatchBarrier.requireSurrender(gameTicket) != null)
             MandatoryRankSurrenderGuard.begin(gameIdentity)
@@ -766,7 +769,7 @@ class MandatoryRankSurrenderGuardTest {
             // fresh game identity, while the first match's proof is stale.
             val nextTicket = MulliganRankDispatchBarrier.beginCurrentGame()
             assertTrue(MulliganRankDispatchBarrier.requireSurrender(nextTicket) != null)
-            val nextGameIdentity = "game-20261022-1641:laz#12793"
+            val nextGameIdentity = "game-20261030-0924-next:laz#12793"
             MandatoryRankSurrenderGuard.begin(nextGameIdentity)
             assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(terminalCapability))
             assertNull(MandatoryRankSurrenderGuard.authorizeTerminalCleanup(acceptedTerminalEvidence))
