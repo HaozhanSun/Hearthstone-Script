@@ -27,7 +27,6 @@ internal class TerminalResultSequenceController(
     private val dispatchContinue: (Page, Int, plannedIntervalMillis: Long, recordDispatch: () -> Long?) -> DispatchOutcome,
     private val confirmDestination: (ResultScreenObservation) -> Boolean,
     private val onStopped: (reason: String, destinationConfirmed: Boolean) -> Unit,
-    private val dispatchDismissGameMenu: () -> Boolean = { false },
 ) {
     enum class Page { DEFEAT, RANK_PROGRESS }
 
@@ -65,7 +64,6 @@ internal class TerminalResultSequenceController(
     private val lastInputAtNanos = java.util.concurrent.atomic.AtomicLong(Long.MIN_VALUE)
     private val lastDispatchAccepted = java.util.concurrent.atomic.AtomicReference<Boolean?>()
     private val inputScheduled = AtomicBoolean(false)
-    private val gameMenuDismissalAttempted = AtomicBoolean(false)
     private val scheduledTasks = CopyOnWriteArrayList<ScheduledFuture<*>>()
 
     @Volatile private var page = Page.DEFEAT
@@ -121,24 +119,18 @@ internal class TerminalResultSequenceController(
         if (stopped.get()) return
         latestObservation.set(observation)
         latestObservationAtNanos.set(observation.capturedAtNanos)
-        if (observation.gameMenuOverlayVisible) {
-            if (observation.captureAuthorized && terminalProofValid() && sameGame() && !paused() &&
-                gameMenuDismissalAttempted.compareAndSet(false, true)
-            ) {
-                inputExecutor.execute {
-                    val stillCurrent = latestObservation.get() === observation &&
-                        observation.captureAuthorized && terminalProofValid() && sameGame() && !paused()
-                    val accepted = stillCurrent && runCatching(dispatchDismissGameMenu).getOrDefault(false)
-                    runCatching {
-                        System.getLogger(TerminalResultSequenceController::class.java.name).log(
-                            System.Logger.Level.INFO,
-                            "TERMINAL_RESULT_MENU_DISMISS action=ESCAPE dispatchAccepted=$accepted freshCaptureRequired=true",
-                        )
-                    }
-                }
-            }
-            // A menu covers the result button. Never apply stale Continue evidence beneath it.
+        if (TerminalResultMenuOverlayPolicy.shouldBlockContinue(observation)) {
+            System.getLogger(TerminalResultSequenceController::class.java.name).log(
+                System.Logger.Level.INFO,
+                "TERMINAL_RESULT_MENU_BLOCKED reason=continue-control-not-freshly-visible action=NO_INPUT",
+            )
             return
+        }
+        if (observation.gameMenuOverlayVisible) {
+            System.getLogger(TerminalResultSequenceController::class.java.name).log(
+                System.Logger.Level.INFO,
+                "TERMINAL_RESULT_MENU_CONTINUE action=FRESH_VISIBLE_CONTINUE_BUTTON_CLICK input=BOUNDED",
+            )
         }
         val destinationConfirmed = FreshPostResultDestinationPolicy.isConfirmed(
             observation.destinationScreen,
@@ -193,7 +185,6 @@ internal class TerminalResultSequenceController(
             next
         }
         val observed = latestObservation.get()
-        if (observed?.gameMenuOverlayVisible == true) return
         val lastInputAt = lastInputAtNanos.get()
         // After authoritative same-game terminal proof, a fresh authorized
         // frame with the calibrated Continue band is enough to retry the
@@ -247,4 +238,10 @@ internal class TerminalResultSequenceController(
         inputExecutor.shutdownNow()
         runCatching { onStopped(reason, destinationConfirmed) }
     }
+}
+
+internal object TerminalResultMenuOverlayPolicy {
+    fun shouldBlockContinue(observation: ResultScreenObservation): Boolean =
+        observation.gameMenuOverlayVisible &&
+            (!observation.captureAuthorized || !observation.continueControlVisible || observation.resultVisible == false)
 }

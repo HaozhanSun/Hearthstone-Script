@@ -14,6 +14,7 @@ internal object ScreenStateRoiSelector {
     const val YOGG_SERVER_UNAVAILABLE_ROI = "screen-state-yogg-server-unavailable"
     const val AMAZON_NOTICE_TITLE_ROI = "screen-state-amazon-notice-title"
     const val AMAZON_NOTICE_CLOSE_ROI = "screen-state-amazon-notice-close"
+    const val BETA_RESULT_CONFIRMATION_ROI = "screen-state-beta-result-confirmation"
 
     data class Roi(val name: String, val bounds: Rectangle)
 
@@ -73,6 +74,9 @@ internal object ScreenStateRoiSelector {
         // narrow so an arbitrary modal cannot be treated as the same notice.
         NormalizedRoi(AMAZON_NOTICE_TITLE_ROI, 0.420, 0.285, 0.720, 0.390),
         NormalizedRoi(AMAZON_NOTICE_CLOSE_ROI, 0.440, 0.680, 0.560, 0.770),
+        // The Beta startup previous-ranked-result notice has a stable single-line
+        // win sentence. Keep the crop tight to avoid a slow full-panel OCR pass.
+        NormalizedRoi(BETA_RESULT_CONFIRMATION_ROI, 0.405, 0.450, 0.635, 0.490),
     )
 
     // Kept out of normal screen recovery's OCR pass: this single crop is

@@ -1,6 +1,8 @@
 package club.xiaojiawei.hsscript.status
 
 import java.awt.Point
+import java.io.File
+import javax.imageio.ImageIO
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -42,6 +44,73 @@ class BetaStartupResultConfirmationPolicyTest {
         assertFalse(allowed(mode = "GAMEPLAY"))
         assertFalse(allowed(trusted = false))
         assertFalse(allowed(purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE))
+    }
+
+    @Test
+    fun `live startup result fixture is recognized from one bounded crop and idle probe never authorizes click`() {
+        val fixture = javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/beta-previous-ranked-result-confirmation-live-20261030-033609.png",
+        )?.use(ImageIO::read) ?: error("missing captured Beta result-confirmation fixture")
+        val chineseModel = javaClass.getResource("/resources/tessdata/chi_sim.traineddata")
+            ?: error("missing classpath Chinese Tesseract model")
+        val tessData = File(chineseModel.toURI()).parentFile
+
+        assertEquals(
+            "BETA_RESULT_CONFIRMATION",
+            UpstreamScreenStateRecovery.classifyBetaResultConfirmationImageForTest(fixture, tessData),
+            "the captured live modal must classify through the same bounded OCR crop used by startup recovery",
+        )
+        assertTrue(BetaStartupResultConfirmationPolicy.matchesLiveModal(
+            "人作和在上一场排名对战的对战中煞胜。",
+            fixture,
+            centeredModalVisible = true,
+        ), "the live OCR's observed 煞/获 glyph confusion is accepted only with the structural modal evidence")
+        assertFalse(BetaStartupResultConfirmationPolicy.matchesLiveModal(
+            "你在上一场排名对战的对战中获胜",
+            fixture,
+            centeredModalVisible = false,
+        ), "exact body OCR without a currently visible centered modal is insufficient")
+        assertFalse(BetaStartupResultConfirmationPolicy.matchesLiveModal(
+            "其他弹窗 确定",
+            fixture,
+            centeredModalVisible = true,
+        ), "a generic confirmation modal cannot match the exact previous-ranked-win body")
+        assertTrue(BetaStartupResultConfirmationPolicy.mayInspect(
+            betaChannel = true,
+            purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+            currentSessionReady = false,
+            activeGame = false,
+            activeMatchmaking = false,
+            mode = "LOGIN",
+            trustedCurrentWindow = true,
+        ))
+        assertFalse(BetaStartupResultConfirmationPolicy.mayAcknowledge(
+            betaChannel = true,
+            purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+            currentSessionReady = false,
+            activeGame = false,
+            activeMatchmaking = false,
+            mode = "LOGIN",
+            trustedCurrentWindow = true,
+        ), "the original idle screenshot is recognition evidence only")
+        assertTrue(BetaStartupResultConfirmationPolicy.mayAcknowledge(
+            betaChannel = true,
+            purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            currentSessionReady = false,
+            activeGame = false,
+            activeMatchmaking = false,
+            mode = "LOGIN",
+            trustedCurrentWindow = true,
+        ), "only an independently refreshed startup capture may authorize confirmation")
+        assertFalse(BetaStartupResultConfirmationPolicy.mayInspect(
+            betaChannel = true,
+            purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+            currentSessionReady = false,
+            activeGame = false,
+            activeMatchmaking = true,
+            mode = "LOGIN",
+            trustedCurrentWindow = true,
+        ), "a live queue must fence even the modal inspection path")
     }
 
     @Test

@@ -18,11 +18,11 @@ import org.junit.jupiter.api.Test
 
 class TerminalResultSequenceControllerTest {
     @Test
-    fun `verified game menu gets one escape then requires a fresh result capture before continue`() {
+    fun `verified result menu dispatches bounded continue only when button is visible in the fresh frame`() {
         val observerExecutor = Executors.newSingleThreadScheduledExecutor()
         val inputExecutor = Executors.newSingleThreadScheduledExecutor()
         val captures = AtomicInteger()
-        val escapes = AtomicInteger()
+        val menuDispatches = AtomicInteger()
         val continues = CountDownLatch(1)
         val controller = TerminalResultSequenceController(
             observerExecutor = observerExecutor,
@@ -35,7 +35,12 @@ class TerminalResultSequenceControllerTest {
             maxDurationMillis = 10_000L,
             observe = {
                 val count = captures.incrementAndGet()
-                if (count == 1) ResultScreenObservation(null, true, gameMenuOverlayVisible = true)
+                if (count == 1) ResultScreenObservation(
+                    resultVisible = null,
+                    captureAuthorized = true,
+                    continueControlVisible = true,
+                    gameMenuOverlayVisible = true,
+                )
                 else ResultScreenObservation(null, true, continueControlVisible = true)
             },
             terminalProofValid = { true }, paused = { false }, sameGame = { true },
@@ -46,18 +51,33 @@ class TerminalResultSequenceControllerTest {
             },
             confirmDestination = { false },
             onStopped = { _, _ -> },
-            dispatchDismissGameMenu = { escapes.incrementAndGet(); true },
         )
         try {
             controller.start()
             assertTrue(continues.await(3, TimeUnit.SECONDS))
-            assertTrue(captures.get() >= 2, "continue requires a fresh observation after menu classification")
-            assertEquals(1, escapes.get(), "the menu gets one bounded Escape attempt")
+            assertEquals(1, captures.get(), "the visible Continue band in the menu frame authorizes one direct click")
+            assertEquals(1, controller.snapshot().inputs)
         } finally {
             controller.cancel("test-cleanup")
             observerExecutor.shutdownNow()
             inputExecutor.shutdownNow()
         }
+    }
+
+    @Test
+    fun `unknown or stale menu overlay never dispatches recovery input`() {
+        val unknownMenu = ResultScreenObservation(
+            resultVisible = null,
+            captureAuthorized = true,
+            continueControlVisible = false,
+            gameMenuOverlayVisible = true,
+        )
+        val unauthorizedMenu = unknownMenu.copy(continueControlVisible = true, captureAuthorized = false)
+        assertTrue(TerminalResultMenuOverlayPolicy.shouldBlockContinue(unknownMenu))
+        assertTrue(TerminalResultMenuOverlayPolicy.shouldBlockContinue(unauthorizedMenu))
+        assertFalse(TerminalResultMenuOverlayPolicy.shouldBlockContinue(
+            unknownMenu.copy(continueControlVisible = true, captureAuthorized = true),
+        ))
     }
 
     @Test

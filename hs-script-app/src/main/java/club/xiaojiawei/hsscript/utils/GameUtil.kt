@@ -2293,11 +2293,6 @@ object GameUtil {
                 }
                 completed
             },
-            dispatchDismissGameMenu = {
-                if (PauseStatus.isPause || WarEx.warCount != startingWarCount ||
-                    !MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(capability)
-                ) false else MouseUtil.pressEscapeForTerminalCleanup(capability)
-            },
             onStopped = { reason, destinationConfirmed ->
                 PauseStatus.removeChangeListener(pauseListener)
                 WarEx.warCountProperty.removeListener(gameListener)

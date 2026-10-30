@@ -6,6 +6,7 @@ import club.xiaojiawei.hsscript.status.ResultScreenObservation
 import club.xiaojiawei.hsscript.status.PostResultRankProgressPolicy
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.ScreenWatchdog
+import club.xiaojiawei.hsscript.status.TerminalResultMenuOverlayPolicy
 import club.xiaojiawei.hsscript.status.UpstreamScreenStateRecovery
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
@@ -17,6 +18,27 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class TerminalCleanupIncidentFixtureTest {
+    @Test
+    fun `v729 victory under verified game menu uses visible Continue button and blocks unknown menu`() {
+        val screenshot = loadImage(V729_VICTORY_MENU)
+        assertTrue(ScreenWatchdog.hasVerifiedGameMenuOverlay(screenshot))
+        val continueVisible = ScreenStateRecovery.continueControlVisibleForFixture(screenshot)
+        assertTrue(continueVisible, "the lower-center victory Continue target remains visible below the menu")
+        val visibleMenu = ResultScreenObservation(
+            resultVisible = null,
+            captureAuthorized = true,
+            continueControlVisible = continueVisible,
+            gameMenuOverlayVisible = true,
+        )
+        assertFalse(TerminalResultMenuOverlayPolicy.shouldBlockContinue(visibleMenu))
+        assertTrue(TerminalResultMenuOverlayPolicy.shouldBlockContinue(
+            visibleMenu.copy(continueControlVisible = false),
+        ), "no click is allowed when the current capture cannot prove the Continue button")
+        assertTrue(TerminalResultMenuOverlayPolicy.shouldBlockContinue(
+            visibleMenu.copy(captureAuthorized = false),
+        ), "a stale or unauthorized menu capture cannot authorize the click")
+    }
+
     @Test
     fun `v569 post-terminal game menu overlay has an exact visual signature`() {
         val menu = loadImage(SCREENSHOT)
@@ -439,6 +461,7 @@ class TerminalCleanupIncidentFixtureTest {
         .digest(bytes).joinToString("") { "%02X".format(it) }
 
     companion object {
+        private const val V729_VICTORY_MENU = "/offline-ocr/result-flow/rc-v729-victory-under-game-menu-20261030-042409.png"
         private const val SCREENSHOT = "/club/xiaojiawei/hsscript/status/surrender/v569-settings-menu-after-terminal-20261005-171244-936.png"
         private const val LOG = "/club/xiaojiawei/hsscript/status/surrender/v569-settings-menu-terminal-cleanup-20261005-1712.txt"
         private const val SCREENSHOT_SHA256 = "8A86E3B2AFC054954CC7C9B05D44F73238B8DF5751DA10545240EFF4AAB0467A"

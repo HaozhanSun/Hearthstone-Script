@@ -2004,9 +2004,17 @@ object ScreenStateRecovery {
             }
             if (ScreenWatchdog.hasVerifiedGameMenuOverlay(capture.image)) {
                 decisionPath = "VERIFIED_GAME_MENU_OVERLAY"
+                val continueVisible = ResultPageEvidencePolicy.continueControlVisible(
+                    capture.visual.resultContinueGrayLightRatio,
+                )
+                log.info {
+                    "SCREEN_RECOVERY_RESULT_MENU_OBSERVATION continueBand=$continueVisible " +
+                        "action=${if (continueVisible) "FRESH_CONTINUE_CLICK" else "NO_INPUT"}"
+                }
                 return@runCatching report(ResultScreenObservation(
                     resultVisible = null,
                     captureAuthorized = true,
+                    continueControlVisible = continueVisible,
                     gameMenuOverlayVisible = true,
                     capturedAtNanos = capture.capturedAtNanos,
                 ))

@@ -285,6 +285,8 @@ object UpstreamScreenStateRecovery {
                 log.info { "SCREEN_RECOVERY_OCR_SKIPPED reason=exact-deck-selection-start-control-visual" }
                 ""
             }
+            shouldProbeBetaResultConfirmation(authorizedCapture) ->
+                runBetaResultConfirmationOcr(capture.image, File(TESS_DATA_PATH))
             else -> runOCR(capture, File(TESS_DATA_PATH)) { ocrTimings = it }
         }
         if (!stateStillCurrent()) {
@@ -1192,6 +1194,73 @@ object UpstreamScreenStateRecovery {
 
     private fun runOCR(capture: Capture): String = runOCR(capture, File(TESS_DATA_PATH))
 
+    private fun shouldProbeBetaResultConfirmation(captured: AuthorizedCapture): Boolean {
+        val beta = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
+        val currentPid = GameUtil.findGameProcessIdForDiagnostics()?.toInt() ?: return false
+        val trusted = ScriptStatus.gameHWND?.toString() == captured.gameWindow.toString() &&
+            GameUtil.isVerifiedCurrentGameWindow(captured.gameWindow) &&
+            GameUtil.findGameProcessIdForDiagnostics() == currentPid.toLong()
+        val allowed = BetaStartupResultConfirmationPolicy.mayInspect(
+            betaChannel = beta,
+            purpose = captured.purpose,
+            currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+            activeGame = WarEx.inWar || GameUtil.isTerminalGameState(),
+            activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                LifecycleTrace.hasRecentMatchmakingInputIntent(),
+            mode = Mode.currMode?.name,
+            trustedCurrentWindow = trusted,
+        )
+        val modal = ScreenStateRecovery.hasCenteredModalPanel(captured.capture.image)
+        if (allowed && modal) {
+            log.info {
+                "BETA_STARTUP_RESULT_CONFIRMATION_PROBE stage=initial pid=$currentPid " +
+                    "hwnd=${captured.gameWindow} purpose=${captured.purpose} modalVisible=true roi=bounded"
+            }
+        }
+        return allowed && modal
+    }
+
+    /** One bounded crop avoids the multi-ROI OCR pass that stalled on this exact modal. */
+    private fun runBetaResultConfirmationOcr(image: BufferedImage, tessData: File): String {
+        val roi = ScreenStateRoiSelector.selectTargeted(image.width, image.height)
+            .firstOrNull { it.name == ScreenStateRoiSelector.BETA_RESULT_CONFIRMATION_ROI }
+            ?: return ""
+        val startedAt = System.nanoTime()
+        val result = runCatching {
+            val crop = enlargeTargetedOcr(crop(image, roi.bounds))
+            Tesseract().apply {
+                setDatapath(tessData.absolutePath)
+                setLanguage(CHI_SIM_DATA)
+                setPageSegMode(7)
+                setVariable("user_defined_dpi", "180")
+            }.doOCR(crop).replace(Regex("\\s+"), "")
+        }.getOrElse { error ->
+            log.warn(error) { "BETA_STARTUP_RESULT_CONFIRMATION_OCR_FAILED roi=${roi.name}" }
+            ""
+        }
+        val elapsed = ResultScreenProbeTelemetry.elapsedMs(startedAt)
+        log.info {
+            "BETA_STARTUP_RESULT_CONFIRMATION_OCR roi=${roi.name} elapsedMs=$elapsed " +
+                "exact=${BetaStartupResultConfirmationPolicy.matchesLiveModal(
+                    result, image, ScreenStateRecovery.hasCenteredModalPanel(image),
+                )} chars=${result.length}"
+        }
+        return result
+    }
+
+    internal fun classifyBetaResultConfirmationImageForTest(image: BufferedImage, tessData: File): String? {
+        if (!ScreenStateRecovery.hasCenteredModalPanel(image)) return null
+        val text = runBetaResultConfirmationOcr(image, tessData)
+        val visual = visualSignature(image)
+        return detect(
+            text,
+            visual,
+            modalVisible = ScreenStateRecovery.hasCenteredModalPanel(image),
+            image = image,
+            betaChannel = true,
+        )?.kind?.code
+    }
+
     private fun windowProcessId(hwnd: WinDef.HWND): Long {
         val pid = IntByReference()
         User32.INSTANCE.GetWindowThreadProcessId(hwnd, pid)
@@ -1716,8 +1785,23 @@ object UpstreamScreenStateRecovery {
                     GameUtil.isVerifiedCurrentGameWindow(expectedWindow),
             )
 
-        if (!allowed(captured.purpose)) {
-            log.warn { "BETA_STARTUP_RESULT_CONFIRMATION_BLOCKED stage=initial reason=safety-policy input=not-sent" }
+        val initialAuthorized = BetaStartupResultConfirmationPolicy.mayInspect(
+            betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
+            purpose = captured.purpose,
+            currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+            activeGame = WarEx.inWar || GameUtil.isTerminalGameState(),
+            activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                LifecycleTrace.hasRecentMatchmakingInputIntent(),
+            mode = Mode.currMode?.name,
+            trustedCurrentWindow = GameUtil.findGameProcessIdForDiagnostics() == currentPid.toLong() &&
+                ScriptStatus.gameHWND?.toString() == expectedWindow.toString() &&
+                GameUtil.isVerifiedCurrentGameWindow(expectedWindow),
+        )
+        if (!initialAuthorized) {
+            log.warn {
+                "BETA_STARTUP_RESULT_CONFIRMATION_BLOCKED stage=initial " +
+                    "reason=inspection-context-not-authorized purpose=${captured.purpose} input=not-sent"
+            }
             return false
         }
         val fresh = captureVerifiedGameScreen(stuckForMs = 0L, startupProbe = true) ?: return false
@@ -1729,17 +1813,26 @@ object UpstreamScreenStateRecovery {
             log.warn { "BETA_STARTUP_RESULT_CONFIRMATION_BLOCKED stage=fresh reason=window-or-purpose-changed input=not-sent" }
             return false
         }
-        val freshText = runOCR(fresh.capture)
+        val freshText = runBetaResultConfirmationOcr(fresh.capture.image, File(TESS_DATA_PATH))
+        val freshModalVisible = ScreenStateRecovery.hasCenteredModalPanel(fresh.capture.image)
         val freshPoint = BetaStartupResultConfirmationPolicy.confirmButtonPoint(
             fresh.capture.image.width,
             fresh.capture.image.height,
             fresh.capture.bounds.x,
             fresh.capture.bounds.y,
         )
-        if (!BetaStartupResultConfirmationPolicy.matches(freshText) || freshPoint == null || !allowed(fresh.purpose)) {
+        val freshSignatureMatches = BetaStartupResultConfirmationPolicy.matchesLiveModal(
+            freshText,
+            fresh.capture.image,
+            freshModalVisible,
+        )
+        if (!freshSignatureMatches || freshPoint == null || !allowed(fresh.purpose)) {
             log.warn {
                 "BETA_STARTUP_RESULT_CONFIRMATION_BLOCKED stage=fresh reason=signature-or-safety-mismatch " +
-                    "screen=${if (BetaStartupResultConfirmationPolicy.matches(freshText)) "EXACT" else "UNKNOWN"} input=not-sent"
+                    "screen=${if (freshSignatureMatches) "EXACT" else "UNKNOWN"} " +
+                    "modalVisible=$freshModalVisible " +
+                    "buttonVisual=${BetaStartupResultConfirmationPolicy.hasStableConfirmButtonVisual(fresh.capture.image)} " +
+                    "input=not-sent"
             }
             return false
         }
@@ -1766,13 +1859,14 @@ object UpstreamScreenStateRecovery {
         visual: VisualSignature,
         modalVisible: Boolean = false,
         image: BufferedImage? = null,
+        betaChannel: Boolean = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
     ): Detection? {
         if (visual.battleNetLauncherVisual) return null
         val text = ocrText.lowercase(Locale.ROOT)
         fun has(vararg terms: String): Boolean = terms.all { text.contains(it) }
 
-        if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta" &&
-            BetaStartupResultConfirmationPolicy.matches(text)
+        if (betaChannel &&
+            BetaStartupResultConfirmationPolicy.matchesLiveModal(ocrText, image, modalVisible)
         ) {
             return Detection(
                 ScreenKind.BETA_RESULT_CONFIRMATION,
@@ -2269,9 +2363,15 @@ object UpstreamScreenStateRecovery {
         val visual = authorizedCapture.capture.visual
         if (ScreenWatchdog.hasVerifiedGameMenuOverlay(authorizedCapture.capture.image)) {
             decisionPath = "VERIFIED_GAME_MENU_OVERLAY"
+            val continueVisible = ResultPageEvidencePolicy.continueControlVisible(visual.resultContinueGrayLightRatio)
+            log.info {
+                "SCREEN_RECOVERY_RESULT_MENU_OBSERVATION continueBand=$continueVisible " +
+                    "action=${if (continueVisible) "FRESH_CONTINUE_CLICK" else "NO_INPUT"}"
+            }
             return@runCatching report(ResultScreenObservation(
                 resultVisible = null,
                 captureAuthorized = true,
+                continueControlVisible = continueVisible,
                 gameMenuOverlayVisible = true,
                 capturedAtNanos = authorizedCapture.capture.capturedAtNanos,
             ))

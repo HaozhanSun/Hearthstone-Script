@@ -33,6 +33,24 @@
   Log physical click acceptance separately from screen-confirmed queue entry.
   Unknown OCR cannot reconcile queue intent, and a long OCR probe must not
   silently renew Start proof.
+- For the Beta previous-ranked-win startup confirmation, let an authorized
+  `IDLE_CLIENT_PROBE` in LOGIN recognize the exact win sentence from the
+  dedicated bounded ROI, but treat that frame as classification evidence only.
+  The acknowledgement must recapture the same verified PID/HWND as a fresh
+  `STARTUP_CLIENT_PROBE`, confirm no current session/game/queue, and match the
+  centered modal plus stable confirm-button visual before issuing the one-shot
+  button permit. Generic or UNKNOWN modals remain no-input. Keep the saved live
+  2026-10-30 modal screenshot as a regression fixture so ROI and OCR changes
+  cannot send this known terminal confirmation back through the slow generic
+  multi-ROI scan.
+- Terminal result recovery must never send Escape to advance or clear a result:
+  Hearthstone uses Escape to open the in-game menu over the victory panel. When
+  a fresh authorized same-game frame verifies that menu, permit the existing
+  bounded center Continue click only if the Continue band is visible in that
+  same frame. Unknown menus, missing button evidence, stale captures, pause,
+  changed game, or invalid terminal capability remain no-input. Preserve a
+  screenshot-backed regression for the victory-under-menu state and verify the
+  subsequent destination from a fresh capture.
 
 Every `ScreenStateRecovery` trigger attempts a screenshot before safety gates
 and records one structured log trail containing `runId`, `sessionId`, trigger,

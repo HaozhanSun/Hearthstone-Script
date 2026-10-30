@@ -512,48 +512,6 @@ object MouseUtil {
         }
     }
 
-    /** Dismiss a freshly classified game-menu overlay during terminal cleanup. */
-    internal fun pressEscapeForTerminalCleanup(
-        terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability,
-    ): Boolean {
-        if (!ActionDispatchGate.allow("terminal-result.dismiss", terminalCleanupCapability = terminalCleanupCapability)) return false
-        val hwnd = ScriptStatus.gameHWND ?: return false
-        if (!hwndIsValid(hwnd) || !WorkTimeListener.working || PauseStatus.isPause) return false
-        val lockAcquired = try { DRIVER_LOCK.tryLock(3000, TimeUnit.MILLISECONDS) }
-        catch (error: InterruptedException) { Thread.currentThread().interrupt(); false }
-        if (!lockAcquired) return false
-        try {
-            synchronized(e2eRobotLock) {
-                if (!ActionDispatchGate.allow("terminal-result.dismiss", terminalCleanupCapability = terminalCleanupCapability)) return false
-                if (!focusE2EWindow(hwnd, recovery = true)) return false
-                @Suppress("UNCHECKED_CAST")
-                val inputs = WinUser.INPUT().toArray(2) as Array<WinUser.INPUT>
-                inputs.forEachIndexed { index, input ->
-                    input.type = WinDef.DWORD(WinUser.INPUT.INPUT_KEYBOARD.toLong())
-                    input.input.setType(WinUser.KEYBDINPUT::class.java)
-                    input.input.ki = WinUser.KEYBDINPUT().apply {
-                        wVk = WinDef.WORD(0x1B)
-                        wScan = WinDef.WORD(0)
-                        dwFlags = WinDef.DWORD(if (index == 0) 0L else 0x0002L)
-                        time = WinDef.DWORD(0)
-                        dwExtraInfo = com.sun.jna.platform.win32.BaseTSD.ULONG_PTR(0)
-                    }
-                    input.input.write()
-                    input.write()
-                }
-                val sent = User32.INSTANCE.SendInput(WinDef.DWORD(inputs.size.toLong()), inputs, inputs[0].size()).toInt()
-                val accepted = sent == inputs.size
-                log.info { "E2E_RECOVERY_KEY_SENT key=ESCAPE hwnd=$hwnd accepted=$accepted input=SendInput" }
-                return accepted
-            }
-        } catch (error: Throwable) {
-            log.warn(error) { "E2E_RECOVERY_KEY_FAILED key=ESCAPE hwnd=$hwnd" }
-            return false
-        } finally {
-            DRIVER_LOCK.unlock()
-        }
-    }
-
     /**
      * Click a recovery control with a real desktop input event.  Recovery is
      * used when the client has already drifted away from the event-driven
