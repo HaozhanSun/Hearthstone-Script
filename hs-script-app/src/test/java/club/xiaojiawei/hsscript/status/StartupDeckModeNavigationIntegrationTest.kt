@@ -580,6 +580,69 @@ class StartupDeckModeNavigationIntegrationTest {
     }
 
     @Test
+    fun `unknown OCR on exact selected Wild deck screen reaches the real matchmaking dispatch gate`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/deck-selection-screen.png",
+        )))
+        assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("二=", image))
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+        assertEquals("WILD", TournamentModeConfirmation.observeImage(image).observedMode.name)
+
+        val pid = 29_428
+        val hwnd = "live-wild-unknown-ocr-window"
+        StartupInputReadiness.resetForTest()
+        MulliganRankDispatchBarrier.resetForTest()
+        try {
+            StartupInputReadiness.recordSelectedTournamentMode(pid, hwnd, "WILD", now = 60_000L)
+            assertTrue(StartupInputReadiness.recordStartupOnlineScreen(
+                pid = pid,
+                hwnd = hwnd,
+                screen = "DECK_SELECTION",
+                confidence = 96,
+                evidence = "deck-selection-start-control-visual",
+                expectedRunMode = "WILD",
+                observedRunMode = "UNKNOWN", // Live OCR output was `二=`.
+                enabledStartButtonVisible = true,
+                modalVisible = false,
+                now = 60_001L,
+            ), "same-window selected mode plus fresh exact deck/Start capture should mint readiness")
+
+            MulliganRankDispatchBarrier.beginCurrentGame()
+            assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
+            var startDispatches = 0
+            val accepted = TournamentModeStrategy.dispatchMatchmakingStartControlIfAuthorized(
+                isAuthorized = {
+                    ActionDispatchGate.allowForState(
+                        action = "matchmaking.start",
+                        paused = false,
+                        working = true,
+                        currentSessionReady = false,
+                        freshOnlineMenuReady = false,
+                        freshDeckSelectionStartReady = StartupInputReadiness.isDeckSelectionStartReady(
+                            pid, hwnd, 60_002L,
+                        ),
+                        selectedModeStartPermitValid = StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+                            pid, hwnd, "WILD", 60_002L,
+                        ),
+                        rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+                    )
+                },
+                dispatchStartControl = { startDispatches++; true },
+            )
+            assertTrue(accepted, "the final ActionDispatchGate must authorize the live Start action")
+            assertEquals(1, startDispatches, "the production pre-click seam must dispatch the Start control exactly once")
+            assertEquals(
+                MulliganRankDispatchBarrier.State.PENDING,
+                MulliganRankDispatchBarrier.currentState(),
+                "pre-match queue entry remains rank-independent; the surrender decision remains post-mulligan",
+            )
+        } finally {
+            MulliganRankDispatchBarrier.resetForTest()
+            StartupInputReadiness.resetForTest()
+        }
+    }
+
+    @Test
     fun `exact live Standard deck screenshot with rank nine cannot dispatch configured Wild queue start`() {
         val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/tournament-wild-deck-standard-mode-20261029.png",
