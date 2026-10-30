@@ -427,8 +427,10 @@ object UpstreamScreenStateRecovery {
                 detection?.kind == ScreenKind.SERVER_UNAVAILABLE
             val wrongModeDeckTooltip = detection?.kind == ScreenKind.DECK_SELECTION &&
                 ScreenStateRecovery.isWrongModeDeckTooltip(capture.image)
+            val selectorModalVisible = detection?.kind == ScreenKind.TOURNAMENT_MODE_SELECTOR &&
+                detection?.evidence == "three-choice-mode-selector-structural-visual"
             val blockingModalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image) &&
-                !wrongModeDeckTooltip
+                !wrongModeDeckTooltip && !selectorModalVisible
             val cleanMenu = pid != null && !WarEx.inWar &&
                 !blockingModalVisible &&
                 !looksLikeReconnectText(ocrText) && !looksLikeReconnectFailureText(ocrText) &&
@@ -442,25 +444,28 @@ object UpstreamScreenStateRecovery {
                     PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence()
                 val exactWindow = pid != null && currentHwnd == hwnd &&
                     GameUtil.isVerifiedCurrentGameWindow(authorizedCapture.gameWindow)
-                val hasSelectorOptions = StartupDeckModeNavigationPolicy.hasFreshWildSelectorEvidence(
-                    screenKind = detection.kind.code,
-                    modalVisible = blockingModalVisible,
-                    wildTargetLabelVisible = detection.evidence ==
-                        "mode-selector-centered-modal-with-standard-and-wild-target-label",
-                    ocrText = ocrText,
-                )
+                val hasSelectorOptions = selectorModalVisible ||
+                    StartupDeckModeNavigationPolicy.hasFreshWildSelectorEvidence(
+                        screenKind = detection.kind.code,
+                        modalVisible = blockingModalVisible,
+                        wildTargetLabelVisible = detection.evidence ==
+                            "mode-selector-centered-modal-with-standard-and-wild-target-label",
+                        ocrText = ocrText,
+                    )
                 val priorMismatchProof = pid != null && StartupInputReadiness.isDeckSelectionModeNavigationReady(
                     pid, hwnd, expectedMode = "WILD",
                 )
-                val selectorProofRecorded = pid != null && exactWindow && priorMismatchProof &&
+                val selectorProofRecorded = pid != null && exactWindow &&
+                    (priorMismatchProof || selectorModalVisible) &&
                     !currentSessionReady && !activeGame && !activeQueueEvidence && !terminal &&
                     stateStillCurrent() && WorkTimeListener.working && !PauseStatus.isPause &&
                     StartupInputReadiness.recordWildModeSelectorControl(
                         pid = pid,
                         hwnd = hwnd,
                         confidence = detection.confidence,
-                        modalVisible = blockingModalVisible,
+                        modalVisible = blockingModalVisible || selectorModalVisible,
                         wildAndStandardOptionsVisible = hasSelectorOptions,
+                        structuralSelectorVisualVisible = selectorModalVisible,
                     )
                 val selected = selectorProofRecorded && stateStillCurrent() &&
                     !WarEx.inWar && !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
@@ -474,7 +479,7 @@ object UpstreamScreenStateRecovery {
                         "reason=${when {
                             selected -> "fresh-selector-visible-wild-option"
                             !hasSelectorOptions -> "wild-and-standard-options-not-both-visible"
-                            !priorMismatchProof -> "prior-opposite-mode-deck-proof-missing-or-expired"
+                            !priorMismatchProof && !selectorModalVisible -> "prior-opposite-mode-deck-proof-missing-or-expired"
                             !exactWindow -> "exact-window-not-verified"
                             activeGame -> "active-game"
                             activeQueueEvidence -> "active-matchmaking"
@@ -483,7 +488,9 @@ object UpstreamScreenStateRecovery {
                         }} " +
                         "pid=${pid ?: "none"} hwnd=$hwnd confidence=${detection.confidence} " +
                         "evidence=${detection.evidence} modal=$blockingModalVisible " +
-                        "optionsVisible=$hasSelectorOptions priorMismatchProof=$priorMismatchProof " +
+                        "selectorModal=$selectorModalVisible optionsVisible=$hasSelectorOptions " +
+                        "structuralSelector=$selectorModalVisible " +
+                        "priorMismatchProof=$priorMismatchProof " +
                         "exactWindow=$exactWindow activeGame=$activeGame activeQueue=$activeQueueEvidence " +
                         "terminal=$terminal inputAccepted=$selected action=${if (selected) "FRESH_MODE_REPROBE_NO_START" else "NO_INPUT_NO_START"}"
                 }
@@ -1791,6 +1798,14 @@ object UpstreamScreenStateRecovery {
                 "event-quest-overlay-structural-visual",
             )
         }
+        if (image?.let(TournamentModeSelectorVisualPolicy::isVisible) == true) {
+            return Detection(
+                ScreenKind.TOURNAMENT_MODE_SELECTOR,
+                ModeEnum.TOURNAMENT,
+                96,
+                "three-choice-mode-selector-structural-visual",
+            )
+        }
         val standardModeOptionVisible = text.contains("标准对战") || text.contains("标准模式")
         val wildModeOptionTextPresent = text.contains("狂野对战") || text.contains("狂野模式")
         val wildTargetLabelVisible = modalVisible && standardModeOptionVisible && wildModeOptionTextPresent &&
@@ -2050,6 +2065,8 @@ object UpstreamScreenStateRecovery {
     internal fun classifyImageForTest(ocrText: String, image: BufferedImage): String? = detect(
         ocrText,
         visualSignature(image),
+        ScreenStateRecovery.hasCenteredModalPanel(image),
+        image,
     )?.kind?.code
 
     private fun startupDeckSelectionVisualDetection(

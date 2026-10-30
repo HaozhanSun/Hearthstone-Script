@@ -17,6 +17,81 @@ import javax.imageio.ImageIO
 
 class StartupDeckModeNavigationIntegrationTest {
     @Test
+    fun `captured three choice selector authorizes only fresh configured Wild control proof`() {
+        val selector = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/mode-selector-wild-standard-casual-live-20261029-190503.png",
+        )))
+        assertTrue(TournamentModeSelectorVisualPolicy.isVisible(selector))
+        assertEquals(
+            StartupDeckModeNavigationPolicy.MODE_SELECTOR_SCREEN,
+            UpstreamScreenStateRecovery.classifyImageForTest("二=", selector),
+            "the captured three-card chooser must classify despite garbage OCR and generic modal=false",
+        )
+        val ordinaryDeck = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/deck-selection-screen.png",
+        )))
+        assertFalse(TournamentModeSelectorVisualPolicy.isVisible(ordinaryDeck))
+
+        StartupInputReadiness.resetForTest()
+        try {
+            assertFalse(StartupInputReadiness.recordWildModeSelectorControl(
+                pid = 25948,
+                hwnd = "captured-game-window",
+                confidence = 96,
+                modalVisible = true,
+                wildAndStandardOptionsVisible = true,
+                structuralSelectorVisualVisible = false,
+                now = 20_000,
+            ), "generic option labels/modal flags without mismatch or structural proof must not authorize a click")
+            assertFalse(StartupDeckModeNavigationPolicy.allowsDispatch(
+                action = StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION,
+                proofFresh = StartupInputReadiness.isWildModeSelectorControlReady(
+                    25948, "captured-game-window", 20_000,
+                ),
+                exactWindowVerified = true,
+                currentSessionReady = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                terminal = false,
+            ), "missing structural selector proof keeps the input gate closed")
+
+            assertTrue(StartupInputReadiness.recordWildModeSelectorControl(
+                pid = 25948,
+                hwnd = "captured-game-window",
+                confidence = 96,
+                modalVisible = true,
+                wildAndStandardOptionsVisible = true,
+                structuralSelectorVisualVisible = true,
+                now = 20_001,
+            ), "exact visual selector proof can stand alone when the stale phase/title OCR is unknown")
+            assertTrue(StartupDeckModeNavigationPolicy.allowsDispatch(
+                action = StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION,
+                proofFresh = StartupInputReadiness.isWildModeSelectorControlReady(
+                    25948, "captured-game-window", 20_002,
+                ),
+                exactWindowVerified = true,
+                currentSessionReady = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                terminal = false,
+            ), "only the short-lived exact-window selector proof permits the configured Wild option")
+            assertFalse(StartupDeckModeNavigationPolicy.allowsDispatch(
+                action = "matchmaking.start",
+                proofFresh = StartupInputReadiness.isWildModeSelectorControlReady(
+                    25948, "captured-game-window", 20_002,
+                ),
+                exactWindowVerified = true,
+                currentSessionReady = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                terminal = false,
+            ), "mode-selection proof cannot authorize matchmaking Start")
+        } finally {
+            StartupInputReadiness.resetForTest()
+        }
+    }
+
+    @Test
     fun `exact Standard deck proof opens selector only and fresh modal evidence alone authorizes Wild control`() {
         val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/standard-ranked-deck-selection-user-20261029.png",

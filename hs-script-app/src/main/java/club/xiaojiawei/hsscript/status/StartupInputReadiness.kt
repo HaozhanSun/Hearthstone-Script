@@ -178,6 +178,7 @@ internal object StartupInputReadiness {
         confidence: Int,
         modalVisible: Boolean,
         wildAndStandardOptionsVisible: Boolean,
+        structuralSelectorVisualVisible: Boolean = false,
         now: Long = System.currentTimeMillis(),
     ): Boolean {
         val previous = proof.get()
@@ -187,7 +188,7 @@ internal object StartupInputReadiness {
                 now >= it.observedAt && now - it.observedAt <= DECK_MODE_NAVIGATION_PROOF_MAX_AGE_MS
         } == true
         if (pid <= 0 || hwnd.isBlank() || confidence < 90 || !modalVisible ||
-            !wildAndStandardOptionsVisible || !hasFreshMismatchAuthority
+            !wildAndStandardOptionsVisible || (!hasFreshMismatchAuthority && !structuralSelectorVisualVisible)
         ) return false
         proof.set(Proof(
             pid = pid,
