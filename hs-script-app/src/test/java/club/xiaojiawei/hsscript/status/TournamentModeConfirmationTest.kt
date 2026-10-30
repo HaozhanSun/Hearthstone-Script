@@ -285,6 +285,13 @@ class TournamentModeConfirmationTest {
         assertEquals(ObservedTournamentMode.WILD, observation.observedMode)
         assertEquals("title-visual-template-wild", observation.evidence)
 
+        val liveWild = javax.imageio.ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/wild-deck-selection-live-20261030-030308.png",
+        )))
+        val liveVisualObservation = TournamentModeConfirmation.observeImageVisualOnly(liveWild)
+        assertEquals(ObservedTournamentMode.WILD, liveVisualObservation.observedMode, liveVisualObservation.evidence)
+        assertTrue(liveVisualObservation.evidence.contains("wild-nearest"))
+
         val standard = javax.imageio.ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/standard-ranked-deck-selection-user-20261029.png",
         )))

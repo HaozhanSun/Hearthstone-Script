@@ -68,6 +68,8 @@ object TournamentModeConfirmation {
     private const val STANDARD_TITLE_HEIGHT = 50
     private const val STANDARD_TITLE_MAX_MEAN_RGB_DELTA = 1.0
     private const val WILD_TITLE_MAX_MEAN_RGB_DELTA = 1.0
+    private const val VISUAL_MODE_MAX_MEAN_RGB_DELTA = 22.0
+    private const val VISUAL_MODE_MIN_DELTA_MARGIN = 4.0
     private val standardTitleTemplate: BufferedImage? by lazy {
         runCatching {
             javaClass.getResourceAsStream("/club/xiaojiawei/hsscript/status/standard-mode-title-template.png")
@@ -269,23 +271,56 @@ object TournamentModeConfirmation {
         )
     }
 
-    /** Fast exact-template-only mode identity for result-page queue re-entry; never falls back to OCR. */
-    internal fun observeImageVisualOnly(image: BufferedImage): TournamentModeObservation = when {
-        classifyWildTitleVisual(image) -> TournamentModeObservation(
-            observedMode = ObservedTournamentMode.WILD,
-            ocrText = "",
-            evidence = "title-visual-template-wild",
-        )
-        classifyStandardTitleVisual(image) -> TournamentModeObservation(
-            observedMode = ObservedTournamentMode.STANDARD,
-            ocrText = "",
-            evidence = "title-visual-template-standard",
-        )
-        else -> TournamentModeObservation(
-            observedMode = ObservedTournamentMode.UNKNOWN,
-            ocrText = "",
-            evidence = "title-visual-template-unmatched",
-        )
+    /** Fast nearest-template mode identity for result re-entry; never falls back to OCR. */
+    internal fun observeImageVisualOnly(image: BufferedImage): TournamentModeObservation {
+        val wildDelta = modeTitleTemplateMeanDelta(image, wildTitleTemplate)
+        val standardDelta = modeTitleTemplateMeanDelta(image, standardTitleTemplate)
+        val wildIsNearest = wildDelta != null && standardDelta != null &&
+            wildDelta <= VISUAL_MODE_MAX_MEAN_RGB_DELTA &&
+            standardDelta - wildDelta >= VISUAL_MODE_MIN_DELTA_MARGIN
+        val standardIsNearest = wildDelta != null && standardDelta != null &&
+            standardDelta <= VISUAL_MODE_MAX_MEAN_RGB_DELTA &&
+            wildDelta - standardDelta >= VISUAL_MODE_MIN_DELTA_MARGIN
+        return when {
+            wildIsNearest -> TournamentModeObservation(
+                ObservedTournamentMode.WILD,
+                "",
+                "title-visual-template-wild-nearest delta=${"%.2f".format(Locale.ROOT, wildDelta)} " +
+                    "opposite=${"%.2f".format(Locale.ROOT, standardDelta)}",
+            )
+            standardIsNearest -> TournamentModeObservation(
+                ObservedTournamentMode.STANDARD,
+                "",
+                "title-visual-template-standard-nearest delta=${"%.2f".format(Locale.ROOT, standardDelta)} " +
+                    "opposite=${"%.2f".format(Locale.ROOT, wildDelta)}",
+            )
+            else -> TournamentModeObservation(
+                ObservedTournamentMode.UNKNOWN,
+                "",
+                "title-visual-template-ambiguous wild=${wildDelta?.let { "%.2f".format(Locale.ROOT, it) } ?: "missing"} " +
+                    "standard=${standardDelta?.let { "%.2f".format(Locale.ROOT, it) } ?: "missing"}",
+            )
+        }
+    }
+
+    private fun modeTitleTemplateMeanDelta(image: BufferedImage, template: BufferedImage?): Double? {
+        if (template == null || image.width < STANDARD_TITLE_X + STANDARD_TITLE_WIDTH ||
+            image.height < STANDARD_TITLE_Y + STANDARD_TITLE_HEIGHT ||
+            template.width != STANDARD_TITLE_WIDTH || template.height != STANDARD_TITLE_HEIGHT
+        ) return null
+        val title = image.getSubimage(STANDARD_TITLE_X, STANDARD_TITLE_Y, STANDARD_TITLE_WIDTH, STANDARD_TITLE_HEIGHT)
+        var totalDelta = 0L
+        val channelCount = STANDARD_TITLE_WIDTH * STANDARD_TITLE_HEIGHT * 3
+        for (y in 0 until STANDARD_TITLE_HEIGHT) {
+            for (x in 0 until STANDARD_TITLE_WIDTH) {
+                val actual = title.getRGB(x, y)
+                val expected = template.getRGB(x, y)
+                totalDelta += kotlin.math.abs(((actual ushr 16) and 0xff) - ((expected ushr 16) and 0xff))
+                totalDelta += kotlin.math.abs(((actual ushr 8) and 0xff) - ((expected ushr 8) and 0xff))
+                totalDelta += kotlin.math.abs((actual and 0xff) - (expected and 0xff))
+            }
+        }
+        return totalDelta.toDouble() / channelCount
     }
 
     /** One-sided exact-title classifier: a known Standard glyph template, otherwise UNKNOWN/OCR. */

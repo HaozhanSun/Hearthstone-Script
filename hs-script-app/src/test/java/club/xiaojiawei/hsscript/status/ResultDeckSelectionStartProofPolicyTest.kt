@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.awt.image.BufferedImage
 import java.nio.file.Files
 import java.nio.file.Path
 import javax.imageio.ImageIO
@@ -16,7 +17,7 @@ class ResultDeckSelectionStartProofPolicyTest {
 
     @Test
     fun `fresh authorized exact Wild deck destination records Start proof for immediate queue continuation`() {
-        val image = fixture("/offline-ocr/screen-recovery/deck-selection-screen.png")
+        val image = fixture("/offline-ocr/screen-recovery/wild-deck-selection-live-20261030-030308.png")
         val mode = TournamentModeConfirmation.observeImageVisualOnly(image)
         assertEquals(ObservedTournamentMode.WILD, mode.observedMode)
         assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
@@ -82,10 +83,23 @@ class ResultDeckSelectionStartProofPolicyTest {
             observedMode = "UNKNOWN",
             now = 20_000L,
         ))
+        val standardImage = fixture("/offline-ocr/screen-recovery/standard-deck-selection-live-20261029-040056.png")
+        val observedStandard = TournamentModeConfirmation.observeImageVisualOnly(standardImage)
+        assertEquals(ObservedTournamentMode.STANDARD, observedStandard.observedMode)
         assertFalse(record(
             captureAuthorized = true,
             captureAgeMs = 10,
-            observedMode = RunModeEnum.STANDARD.name,
+            observedMode = observedStandard.observedMode.name,
+            now = 20_000L,
+        ))
+
+        val unknownImage = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
+        val observedUnknown = TournamentModeConfirmation.observeImageVisualOnly(unknownImage)
+        assertEquals(ObservedTournamentMode.UNKNOWN, observedUnknown.observedMode)
+        assertFalse(record(
+            captureAuthorized = true,
+            captureAgeMs = 10,
+            observedMode = observedUnknown.observedMode.name,
             now = 20_000L,
         ))
         assertFalse(StartupInputReadiness.isDeckSelectionStartReady(40_020, "exact-game-window", 20_001L))
