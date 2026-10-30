@@ -25,6 +25,8 @@ internal class StuckScreenUnblockPolicy(
         val activeGameplayScreen: Boolean = false,
         val matchmakingScreen: Boolean = false,
         val dispatchAccepted: Boolean = true,
+        val semanticScreenIdentity: String = fingerprint,
+        val automationRunId: Long = 0L,
     )
     data class Decision(val action: Action, val clickNumber: Int, val reason: String)
 
@@ -32,6 +34,8 @@ internal class StuckScreenUnblockPolicy(
     private var firstSeenAtMs = 0L
     private var clicks = 0
     private var thirdClickAtMs = 0L
+    private var restartScope: String? = null
+    private var restartCount = 0
 
     @Synchronized
     fun observe(e: Evidence): Decision {
@@ -43,6 +47,11 @@ internal class StuckScreenUnblockPolicy(
         if (!safe) {
             reset()
             return Decision(Action.STOP, clicks, "evidence-fence")
+        }
+        val nextRestartScope = "${e.automationRunId}|${e.semanticScreenIdentity}"
+        if (restartScope != nextRestartScope) {
+            restartScope = nextRestartScope
+            restartCount = 0
         }
         val screenChanged = fingerprint != null && fingerprint != e.fingerprint
         if (fingerprint != e.fingerprint) {
@@ -60,6 +69,10 @@ internal class StuckScreenUnblockPolicy(
             return Decision(Action.CLICK_TOP_LEFT, clicks, "bounded-top-left-unblock")
         }
         if (e.nowMs - thirdClickAtMs < secondStageMs) return Decision(Action.REPROBE, clicks, "second-stage-grace")
+        if (restartCount >= MAX_CLIENT_RESTARTS_PER_RUN_AND_SCREEN) {
+            return Decision(Action.STOP, clicks, "client-restart-cap-exhausted")
+        }
+        restartCount++
         return Decision(Action.RESTART_CLIENT, clicks, "same-screen-after-three-clicks-and-grace")
     }
 
@@ -71,6 +84,7 @@ internal class StuckScreenUnblockPolicy(
         return true
     }
 
+    /** Reset only the current PID-bound click ladder; retain the cross-PID restart cap. */
     @Synchronized fun reset() { fingerprint = null; firstSeenAtMs = 0L; clicks = 0; thirdClickAtMs = 0L }
 
     @Synchronized fun hasProgress(): Boolean = fingerprint != null
@@ -83,5 +97,6 @@ internal class StuckScreenUnblockPolicy(
         const val DEFAULT_FIRST_THRESHOLD_MS = 60_000L
         const val DEFAULT_SECOND_STAGE_MS = 60_000L
         const val MAX_TOP_LEFT_CLICKS = 3
+        const val MAX_CLIENT_RESTARTS_PER_RUN_AND_SCREEN = 1
     }
 }

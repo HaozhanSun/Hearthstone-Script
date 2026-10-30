@@ -37,6 +37,7 @@ import java.time.ZonedDateTime
 import java.util.Random
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -360,6 +361,16 @@ object WorkTimeListener {
      * 是否处于工作中
      */
     private val workingProperty = SimpleBooleanProperty(false)
+    private val recoveryRunGeneration = AtomicLong(0L)
+
+    init {
+        workingProperty.addListener { _, wasWorking, isWorking ->
+            if (!wasWorking && isWorking) recoveryRunGeneration.incrementAndGet()
+        }
+    }
+
+    /** Monotonic identity for an automation run; survives a Hearthstone-only restart. */
+    fun recoveryRunId(): Long = recoveryRunGeneration.get()
 
     /**
      * 当前工作时间规则

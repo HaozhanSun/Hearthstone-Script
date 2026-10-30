@@ -2526,6 +2526,8 @@ object UpstreamScreenStateRecovery {
                 ScreenKind.RANK_PROGRESS_CONTINUATION) || resultOrTerminal,
             activeGameplayScreen = activeGame,
             matchmakingScreen = activeQueue,
+            semanticScreenIdentity = currentFrameProof.screenIdentity,
+            automationRunId = WorkTimeListener.recoveryRunId(),
         )
         // Non-modal unknown and exact wrong-mode deck frames use the bounded, fresh-frame ladder.
         if (!evidence.recognizedSafeBlocker) return false
@@ -2760,8 +2762,18 @@ object UpstreamScreenStateRecovery {
                 true
             }
             StuckScreenUnblockPolicy.Action.WAIT,
-            StuckScreenUnblockPolicy.Action.STOP,
             -> true
+            StuckScreenUnblockPolicy.Action.STOP -> {
+                if (decision.reason == "client-restart-cap-exhausted") {
+                    log.error {
+                        "STUCK_SCREEN_UNBLOCK_ALERT reason=client-restart-cap-exhausted " +
+                            "automationRunId=${evidence.automationRunId} semanticScreen=${evidence.semanticScreenIdentity} " +
+                            "action=NO_MORE_CLIENT_RESTARTS activeGame=$activeGame activeQueue=$activeQueue " +
+                            "terminal=$resultOrTerminal paused=${PauseStatus.isPause}"
+                    }
+                }
+                true
+            }
         }
         return true
     }

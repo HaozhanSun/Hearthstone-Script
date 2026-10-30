@@ -24,6 +24,8 @@ class StuckScreenUnblockPolicyTest {
         eligible: Boolean = true,
         knownBlocker: Boolean = true,
         currentSessionReady: Boolean = false,
+        semanticScreenIdentity: String = fingerprint,
+        automationRunId: Long = 1L,
     ) = StuckScreenUnblockPolicy.Evidence(
         nowMs = now,
         stableForMs = stableForMs,
@@ -43,6 +45,8 @@ class StuckScreenUnblockPolicyTest {
         activeGameplayScreen = gameplay,
         matchmakingScreen = queueScreen,
         dispatchAccepted = dispatchAccepted,
+        semanticScreenIdentity = semanticScreenIdentity,
+        automationRunId = automationRunId,
     )
 
     @Test
@@ -162,5 +166,49 @@ class StuckScreenUnblockPolicyTest {
             stableForMs = 120_100L,
             fingerprint = thirdFrame.fingerprint,
         )).action)
+    }
+
+    @Test
+    fun `same semantic blocker cannot restart repeatedly across Hearthstone PID changes`() {
+        val policy = StuckScreenUnblockPolicy(firstThresholdMs = 100L, secondStageMs = 100L)
+        val semantic = "TOURNAMENT_MODE_SELECTOR|mode=TOURNAMENT"
+        fun e(now: Long, fingerprint: String, stable: Long = 100L, screen: String = semantic, run: Long = 7L) =
+            evidence(now, stableForMs = stable, fingerprint = fingerprint,
+                semanticScreenIdentity = screen, automationRunId = run)
+
+        assertEquals(StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT, policy.observe(e(101, "pid1|hwnd1|selector")).action)
+        assertTrue(policy.completeTopLeftClickBatch("pid1|hwnd1|selector", 110))
+        assertEquals(StuckScreenUnblockPolicy.Action.RESTART_CLIENT,
+            policy.observe(e(210, "pid1|hwnd1|selector", stable = 210)).action)
+
+        // Core restarts Hearthstone, changing PID/HWND but preserving the script's run and screen.
+        policy.reset()
+        val restartedClient = "pid2|hwnd2|selector"
+        assertEquals(StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT,
+            policy.observe(e(311, restartedClient)).action)
+        assertTrue(policy.completeTopLeftClickBatch(restartedClient, 320))
+        assertEquals(StuckScreenUnblockPolicy.Action.STOP,
+            policy.observe(e(420, restartedClient, stable = 420)).action)
+        assertEquals("client-restart-cap-exhausted",
+            policy.observe(e(421, restartedClient, stable = 421)).reason)
+
+        // Semantic progress clears the old per-screen restart allowance.
+        val changedScreen = "HUB|mode=TOURNAMENT"
+        fun reachRestart(start: Long, fingerprint: String, screen: String, run: Long): StuckScreenUnblockPolicy.Action {
+            val click = policy.observe(e(start + 101, fingerprint, screen = screen, run = run))
+            assertEquals(StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT, click.action)
+            assertTrue(policy.completeTopLeftClickBatch(fingerprint, start + 110))
+            return policy.observe(e(start + 210, fingerprint, stable = 210, screen = screen, run = run)).action
+        }
+        assertEquals(StuckScreenUnblockPolicy.Action.UNBLOCKED, policy.observe(
+            e(500, "pid2|hwnd2|hub", stable = 0, screen = changedScreen),
+        ).action)
+        assertEquals(StuckScreenUnblockPolicy.Action.RESTART_CLIENT,
+            reachRestart(500, "pid2|hwnd2|hub", changedScreen, 7L))
+
+        // A new automation run also receives one allowance, even on the prior screen.
+        policy.reset()
+        assertEquals(StuckScreenUnblockPolicy.Action.RESTART_CLIENT,
+            reachRestart(700, "pid3|hwnd3|selector", semantic, 8L))
     }
 }
