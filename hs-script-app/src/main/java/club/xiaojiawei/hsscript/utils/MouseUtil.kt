@@ -818,6 +818,9 @@ object MouseUtil {
         expectedPid: Long,
         expectedHwnd: HWND,
         permit: StartupQuestOverlayDismissPermitStore.Permit,
+        freshEmptySessionLoginProof: Boolean = false,
+        matchmakingSearchVisual: Boolean = false,
+        reconnectDialogVisual: Boolean = false,
     ): Boolean {
         val action = StartupQuestOverlayDismissPolicy.DISPATCH_ACTION
         fun contextStillMatches(): Boolean =
@@ -835,7 +838,16 @@ object MouseUtil {
                     activeQueueScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
                     recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
                     shortRaceWindow = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
-                    matchmakingSearchVisual = false,
+                    matchmakingSearchVisual = matchmakingSearchVisual,
+                    freshEmptySessionLoginProof = freshEmptySessionLoginProof &&
+                        ScreenStateRecovery.hasVerifiedEmptyCurrentSessionPowerLog() &&
+                        !ScreenStateRecovery.isCurrentGameSessionReadyForStart() &&
+                        !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+                        !LifecycleTrace.hasRecentMatchmakingInputIntent() &&
+                        !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() &&
+                        !WarEx.inWar && Mode.currMode !== ModeEnum.GAMEPLAY && Mode.nextMode !== ModeEnum.GAMEPLAY &&
+                        !MandatoryRankSurrenderGuard.isPending() && !MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+                    reconnectDialogVisual = reconnectDialogVisual,
                     terminalOrResult = GameUtil.isTerminalGameState() ||
                         club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending() ||
                         club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isTerminalCleanupPending(),

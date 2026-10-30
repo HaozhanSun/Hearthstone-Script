@@ -19,6 +19,7 @@ internal class EventQuestOverlayRecoveryPolicy(
         val activeQueue: Boolean,
         val terminalOrResult: Boolean,
         val postGameTerminalProof: Boolean = false,
+        val freshEmptySessionLoginProof: Boolean = false,
         val stableForMs: Long = FIRST_STAGE_DELAY_MS,
         val automationRunId: Long = 0L,
         val semanticScreenIdentity: String = "EVENT_QUEST_OVERLAY",
@@ -48,7 +49,7 @@ internal class EventQuestOverlayRecoveryPolicy(
         if (!evidence.working) return Decision(Action.DEFER, clicksAttempted, "script-not-working")
         if (evidence.paused) return Decision(Action.DEFER, clicksAttempted, "paused")
         if (evidence.activeGame || evidence.activeQueue ||
-            evidence.terminalOrResult && !evidence.postGameTerminalProof
+            evidence.terminalOrResult && !evidence.postGameTerminalProof && !evidence.freshEmptySessionLoginProof
         ) {
             return Decision(Action.STOP, clicksAttempted, "game-queue-or-result-fence")
         }
@@ -111,6 +112,33 @@ internal class EventQuestOverlayRecoveryPolicy(
 }
 
 internal object EventQuestOverlayRecoveryContextPolicy {
+    fun allowsFreshEmptySessionLoginTransition(
+        questOverlayVisible: Boolean,
+        centeredModalVisible: Boolean,
+        freshEmptySessionLoginProof: Boolean,
+    ): Boolean = !questOverlayVisible && !centeredModalVisible && freshEmptySessionLoginProof
+
+    fun allowsFreshEmptySessionLoginProof(
+        mode: String?,
+        phase: String?,
+        exactForegroundCapture: Boolean,
+        emptyCurrentSessionPowerLog: Boolean,
+        currentSessionReady: Boolean,
+        nextModeGameplay: Boolean,
+        activeGame: Boolean,
+        activeQueueScreen: Boolean,
+        recentInputIntent: Boolean,
+        shortRaceWindow: Boolean,
+        matchmakingSearchVisual: Boolean,
+        reconnectDialogVisual: Boolean,
+        mandatoryRankGuard: Boolean,
+        working: Boolean,
+        paused: Boolean,
+    ): Boolean = mode == "LOGIN" && phase == "FILL_DECK" && exactForegroundCapture && emptyCurrentSessionPowerLog &&
+        !currentSessionReady && !nextModeGameplay && !activeGame && !activeQueueScreen &&
+        !recentInputIntent && !shortRaceWindow && !matchmakingSearchVisual && !reconnectDialogVisual &&
+        !mandatoryRankGuard && working && !paused
+
     fun allowsDismiss(
         mode: String?,
         phase: String?,
@@ -125,17 +153,22 @@ internal object EventQuestOverlayRecoveryContextPolicy {
         working: Boolean,
         paused: Boolean,
         postGameTerminalProof: Boolean = false,
+        freshEmptySessionLoginProof: Boolean = false,
+        reconnectDialogVisual: Boolean = false,
     ): Boolean {
         val safeHub = mode == "HUB"
         // Exact visible Event Quest structure over Tournament/FILL_DECK is
         // sufficient safe-underlay proof; only a verified post-game result
         // may override the stale terminal phase latch in that same state.
         val safeDeckSelection = mode == "TOURNAMENT" && phase == "FILL_DECK"
+        val safeEmptySessionLogin = mode == "LOGIN" && phase == "FILL_DECK" &&
+            freshEmptySessionLoginProof
         val activeQueue = activeQueueScreen || matchmakingSearchVisual ||
-            if (safeDeckSelection) shortRaceWindow else recentInputIntent
-        val terminalContextSafe = !terminalOrResult || (safeDeckSelection && postGameTerminalProof)
-        return (safeHub || safeDeckSelection) && !nextModeGameplay && !activeGame && !activeQueue &&
-            terminalContextSafe && working && !paused
+            if (safeDeckSelection) shortRaceWindow else recentInputIntent || shortRaceWindow
+        val terminalContextSafe = !terminalOrResult ||
+            (safeDeckSelection && postGameTerminalProof) || safeEmptySessionLogin
+        return (safeHub || safeDeckSelection || safeEmptySessionLogin) && !reconnectDialogVisual &&
+            !nextModeGameplay && !activeGame && !activeQueue && terminalContextSafe && working && !paused
     }
 }
 

@@ -378,6 +378,180 @@ class EventQuestOverlayRecoveryPolicyTest {
     }
 
     @Test
+    fun `fresh empty current-session LOGIN overlay is safe under exact proof and all other fences remain`() {
+        fun allows(
+            emptyLog: Boolean = true,
+            sessionReady: Boolean = false,
+            activeGame: Boolean = false,
+            queueScreen: Boolean = false,
+            recentIntent: Boolean = false,
+            shortRace: Boolean = false,
+            queueVisual: Boolean = false,
+            reconnect: Boolean = false,
+            rankGuard: Boolean = false,
+            working: Boolean = true,
+            paused: Boolean = false,
+            mode: String = "LOGIN",
+            phase: String = "FILL_DECK",
+            captureTrusted: Boolean = true,
+        ) = EventQuestOverlayRecoveryContextPolicy.allowsFreshEmptySessionLoginProof(
+            mode = mode, phase = phase, exactForegroundCapture = captureTrusted,
+            emptyCurrentSessionPowerLog = emptyLog,
+            currentSessionReady = sessionReady, nextModeGameplay = false, activeGame = activeGame,
+            activeQueueScreen = queueScreen, recentInputIntent = recentIntent, shortRaceWindow = shortRace,
+            matchmakingSearchVisual = queueVisual, reconnectDialogVisual = reconnect,
+            mandatoryRankGuard = rankGuard, working = working, paused = paused,
+        )
+
+        assertTrue(allows())
+        assertFalse(allows(emptyLog = false), "nonempty or stale Power.log cannot prove fresh startup")
+        assertFalse(allows(sessionReady = true))
+        assertFalse(allows(activeGame = true))
+        assertFalse(allows(queueScreen = true))
+        assertFalse(allows(recentIntent = true))
+        assertFalse(allows(shortRace = true))
+        assertFalse(allows(queueVisual = true))
+        assertFalse(allows(reconnect = true))
+        assertFalse(allows(rankGuard = true))
+        assertFalse(allows(working = false))
+        assertFalse(allows(paused = true))
+        assertFalse(allows(mode = "TOURNAMENT"))
+        assertFalse(allows(phase = "MULLIGAN"))
+        assertFalse(allows(captureTrusted = false), "untrusted or background capture cannot prove the overlay context")
+
+        val policy = EventQuestOverlayRecoveryPolicy(secondStageDelayMs = 60_000L)
+        var dispatchedClicks = 0
+        fun loginEvidence(now: Long) = evidence(
+            nowMs = now,
+            stableForMs = 60_000L,
+            terminal = true,
+        ).copy(
+            freshEmptySessionLoginProof = true,
+            semanticScreenIdentity = "EVENT_QUEST_OVERLAY|LOGIN|FILL_DECK|EMPTY_CURRENT_POWERLOG",
+        )
+        repeat(3) { index ->
+            val decision = policy.observe(loginEvidence(60_000L + index * 500L))
+            assertEquals(EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT, decision.action)
+            assertTrue(EventQuestOverlayClickDispatch.dispatch(
+                action = decision.action,
+                freshCaptureTrusted = true,
+                foregroundVerified = true,
+                safeContext = allows(),
+            ) { dispatchedClicks++; true })
+        }
+        assertEquals(3, dispatchedClicks, "each retry requires a fresh exact overlay observation")
+        assertEquals(EventQuestOverlayRecoveryPolicy.Action.WAIT_AND_REPROBE,
+            policy.observe(loginEvidence(120_999L)).action)
+        assertEquals(EventQuestOverlayRecoveryPolicy.Action.RESTART_CLIENT,
+            policy.observe(loginEvidence(121_000L)).action,
+            "unchanged exact overlay after the second minute must reach bounded restart")
+        policy.confirmRestartIssued()
+        assertEquals(EventQuestOverlayRecoveryPolicy.Action.STOP,
+            policy.observe(loginEvidence(121_001L)).action)
+
+        policy.reset() // A replacement Hearthstone PID gets a new click sequence, not a new restart budget.
+        repeat(3) { index ->
+            assertEquals(EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT,
+                policy.observe(loginEvidence(200_000L + index * 500L)).action)
+        }
+        assertEquals(EventQuestOverlayRecoveryPolicy.Action.STOP,
+            policy.observe(loginEvidence(321_000L)).action,
+            "an unchanged LOGIN overlay after the one permitted client restart must alert/stop")
+        assertEquals("client-restart-cap-exhausted",
+            policy.observe(loginEvidence(321_001L)).reason)
+    }
+
+    @Test
+    fun `LOGIN empty-session proof alone cannot let a reconnect frame enter recovery`() {
+        assertFalse(EventQuestOverlayRecoveryContextPolicy.allowsDismiss(
+            mode = "LOGIN", phase = "FILL_DECK", currentSessionReady = false,
+            nextModeGameplay = false, activeGame = false, activeQueueScreen = false,
+            recentInputIntent = false, shortRaceWindow = false, matchmakingSearchVisual = false,
+            terminalOrResult = true, working = true, paused = false,
+            freshEmptySessionLoginProof = true, reconnectDialogVisual = true,
+        ))
+        assertTrue(EventQuestOverlayRecoveryContextPolicy.allowsFreshEmptySessionLoginTransition(
+            questOverlayVisible = false,
+            centeredModalVisible = false,
+            freshEmptySessionLoginProof = true,
+        ), "fresh empty-session LOGIN capture with the quest panel gone releases the recovery fence")
+        assertFalse(EventQuestOverlayRecoveryContextPolicy.allowsFreshEmptySessionLoginTransition(
+            questOverlayVisible = false,
+            centeredModalVisible = true,
+            freshEmptySessionLoginProof = true,
+        ), "another modal is not a safe transition")
+        assertFalse(EventQuestOverlayRecoveryContextPolicy.allowsFreshEmptySessionLoginTransition(
+            questOverlayVisible = true,
+            centeredModalVisible = false,
+            freshEmptySessionLoginProof = true,
+        ), "the exact overlay still visible is not an unblocked transition")
+        listOf(
+            mapOf("reconnectDialogVisual" to true),
+            mapOf("activeQueueScreen" to true),
+            mapOf("shortRaceWindow" to true),
+            mapOf("activeGame" to true),
+            mapOf("paused" to true),
+        ).forEach { fences ->
+            val safeProof = EventQuestOverlayRecoveryContextPolicy.allowsFreshEmptySessionLoginProof(
+                mode = "LOGIN", phase = "FILL_DECK", exactForegroundCapture = true,
+                emptyCurrentSessionPowerLog = true,
+                currentSessionReady = false, nextModeGameplay = false,
+                activeGame = fences["activeGame"] == true,
+                activeQueueScreen = fences["activeQueueScreen"] == true,
+                recentInputIntent = false,
+                shortRaceWindow = fences["shortRaceWindow"] == true,
+                matchmakingSearchVisual = false,
+                reconnectDialogVisual = fences["reconnectDialogVisual"] == true,
+                mandatoryRankGuard = false, working = true, paused = fences["paused"] == true,
+            )
+            assertFalse(EventQuestOverlayRecoveryContextPolicy.allowsFreshEmptySessionLoginTransition(
+                questOverlayVisible = false,
+                centeredModalVisible = false,
+                freshEmptySessionLoginProof = safeProof,
+            ), "fence evidence $fences must prevent transition/unblocking")
+        }
+
+        val policy = EventQuestOverlayRecoveryPolicy()
+        val transition = policy.observe(evidence(
+            nowMs = 1_000L,
+            exact = false,
+            safeTransition = EventQuestOverlayRecoveryContextPolicy.allowsFreshEmptySessionLoginTransition(
+                questOverlayVisible = false,
+                centeredModalVisible = false,
+                freshEmptySessionLoginProof = true,
+            ),
+            terminal = true,
+        ).copy(freshEmptySessionLoginProof = true))
+        assertEquals(EventQuestOverlayRecoveryPolicy.Action.UNBLOCK_SAFE_TRANSITION, transition.action)
+        StartupQuestOverlayRecoveryFence.resetForTest()
+        try {
+            StartupQuestOverlayRecoveryFence.begin()
+            assertTrue(StartupQuestOverlayRecoveryFence.isActive())
+            assertTrue(UpstreamScreenStateRecovery.resolveEventQuestSafeTransition(transition.action))
+            assertFalse(StartupQuestOverlayRecoveryFence.isActive(),
+                "verified overlay disappearance must release the queue/input fence")
+            StartupQuestOverlayRecoveryFence.begin()
+            assertFalse(UpstreamScreenStateRecovery.resolveEventQuestSafeTransition(
+                EventQuestOverlayRecoveryPolicy.Action.RESTART_CLIENT,
+            ), "unsafe or unresolved actions cannot release the recovery fence")
+            assertTrue(StartupQuestOverlayRecoveryFence.isActive())
+        } finally {
+            StartupQuestOverlayRecoveryFence.resetForTest()
+        }
+        listOf(
+            evidence(nowMs = 2_000L, exact = false, safeTransition = false, activeQueue = true),
+            evidence(nowMs = 2_000L, exact = false, safeTransition = false, activeGame = true),
+            evidence(nowMs = 2_000L, exact = false, safeTransition = false, trusted = false),
+            evidence(nowMs = 2_000L, exact = false, safeTransition = false).copy(
+                safeMenuOrDeckState = false,
+            ), // reconnect/unknown modal: no empty-session transition proof
+        ).forEach { blocked ->
+            assertNotEquals(EventQuestOverlayRecoveryPolicy.Action.UNBLOCK_SAFE_TRANSITION,
+                EventQuestOverlayRecoveryPolicy().observe(blocked).action)
+        }
+    }
+
+    @Test
     fun `15 minute matchmaking intent alone does not veto fill deck but active screen does`() {
         val now = System.currentTimeMillis()
         LifecycleTrace.resetMatchmakingEvidenceForTest()

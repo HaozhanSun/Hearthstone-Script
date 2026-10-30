@@ -578,6 +578,21 @@ this deletion boundary.
   unowned terminal log, false overlay, failed foreground proof, active game,
   active queue, pause, accepted click without visual transition, verified
   transition, and restart-cap exhaustion.
+- After a Hearthstone restart, an Event Quest card can cover the startup menu
+  while the model still says `LOGIN|FILL_DECK` and the current Power.log is
+  empty. This is a narrow recovery exception only: bind the readable zero-byte
+  Power.log to the current Hearthstone process start, require an exact fresh
+  foreground PID/HWND capture with the structural Event Quest card, and retain
+  all no-session-ready, no-game, no-queue-screen/intent/race, no-reconnect,
+  no-rank-guard, working, and unpaused fences. Empty bytes are not session
+  progress or gameplay authority. Recheck that proof on every top-left retry
+  and before the bounded no-pause restart. If a later fresh capture shows the
+  quest card gone and no centered modal, the same empty-session/window proof
+  may release the recovery fence without sending another input; overlay
+  absence alone, reconnect/queue frames, and untrusted captures cannot release
+  it. Regress the positive startup path, each fence, zero-byte process lineage,
+  unchanged overlay through restart-cap alert, and verified overlay-absent
+  fence release.
 - For an exact reconnect screen, the 60-second no-pause restart grace must
   schedule its own fresh authorized capture at the threshold rather than wait
   for the next slow periodic OCR pass. Re-evaluate current active-game,

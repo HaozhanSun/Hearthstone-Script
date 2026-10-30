@@ -3,6 +3,7 @@ package club.xiaojiawei.hsscript.status
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME
+import club.xiaojiawei.hsscript.enums.GameLogModeEnum
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
@@ -313,6 +314,22 @@ object ScreenStateRecovery {
 
     /** Read-only process/log boundary used to distinguish an explicit rearm from a healthy heartbeat. */
     internal fun isCurrentGameSessionReadyForStart(): Boolean = currentSessionModelReady()
+
+    /** Exact empty Power.log lineage for a freshly started Hearthstone process. */
+    internal fun hasVerifiedEmptyCurrentSessionPowerLog(): Boolean = runCatching {
+        if (ScriptStatus.gameLogMode != GameLogModeEnum.DISK) return@runCatching false
+        val pid = GameUtil.findGameProcessIdForDiagnostics() ?: return@runCatching false
+        val processStartedAt = GameUtil.findProcessStartedAtForDiagnostics(pid) ?: return@runCatching false
+        val latest = GameUtil.getLatestLogDir()?.resolve(GAME_WAR_LOG_NAME) ?: return@runCatching false
+        latest.isFile && latest.canRead() && latest.length() == 0L &&
+            PowerLogSessionBindingPolicy.isEmptySessionFileForProcess(
+                powerLogPath = latest.absolutePath,
+                gameLogsRoot = latest.parentFile?.parent,
+                length = latest.length(),
+                lastModifiedMs = latest.lastModified(),
+                processStartedAtMs = processStartedAt,
+            )
+    }.getOrDefault(false)
 
     /** A stale WarEx latch is not game evidence when the live process has no current-session log. */
     internal fun hasAuthoritativeCurrentGameEvidenceForReconnect(): Boolean {

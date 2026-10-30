@@ -18,6 +18,16 @@ internal object PowerLogSessionBindingPolicy {
         return isSessionFileForProcess(powerLogPath, gameLogsRoot, lastModifiedMs, processStartedAtMs)
     }
 
+    /** Empty startup logs prove only that the current game process has no Power.log game data yet. */
+    fun isEmptySessionFileForProcess(
+        powerLogPath: String?,
+        gameLogsRoot: String?,
+        length: Long,
+        lastModifiedMs: Long,
+        processStartedAtMs: Long?,
+    ): Boolean = length == 0L &&
+        isSessionFileForProcess(powerLogPath, gameLogsRoot, lastModifiedMs, processStartedAtMs)
+
     /** Validates current-session file lineage without treating an empty file as progress. */
     fun isSessionFileForProcess(
         powerLogPath: String?,

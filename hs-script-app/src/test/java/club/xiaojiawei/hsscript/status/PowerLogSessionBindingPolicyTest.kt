@@ -44,6 +44,23 @@ class PowerLogSessionBindingPolicyTest {
             "a stale previous-process log stays detached even when the current log is empty",
         )
     }
+
+    @Test
+    fun `only an empty Power log from the current process session proves empty startup`() {
+        val path = "D:/Hearthstone/Logs/Hearthstone_2026_10_29_21_52_49/Power.log"
+        val root = "D:/Hearthstone/Logs"
+        val processStarted = 1_798_000_000_000L
+        val modified = processStarted + 1_000L
+        assertTrue(PowerLogSessionBindingPolicy.isEmptySessionFileForProcess(
+            path, root, length = 0L, lastModifiedMs = modified, processStartedAtMs = processStarted,
+        ))
+        assertFalse(PowerLogSessionBindingPolicy.isEmptySessionFileForProcess(
+            path, root, length = 10L, lastModifiedMs = modified, processStartedAtMs = processStarted,
+        ))
+        assertFalse(PowerLogSessionBindingPolicy.isEmptySessionFileForProcess(
+            path, root, length = 0L, lastModifiedMs = processStarted - 20_000L, processStartedAtMs = processStarted,
+        ))
+    }
     @Test
     fun `accepts readable nonempty Power log modified during current game process`() {
         val root = Files.createTempDirectory("hs-game-logs")
