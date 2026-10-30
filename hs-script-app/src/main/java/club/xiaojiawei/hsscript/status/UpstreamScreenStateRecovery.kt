@@ -2319,6 +2319,16 @@ object UpstreamScreenStateRecovery {
         val detection = detect(ocrText, authorizedCapture.capture.visual)
         decisionMs = ResultScreenProbeTelemetry.elapsedMs(decisionStartedAt)
         decisionPath = if (detection == null) "OCR_UNKNOWN" else "OCR_${detection.kind.code}"
+        if (detection?.kind?.code == "DECK_SELECTION") {
+            recordResultDeckSelectionStartProof(
+                detection = detection,
+                capture = authorizedCapture.capture,
+                pid = authorizedCapture.capture.processId.toInt(),
+                hwnd = authorizedCapture.gameWindow.toString(),
+                captureAuthorized = authorizedCapture.foregroundVerified,
+                modalVisible = ScreenStateRecovery.hasCenteredModalPanel(authorizedCapture.capture.image),
+            )
+        }
         report(ResultScreenObservation(
             resultVisible = resultPageVisibility(detection),
             captureAuthorized = true,
@@ -2340,6 +2350,47 @@ object UpstreamScreenStateRecovery {
 
     private fun resultPageVisibility(detection: Detection?): Boolean? =
         resultVisibilityForTest(detection?.kind?.code, detection?.confidence ?: 0)
+
+    private fun recordResultDeckSelectionStartProof(
+        detection: Detection,
+        capture: Capture,
+        pid: Int?,
+        hwnd: String,
+        captureAuthorized: Boolean,
+        modalVisible: Boolean,
+    ) {
+        val mode = TournamentModeConfirmation.observeImageVisualOnly(capture.image)
+        val expectedMode = DeckStrategyManager.currentRunMode?.name
+        val captureAgeMs = (System.nanoTime() - capture.capturedAtNanos) / 1_000_000L
+        val startVisible = ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image)
+        val recorded = ResultDeckSelectionStartProofPolicy.record(
+            captureAuthorized = captureAuthorized,
+            captureAgeMs = captureAgeMs,
+            pid = pid,
+            hwnd = hwnd,
+            confidence = detection.confidence,
+            evidence = detection.evidence,
+            expectedMode = expectedMode,
+            observedMode = mode.observedMode.name,
+            enabledStartVisible = startVisible,
+            modalVisible = modalVisible,
+            now = System.currentTimeMillis(),
+        )
+        log.info {
+            "RESULT_PAGE_DECK_START_PROOF decision=${if (recorded) "RECORDED" else "BLOCKED"} " +
+                "reason=${when {
+                    !captureAuthorized -> "capture-unauthorized"
+                    captureAgeMs !in 0..ResultDeckSelectionStartProofPolicy.MAX_CAPTURE_AGE_MS -> "capture-stale"
+                    expectedMode !in setOf("WILD", "STANDARD") -> "configured-mode-unavailable"
+                    mode.observedMode.name != expectedMode -> "configured-mode-not-visually-confirmed"
+                    !startVisible -> "start-control-not-visible"
+                    modalVisible -> "modal-visible"
+                    else -> "capture-or-screen-evidence-rejected"
+                }} expectedMode=${expectedMode ?: "UNKNOWN"} observedMode=${mode.observedMode.name} " +
+                "captureAgeMs=$captureAgeMs captureAuthorized=$captureAuthorized confidence=${detection.confidence} " +
+                "evidence=${detection.evidence} startVisible=$startVisible modal=$modalVisible pid=${pid ?: "none"} hwnd=$hwnd"
+        }
+    }
 
     /** Contract seam shared by the live postcheck and deterministic mapping tests. */
     internal fun resultVisibilityForTest(screenKind: String?, confidence: Int): Boolean? = when {

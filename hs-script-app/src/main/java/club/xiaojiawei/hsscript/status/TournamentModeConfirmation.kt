@@ -269,6 +269,25 @@ object TournamentModeConfirmation {
         )
     }
 
+    /** Fast exact-template-only mode identity for result-page queue re-entry; never falls back to OCR. */
+    internal fun observeImageVisualOnly(image: BufferedImage): TournamentModeObservation = when {
+        classifyWildTitleVisual(image) -> TournamentModeObservation(
+            observedMode = ObservedTournamentMode.WILD,
+            ocrText = "",
+            evidence = "title-visual-template-wild",
+        )
+        classifyStandardTitleVisual(image) -> TournamentModeObservation(
+            observedMode = ObservedTournamentMode.STANDARD,
+            ocrText = "",
+            evidence = "title-visual-template-standard",
+        )
+        else -> TournamentModeObservation(
+            observedMode = ObservedTournamentMode.UNKNOWN,
+            ocrText = "",
+            evidence = "title-visual-template-unmatched",
+        )
+    }
+
     /** One-sided exact-title classifier: a known Standard glyph template, otherwise UNKNOWN/OCR. */
     internal fun classifyStandardTitleVisual(image: BufferedImage): Boolean {
         val template = standardTitleTemplate ?: return false
