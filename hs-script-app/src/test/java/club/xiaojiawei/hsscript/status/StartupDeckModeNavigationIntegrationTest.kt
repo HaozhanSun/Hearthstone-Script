@@ -17,6 +17,104 @@ import javax.imageio.ImageIO
 
 class StartupDeckModeNavigationIntegrationTest {
     @Test
+    fun `exact Standard deck proof opens selector only and fresh modal evidence alone authorizes Wild control`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/standard-ranked-deck-selection-user-20261029.png",
+        )))
+        assertTrue(TournamentModeConfirmation.isConfirmedModeMismatch(image, "WILD"))
+        val decision = StartupDeckModeNavigationPolicy.decide(
+            purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE.name,
+            screenKind = "DECK_SELECTION",
+            confidence = 96,
+            evidence = "deck-selection-start-control-visual",
+            expectedRunMode = "WILD",
+            observedRunMode = "STANDARD",
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            currentSessionReady = false,
+            activeGame = false,
+            activeMatchmaking = false,
+            terminal = false,
+            trustedCurrentWindow = true,
+        )
+        assertTrue(decision.allowed)
+        var crestClicks = 0
+        var reprobes = 0
+        val opened = StartupDeckModeNavigationPolicy.dispatchOpenSelectorForVerifiedDeckMismatch(
+            image = image,
+            expectedMode = "WILD",
+            decision = decision,
+            dispatchOpenSelector = { crestClicks++; true },
+            requestFreshSelectorProbe = { reprobes++ },
+        )
+        assertTrue(opened)
+        assertEquals(1, crestClicks, "only the exact observed mode crest is clicked in stage one")
+        assertEquals(1, reprobes, "stage one must schedule a fresh capture before mode selection")
+
+        assertFalse(StartupDeckModeNavigationPolicy.hasFreshWildSelectorEvidence(
+            StartupDeckModeNavigationPolicy.MODE_SELECTOR_SCREEN,
+            modalVisible = false,
+            wildTargetLabelVisible = true,
+            ocrText = "标准对战 狂野对战",
+        ))
+        assertFalse(StartupDeckModeNavigationPolicy.hasFreshWildSelectorEvidence(
+            StartupDeckModeNavigationPolicy.MODE_SELECTOR_SCREEN,
+            modalVisible = true,
+            wildTargetLabelVisible = false,
+            ocrText = "标准对战 狂野对战",
+        ), "generic Wild text outside the configured target rectangle is insufficient")
+        assertFalse(StartupDeckModeNavigationPolicy.hasFreshWildSelectorEvidence(
+            StartupDeckModeNavigationPolicy.MODE_SELECTOR_SCREEN,
+            modalVisible = true,
+            wildTargetLabelVisible = false,
+            ocrText = "标准对战",
+        ))
+        assertTrue(StartupDeckModeNavigationPolicy.hasFreshWildSelectorEvidence(
+            StartupDeckModeNavigationPolicy.MODE_SELECTOR_SCREEN,
+            modalVisible = true,
+            wildTargetLabelVisible = true,
+            ocrText = "标准对战 狂野对战",
+        ))
+
+        StartupInputReadiness.resetForTest()
+        try {
+            assertTrue(StartupInputReadiness.recordDeckSelectionModeNavigation(
+                pid = 29428,
+                hwnd = "exact-game-window",
+                expectedRunMode = "WILD",
+                observedRunMode = "STANDARD",
+                confidence = 96,
+                evidence = "deck-selection-start-control-visual",
+                enabledStartButtonVisible = true,
+                modalVisible = false,
+                now = 10_000,
+            ))
+            assertFalse(
+                StartupInputReadiness.isWildModeSelectorControlReady(29428, "exact-game-window", 10_001),
+                "the deck mismatch proof alone must never authorize the Wild-option coordinate",
+            )
+            assertTrue(StartupInputReadiness.recordWildModeSelectorControl(
+                pid = 29428,
+                hwnd = "exact-game-window",
+                confidence = 96,
+                modalVisible = true,
+                wildAndStandardOptionsVisible = true,
+                now = 10_002,
+            ))
+            assertTrue(StartupInputReadiness.isWildModeSelectorControlReady(29428, "exact-game-window", 10_003))
+            assertFalse(StartupInputReadiness.isWildModeSelectorControlReady(
+                29428,
+                "exact-game-window",
+                10_002 + StartupInputReadiness.WILD_MODE_SELECTOR_CONTROL_PROOF_MAX_AGE_MS + 1,
+            ), "the target-control proof expires quickly if dispatch is delayed")
+            assertFalse(StartupInputReadiness.isWildModeSelectorControlReady(29429, "exact-game-window", 10_003))
+            assertFalse(StartupInputReadiness.isWildModeSelectorControlReady(29428, "other-window", 10_003))
+        } finally {
+            StartupInputReadiness.resetForTest()
+        }
+    }
+
+    @Test
     fun `legacy change mode rectangle targets the visible top right format crest`() {
         val gameRect = ScriptStatus.GAME_RECT
         val old = intArrayOf(gameRect.left, gameRect.top, gameRect.right, gameRect.bottom)
@@ -83,17 +181,17 @@ class StartupDeckModeNavigationIntegrationTest {
                 trustedCurrentWindow = true,
             )
             assertTrue(mismatchDecision.allowed, "fresh exact mismatch is recognized for classification/recovery policy")
-            var wildClicks = 0
+            var selectorClicks = 0
             var modeReprobes = 0
-            assertFalse(StartupDeckModeNavigationPolicy.dispatchConfiguredModeCorrection(
+            assertTrue(StartupDeckModeNavigationPolicy.dispatchOpenSelectorForVerifiedDeckMismatch(
                 image = image,
                 expectedMode = "WILD",
                 decision = mismatchDecision,
-                openSelectorAndSelectMode = { wildClicks++; true },
-                requestFreshModeProbe = { modeReprobes++ },
-            ), "deck-page screenshot does not prove the opened selector's Wild-control location")
-            assertEquals(0, wildClicks)
-            assertEquals(0, modeReprobes)
+                dispatchOpenSelector = { selectorClicks++; true },
+                requestFreshSelectorProbe = { modeReprobes++ },
+            ), "the exact Standard deck crest may open the selector, then require a fresh selector capture")
+            assertEquals(1, selectorClicks)
+            assertEquals(1, modeReprobes)
 
             val confirmedWild = TournamentModeConfirmation.evaluate(
                 expectedMode = RunModeEnum.WILD,
@@ -131,11 +229,18 @@ class StartupDeckModeNavigationIntegrationTest {
     @Test
     fun `fresh selector observation renews exactly one wrong-mode Return attempt`() {
         val attempts = StartupDeckModeNavigationAttemptGate()
-        assertTrue(attempts.tryBegin(9704, "live-v709").allowed)
-        assertFalse(attempts.tryBegin(9704, "live-v709").allowed)
+        val rejectedDispatch = attempts.tryBegin(9704, "live-v709")
+        assertTrue(rejectedDispatch.allowed)
+        assertFalse(attempts.tryBegin(9704, "live-v709").allowed, "a concurrent probe cannot reserve a second dispatch")
+        assertFalse(attempts.resolve(9704, "live-v709", inputAccepted = false))
+        val acceptedDispatch = attempts.tryBegin(9704, "live-v709")
+        assertTrue(acceptedDispatch.allowed, "a rejected final dispatch must leave the recovery attempt available")
+        assertTrue(attempts.resolve(9704, "live-v709", inputAccepted = true))
+        assertFalse(attempts.tryBegin(9704, "live-v709").allowed, "only an accepted input consumes the single attempt")
         // Runtime calls reset only after the exact HUB chooser proof is accepted.
         attempts.reset()
         assertTrue(attempts.tryBegin(9704, "live-v709").allowed)
+        assertTrue(attempts.resolve(9704, "live-v709", inputAccepted = true))
         assertFalse(attempts.tryBegin(9704, "live-v709").allowed)
     }
 
@@ -390,17 +495,16 @@ class StartupDeckModeNavigationIntegrationTest {
     }
 
     @Test
-    fun `fresh exact deck selection with unknown mode OCR dispatches only under independent selected mode proof`() {
+    fun `fresh exact deck selection with visually confirmed Wild title dispatches without mode OCR dependency`() {
         val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/deck-selection-screen.png",
         )))
         assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("", image))
         assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
         val observedMode = TournamentModeConfirmation.observeImage(image).observedMode.name
-        assertEquals("UNKNOWN", observedMode, "fixture exercises exact screen evidence without usable mode OCR")
+        assertEquals("WILD", observedMode, "the exact title template must override unavailable title OCR")
 
         try {
-            StartupInputReadiness.recordSelectedTournamentMode(25948, "captured-live-window", "WILD", 50_000L)
             assertTrue(StartupInputReadiness.recordStartupOnlineScreen(
                 pid = 25948,
                 hwnd = "captured-live-window",
@@ -412,7 +516,7 @@ class StartupDeckModeNavigationIntegrationTest {
                 enabledStartButtonVisible = true,
                 modalVisible = false,
                 now = 50_001L,
-            ), "unknown OCR is usable only when an independent same-window mode selection is fresh")
+            ), "fresh visible Wild title plus exact Start control may mint the narrow Start proof")
             assertTrue(StartupInputAuthorizationPolicy.allows(
                 action = "matchmaking.start",
                 currentSessionReady = false,
@@ -615,17 +719,16 @@ class StartupDeckModeNavigationIntegrationTest {
             modalVisible = false,
             now = now,
         ))
-        var correctionDispatches = 0
+        var selectorOpenDispatches = 0
         var modeReprobes = 0
-        assertTrue(StartupDeckModeNavigationPolicy.dispatchConfiguredModeCorrection(
+        assertTrue(StartupDeckModeNavigationPolicy.dispatchOpenSelectorForVerifiedDeckMismatch(
             image = image,
             expectedMode = "WILD",
             decision = decision,
-            freshWildControlProof = true,
-            openSelectorAndSelectMode = { correctionDispatches++; true },
-            requestFreshModeProbe = { modeReprobes++ },
-        ), "fresh exact opposite-mode deck proof may open the format menu and select only configured Wild")
-        assertEquals(1, correctionDispatches)
+            dispatchOpenSelector = { selectorOpenDispatches++; true },
+            requestFreshSelectorProbe = { modeReprobes++ },
+        ), "fresh exact opposite-mode deck proof may open the format menu, but cannot select from this frame")
+        assertEquals(1, selectorOpenDispatches)
         assertEquals(1, modeReprobes)
         assertTrue(StartupDeckModeNavigationPolicy.allowsDispatch(
             action = StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION,
@@ -638,17 +741,36 @@ class StartupDeckModeNavigationIntegrationTest {
             activeMatchmaking = false,
             terminal = false,
         ))
-        assertTrue(StartupDeckModeNavigationPolicy.allowsDispatch(
+        assertFalse(StartupDeckModeNavigationPolicy.allowsDispatch(
             action = StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION,
-            proofFresh = StartupInputReadiness.isDeckSelectionModeNavigationReady(
-                16992, "live-standard-window", now + 1, expectedMode = "WILD",
+            proofFresh = StartupInputReadiness.isWildModeSelectorControlReady(
+                16992, "live-standard-window", now + 1,
             ),
             exactWindowVerified = true,
             currentSessionReady = false,
             activeGame = false,
             activeMatchmaking = false,
             terminal = false,
+        ), "deck mismatch proof alone cannot dispatch the Wild selector coordinate")
+        assertTrue(StartupInputReadiness.recordWildModeSelectorControl(
+            pid = 16992,
+            hwnd = "live-standard-window",
+            confidence = 96,
+            modalVisible = true,
+            wildAndStandardOptionsVisible = true,
+            now = now + 2,
         ))
+        assertTrue(StartupDeckModeNavigationPolicy.allowsDispatch(
+            action = StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION,
+            proofFresh = StartupInputReadiness.isWildModeSelectorControlReady(
+                16992, "live-standard-window", now + 3,
+            ),
+            exactWindowVerified = true,
+            currentSessionReady = false,
+            activeGame = false,
+            activeMatchmaking = false,
+            terminal = false,
+        ), "only the fresh selector capture permits the Wild coordinate")
         listOf(
             StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION,
             StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION,
@@ -684,12 +806,12 @@ class StartupDeckModeNavigationIntegrationTest {
             proofFresh = true, exactWindowVerified = true, currentSessionReady = false,
             activeGame = true, activeMatchmaking = false, terminal = false,
         ), "an active game fences format correction")
-        assertFalse(StartupDeckModeNavigationPolicy.dispatchConfiguredModeCorrection(
+        assertFalse(StartupDeckModeNavigationPolicy.dispatchOpenSelectorForVerifiedDeckMismatch(
             image = image,
             expectedMode = "WILD",
             decision = decision.copy(allowed = false),
-            openSelectorAndSelectMode = { error("blocked correction must not dispatch") },
-            requestFreshModeProbe = {},
+            dispatchOpenSelector = { error("blocked correction must not dispatch") },
+            requestFreshSelectorProbe = {},
         ))
         assertFalse(StartupInputReadiness.recordDeckSelectionStart(
             pid = 16992,
@@ -853,16 +975,20 @@ class StartupDeckModeNavigationIntegrationTest {
     }
 
     @Test
-    fun `recovery source dispatches configured mode correction and refreshes proof before any Start`() {
+    fun `recovery source opens selector then requires fresh selector proof before Wild and Start`() {
         val upstream = File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt").readText()
-        assertTrue(upstream.contains("dispatchConfiguredModeCorrection("))
-        assertTrue(upstream.contains("correctVerifiedDeckSelectionToWild()"))
-        assertTrue(upstream.contains("next=FRESH_CONFIGURED_MODE_PROBE"))
+        assertTrue(upstream.contains("dispatchOpenSelectorForVerifiedDeckMismatch("))
+        assertTrue(upstream.contains("openModeSelectorAfterVerifiedDeckMismatch()"))
+        assertTrue(upstream.contains("next=FRESH_SELECTOR_CAPTURE"))
+        assertTrue(upstream.contains("hasFreshWildSelectorEvidence("))
+        assertTrue(upstream.contains("recordWildModeSelectorControl("))
+        assertTrue(upstream.contains("selectWildFromVerifiedModeSelector()"))
+        assertTrue(upstream.contains("FRESH_MODE_REPROBE_NO_START"))
         val strategy = File("src/main/java/club/xiaojiawei/hsscript/strategy/mode/TournamentModeStrategy.kt").readText()
         assertTrue(strategy.contains("CHANGE_MODE_RECT.lClick(isCancel = false"))
         assertTrue(strategy.contains("WILD_MODE_RECT.lClick("))
         assertTrue(strategy.contains("dispatchAction = StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION"))
-        assertTrue(strategy.indexOf("correctVerifiedDeckSelectionToWild()") <
+        assertTrue(strategy.indexOf("selectWildFromVerifiedModeSelector()") <
             strategy.indexOf("fun startMatching()"))
     }
 

@@ -93,12 +93,18 @@ object ActionDispatchGate {
                 StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION,
             )
         ) "WILD" else null
+        val modeNavigationProofFresh = when (action) {
+            StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION -> processId != null && !hwnd.isNullOrBlank() &&
+                StartupInputReadiness.isWildModeSelectorControlReady(processId, hwnd)
+            else -> processId != null && !hwnd.isNullOrBlank() &&
+                StartupInputReadiness.isDeckSelectionModeNavigationReady(
+                    processId, hwnd, expectedMode = expectedCorrectionMode,
+                )
+        }
         return processId != null && !hwnd.isNullOrBlank() &&
             StartupDeckModeNavigationPolicy.allowsDispatch(
                 action = action,
-                proofFresh = StartupInputReadiness.isDeckSelectionModeNavigationReady(
-                    processId, hwnd, expectedMode = expectedCorrectionMode,
-                ),
+                proofFresh = modeNavigationProofFresh,
                 exactWindowVerified = exactWindowVerified,
                 currentSessionReady = currentSessionReady,
                 activeGame = activeGame,

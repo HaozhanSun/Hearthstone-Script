@@ -158,6 +158,7 @@ class MandatoryRankSurrenderGuardTest {
             paused = false,
             working = true,
             currentSessionReady = true,
+            freshDeckSelectionStartReady = true,
             terminalCleanupPending = MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
         ), "fresh deck selection releases the old game's cleanup fence before the next queue")
     }
@@ -192,6 +193,7 @@ class MandatoryRankSurrenderGuardTest {
                     mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending(),
                     rankBarrierState = MulliganRankDispatchBarrier.currentState(),
                     currentSessionReady = true,
+                    freshDeckSelectionStartReady = true,
                 ),
                 "rank state must not block matchmaking once its screen/session permit is satisfied",
             )
@@ -241,6 +243,7 @@ class MandatoryRankSurrenderGuardTest {
                 mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending(),
                 rankBarrierState = MulliganRankDispatchBarrier.currentState(),
                 currentSessionReady = true,
+                freshDeckSelectionStartReady = true,
             ), "rank state must not block matchmaking once its screen/session permit is satisfied")
             assertFalse(ActionDispatchGate.allowForState(
                 action = "strategy.card.play",
@@ -268,6 +271,7 @@ class MandatoryRankSurrenderGuardTest {
                 paused = false,
                 working = true,
                 currentSessionReady = true,
+                freshDeckSelectionStartReady = true,
             ))
 
             // CREATE_GAME for the next match creates a new mulligan ticket;
@@ -707,6 +711,7 @@ class MandatoryRankSurrenderGuardTest {
                 paused = false,
                 working = true,
                 currentSessionReady = true,
+                freshDeckSelectionStartReady = true,
             ))
             repeat(10) {
                 assertTrue(ActionDispatchGate.allowForState(
@@ -714,6 +719,7 @@ class MandatoryRankSurrenderGuardTest {
                     paused = false,
                     working = true,
                     currentSessionReady = true,
+                    freshDeckSelectionStartReady = true,
                 ), "no stale cleanup block or repeated blocked-action spam")
             }
 
@@ -787,6 +793,7 @@ class MandatoryRankSurrenderGuardTest {
                 paused = false,
                 working = true,
                 currentSessionReady = true,
+                freshDeckSelectionStartReady = true,
             ))
             repeat(10) {
                 assertTrue(ActionDispatchGate.allowForState(
@@ -794,6 +801,7 @@ class MandatoryRankSurrenderGuardTest {
                     paused = false,
                     working = true,
                     currentSessionReady = true,
+                    freshDeckSelectionStartReady = true,
                 ), "the second cleanup cycle does not leave stale blocked dispatch")
             }
         } finally {
@@ -914,6 +922,7 @@ class MandatoryRankSurrenderGuardTest {
                 terminalCleanupPending = false,
                 rankBarrierState = MulliganRankDispatchBarrier.currentState(),
                 currentSessionReady = true,
+                freshDeckSelectionStartReady = true,
             ),
             "rank preflight remains post-mulligan and does not re-block the queue start",
         )

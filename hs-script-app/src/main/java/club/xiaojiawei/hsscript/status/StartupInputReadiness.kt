@@ -40,6 +40,7 @@ internal object StartupInputReadiness {
     const val HUB_MODE_CHOOSER_PROOF_MAX_AGE_MS = 30_000L
     const val DECK_SELECTION_START_PROOF_MAX_AGE_MS = 8_000L
     const val DECK_MODE_NAVIGATION_PROOF_MAX_AGE_MS = 30_000L
+    const val WILD_MODE_SELECTOR_CONTROL_PROOF_MAX_AGE_MS = 5_000L
     const val SELECTED_MODE_START_PERMIT_MAX_AGE_MS = 30_000L
 
     /** Recent selector observation; it may resolve UNKNOWN title OCR when minting fresh deck Start proof. */
@@ -170,6 +171,35 @@ internal object StartupInputReadiness {
         return true
     }
 
+    /** Fresh same-window proof that the Wild option was visible on the mode-selector modal. */
+    fun recordWildModeSelectorControl(
+        pid: Int,
+        hwnd: String,
+        confidence: Int,
+        modalVisible: Boolean,
+        wildAndStandardOptionsVisible: Boolean,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean {
+        val previous = proof.get()
+        val hasFreshMismatchAuthority = previous?.let {
+            it.pid == pid && it.hwnd == hwnd && it.screen == DECK_SELECTION_MODE_NAV_SCREEN &&
+                it.expectedMode == "WILD" && it.observedMode == "STANDARD" &&
+                now >= it.observedAt && now - it.observedAt <= DECK_MODE_NAVIGATION_PROOF_MAX_AGE_MS
+        } == true
+        if (pid <= 0 || hwnd.isBlank() || confidence < 90 || !modalVisible ||
+            !wildAndStandardOptionsVisible || !hasFreshMismatchAuthority
+        ) return false
+        proof.set(Proof(
+            pid = pid,
+            hwnd = hwnd,
+            screen = WILD_MODE_SELECTOR_SCREEN,
+            observedAt = now,
+            expectedMode = "WILD",
+            observedMode = "STANDARD",
+        ))
+        return true
+    }
+
     fun recordStartupOnlineScreen(
         pid: Int,
         hwnd: String,
@@ -217,6 +247,16 @@ internal object StartupInputReadiness {
         it.pid == pid && it.hwnd == hwnd && it.screen == DECK_SELECTION_MODE_NAV_SCREEN &&
             now >= it.observedAt && now - it.observedAt <= DECK_MODE_NAVIGATION_PROOF_MAX_AGE_MS &&
             (expectedMode == null || it.expectedMode == expectedMode && it.observedMode != expectedMode)
+    } == true
+
+    fun isWildModeSelectorControlReady(
+        pid: Int,
+        hwnd: String,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean = proof.get()?.let {
+        it.pid == pid && it.hwnd == hwnd && it.screen == WILD_MODE_SELECTOR_SCREEN &&
+            it.expectedMode == "WILD" && it.observedMode == "STANDARD" &&
+            now >= it.observedAt && now - it.observedAt <= WILD_MODE_SELECTOR_CONTROL_PROOF_MAX_AGE_MS
     } == true
 
     fun invalidate(pid: Int? = null, hwnd: String? = null) {
@@ -351,6 +391,7 @@ internal object StartupInputReadiness {
     private const val HUB_MODE_CHOOSER_SCREEN = "HUB_MODE_CHOOSER"
     private const val DECK_SELECTION_START_SCREEN = "DECK_SELECTION_START"
     private const val DECK_SELECTION_MODE_NAV_SCREEN = "DECK_SELECTION_MODE_NAV"
+    private const val WILD_MODE_SELECTOR_SCREEN = "WILD_MODE_SELECTOR_CONTROL"
     private val CONFIRMABLE_TOURNAMENT_MODES = setOf("STANDARD", "WILD")
     private val DECK_SELECTION_START_EVIDENCE = setOf(
         "deck-selection-title", "deck-selection-title-roi", "deck-selection-start-control-visual",

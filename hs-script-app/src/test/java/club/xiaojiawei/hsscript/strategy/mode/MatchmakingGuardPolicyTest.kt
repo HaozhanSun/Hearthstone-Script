@@ -30,12 +30,13 @@ class MatchmakingGuardPolicyTest {
             .map { it.resolve(relative) }
             .first { Files.isRegularFile(it) }
         val source = Files.readString(file)
-        val startMatching = source.substringAfter("fun startMatching() {").substringBefore("private fun abortMatchmakingIfGameStarted")
+        val startMatching = source.substringAfter("fun startMatching() {")
+            .substringBefore("private fun abortMatchmakingInputIfNoLongerNeeded")
 
         assertTrue(startMatching.contains("MatchmakingGuardPolicy.runtimeAllowsInput"))
         assertTrue(startMatching.contains("abortMatchmakingInputIfNoLongerNeeded"))
         assertTrue(startMatching.contains("LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = true)"))
-        assertTrue(startMatching.contains("val startDispatched = clickMatchmakingControl(START_RECT)"))
+        assertTrue(startMatching.contains("val startDispatched = clickMatchmakingStartControl()"))
         assertTrue(startMatching.contains("rankPolicy=POST_MULLIGAN"))
         assertFalse(startMatching.contains("CurrentRankDetector"))
         assertFalse(startMatching.contains("RankEligibilityPolicy"))

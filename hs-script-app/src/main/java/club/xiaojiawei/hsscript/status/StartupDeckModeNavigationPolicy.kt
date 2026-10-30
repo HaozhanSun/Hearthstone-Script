@@ -5,6 +5,7 @@ internal object StartupDeckModeNavigationPolicy {
     const val ACTION = "startup.mode-return-to-selector"
     const val OPEN_SELECTOR_ACTION = "startup.mode-open-selector"
     const val SELECT_WILD_ACTION = "startup.mode-select-wild"
+    const val MODE_SELECTOR_SCREEN = "TOURNAMENT_MODE_SELECTOR"
 
     fun isModeProofProbe(purpose: ScreenRecoveryCapturePurpose): Boolean =
         purpose == ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE ||
@@ -110,25 +111,34 @@ internal object StartupDeckModeNavigationPolicy {
         return accepted
     }
 
-    /** Dispatches only configured-Wild selection controls from a fresh exact opposite-mode deck screenshot. */
-    fun dispatchConfiguredModeCorrection(
+    /** Open only the mode crest from a fresh, exact opposite-mode deck page; selection requires a later probe. */
+    fun dispatchOpenSelectorForVerifiedDeckMismatch(
         image: java.awt.image.BufferedImage,
         expectedMode: String?,
         decision: Decision,
-        freshWildControlProof: Boolean = false,
-        openSelectorAndSelectMode: () -> Boolean,
-        requestFreshModeProbe: () -> Unit,
+        dispatchOpenSelector: () -> Boolean,
+        requestFreshSelectorProbe: () -> Unit,
     ): Boolean {
         val exactOppositeMode = expectedMode == "WILD" &&
             TournamentModeConfirmation.isConfirmedModeMismatch(image, expectedMode)
-        // The deck frame proves only the mismatch. It does not prove where the
-        // Wild option is in the selector opened by the next click. Require a
-        // separate fresh selector capture before any Wild-coordinate dispatch.
-        if (!exactOppositeMode || !decision.allowed || !freshWildControlProof) return false
-        val accepted = openSelectorAndSelectMode()
-        if (accepted) requestFreshModeProbe()
+        if (!exactOppositeMode || !decision.allowed) return false
+        val accepted = dispatchOpenSelector()
+        if (accepted) requestFreshSelectorProbe()
         return accepted
     }
+
+    /** Mode option text is actionable only on the freshly captured centered selector modal. */
+    fun hasFreshWildSelectorEvidence(
+        screenKind: String?,
+        modalVisible: Boolean,
+        wildTargetLabelVisible: Boolean,
+        ocrText: String,
+    ): Boolean {
+        val text = ocrText.lowercase(java.util.Locale.ROOT).replace(Regex("\\s+"), "")
+        val hasStandard = text.contains("标准对战") || text.contains("标准模式")
+        return screenKind == MODE_SELECTOR_SCREEN && modalVisible && wildTargetLabelVisible && hasStandard
+    }
+
 }
 
 /** One automatic Back attempt per continuous startup deck-selection screen. */
@@ -138,6 +148,7 @@ internal class StartupDeckModeNavigationAttemptGate {
     private var processId: Int? = null
     private var hwnd: String? = null
     private var attempts = 0
+    private var reservationInFlight = false
 
     @Synchronized
     fun tryBegin(pid: Int, window: String): Decision {
@@ -146,10 +157,21 @@ internal class StartupDeckModeNavigationAttemptGate {
             processId = pid
             hwnd = window
             attempts = 0
+            reservationInFlight = false
         }
         if (attempts >= MAX_ATTEMPTS) return Decision(false, attempts, "attempt-budget-exhausted")
-        attempts++
-        return Decision(true, attempts, "single-safe-navigation-attempt")
+        if (reservationInFlight) return Decision(false, attempts + 1, "navigation-dispatch-in-flight")
+        reservationInFlight = true
+        return Decision(true, attempts + 1, "reserved-until-input-accepted")
+    }
+
+    /** Commit the one-attempt budget only after the final desktop dispatcher accepted the click. */
+    @Synchronized
+    fun resolve(pid: Int, window: String, inputAccepted: Boolean): Boolean {
+        if (processId != pid || hwnd != window || !reservationInFlight) return false
+        reservationInFlight = false
+        if (inputAccepted) attempts++
+        return inputAccepted
     }
 
     @Synchronized
@@ -157,6 +179,7 @@ internal class StartupDeckModeNavigationAttemptGate {
         processId = null
         hwnd = null
         attempts = 0
+        reservationInFlight = false
     }
 
     companion object {

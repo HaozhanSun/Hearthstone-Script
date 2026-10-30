@@ -511,15 +511,27 @@ this deletion boundary.
   UNKNOWN but a fresh, exact client capture has the fixed enabled Start-control
   visual, no modal/quest/queue visual, and a configured deck, classify only the
   deck-selection screen. The Start proof still requires an independently
-  confirmed configured format; an exact, high-confidence opposite-mode deck
-  screenshot may authorize only opening the format selector and clicking the
-  configured format under a short PID/HWND-bound proof. Never pre-click a
-  format option with a right-click because it can dismiss the selector. Recheck
-  the mode after selection before deck selection or Start, and retain
+  confirmed configured format. For an exact Standard page with configured
+  Wild, the opposite-mode screenshot may authorize only opening the visible
+  upper-right mode crest. Capture the same PID/HWND again; click Wild only when
+  that fresh centered selector modal visibly identifies Standard and OCR finds
+  Wild inside the exact configured Wild-control rectangle, under a five-second
+  PID/HWND-bound selector-control proof. Generic Wild text elsewhere on the
+  screenshot is not target proof. A deck page mismatch alone must never
+  authorize the Wild-option coordinate. Never
+  pre-click a format option with a right-click because it can dismiss the
+  selector. Recheck the mode after selection before deck selection or Start,
+  and retain
   active-game, current-queue,
   terminal, exact-window, and post-mulligan surrender fences. Regression must
-  use the saved live frame and assert that the named navigation dispatch is
-  reached while `matchmaking.start` remains blocked for UNKNOWN mode.
+  use the saved live frame and assert that only the crest dispatch is reached,
+  then require the fresh selector proof before the Wild dispatch; keep
+  `matchmaking.start` blocked until the subsequent mode and deck proofs exist.
+  Commit the one-attempt recovery budget only after the final mouse dispatcher
+  accepts input. A stale screen or rejected dispatch releases the reservation
+  so a later fresh probe can retry. Unknown OCR never means the deterministic
+  click succeeded: fail closed unless a fresh visible mode identity is found.
+  Use title-bar visual templates for Standard and Wild when title OCR fails.
   After configured-mode correction is accepted, schedule a fresh
   process/window-bound mode probe. Do not treat the click or the old
   deck-selection capture as proof that the configured format is now selected;

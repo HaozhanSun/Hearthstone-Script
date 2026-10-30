@@ -74,6 +74,7 @@ object UpstreamScreenStateRecovery {
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
+        TOURNAMENT_MODE_SELECTOR(StartupDeckModeNavigationPolicy.MODE_SELECTOR_SCREEN),
         HOME("HOME"),
         TOURNAMENT("TOURNAMENT"),
         MATCHMAKING("MATCHMAKING"),
@@ -275,7 +276,12 @@ object UpstreamScreenStateRecovery {
             return false
         }
         val decisionStartedAt = System.nanoTime()
-        val ocrDetection = detect(ocrText, capture.visual)
+        val ocrDetection = detect(
+            ocrText,
+            capture.visual,
+            ScreenStateRecovery.hasCenteredModalPanel(capture.image),
+            capture.image,
+        )
         val detection = ocrDetection ?: startupDeckSelectionVisualDetection(
             purpose = authorizedCapture.purpose,
             image = capture.image,
@@ -406,7 +412,8 @@ object UpstreamScreenStateRecovery {
                 ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
                 ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
                 ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
-            ) && !ScreenStateRecovery.isCurrentGameSessionReadyForStart()
+            ) && !ScreenStateRecovery.isCurrentGameSessionReadyForStart() &&
+            detection?.kind != ScreenKind.TOURNAMENT_MODE_SELECTOR
         ) {
             // A fresh, process-bound reconnect/unknown/modal observation revokes
             // any prior startup menu authorization; it must not survive a UI change.
@@ -426,7 +433,62 @@ object UpstreamScreenStateRecovery {
                 !blockingModalVisible &&
                 !looksLikeReconnectText(ocrText) && !looksLikeReconnectFailureText(ocrText) &&
                 detection != null && ScreenRecoveryCapturePurposePolicy.allowsStartupOnlineMenu(detection.kind.code)
-            if (startupHubModeChooser) {
+            if (detection?.kind == ScreenKind.TOURNAMENT_MODE_SELECTOR) {
+                val currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart()
+                val activeGame = currentSessionReady || WarEx.inWar || Mode.currMode == ModeEnum.GAMEPLAY
+                val terminal = GameUtil.isTerminalGameState() ||
+                    MandatoryRankSurrenderGuard.isPending() ||
+                    MandatoryRankSurrenderGuard.isTerminalCleanupPending() ||
+                    PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence()
+                val exactWindow = pid != null && currentHwnd == hwnd &&
+                    GameUtil.isVerifiedCurrentGameWindow(authorizedCapture.gameWindow)
+                val hasSelectorOptions = StartupDeckModeNavigationPolicy.hasFreshWildSelectorEvidence(
+                    screenKind = detection.kind.code,
+                    modalVisible = blockingModalVisible,
+                    wildTargetLabelVisible = detection.evidence ==
+                        "mode-selector-centered-modal-with-standard-and-wild-target-label",
+                    ocrText = ocrText,
+                )
+                val priorMismatchProof = pid != null && StartupInputReadiness.isDeckSelectionModeNavigationReady(
+                    pid, hwnd, expectedMode = "WILD",
+                )
+                val selectorProofRecorded = pid != null && exactWindow && priorMismatchProof &&
+                    !currentSessionReady && !activeGame && !activeQueueEvidence && !terminal &&
+                    stateStillCurrent() && WorkTimeListener.working && !PauseStatus.isPause &&
+                    StartupInputReadiness.recordWildModeSelectorControl(
+                        pid = pid,
+                        hwnd = hwnd,
+                        confidence = detection.confidence,
+                        modalVisible = blockingModalVisible,
+                        wildAndStandardOptionsVisible = hasSelectorOptions,
+                    )
+                val selected = selectorProofRecorded && stateStillCurrent() &&
+                    !WarEx.inWar && !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+                    !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() &&
+                    !GameUtil.isTerminalGameState() &&
+                    TournamentModeStrategy.selectWildFromVerifiedModeSelector()
+                startupClassificationOnly = true
+                log.warn {
+                    "STARTUP_DECK_MODE_NAVIGATION stage=FRESH_SELECTOR_CAPTURE " +
+                        "decision=${if (selected) "WILD_SELECTED" else "BLOCKED"} " +
+                        "reason=${when {
+                            selected -> "fresh-selector-visible-wild-option"
+                            !hasSelectorOptions -> "wild-and-standard-options-not-both-visible"
+                            !priorMismatchProof -> "prior-opposite-mode-deck-proof-missing-or-expired"
+                            !exactWindow -> "exact-window-not-verified"
+                            activeGame -> "active-game"
+                            activeQueueEvidence -> "active-matchmaking"
+                            terminal -> "terminal-state"
+                            else -> "runtime-or-dispatch-fence"
+                        }} " +
+                        "pid=${pid ?: "none"} hwnd=$hwnd confidence=${detection.confidence} " +
+                        "evidence=${detection.evidence} modal=$blockingModalVisible " +
+                        "optionsVisible=$hasSelectorOptions priorMismatchProof=$priorMismatchProof " +
+                        "exactWindow=$exactWindow activeGame=$activeGame activeQueue=$activeQueueEvidence " +
+                        "terminal=$terminal inputAccepted=$selected action=${if (selected) "FRESH_MODE_REPROBE_NO_START" else "NO_INPUT_NO_START"}"
+                }
+                if (selected) ScreenStateRecovery.scheduleStartupMenuReprobeAfterModeSelection()
+            } else if (startupHubModeChooser) {
                 // The chooser is the HUB's Traditional Battle/Tavern Brawl/Arena
                 // list, not the tournament strategy screen. Keep it classification-
                 // only; its exact first action is authorized separately.
@@ -515,39 +577,39 @@ object UpstreamScreenStateRecovery {
                             !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() &&
                             !GameUtil.isTerminalGameState()
                         ) {
-                            StartupDeckModeNavigationPolicy.dispatchConfiguredModeCorrection(
+                            StartupDeckModeNavigationPolicy.dispatchOpenSelectorForVerifiedDeckMismatch(
                                 image = capture.image,
                                 expectedMode = expectedMode,
                                 decision = navigationDecision,
-                                // This capture is the Standard deck page, not the
-                                // mode selector. A selector-specific visual proof
-                                // must be added before dispatching the Wild target.
-                                freshWildControlProof = false,
-                                openSelectorAndSelectMode = {
-                                    TournamentModeStrategy.correctVerifiedDeckSelectionToWild()
+                                dispatchOpenSelector = {
+                                    TournamentModeStrategy.openModeSelectorAfterVerifiedDeckMismatch()
                                 },
-                                requestFreshModeProbe = {
+                                requestFreshSelectorProbe = {
                                     log.warn {
                                         "STARTUP_DECK_MODE_NAVIGATION_POSTCHECK scheduled=true pid=$pid hwnd=$hwnd " +
-                                            "next=FRESH_CONFIGURED_MODE_PROBE expectedMode=${expectedMode ?: "UNKNOWN"} " +
-                                            "action=NO_START"
+                                            "next=FRESH_SELECTOR_CAPTURE expectedMode=${expectedMode ?: "UNKNOWN"} " +
+                                            "action=NO_MODE_SELECTION_NO_START"
                                     }
                                     ScreenStateRecovery.scheduleStartupMenuReprobeAfterModeSelection()
                                 },
                             )
                         } else false
+                        val attemptCommitted = if (attempt.allowed) {
+                            startupDeckModeNavigationAttempts.resolve(pid, hwnd, accepted)
+                        } else false
                         modeNavigationAttempted = accepted
                         log.warn {
                             "STARTUP_DECK_MODE_NAVIGATION decision=${if (accepted) "MODE_CORRECTION_DISPATCHED" else "BLOCKED"} " +
-                                "reason=${if (accepted) "fresh-opposite-mode-deck-proof" else if (!attempt.allowed) attempt.reason else if (!proofRecorded) "proof-not-recorded" else if (!navigationDecision.allowed) navigationDecision.denial.name.lowercase() else "wild-selector-control-not-visually-confirmed"} " +
+                                "reason=${if (accepted) "fresh-opposite-mode-deck-proof" else if (!attempt.allowed) attempt.reason else if (!proofRecorded) "proof-not-recorded" else if (!stateStillCurrent()) "state-changed-before-dispatch" else if (WarEx.inWar) "active-game-before-dispatch" else if (LifecycleTrace.hasRecentActiveMatchmakingScreen() || LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()) "active-queue-before-dispatch" else if (GameUtil.isTerminalGameState()) "terminal-before-dispatch" else "input-dispatch-rejected"} " +
                                 "attempt=${attempt.attempt} expectedMode=${expectedMode ?: "UNKNOWN"} " +
                                 "observedMode=${observedMode ?: "UNKNOWN"} pid=$pid hwnd=$hwnd " +
                                 "confidence=${currentDetection.confidence} evidence=${currentDetection.evidence} " +
                                 "startVisible=$startVisible wrongModeDeckTooltip=$wrongModeDeckTooltip " +
                                 "activeGame=$activeGame activeQueue=$activeQueue " +
                                 "terminal=$terminal exactWindow=$trustedWindow " +
-                                "action=${if (accepted) "${StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION}+${StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION}" else "NO_MODE_INPUT"} " +
-                                "freshWildControlProof=false inputAccepted=$accepted"
+                                "action=${if (accepted) StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION else "NO_MODE_INPUT"} " +
+                                "next=${if (accepted) "FRESH_SELECTOR_CAPTURE" else "RETRY_ON_NEXT_FRESH_PROBE"} " +
+                                "inputAccepted=$accepted attemptBudgetCommitted=$attemptCommitted"
                         }
                     } else {
                         log.warn {
@@ -1637,7 +1699,12 @@ object UpstreamScreenStateRecovery {
         return accepted
     }
 
-    private fun detect(ocrText: String, visual: VisualSignature): Detection? {
+    private fun detect(
+        ocrText: String,
+        visual: VisualSignature,
+        modalVisible: Boolean = false,
+        image: BufferedImage? = null,
+    ): Detection? {
         if (visual.battleNetLauncherVisual) return null
         val text = ocrText.lowercase(Locale.ROOT)
         fun has(vararg terms: String): Boolean = terms.all { text.contains(it) }
@@ -1722,6 +1789,24 @@ object UpstreamScreenStateRecovery {
                 ModeEnum.TOURNAMENT,
                 96,
                 "event-quest-overlay-structural-visual",
+            )
+        }
+        val standardModeOptionVisible = text.contains("标准对战") || text.contains("标准模式")
+        val wildModeOptionTextPresent = text.contains("狂野对战") || text.contains("狂野模式")
+        val wildTargetLabelVisible = modalVisible && standardModeOptionVisible && wildModeOptionTextPresent &&
+            image?.let(TournamentModeConfirmation::hasWildSelectorControlAtConfiguredTarget) == true
+        if (StartupDeckModeNavigationPolicy.hasFreshWildSelectorEvidence(
+                screenKind = StartupDeckModeNavigationPolicy.MODE_SELECTOR_SCREEN,
+                modalVisible = modalVisible,
+                wildTargetLabelVisible = wildTargetLabelVisible,
+                ocrText = text,
+            )
+        ) {
+            return Detection(
+                ScreenKind.TOURNAMENT_MODE_SELECTOR,
+                ModeEnum.TOURNAMENT,
+                96,
+                "mode-selector-centered-modal-with-standard-and-wild-target-label",
             )
         }
         val hubModeChoiceText = listOf("传统对战", "酒馆战棋", "竞技模式", "其他模式")

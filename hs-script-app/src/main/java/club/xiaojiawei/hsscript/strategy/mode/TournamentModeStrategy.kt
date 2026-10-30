@@ -356,8 +356,8 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         CASUAL_MODE_RECT.lClick(isCancel = false)
     }
 
-    /** Select Wild only when screen recovery minted a fresh opposite-mode deck-selection permit. */
-    internal fun correctVerifiedDeckSelectionToWild(): Boolean {
+    /** Open the mode selector only after exact Standard deck-screen proof; selection needs a fresh next frame. */
+    internal fun openModeSelectorAfterVerifiedDeckMismatch(): Boolean {
         val opened = CHANGE_MODE_RECT.lClick(
             isCancel = false,
             dispatchAction = StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION,
@@ -366,14 +366,22 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
             log.warn { "STARTUP_MODE_CORRECTION action=OPEN_SELECTOR accepted=false target=WILD" }
             return false
         }
-        SystemUtil.delayShort()
+        log.warn {
+            "STARTUP_MODE_CORRECTION action=OPEN_SELECTOR accepted=true target=WILD " +
+                "proof=FRESH_STANDARD_DECK_SCREEN next=FRESH_SELECTOR_CAPTURE action=NO_MODE_SELECTION_NO_START"
+        }
+        return true
+    }
+
+    /** Select Wild only when a fresh selector-modal capture visibly contains both mode options. */
+    internal fun selectWildFromVerifiedModeSelector(): Boolean {
         val selected = WILD_MODE_RECT.lClick(
             isCancel = false,
             dispatchAction = StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION,
         )
         log.warn {
             "STARTUP_MODE_CORRECTION action=SELECT_CONFIGURED_MODE accepted=$selected target=WILD " +
-                "proof=FRESH_OPPOSITE_MODE_DECK_SELECTION next=FRESH_MODE_PROBE_NO_START"
+                "proof=FRESH_SELECTOR_MODAL_WITH_WILD_OPTION next=FRESH_MODE_PROBE_NO_START"
         }
         return selected
     }

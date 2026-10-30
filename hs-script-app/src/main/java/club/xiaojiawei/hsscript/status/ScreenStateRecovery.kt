@@ -97,6 +97,7 @@ object ScreenStateRecovery {
     private val loadingObservedAt = AtomicLong(0L)
     private val startGameErrorProbeInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     private val startupMenuReprobeInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val startupMenuReprobePending = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
@@ -340,7 +341,10 @@ object ScreenStateRecovery {
 
     /** Re-observe the same verified client after the single authorized HUB entry click. */
     fun scheduleStartupMenuReprobeAfterModeSelection() {
-        if (!startupMenuReprobeInFlight.compareAndSet(false, true)) return
+        if (!startupMenuReprobeInFlight.compareAndSet(false, true)) {
+            startupMenuReprobePending.set(true)
+            return
+        }
         EXTRA_THREAD_POOL.schedule({
             try {
                 if (!WorkTimeListener.working || PauseStatus.isPause || WarEx.inWar) return@schedule
@@ -351,6 +355,11 @@ object ScreenStateRecovery {
                 )
             } finally {
                 startupMenuReprobeInFlight.set(false)
+                if (startupMenuReprobePending.getAndSet(false) &&
+                    WorkTimeListener.working && !PauseStatus.isPause && !WarEx.inWar
+                ) {
+                    scheduleStartupMenuReprobeAfterModeSelection()
+                }
             }
         }, STARTUP_MODE_ENTRY_REPROBE_DELAY_MS, TimeUnit.MILLISECONDS)
     }

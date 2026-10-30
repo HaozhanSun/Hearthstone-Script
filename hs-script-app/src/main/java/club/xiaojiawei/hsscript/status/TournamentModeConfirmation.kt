@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscript.consts.CHI_SIM_DATA
 import club.xiaojiawei.hsscript.consts.TESS_DATA_PATH
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
+import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import club.xiaojiawei.hsscriptstrategysdk.DeckStrategy
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscript.utils.GameUtil
@@ -66,9 +67,16 @@ object TournamentModeConfirmation {
     private const val STANDARD_TITLE_WIDTH = 190
     private const val STANDARD_TITLE_HEIGHT = 50
     private const val STANDARD_TITLE_MAX_MEAN_RGB_DELTA = 1.0
+    private const val WILD_TITLE_MAX_MEAN_RGB_DELTA = 1.0
     private val standardTitleTemplate: BufferedImage? by lazy {
         runCatching {
             javaClass.getResourceAsStream("/club/xiaojiawei/hsscript/status/standard-mode-title-template.png")
+                ?.use { stream -> ImageIO.read(stream) }
+        }.getOrNull()
+    }
+    private val wildTitleTemplate: BufferedImage? by lazy {
+        runCatching {
+            javaClass.getResourceAsStream("/club/xiaojiawei/hsscript/status/wild-mode-title-template.png")
                 ?.use { stream -> ImageIO.read(stream) }
         }.getOrNull()
     }
@@ -234,17 +242,18 @@ object TournamentModeConfirmation {
             ocrText = "",
             evidence = "capture-failed",
         )
-        val titleRegion = cropTitleRegion(screen)
-        val titleText = runOCR(titleRegion, "tournament-mode-title")
-        return TournamentModeObservation(
-            observedMode = classifyModeTitle(titleText),
-            ocrText = titleText,
-            evidence = "title-roi-ocr",
-        )
+        return observeImage(screen)
     }
 
     /** Classify only the visible title ROI from an authorized fresh client capture. */
     internal fun observeImage(image: BufferedImage): TournamentModeObservation {
+        if (classifyWildTitleVisual(image)) {
+            return TournamentModeObservation(
+                observedMode = ObservedTournamentMode.WILD,
+                ocrText = "",
+                evidence = "title-visual-template-wild",
+            )
+        }
         if (classifyStandardTitleVisual(image)) {
             return TournamentModeObservation(
                 observedMode = ObservedTournamentMode.STANDARD,
@@ -263,6 +272,35 @@ object TournamentModeConfirmation {
     /** One-sided exact-title classifier: a known Standard glyph template, otherwise UNKNOWN/OCR. */
     internal fun classifyStandardTitleVisual(image: BufferedImage): Boolean {
         val template = standardTitleTemplate ?: return false
+        return matchesModeTitleTemplate(image, template, STANDARD_TITLE_MAX_MEAN_RGB_DELTA)
+    }
+
+    /** Exact title-bar template fallback prevents OCR glyph noise from misclassifying a visibly selected Wild page. */
+    internal fun classifyWildTitleVisual(image: BufferedImage): Boolean {
+        val template = wildTitleTemplate ?: return false
+        return matchesModeTitleTemplate(image, template, WILD_TITLE_MAX_MEAN_RGB_DELTA)
+    }
+
+    /** OCR only the configured Wild button rectangle on a fresh selector capture. */
+    internal fun hasWildSelectorControlAtConfiguredTarget(image: BufferedImage): Boolean = runCatching {
+        val target = TournamentModeStrategy.WILD_MODE_RECT.getRelativeRect()
+        val left = kotlin.math.floor(target.x).toInt().coerceIn(0, image.width - 1)
+        val top = kotlin.math.floor(target.y).toInt().coerceIn(0, image.height - 1)
+        val right = kotlin.math.ceil(target.x + target.width).toInt().coerceIn(left + 1, image.width)
+        val bottom = kotlin.math.ceil(target.y + target.height).toInt().coerceIn(top + 1, image.height)
+        val roi = image.getSubimage(left, top, right - left, bottom - top)
+        val text = runOCR(roi, "tournament-mode-selector-wild-target")
+        text.contains("狂野") && !text.contains("标准")
+    }.getOrElse { error ->
+        log.warn(error) { "TOURNAMENT_MODE_SELECTOR_TARGET_OCR_FAILED action=NO_WILD_INPUT" }
+        false
+    }
+
+    private fun matchesModeTitleTemplate(
+        image: BufferedImage,
+        template: BufferedImage,
+        maxMeanRgbDelta: Double,
+    ): Boolean {
         // Clipboard/window captures may omit the final desktop row and column
         // (1919x1079); the title ROI remains at the same origin and is still
         // compared pixel-for-pixel with the known Standard template.
@@ -281,7 +319,7 @@ object TournamentModeConfirmation {
                 totalDelta += kotlin.math.abs((actual and 0xff) - (expected and 0xff))
             }
         }
-        return totalDelta.toDouble() / channelCount <= STANDARD_TITLE_MAX_MEAN_RGB_DELTA
+        return totalDelta.toDouble() / channelCount <= maxMeanRgbDelta
     }
 
     internal fun isConfirmedModeMismatch(image: BufferedImage, expectedMode: String?): Boolean =

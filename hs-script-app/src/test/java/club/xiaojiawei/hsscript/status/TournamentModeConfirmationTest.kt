@@ -218,6 +218,11 @@ class TournamentModeConfirmationTest {
             assertFalse(result)
             assertEquals(3, observations)
             assertFalse(PauseStatus.isAutomaticPause)
+            val source = Files.readString(moduleRoot().resolve(Path.of(
+                "src", "main", "java", "club", "xiaojiawei", "hsscript", "status", "TournamentModeConfirmation.kt",
+            )))
+            assertFalse(source.contains("CONTINUE_DETERMINISTIC_MODE"),
+                "the Sep 19 UNKNOWN fallback must not return to the startup mode path")
         } finally {
             PauseStatus.setAutomaticPause(false)
         }
@@ -269,6 +274,22 @@ class TournamentModeConfirmationTest {
         } finally {
             StartupInputReadiness.resetForTest()
         }
+    }
+
+    @Test
+    fun `visible Wild title template confirms mode even when title OCR is unavailable`() {
+        val image = javax.imageio.ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/deck-selection-screen.png",
+        )))
+        val observation = TournamentModeConfirmation.observeImage(image)
+        assertEquals(ObservedTournamentMode.WILD, observation.observedMode)
+        assertEquals("title-visual-template-wild", observation.evidence)
+
+        val standard = javax.imageio.ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/standard-ranked-deck-selection-user-20261029.png",
+        )))
+        val standardObservation = TournamentModeConfirmation.observeImage(standard)
+        assertEquals(ObservedTournamentMode.STANDARD, standardObservation.observedMode)
     }
 
     @Test
