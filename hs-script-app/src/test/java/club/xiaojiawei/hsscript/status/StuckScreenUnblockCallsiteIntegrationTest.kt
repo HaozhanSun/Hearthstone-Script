@@ -23,9 +23,11 @@ class StuckScreenUnblockCallsiteIntegrationTest {
         stableForMs: Long = 60_000L,
         fingerprint: String = "9704|native@0x44c086e|live-hub-chooser",
         activeQueue: Boolean = false,
+        activeGame: Boolean = false,
         paused: Boolean = false,
         terminal: Boolean = false,
         result: Boolean = false,
+        currentSessionReady: Boolean = false,
     ) = StuckScreenUnblockPolicy.Evidence(
         nowMs = now,
         stableForMs = stableForMs,
@@ -34,8 +36,8 @@ class StuckScreenUnblockCallsiteIntegrationTest {
         exactWindowVerified = true,
         eligibleIdleProbe = true,
         recognizedSafeBlocker = true,
-        currentSessionReady = false,
-        activeGame = false,
+        currentSessionReady = currentSessionReady,
+        activeGame = activeGame,
         activeQueue = activeQueue,
         terminal = terminal,
         paused = paused,
@@ -444,5 +446,110 @@ class StuckScreenUnblockCallsiteIntegrationTest {
         assertEquals(StuckScreenUnblockPolicy.Action.UNBLOCKED, policy.observe(evidence(
             now = 121_200L, stableForMs = 0L, fingerprint = wildFrame.fingerprint,
         )).action)
+    }
+
+    @Test
+    fun `exact live mode selector visual uses semantic ladder with strict gameplay and queue fences`() {
+        val selector = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/mode-selector-wild-standard-casual-live-20261029-190503.png",
+        )))
+        assertTrue(TournamentModeSelectorVisualPolicy.isVisible(selector))
+        val kind = UpstreamScreenStateRecovery.classifyImageForTest("二=", selector)
+        assertEquals("TOURNAMENT_MODE_SELECTOR", kind)
+        assertTrue(SafeIdleUnblockScreenPolicy.matches(
+            screenKind = kind,
+            screenMode = ModeEnum.TOURNAMENT.name,
+            hubModeChooserVisual = false,
+            eventQuestOverlayVisual = false,
+            tournamentModeSelectorVisual = true,
+        ), "only the exact selector structure qualifies for the bounded startup ladder")
+        assertFalse(SafeIdleUnblockScreenPolicy.matches(
+            screenKind = kind,
+            screenMode = ModeEnum.TOURNAMENT.name,
+            hubModeChooserVisual = false,
+            eventQuestOverlayVisual = false,
+            tournamentModeSelectorVisual = false,
+        ), "the semantic screen label without exact visual proof is insufficient")
+
+        listOf(
+            "hub-mode-chooser-live-20261029-035630.png",
+            "reconnect-failure-dialog-over-deck-selection.png",
+            "matchmaking-reward-modal-20261021-200538.png",
+        ).forEach { filename ->
+            val confuser = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+                "/offline-ocr/screen-recovery/$filename",
+            )))
+            assertFalse(TournamentModeSelectorVisualPolicy.isVisible(confuser), "$filename is not the selector")
+        }
+
+        fun semanticFrame(hash: String) = StuckScreenUnblockFrameIdentity.create(
+            processId = 34_996,
+            windowId = "native@selector",
+            perceptualFingerprint = hash,
+            exactReconnectDialog = false,
+            semanticScreenIdentity = StuckScreenUnblockFrameIdentity.semanticScreenIdentity(
+                screenKind = kind,
+                screenMode = ModeEnum.TOURNAMENT.name,
+            ),
+        )
+        val frame1 = semanticFrame("blue-card-animation-1")
+        val frame2 = semanticFrame("blue-card-animation-2")
+        val frame3 = semanticFrame("blue-card-animation-3")
+        assertTrue(StuckScreenUnblockFrameIdentity.isSameClientScreen(frame1, frame3))
+
+        val policy = StuckScreenUnblockPolicy()
+        val first = policy.observe(evidence(
+            now = 61_000L,
+            stableForMs = 60_000L,
+            fingerprint = frame1.fingerprint,
+        ))
+        assertEquals(StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT, first.action)
+        val clicks = mutableListOf<Int>()
+        var rechecks = 0
+        assertTrue(StuckScreenUnblockDispatch.dispatchTopLeftBatch(
+            batchInFlight = AtomicBoolean(false),
+            action = first.action,
+            firstClick = first.clickNumber,
+            freshCaptureAuthorized = StuckScreenUnblockFrameIdentity.isSameClientScreen(frame1, frame2),
+            point = Point(0, 0),
+            expectedFingerprint = frame1.fingerprint,
+            completionTimeMs = { 61_100L },
+            dispatchClick = { point, number ->
+                assertEquals(Point(0, 0), point)
+                clicks += number
+                true
+            },
+            completeBatch = policy::completeTopLeftClickBatch,
+            requestFreshRecheck = { rechecks++ },
+        ))
+        assertEquals(listOf(1, 2, 3), clicks)
+        assertEquals(1, rechecks)
+        assertEquals(StuckScreenUnblockPolicy.Action.REPROBE, policy.observe(evidence(
+            now = 121_099L,
+            stableForMs = 120_099L,
+            fingerprint = frame2.fingerprint,
+        )).action)
+        val restart = policy.observe(evidence(
+            now = 121_100L,
+            stableForMs = 120_100L,
+            fingerprint = frame3.fingerprint,
+        ))
+        assertEquals(StuckScreenUnblockPolicy.Action.RESTART_CLIENT, restart.action)
+        var restartCount = 0
+        listOf(
+            evidence(now = 121_100L, fingerprint = frame3.fingerprint, activeGame = true),
+            evidence(now = 121_100L, fingerprint = frame3.fingerprint, activeQueue = true),
+            evidence(now = 121_100L, fingerprint = frame3.fingerprint, paused = true),
+            evidence(now = 121_100L, fingerprint = frame3.fingerprint, terminal = true),
+            evidence(now = 121_100L, fingerprint = frame3.fingerprint, currentSessionReady = true),
+        ).forEach { fenced ->
+            assertEquals(StuckScreenUnblockPolicy.Action.STOP, StuckScreenUnblockPolicy().observe(fenced).action)
+            assertFalse(StuckScreenUnblockDispatch.dispatchRestartIfAuthorized(
+                action = restart.action,
+                finalSafetyPassed = false,
+                restart = { restartCount++ },
+            ))
+        }
+        assertEquals(0, restartCount)
     }
 }

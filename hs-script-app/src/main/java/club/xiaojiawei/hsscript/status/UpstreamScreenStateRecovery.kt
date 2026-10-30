@@ -69,7 +69,7 @@ object UpstreamScreenStateRecovery {
     private val eventQuestOverlayRecoveryInFlight = AtomicBoolean(false)
     private val eventQuestOverlayRecoveryPolicy = EventQuestOverlayRecoveryPolicy()
     private val startupDeckModeNavigationAttempts = StartupDeckModeNavigationAttemptGate()
-    private val stuckScreenUnblockProbeInFlight = AtomicBoolean(false)
+    private val stuckScreenUnblockRecheckGate = StuckScreenUnblockRecheckGate()
     private val stuckScreenUnblockBatchInFlight = AtomicBoolean(false)
 
     private enum class ScreenKind(val code: String) {
@@ -138,6 +138,7 @@ object UpstreamScreenStateRecovery {
         val amazonAppstoreSunsetNoticeVisual: Boolean = false,
         val startupQuestOverlayVisual: Boolean = false,
         val battleNetLauncherVisual: Boolean = false,
+        val tournamentModeSelectorVisual: Boolean = false,
     ) {
         override fun toString(): String =
             "hash=${java.lang.Long.toUnsignedString(sampleHash, 16)} " +
@@ -152,7 +153,8 @@ object UpstreamScreenStateRecovery {
                 "hubModeChooserVisual=$hubModeChooserVisual " +
                 "amazonAppstoreSunsetNoticeVisual=$amazonAppstoreSunsetNoticeVisual " +
                 "startupQuestOverlayVisual=$startupQuestOverlayVisual " +
-                "battleNetLauncherVisual=$battleNetLauncherVisual"
+                "battleNetLauncherVisual=$battleNetLauncherVisual " +
+                "tournamentModeSelectorVisual=$tournamentModeSelectorVisual"
     }
 
     private data class RegionSignal(
@@ -198,9 +200,28 @@ object UpstreamScreenStateRecovery {
         startupProbe: Boolean = false,
         exactReconnectRecheck: Boolean = false,
         stuckScreenUnblockRecheck: Boolean = false,
+        stuckScreenUnblockRecheckToken: Long? = null,
         stateStillCurrent: () -> Boolean = { true },
     ): Boolean {
-        if (stuckScreenUnblockProbeInFlight.get() && !stuckScreenUnblockRecheck) {
+        val gateNow = System.currentTimeMillis()
+        val timedOutRecheck = stuckScreenUnblockRecheckGate.expireIfTimedOut(gateNow)
+        if (timedOutRecheck != null) {
+            log.error {
+                "STUCK_SCREEN_UNBLOCK_RECHECK result=TIMEOUT generation=${timedOutRecheck.generation} " +
+                    "elapsedMs=${gateNow - timedOutRecheck.startedAtMs} action=RELEASE_GATE_CONTINUE_BOUNDED_RECOVERY"
+            }
+        }
+        if (stuckScreenUnblockRecheck) {
+            if (stuckScreenUnblockRecheckToken == null ||
+                !stuckScreenUnblockRecheckGate.isCurrentGeneration(stuckScreenUnblockRecheckToken, gateNow)
+            ) {
+                log.warn {
+                    "STUCK_SCREEN_UNBLOCK_RECHECK result=STALE_CALLBACK " +
+                        "generation=${stuckScreenUnblockRecheckToken ?: "none"} action=NO_INPUT"
+                }
+                return false
+            }
+        } else if (stuckScreenUnblockRecheckGate.isInFlight(gateNow)) {
             log.warn {
                 "SCREEN_RECOVERY_SKIPPED reason=stuck-screen-post-click-recheck-in-flight " +
                     "state=$stateFingerprint"
@@ -680,6 +701,7 @@ object UpstreamScreenStateRecovery {
                 currentPid = currentPid,
                 stateFingerprint = stateFingerprint,
                 stuckForMs = stuckForMs,
+                stateStillCurrent = stateStillCurrent,
             )
         ) return true
 
@@ -693,6 +715,7 @@ object UpstreamScreenStateRecovery {
                 currentPid = currentPid,
                 stateFingerprint = stateFingerprint,
                 stuckForMs = stuckForMs,
+                stateStillCurrent = stateStillCurrent,
             )
         ) return false
 
@@ -747,6 +770,7 @@ object UpstreamScreenStateRecovery {
                     currentPid = currentPid,
                     stateFingerprint = stateFingerprint,
                     stuckForMs = stuckForMs,
+                    stateStillCurrent = stateStillCurrent,
                 )
             ) return false
             val eligibleProbe = authorizedCapture.purpose in setOf(
@@ -1412,6 +1436,7 @@ object UpstreamScreenStateRecovery {
             amazonAppstoreSunsetNoticeVisual = ScreenStateRecovery.looksLikeAmazonAppstoreSunsetNoticeVisual(image),
             startupQuestOverlayVisual = StartupQuestOverlayVisualClassifier.isQuestOverlay(image),
             battleNetLauncherVisual = BattleNetLauncherVisualPolicy.isVisible(image),
+            tournamentModeSelectorVisual = TournamentModeSelectorVisualPolicy.isVisible(image),
         )
     }
 
@@ -2405,6 +2430,7 @@ object UpstreamScreenStateRecovery {
         currentPid: Int?,
         stateFingerprint: String,
         stuckForMs: Long,
+        stateStillCurrent: () -> Boolean = { true },
     ): Boolean {
         val capture = authorizedCapture.capture
         if (StartupHubModeChooserPolicy.shouldDeferGenericIdleUnblock(
@@ -2519,7 +2545,12 @@ object UpstreamScreenStateRecovery {
             StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT -> {
                 val fresh = captureVerifiedGameScreen(stuckForMs = stuckForMs, startupProbe = true)
                 val freshVisualDetection = fresh?.let {
-                    detect("", it.capture.visual) ?: startupDeckSelectionVisualDetection(
+                    detect(
+                        "",
+                        it.capture.visual,
+                        ScreenStateRecovery.hasCenteredModalPanel(it.capture.image),
+                        it.capture.image,
+                    ) ?: startupDeckSelectionVisualDetection(
                         purpose = it.purpose,
                         image = it.capture.image,
                         ocrUnknown = true,
@@ -2545,6 +2576,7 @@ object UpstreamScreenStateRecovery {
                     fresh.gameWindow.toString() == authorizedCapture.gameWindow.toString() &&
                     fresh.purpose in setOf(ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
                         ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE, ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE) &&
+                    stateStillCurrent() &&
                     System.nanoTime() - fresh.capture.capturedAtNanos <= 5_000_000_000L &&
                     freshFrame != null && StuckScreenUnblockFrameIdentity.isSameClientScreen(currentFrameProof, freshFrame) &&
                     (freshVisualDetection == null || exactReconnect &&
@@ -2590,24 +2622,41 @@ object UpstreamScreenStateRecovery {
                     },
                     completeBatch = stuckScreenUnblockPolicy::completeTopLeftClickBatch,
                     requestFreshRecheck = {
-                        if (stuckScreenUnblockProbeInFlight.compareAndSet(false, true)) {
-                            EXTRA_THREAD_POOL.schedule({
-                                try {
-                                    inspectAndRecover(
-                                        stuckForMs,
-                                        stateFingerprint,
-                                        startupProbe = true,
-                                        stuckScreenUnblockRecheck = true,
-                                    )
-                                } finally {
-                                    stuckScreenUnblockProbeInFlight.set(false)
+                        val scheduled = stuckScreenUnblockRecheckGate.schedule(
+                            nowMs = System.currentTimeMillis(),
+                            enqueue = { task ->
+                                EXTRA_THREAD_POOL.schedule({ task() }, 800L, TimeUnit.MILLISECONDS)
+                            },
+                        ) { lease ->
+                            try {
+                                val completed = inspectAndRecover(
+                                    stuckForMs,
+                                    stateFingerprint,
+                                    startupProbe = true,
+                                    stuckScreenUnblockRecheck = true,
+                                    stuckScreenUnblockRecheckToken = lease.generation,
+                                    stateStillCurrent = {
+                                        stateStillCurrent() && stuckScreenUnblockRecheckGate.isCurrentGeneration(
+                                            lease.generation, System.currentTimeMillis(),
+                                        )
+                                    },
+                                )
+                                log.info {
+                                    "STUCK_SCREEN_UNBLOCK_RECHECK result=COMPLETED " +
+                                        "generation=${lease.generation} inspectReturned=$completed"
                                 }
-                            }, 800L, TimeUnit.MILLISECONDS)
-                            log.warn {
-                                "STUCK_SCREEN_UNBLOCK_RECHECK scheduled=true delayMs=800 clickCount=3 action=FRESH_CAPTURE"
+                            } catch (error: Throwable) {
+                                log.error(error) {
+                                    "STUCK_SCREEN_UNBLOCK_RECHECK result=FAILED generation=${lease.generation} " +
+                                        "action=RELEASE_GATE"
+                                }
                             }
-                        } else {
-                            log.warn { "STUCK_SCREEN_UNBLOCK_RECHECK scheduled=false reason=probe-in-flight clickCount=3" }
+                        }
+                        log.warn {
+                            "STUCK_SCREEN_UNBLOCK_RECHECK scheduled=$scheduled delayMs=800 clickCount=3 " +
+                                "timeoutMs=${StuckScreenUnblockRecheckGate.DEFAULT_TIMEOUT_MS} " +
+                                "action=${if (scheduled) "FRESH_CAPTURE" else "CONTINUE_BOUNDED_RECOVERY"} " +
+                                "reason=${if (scheduled) "accepted" else "probe-in-flight-or-scheduler-rejected"}"
                         }
                     },
                 )
@@ -2639,7 +2688,12 @@ object UpstreamScreenStateRecovery {
                 val freshDetection = fresh?.let {
                     if (exactReconnect && it.capture.visual.reconnectDialogVisual) {
                         Detection(ScreenKind.RECONNECT, ModeEnum.LOGIN, 100, "reconnect-dialog-structural-visual")
-                    } else detect("", it.capture.visual) ?: startupDeckSelectionVisualDetection(
+                    } else detect(
+                        "",
+                        it.capture.visual,
+                        ScreenStateRecovery.hasCenteredModalPanel(it.capture.image),
+                        it.capture.image,
+                    ) ?: startupDeckSelectionVisualDetection(
                         purpose = it.purpose,
                         image = it.capture.image,
                         ocrUnknown = true,
@@ -2665,6 +2719,7 @@ object UpstreamScreenStateRecovery {
                 }
                 val finalSafe = fresh != null && currentPid != null &&
                     fresh.gameWindow.toString() == authorizedCapture.gameWindow.toString() &&
+                    stateStillCurrent() &&
                     System.nanoTime() - fresh.capture.capturedAtNanos <= 5_000_000_000L &&
                     finalFrame != null && StuckScreenUnblockFrameIdentity.isSameClientScreen(currentFrameProof, finalFrame) &&
                     !fresh.capture.visual.startupQuestOverlayVisual &&
@@ -2783,6 +2838,8 @@ object UpstreamScreenStateRecovery {
             screenMode = detection?.mode?.name,
             hubModeChooserVisual = visual.hubModeChooserVisual,
             eventQuestOverlayVisual = detection?.kind == ScreenKind.EVENT_QUEST_OVERLAY,
+            tournamentModeSelectorVisual = visual.tournamentModeSelectorVisual &&
+                detection?.evidence == "three-choice-mode-selector-structural-visual",
         )
 
     private fun isConfirmedWrongModeDeck(

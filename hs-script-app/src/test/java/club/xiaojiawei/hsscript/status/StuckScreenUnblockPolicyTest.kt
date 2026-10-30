@@ -123,4 +123,44 @@ class StuckScreenUnblockPolicyTest {
         assertEquals(StuckScreenUnblockPolicy.Action.RESTART_CLIENT,
             policy.observe(evidence(122_600, reconnect = true)).action)
     }
+
+    @Test
+    fun `animated exact mode selector frames preserve one bounded ladder through restart grace`() {
+        fun proof(perceptual: String) = StuckScreenUnblockFrameIdentity.create(
+            processId = 34_996,
+            windowId = "native@selector",
+            perceptualFingerprint = perceptual,
+            exactReconnectDialog = false,
+            semanticScreenIdentity = StuckScreenUnblockFrameIdentity.semanticScreenIdentity(
+                screenKind = "TOURNAMENT_MODE_SELECTOR",
+                screenMode = "TOURNAMENT",
+            ),
+        )
+
+        val firstFrame = proof("animation-a")
+        val secondFrame = proof("animation-b")
+        val thirdFrame = proof("animation-c")
+        assertEquals(firstFrame.fingerprint, secondFrame.fingerprint)
+        assertEquals(firstFrame.fingerprint, thirdFrame.fingerprint)
+        assertTrue(StuckScreenUnblockFrameIdentity.isSameClientScreen(firstFrame, thirdFrame))
+
+        val policy = StuckScreenUnblockPolicy()
+        val first = policy.observe(evidence(
+            now = 61_000L,
+            stableForMs = 60_000L,
+            fingerprint = firstFrame.fingerprint,
+        ))
+        assertEquals(StuckScreenUnblockPolicy.Action.CLICK_TOP_LEFT, first.action)
+        assertTrue(policy.completeTopLeftClickBatch(firstFrame.fingerprint, 61_100L))
+        assertEquals(StuckScreenUnblockPolicy.Action.REPROBE, policy.observe(evidence(
+            now = 121_099L,
+            stableForMs = 120_099L,
+            fingerprint = secondFrame.fingerprint,
+        )).action)
+        assertEquals(StuckScreenUnblockPolicy.Action.RESTART_CLIENT, policy.observe(evidence(
+            now = 121_100L,
+            stableForMs = 120_100L,
+            fingerprint = thirdFrame.fingerprint,
+        )).action)
+    }
 }
