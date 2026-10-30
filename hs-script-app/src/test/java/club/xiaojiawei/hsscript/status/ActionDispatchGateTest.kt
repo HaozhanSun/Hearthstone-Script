@@ -138,17 +138,19 @@ class ActionDispatchGateTest {
         )
 
         modeActions.forEach { action ->
-            assertTrue(
-                ActionDispatchGate.allowForState(
+            val allowed = ActionDispatchGate.allowForState(
                     action = action,
                     paused = false,
                     working = true,
                     currentSessionReady = false,
                     freshOnlineMenuReady = true,
                     selectedModeStartPermitValid = action == "matchmaking.start",
-                ),
-                "$action resumes after a fresh, clean online-menu observation",
-            )
+                )
+            if (action == "matchmaking.start") {
+                assertFalse(allowed, "a generic online-menu proof and mode permit cannot replace deck Start proof")
+            } else {
+                assertTrue(allowed, "$action resumes after a fresh, clean online-menu observation")
+            }
         }
         assertTrue(
             ActionDispatchGate.allowForState(
@@ -184,17 +186,19 @@ class ActionDispatchGateTest {
             ),
         )
         listOf("startup.handoff", "matchmaking.start", "queue.retry").forEach { action ->
-            assertTrue(
-                ActionDispatchGate.allowForState(
+            val allowed = ActionDispatchGate.allowForState(
                     action = action,
                     paused = false,
                     working = true,
                     mandatoryRankSurrenderPending = true,
                     rankBarrierState = MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
                     selectedModeStartPermitValid = action == "matchmaking.start",
-                ),
-                "$action is outside gameplay rank authorization",
-            )
+                )
+            if (action == "matchmaking.start") {
+                assertFalse(allowed, "rank independence does not replace the exact deck Start proof")
+            } else {
+                assertTrue(allowed, "$action is outside gameplay rank authorization")
+            }
         }
         assertFalse(
             ActionDispatchGate.allowForState(
@@ -623,7 +627,7 @@ class ActionDispatchGateTest {
                 ActionDispatchGate.allow("matchmaking.start"),
                 "terminal proof clears rank fences but cannot replace current-session or fresh-menu readiness",
             )
-            assertTrue(
+            assertFalse(
                 ActionDispatchGate.allowForState(
                     "matchmaking.start",
                     paused = false,
@@ -631,7 +635,7 @@ class ActionDispatchGateTest {
                     currentSessionReady = true,
                     selectedModeStartPermitValid = true,
                 ),
-                "a ready current-session log restores queue dispatch",
+                "a ready current-session log and selector permit cannot replace a fresh enabled deck Start proof",
             )
             assertFalse(PauseStatus.isPause, "terminal proof releases rank fencing without auto-pausing")
         } finally {

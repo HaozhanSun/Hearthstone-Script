@@ -424,7 +424,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         // automatic deck-completion dialog.  A single start click can leave
         // the client on the deck-selection page while the script has already
         // logged START_MATCHING, which is not a real state transition.
-        val startDispatched = clickMatchmakingControl(START_RECT)
+        val startDispatched = clickMatchmakingStartControl()
         if (!startDispatched) {
             cancelAllEnteredTasks()
             LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = false)
@@ -454,7 +454,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-complete-deck-click-2")) return
         log.info { "确认补全后再次点击开始" }
         logMatchmakingCheckpoint(traceId, "before-final-start-click")
-        val finalStartDispatched = clickMatchmakingControl(START_RECT)
+        val finalStartDispatched = clickMatchmakingStartControl()
         if (!finalStartDispatched) {
             cancelAllEnteredTasks()
             LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = false)
@@ -578,6 +578,26 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         }
         return accepted
     }
+
+    /** Revalidate the narrow start capability immediately before the physical Start click. */
+    internal fun dispatchMatchmakingStartControlIfAuthorized(
+        isAuthorized: () -> Boolean,
+        dispatchStartControl: () -> Boolean,
+    ): Boolean {
+        if (!isAuthorized()) {
+            log.warn {
+                "MATCHMAKING_BLOCKED reason=startup-proof-expired-at-start-click " +
+                    "action=NO_QUEUE_INPUT dispatch=false"
+            }
+            return false
+        }
+        return dispatchStartControl()
+    }
+
+    private fun clickMatchmakingStartControl(): Boolean = dispatchMatchmakingStartControlIfAuthorized(
+        isAuthorized = { ActionDispatchGate.isStartupScreenConfirmedForAction("matchmaking.start") },
+        dispatchStartControl = { clickMatchmakingControl(START_RECT) },
+    )
 
     private fun captureMatchmakingCheckpoint(traceId: Long, stage: String) {
         if (System.getProperty("hs.script.e2e") != "true") return

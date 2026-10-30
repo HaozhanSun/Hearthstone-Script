@@ -1,6 +1,10 @@
 package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscriptbase.enums.RunModeEnum
+import club.xiaojiawei.hsscript.consts.GameRationConst
+import club.xiaojiawei.hsscript.status.ScriptStatus
+import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
+import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import java.io.File
 import java.awt.Point
 import java.util.concurrent.atomic.AtomicBoolean
@@ -12,6 +16,29 @@ import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
 
 class StartupDeckModeNavigationIntegrationTest {
+    @Test
+    fun `legacy change mode rectangle targets the visible top right format crest`() {
+        val gameRect = ScriptStatus.GAME_RECT
+        val old = intArrayOf(gameRect.left, gameRect.top, gameRect.right, gameRect.bottom)
+        try {
+            gameRect.left = 0
+            gameRect.top = 0
+            gameRect.right = 1920
+            gameRect.bottom = 1080
+            val target = TournamentModeStrategy.CHANGE_MODE_RECT.getRelativeRect()
+            val centerX = target.x + target.width / 2.0
+            val centerY = target.y + target.height / 2.0
+            assertTrue(centerX in 1390.0..1420.0, "mode crest center X=$centerX")
+            assertTrue(centerY in 45.0..70.0, "mode crest center Y=$centerY")
+            assertTrue(GameRationConst.GAME_WINDOW_CONTENT_WIDTH_HEIGHT_RATIO > 1.3f)
+        } finally {
+            gameRect.left = old[0]
+            gameRect.top = old[1]
+            gameRect.right = old[2]
+            gameRect.bottom = old[3]
+        }
+    }
+
     @Test
     fun `user supplied 1919px Standard ranked screen is recognized but cannot dispatch unverified Wild selector coordinates`() {
         val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
@@ -398,13 +425,14 @@ class StartupDeckModeNavigationIntegrationTest {
                 ),
             ), "both proofs authorize only the named matchmaking start action")
 
-            var dispatches = 0
             val freshStartProof = StartupInputReadiness.isDeckSelectionStartReady(
                 25948, "captured-live-window", 50_003L,
             )
             val selectedModeProof = StartupInputReadiness.hasSelectedTournamentModeStartPermit(
                 25948, "captured-live-window", "WILD", 50_003L,
             )
+            MulliganRankDispatchBarrier.beginCurrentGame()
+            assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
             assertTrue(ActionDispatchGate.allowForState(
                 action = "matchmaking.start",
                 paused = false,
@@ -413,6 +441,7 @@ class StartupDeckModeNavigationIntegrationTest {
                 freshOnlineMenuReady = false,
                 freshDeckSelectionStartReady = freshStartProof,
                 selectedModeStartPermitValid = selectedModeProof,
+                rankBarrierState = MulliganRankDispatchBarrier.currentState(),
             ), "the production last dispatch gate authorizes only matchmaking.start from exact screen + selected mode proofs")
             assertFalse(ActionDispatchGate.allowForState(
                 action = "strategy.card.play",
@@ -423,19 +452,82 @@ class StartupDeckModeNavigationIntegrationTest {
                 freshDeckSelectionStartReady = freshStartProof,
                 selectedModeStartPermitValid = selectedModeProof,
             ), "deck-selection proof cannot authorize gameplay actions")
-            assertTrue(StartupInputAuthorizationPolicy.dispatchDeckSelectionRecoveryIfReady(
-                startupScreenConfirmed = ActionDispatchGate.allowForState(
-                    action = "matchmaking.start",
-                    paused = false,
-                    working = true,
-                    currentSessionReady = false,
-                    freshOnlineMenuReady = false,
-                    freshDeckSelectionStartReady = freshStartProof,
-                    selectedModeStartPermitValid = selectedModeProof,
-                ),
-            ) { dispatches++ })
-            assertEquals(1, dispatches, "the integration callsite reaches the start dispatch once")
+            var queueStartDispatches = 0
+            assertTrue(TournamentModeStrategy.dispatchMatchmakingStartControlIfAuthorized(
+                isAuthorized = {
+                    ActionDispatchGate.allowForState(
+                        action = "matchmaking.start",
+                        paused = false,
+                        working = true,
+                        currentSessionReady = false,
+                        freshOnlineMenuReady = false,
+                        freshDeckSelectionStartReady = freshStartProof,
+                        selectedModeStartPermitValid = selectedModeProof,
+                        rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+                    )
+                },
+                dispatchStartControl = { queueStartDispatches++; true },
+            ), "the same immediately-before-click gate used by production must pass")
+            assertEquals(1, queueStartDispatches, "authorized proof reaches the physical Start-control callback exactly once")
         } finally {
+            MulliganRankDispatchBarrier.resetForTest()
+            StartupInputReadiness.resetForTest()
+        }
+    }
+
+    @Test
+    fun `exact live Standard deck screenshot with rank nine cannot dispatch configured Wild queue start`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/tournament-wild-deck-standard-mode-20261029.png",
+        )))
+        assertTrue(UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("二=", image) == "DECK_SELECTION")
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+        assertEquals("STANDARD", TournamentModeConfirmation.observeImage(image).observedMode.name)
+
+        StartupInputReadiness.resetForTest()
+        MulliganRankDispatchBarrier.resetForTest()
+        try {
+            // The live OCR was UNKNOWN, but the exact captured title template proves STANDARD.
+            // A stale selected-Wild permit must be revoked by this fresh contradictory screen.
+            StartupInputReadiness.recordSelectedTournamentMode(25_948, "live-standard-hwnd", "WILD", 50_000L)
+            assertFalse(StartupInputReadiness.recordStartupOnlineScreen(
+                pid = 25_948,
+                hwnd = "live-standard-hwnd",
+                screen = "DECK_SELECTION",
+                confidence = 96,
+                evidence = "deck-selection-start-control-visual",
+                expectedRunMode = "WILD",
+                observedRunMode = "STANDARD",
+                enabledStartButtonVisible = true,
+                modalVisible = false,
+                now = 50_001L,
+            ))
+
+            MulliganRankDispatchBarrier.beginCurrentGame()
+            assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
+            var queueStartDispatches = 0
+            val startAllowed = ActionDispatchGate.allowForState(
+                action = "matchmaking.start",
+                paused = false,
+                working = true,
+                currentSessionReady = false,
+                freshOnlineMenuReady = false,
+                freshDeckSelectionStartReady = StartupInputReadiness.isDeckSelectionStartReady(
+                    25_948, "live-standard-hwnd", 50_002L,
+                ),
+                selectedModeStartPermitValid = StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+                    25_948, "live-standard-hwnd", "WILD", 50_002L,
+                ),
+                rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+            )
+            assertFalse(startAllowed, "fresh Standard identity must block Wild even though pre-match rank does not")
+            assertFalse(TournamentModeStrategy.dispatchMatchmakingStartControlIfAuthorized(
+                isAuthorized = { startAllowed },
+                dispatchStartControl = { queueStartDispatches++; true },
+            ))
+            assertEquals(0, queueStartDispatches, "a Start intent must not become a queue-control dispatch")
+        } finally {
+            MulliganRankDispatchBarrier.resetForTest()
             StartupInputReadiness.resetForTest()
         }
     }

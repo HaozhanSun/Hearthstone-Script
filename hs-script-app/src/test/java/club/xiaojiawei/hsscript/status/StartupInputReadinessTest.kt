@@ -84,16 +84,36 @@ class StartupInputReadinessTest {
     }
 
     @Test
-    fun `recent confirmed selector mode authorizes only matchmaking start in its exact window`() {
+    fun `recent confirmed selector mode alone cannot authorize matchmaking start`() {
         StartupInputReadiness.recordSelectedTournamentMode(101, "hwnd-a", "WILD", now = 20_000L)
         val permit = StartupInputReadiness.hasSelectedTournamentModeStartPermit(
             101, "hwnd-a", "WILD", now = 20_001L,
         )
         assertTrue(permit)
+        assertFalse(StartupInputAuthorizationPolicy.allows(
+            action = "matchmaking.start",
+            currentSessionReady = false,
+            freshOnlineMenuReady = false,
+            selectedModeStartPermitValid = permit,
+        ), "a selector click/observation without a fresh enabled deck Start control cannot queue")
+        assertTrue(StartupInputReadiness.recordDeckSelectionStart(
+            pid = 101,
+            hwnd = "hwnd-a",
+            confidence = 96,
+            evidence = "deck-selection-start-control-visual",
+            expectedRunMode = "WILD",
+            observedRunMode = "UNKNOWN",
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            now = 20_002L,
+        ), "unknown title OCR may use the independent same-window selected-mode permit")
         assertTrue(StartupInputAuthorizationPolicy.allows(
             action = "matchmaking.start",
-            currentSessionReady = true,
+            currentSessionReady = false,
             freshOnlineMenuReady = false,
+            freshDeckSelectionStartReady = StartupInputReadiness.isDeckSelectionStartReady(
+                101, "hwnd-a", 20_003L,
+            ),
             selectedModeStartPermitValid = permit,
         ))
         assertFalse(StartupInputAuthorizationPolicy.allows(

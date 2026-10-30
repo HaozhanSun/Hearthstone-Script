@@ -42,7 +42,7 @@ internal object StartupInputReadiness {
     const val DECK_MODE_NAVIGATION_PROOF_MAX_AGE_MS = 30_000L
     const val SELECTED_MODE_START_PERMIT_MAX_AGE_MS = 30_000L
 
-    /** Recent exact selector observation; permits only the Start action in the same client window. */
+    /** Recent selector observation; it may resolve UNKNOWN title OCR when minting fresh deck Start proof. */
     fun recordSelectedTournamentMode(pid: Int, hwnd: String, mode: String, now: Long = System.currentTimeMillis()) {
         if (pid <= 0 || hwnd.isBlank() || mode !in CONFIRMABLE_TOURNAMENT_MODES) {
             clearSelectedTournamentMode(pid, hwnd)
@@ -437,9 +437,11 @@ internal object StartupInputAuthorizationPolicy {
     } else if (action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION) {
         startupQuestOverlayDismissPermitValid
     } else if (action == "matchmaking.start") {
-        // Current-session/Power.log readiness is not mode proof. Start requires
-        // either a fresh image-matched deck screen or a recent exact mode-selector observation.
-        freshDeckSelectionStartReady || selectedModeStartPermitValid
+        // Mode-selection proof alone is not enough: the only button this path
+        // authorizes is on the freshly captured, enabled deck-selection screen.
+        // recordDeckSelectionStart already requires matching visible mode or a
+        // same-window selected-mode permit when title OCR is UNKNOWN.
+        freshDeckSelectionStartReady
     } else currentSessionReady || freshOnlineMenuReady ||
         (action.startsWith("startup.") && action != StartupNoticeRecoveryPolicy.DISPATCH_ACTION) ||
         (action == StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION &&

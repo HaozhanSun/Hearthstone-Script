@@ -394,20 +394,27 @@ this deletion boundary.
   condition changes the user's pause state. A fresh deck-selection title and enabled Start control authorize
   only `matchmaking.start` after the observed mode matches the selected run
   mode. Do not carry the previous game's cleanup fence into the next queue.
+  The selected-mode permit by itself cannot start a queue; the final click path
+  must revalidate a fresh, same-window enabled deck Start proof. When title OCR
+  is UNKNOWN, that proof may use a recent same-window selected-mode permit as
+  secondary mode identity evidence.
   The startup mode-switch sequence uses generic mouse input after leaving the
   HUB chooser; the final dispatch gate can reject those clicks until a narrow
-  mode-selector proof exists. If mode-title OCR is UNKNOWN, do not let upstream
-  recovery call `startMatching` merely because the structural deck-selection
-  classifier succeeded. Keep it classification-only, notify the operator once,
-  and require manual mode correction/retry. We do not currently have an
+  mode-selector proof exists. Do not let upstream recovery call `startMatching`
+  merely because the structural deck-selection classifier succeeded: it must
+  first mint the fresh deck Start proof, and the production click path must
+  recheck it immediately before input. UNKNOWN title OCR can use an independently
+  selected same-window mode; a known opposite mode revokes that permit. We do not currently have an
   authorized capture of the tournament mode selector after opening it. A
   Standard deck screenshot may identify the mismatch, but cannot authorize
   selector or Wild-option coordinates; require a fresh selector screenshot and
   exact Wild-control classifier before either click. The supplied 1919x1079
   Standard deck frame matches the existing title template and is now accepted
-  despite its missing final row/column. Its `CHANGE_MODE_RECT` target maps near
-  the rank badge, and the screenshot does not show an in-game Wild control, so
-  automatic correction remains blocked pending selector evidence. Resume only
+  despite its missing final row/column. At the 1920x1080 client geometry,
+  `CHANGE_MODE_RECT` maps to the format crest above the ranked portrait, not
+  the rank badge. The supplied screenshot does not show the selector after
+  opening or its Wild option, so automatic correction remains blocked pending
+  selector evidence. Resume only
   after a new exact deck-selection capture confirms the configured mode. The visible tooltip
   `狂野模式套牌无法用于标准模式` with an exact deck-selection Start signature is
   a specific wrong-mode terminal state for the matchmaking-error probe: emit
