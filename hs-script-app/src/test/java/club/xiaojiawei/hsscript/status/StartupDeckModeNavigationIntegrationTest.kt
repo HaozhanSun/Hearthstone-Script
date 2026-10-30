@@ -31,6 +31,21 @@ class StartupDeckModeNavigationIntegrationTest {
             "/offline-ocr/screen-recovery/deck-selection-screen.png",
         )))
         assertFalse(TournamentModeSelectorVisualPolicy.isVisible(ordinaryDeck))
+        listOf(
+            "hub-mode-chooser-live-20261029-035630.png",
+            "reconnect-failure-dialog-over-deck-selection.png",
+            "matchmaking-reward-modal-20261021-200538.png",
+        ).forEach { fixture ->
+            val confuser = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+                "/offline-ocr/screen-recovery/$fixture",
+            )))
+            assertFalse(TournamentModeSelectorVisualPolicy.isVisible(confuser), "$fixture must not match selector visual")
+            assertFalse(
+                UpstreamScreenStateRecovery.classifyImageForTest("二=", confuser) ==
+                    StartupDeckModeNavigationPolicy.MODE_SELECTOR_SCREEN,
+                "$fixture must not classify as TOURNAMENT_MODE_SELECTOR",
+            )
+        }
 
         StartupInputReadiness.resetForTest()
         try {
