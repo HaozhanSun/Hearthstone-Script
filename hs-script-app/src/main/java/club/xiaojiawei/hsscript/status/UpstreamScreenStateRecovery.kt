@@ -2874,6 +2874,23 @@ object UpstreamScreenStateRecovery {
         return java.lang.Long.toUnsignedString(hash, 16)
     }
 
+    private fun isExactEventQuestHubChooser(
+        captureTrusted: Boolean,
+        visual: VisualSignature,
+        image: BufferedImage,
+    ): Boolean {
+        val screen = detect("", visual, ScreenStateRecovery.hasCenteredModalPanel(image), image)
+        return captureTrusted && !visual.startupQuestOverlayVisual &&
+            screen?.kind == ScreenKind.TOURNAMENT && screen.mode == ModeEnum.HUB &&
+            screen.confidence >= 90 && screen.evidence.startsWith("hub-mode-chooser-visual") &&
+            visual.hubModeChooserVisual
+    }
+
+    internal fun exactEventQuestHubChooserForTest(image: BufferedImage): Boolean {
+        val visual = visualSignature(image)
+        return isExactEventQuestHubChooser(captureTrusted = true, visual = visual, image = image)
+    }
+
     private fun isSafeIdleUnblockScreen(detection: Detection?, visual: VisualSignature): Boolean =
         SafeIdleUnblockScreenPolicy.matches(
             screenKind = detection?.kind?.code,
@@ -3111,6 +3128,8 @@ object UpstreamScreenStateRecovery {
                 }
                 val captureTrusted = GameUtil.findGameProcessIdForDiagnostics() == expectedPid &&
                     ScriptStatus.gameHWND?.toString() == expectedWindow.toString() &&
+                    capture.processId == expectedPid.toLong() && capture.windowId == expectedWindow.toString() &&
+                    authorized.foregroundVerified &&
                     GameUtil.isVerifiedCurrentGameWindow(expectedWindow, expectedPid)
                 val exactOverlay = captureTrusted && capture.visual.startupQuestOverlayVisual
                 val currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart()
@@ -3128,6 +3147,13 @@ object UpstreamScreenStateRecovery {
                     hwnd = expectedWindow,
                 )
                 val reconnectDialogVisual = capture.visual.reconnectDialogVisual
+                val freshScreenDetection = detect(
+                    ocrText = "",
+                    visual = capture.visual,
+                    modalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image),
+                    image = capture.image,
+                )
+                val exactHubModeChooser = isExactEventQuestHubChooser(captureTrusted, capture.visual, capture.image)
                 val emptySessionLoginTransition =
                     EventQuestOverlayRecoveryContextPolicy.allowsFreshEmptySessionLoginTransition(
                         questOverlayVisible = exactOverlay,
@@ -3137,8 +3163,21 @@ object UpstreamScreenStateRecovery {
                 val deckReadyVisible = !capture.visual.startupQuestOverlayVisual &&
                     Mode.currMode === ModeEnum.TOURNAMENT && WarEx.war.currentPhase == WarPhaseEnum.FILL_DECK &&
                     club.xiaojiawei.hsscript.status.ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image)
-                val protectedTransition = Mode.currMode !== ModeEnum.LOGIN &&
-                    (activeGame || activeQueue || terminalOrResult && !postGameTerminalProof)
+                val verifiedSafeTransition = EventQuestOverlayFenceReleasePolicy.allows(
+                    captureTrusted = captureTrusted,
+                    questOverlayVisible = capture.visual.startupQuestOverlayVisual,
+                    exactHubModeChooser = exactHubModeChooser,
+                    deckReadyVisible = deckReadyVisible,
+                    freshEmptySessionLoginTransition = emptySessionLoginTransition,
+                    activeGame = activeGame,
+                    activeQueue = activeQueue,
+                    reconnectDialog = reconnectDialogVisual,
+                    terminalOrResult = terminalOrResult,
+                    mandatoryRankGuard = MandatoryRankSurrenderGuard.isPending() ||
+                        MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+                    working = WorkTimeListener.working,
+                    paused = PauseStatus.isPause,
+                )
                 val decision = eventQuestOverlayRecoveryPolicy.observe(
                     EventQuestOverlayRecoveryPolicy.Evidence(
                         nowMs = System.currentTimeMillis(), captureTrusted = captureTrusted,
@@ -3147,8 +3186,8 @@ object UpstreamScreenStateRecovery {
                             matchmakingSearchVisual = capture.visual.matchmakingSearchVisual,
                             reconnectDialogVisual = reconnectDialogVisual,
                             freshEmptySessionLoginProof = freshEmptySessionLoginProof,
-                        ) || protectedTransition,
-                        verifiedSafeTransition = protectedTransition || deckReadyVisible || emptySessionLoginTransition,
+                        ),
+                        verifiedSafeTransition = verifiedSafeTransition,
                         working = WorkTimeListener.working, paused = PauseStatus.isPause,
                         activeGame = activeGame, activeQueue = activeQueue,
                         terminalOrResult = terminalOrResult,
@@ -3169,6 +3208,8 @@ object UpstreamScreenStateRecovery {
                         "postGameTerminalProof=$postGameTerminalProof " +
                         "freshEmptySessionLoginProof=$freshEmptySessionLoginProof " +
                         "paused=${PauseStatus.isPause} exactOverlay=$exactOverlay deckReadyVisible=$deckReadyVisible " +
+                        "hubModeChooser=$exactHubModeChooser hubEvidence=${freshScreenDetection?.evidence ?: "none"} " +
+                        "safeTransition=$verifiedSafeTransition " +
                         "pid=$expectedPid hwnd=$expectedWindow screenshot=${capture.file?.absolutePath ?: "none"}"
                 }
                 when (decision.action) {

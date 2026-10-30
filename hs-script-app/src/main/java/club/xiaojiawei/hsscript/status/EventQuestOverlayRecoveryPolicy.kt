@@ -54,7 +54,13 @@ internal class EventQuestOverlayRecoveryPolicy(
             return Decision(Action.STOP, clicksAttempted, "game-queue-or-result-fence")
         }
         if (!evidence.safeMenuOrDeckState) return Decision(Action.STOP, clicksAttempted, "unsafe-underlay-state")
-        if (!evidence.exactQuestOverlay) return Decision(Action.STOP, clicksAttempted, "exact-overlay-not-confirmed")
+        if (!evidence.exactQuestOverlay) {
+            return Decision(
+                Action.STOP,
+                clicksAttempted,
+                "overlay-absent-safe-transition-unverified",
+            )
+        }
         if (restartIssued) return Decision(Action.STOP, clicksAttempted, "restart-already-issued")
 
         val stableForMs = evidence.stableForMs.coerceAtLeast(0L)

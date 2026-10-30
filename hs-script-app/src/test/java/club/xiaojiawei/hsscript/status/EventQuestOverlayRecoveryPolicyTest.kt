@@ -14,6 +14,72 @@ import club.xiaojiawei.hsscript.status.surrender.CurrentGamePowerLogTerminalTrac
 
 class EventQuestOverlayRecoveryPolicyTest {
     @Test
+    fun `fresh exact HUB chooser releases dismissed Event Quest fence while unsafe destinations retain it`() {
+        val hubChooser = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/hub-mode-chooser-live-20261029-035630.png",
+        )))
+        assertEquals("TOURNAMENT", UpstreamScreenStateRecovery.classifyImageForTest("", hubChooser))
+        assertTrue(UpstreamScreenStateRecovery.exactEventQuestHubChooserForTest(hubChooser),
+            "the fresh recovery callsite must recognize the saved visual chooser as its exact safe destination")
+        val safeRelease = EventQuestOverlayFenceReleasePolicy.allows(
+            captureTrusted = true, questOverlayVisible = false,
+            exactHubModeChooser = true, deckReadyVisible = false,
+            freshEmptySessionLoginTransition = false, activeGame = false, activeQueue = false,
+            reconnectDialog = false, terminalOrResult = false, mandatoryRankGuard = false,
+            working = true, paused = false,
+        )
+        assertTrue(safeRelease, "fresh visual HUB proof must release after the overlay disappears")
+
+        StartupQuestOverlayRecoveryFence.resetForTest()
+        try {
+            StartupQuestOverlayRecoveryFence.begin()
+            val decision = EventQuestOverlayRecoveryPolicy().observe(
+                evidence(nowMs = 2_000L, exact = false, safeTransition = safeRelease),
+            )
+            assertEquals(EventQuestOverlayRecoveryPolicy.Action.UNBLOCK_SAFE_TRANSITION, decision.action)
+            assertTrue(UpstreamScreenStateRecovery.resolveEventQuestSafeTransition(decision.action))
+            assertFalse(StartupQuestOverlayRecoveryFence.isActive())
+        } finally {
+            StartupQuestOverlayRecoveryFence.resetForTest()
+        }
+
+        val unsafe = listOf(
+            mapOf("captureTrusted" to false),
+            mapOf("questOverlayVisible" to true),
+            mapOf("activeGame" to true),
+            mapOf("activeQueue" to true),
+            mapOf("reconnectDialog" to true),
+            mapOf("terminalOrResult" to true),
+            mapOf("mandatoryRankGuard" to true),
+            mapOf("working" to false),
+            mapOf("paused" to true),
+        )
+        unsafe.forEach { fence ->
+            val allowed = EventQuestOverlayFenceReleasePolicy.allows(
+                captureTrusted = fence["captureTrusted"] as? Boolean ?: true,
+                questOverlayVisible = fence["questOverlayVisible"] as? Boolean ?: false,
+                exactHubModeChooser = false, deckReadyVisible = false,
+                freshEmptySessionLoginTransition = false,
+                activeGame = fence["activeGame"] as? Boolean ?: false,
+                activeQueue = fence["activeQueue"] as? Boolean ?: false,
+                reconnectDialog = fence["reconnectDialog"] as? Boolean ?: false,
+                terminalOrResult = fence["terminalOrResult"] as? Boolean ?: false,
+                mandatoryRankGuard = fence["mandatoryRankGuard"] as? Boolean ?: false,
+                working = fence["working"] as? Boolean ?: true,
+                paused = fence["paused"] as? Boolean ?: false,
+            )
+            assertFalse(allowed, "unsafe fence $fence must retain the unresolved-action barrier")
+        }
+        assertFalse(EventQuestOverlayFenceReleasePolicy.allows(
+            captureTrusted = true, questOverlayVisible = false,
+            exactHubModeChooser = false, deckReadyVisible = false,
+            freshEmptySessionLoginTransition = false, activeGame = false, activeQueue = false,
+            reconnectDialog = false, terminalOrResult = false, mandatoryRankGuard = false,
+            working = true, paused = false,
+        ), "unknown or ambiguous non-overlay frames cannot release the fence")
+    }
+
+    @Test
     fun `exact Event Quest screenshot alone routes to three top left clicks then minute recheck`() {
         val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/event-quest-overlay-deck-selection-20261029.png",

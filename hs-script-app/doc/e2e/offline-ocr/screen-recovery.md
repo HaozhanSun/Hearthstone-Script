@@ -17,6 +17,14 @@
   `FILL_DECK`, the 15-minute matchmaking input-intent history alone is not
   active queue evidence; only a recently observed matchmaking screen, the
   60-second input race guard, or current `matchmakingSearchVisual` blocks.
+- After a top-left Event Quest dismissal, release the startup-action fence only
+  from a fresh, foreground-authorized same-PID/HWND frame that confirms the
+  overlay is gone and structurally identifies the HUB mode chooser (or an
+  independently verified safe deck/empty-login transition). UNKNOWN or
+  ambiguous screens, active game/queue, reconnect, terminal/rank cleanup,
+  pause, or non-working state must retain the fence. Log the detected evidence
+  and each release/block reason so a visible chooser cannot remain hidden
+  behind stale internal LOGIN state.
 
 Every `ScreenStateRecovery` trigger attempts a screenshot before safety gates
 and records one structured log trail containing `runId`, `sessionId`, trigger,
