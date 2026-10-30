@@ -11,6 +11,7 @@ import club.xiaojiawei.hsscript.dll.User32PostMessageDll
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.enums.MouseControlModeEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
+import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.Mode
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.status.GameWindowReadiness
@@ -836,10 +837,14 @@ object MouseUtil {
                     shortRaceWindow = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
                     matchmakingSearchVisual = false,
                     terminalOrResult = GameUtil.isTerminalGameState() ||
-                        club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
-                            .isTerminalCleanupPending(),
+                        club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending() ||
+                        club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
                     working = WorkTimeListener.working,
                     paused = PauseStatus.isPause,
+                    postGameTerminalProof = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta" &&
+                        PowerLogListener.hasVerifiedCurrentGameTerminalOutcome() &&
+                        !club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isPending() &&
+                        !club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
                 )
 
         val permitValid = ActionDispatchGate.startupQuestOverlayPermitValid(

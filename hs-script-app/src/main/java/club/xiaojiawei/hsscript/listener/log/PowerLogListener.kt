@@ -190,6 +190,10 @@ object PowerLogListener :
         }
     }
 
+    /** Complete current-game terminal markers plus a locally verified outcome, never a stale phase latch alone. */
+    fun hasVerifiedCurrentGameTerminalOutcome(): Boolean =
+        hasCurrentGameCompleteTerminalPowerLogEvidence() && currentGameTerminalForVerifiedLocalPlayer() != null
+
     /** Recover one missed live result callback from a complete current-game terminal tail. */
     @Synchronized
     fun reconcileStaleTerminalResultForBeta(): Boolean {

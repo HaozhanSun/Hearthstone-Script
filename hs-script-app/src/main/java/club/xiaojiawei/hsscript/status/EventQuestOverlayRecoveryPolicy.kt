@@ -18,7 +18,10 @@ internal class EventQuestOverlayRecoveryPolicy(
         val activeGame: Boolean,
         val activeQueue: Boolean,
         val terminalOrResult: Boolean,
+        val postGameTerminalProof: Boolean = false,
         val stableForMs: Long = FIRST_STAGE_DELAY_MS,
+        val automationRunId: Long = 0L,
+        val semanticScreenIdentity: String = "EVENT_QUEST_OVERLAY",
     )
 
     data class Decision(val action: Action, val clickNumber: Int, val reason: String)
@@ -26,17 +29,27 @@ internal class EventQuestOverlayRecoveryPolicy(
     private var clicksAttempted = 0
     private var secondStageStartedAt = 0L
     private var restartIssued = false
+    private var restartScope: String? = null
+    private var restartCount = 0
 
     @Synchronized
     fun observe(evidence: Evidence): Decision {
         if (!evidence.captureTrusted || evidence.nowMs <= 0L) return Decision(Action.STOP, clicksAttempted, "capture-untrusted")
+        val nextRestartScope = "${evidence.automationRunId}|${evidence.semanticScreenIdentity}"
+        if (restartScope != nextRestartScope) {
+            restartScope = nextRestartScope
+            restartCount = 0
+        }
         if (evidence.verifiedSafeTransition) {
             reset()
+            restartCount = 0
             return Decision(Action.UNBLOCK_SAFE_TRANSITION, 0, "fresh-safe-screen-transition")
         }
         if (!evidence.working) return Decision(Action.DEFER, clicksAttempted, "script-not-working")
         if (evidence.paused) return Decision(Action.DEFER, clicksAttempted, "paused")
-        if (evidence.activeGame || evidence.activeQueue || evidence.terminalOrResult) {
+        if (evidence.activeGame || evidence.activeQueue ||
+            evidence.terminalOrResult && !evidence.postGameTerminalProof
+        ) {
             return Decision(Action.STOP, clicksAttempted, "game-queue-or-result-fence")
         }
         if (!evidence.safeMenuOrDeckState) return Decision(Action.STOP, clicksAttempted, "unsafe-underlay-state")
@@ -64,6 +77,10 @@ internal class EventQuestOverlayRecoveryPolicy(
         if (evidence.nowMs - secondStageStartedAt < secondStageDelayMs) {
             return Decision(Action.WAIT_AND_REPROBE, clicksAttempted, "second-stage-minute-pending")
         }
+        if (restartCount >= MAX_CLIENT_RESTARTS_PER_RUN_AND_SCREEN) {
+            return Decision(Action.STOP, clicksAttempted, "client-restart-cap-exhausted")
+        }
+        restartCount++
         return Decision(Action.RESTART_CLIENT, clicksAttempted, "exact-overlay-persisted-after-second-stage")
     }
 
@@ -87,6 +104,7 @@ internal class EventQuestOverlayRecoveryPolicy(
         const val FIRST_STAGE_DELAY_MS = 60_000L
         const val MAX_CLICKS = 3
         const val SECOND_STAGE_DELAY_MS = 60_000L
+        const val MAX_CLIENT_RESTARTS_PER_RUN_AND_SCREEN = 1
     }
 
     private var firstStageStartedAt = 0L
@@ -106,14 +124,29 @@ internal object EventQuestOverlayRecoveryContextPolicy {
         terminalOrResult: Boolean,
         working: Boolean,
         paused: Boolean,
+        postGameTerminalProof: Boolean = false,
     ): Boolean {
         val safeHub = mode == "HUB"
         // Exact visible Event Quest structure over Tournament/FILL_DECK is
-        // sufficient safe-underlay proof; Power.log may still be empty after launch.
+        // sufficient safe-underlay proof; only a verified post-game result
+        // may override the stale terminal phase latch in that same state.
         val safeDeckSelection = mode == "TOURNAMENT" && phase == "FILL_DECK"
         val activeQueue = activeQueueScreen || matchmakingSearchVisual ||
             if (safeDeckSelection) shortRaceWindow else recentInputIntent
+        val terminalContextSafe = !terminalOrResult || (safeDeckSelection && postGameTerminalProof)
         return (safeHub || safeDeckSelection) && !nextModeGameplay && !activeGame && !activeQueue &&
-            !terminalOrResult && working && !paused
+            terminalContextSafe && working && !paused
     }
+}
+
+/** Last injectable gate before a single exact-window quest-overlay input is sent. */
+internal object EventQuestOverlayClickDispatch {
+    fun dispatch(
+        action: EventQuestOverlayRecoveryPolicy.Action,
+        freshCaptureTrusted: Boolean,
+        foregroundVerified: Boolean,
+        safeContext: Boolean,
+        click: () -> Boolean,
+    ): Boolean = action == EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT &&
+        freshCaptureTrusted && foregroundVerified && safeContext && click()
 }

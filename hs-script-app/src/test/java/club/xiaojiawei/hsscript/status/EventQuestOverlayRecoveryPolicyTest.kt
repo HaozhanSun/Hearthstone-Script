@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.status
 
 import java.awt.Point
 import java.awt.Rectangle
+import java.awt.image.BufferedImage
 import java.io.File
 import javax.imageio.ImageIO
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import club.xiaojiawei.hsscript.status.surrender.CurrentGamePowerLogTerminalTracker
 
 class EventQuestOverlayRecoveryPolicyTest {
     @Test
@@ -169,6 +171,171 @@ class EventQuestOverlayRecoveryPolicyTest {
     }
 
     @Test
+    fun `authoritative current game win permits only stale FILL_DECK quest dismissal`() {
+        val terminal = CurrentGamePowerLogTerminalTracker().apply {
+            observeLine("D 21:00:00.000 CREATE_GAME")
+            observeLine("Entity=self tag=PLAYSTATE value=WON")
+            observeLine("Entity=opponent tag=PLAYSTATE value=CONCEDED")
+            observeLine("Entity=GameEntity tag=STEP value=FINAL_GAMEOVER")
+            observeLine("Entity=GameEntity tag=STATE value=COMPLETE")
+        }
+        val verifiedWin = terminal.hasCompleteTerminalEvidence() &&
+            terminal.currentGameSurrenderEvidence("self", "opponent")?.ownPlayState == "WON"
+        assertTrue(verifiedWin)
+
+        fun context(
+            terminalProof: Boolean,
+            activeGame: Boolean = false,
+            activeQueue: Boolean = false,
+            paused: Boolean = false,
+            exactPhase: String = "FILL_DECK",
+            mode: String = "TOURNAMENT",
+        ) = EventQuestOverlayRecoveryContextPolicy.allowsDismiss(
+            mode = mode, phase = exactPhase, currentSessionReady = false,
+            nextModeGameplay = false, activeGame = activeGame, activeQueueScreen = activeQueue,
+            recentInputIntent = true, shortRaceWindow = false, matchmakingSearchVisual = false,
+            terminalOrResult = true, working = true, paused = paused,
+            postGameTerminalProof = terminalProof,
+        )
+
+        assertFalse(context(terminalProof = false), "phase/result latch without complete current-game proof is insufficient")
+        assertTrue(context(terminalProof = verifiedWin), "FINAL_GAMEOVER may leave the model at FILL_DECK; exact post-game proof permits this dismiss only")
+        assertFalse(context(terminalProof = verifiedWin, activeGame = true))
+        assertFalse(context(terminalProof = verifiedWin, activeQueue = true))
+        assertFalse(context(terminalProof = verifiedWin, paused = true))
+        assertFalse(context(terminalProof = verifiedWin, exactPhase = "MULLIGAN"))
+        assertFalse(context(terminalProof = verifiedWin, mode = "HUB", exactPhase = "NONE"),
+            "terminal override stays within the exact stale Tournament/FILL_DECK case")
+    }
+
+    @Test
+    fun `click accepted without screen transition keeps overlay recovery active until fresh proof`() {
+        val policy = EventQuestOverlayRecoveryPolicy()
+        var overlayVisible = true
+        var clickCount = 0
+        repeat(3) { index ->
+            val decision = policy.observe(evidence(nowMs = 60_000L + index * 500L,
+                terminal = true, postGameTerminal = true))
+            val accepted = EventQuestOverlayClickDispatch.dispatch(
+                action = decision.action, freshCaptureTrusted = true, foregroundVerified = true,
+                safeContext = true,
+            ) {
+                clickCount++
+                true // Windows accepted the input; the UI may still not have changed.
+            }
+            assertTrue(accepted)
+            assertTrue(overlayVisible)
+        }
+        assertEquals(3, clickCount)
+        assertEquals(EventQuestOverlayRecoveryPolicy.Action.WAIT_AND_REPROBE,
+            policy.observe(evidence(nowMs = 120_999L, terminal = true, postGameTerminal = true)).action)
+        val safeTransition = evidence(nowMs = 121_000L, exact = false, safeTransition = true,
+            terminal = true, postGameTerminal = true)
+        assertEquals(EventQuestOverlayRecoveryPolicy.Action.UNBLOCK_SAFE_TRANSITION, policy.observe(safeTransition).action)
+        overlayVisible = false // Transition is recorded only after fresh screen evidence, not input acceptance.
+        assertFalse(overlayVisible)
+    }
+
+    @Test
+    fun `fresh foreground and exact capture are required immediately before click dispatch`() {
+        var clickCount = 0
+        fun dispatch(fresh: Boolean, foreground: Boolean, safe: Boolean) = EventQuestOverlayClickDispatch.dispatch(
+            action = EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT,
+            freshCaptureTrusted = fresh, foregroundVerified = foreground, safeContext = safe,
+        ) { clickCount++; true }
+        assertFalse(dispatch(fresh = false, foreground = true, safe = true))
+        assertFalse(dispatch(fresh = true, foreground = false, safe = true))
+        assertFalse(dispatch(fresh = true, foreground = true, safe = false))
+        assertEquals(0, clickCount)
+        assertTrue(dispatch(fresh = true, foreground = true, safe = true))
+        assertEquals(1, clickCount)
+    }
+
+    @Test
+    fun `client restart budget survives Hearthstone PID change and resets on new work run`() {
+        val policy = EventQuestOverlayRecoveryPolicy(secondStageDelayMs = 100L)
+        fun e(now: Long, run: Long = 7L) = evidence(
+            nowMs = now, stableForMs = 60_000L, terminal = true, postGameTerminal = true,
+        ).copy(automationRunId = run, semanticScreenIdentity = "EVENT_QUEST_OVERLAY|TOURNAMENT|FILL_DECK")
+
+        repeat(3) { index ->
+            assertEquals(EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT,
+                policy.observe(e(60_001L + index)).action)
+        }
+        assertEquals(EventQuestOverlayRecoveryPolicy.Action.RESTART_CLIENT,
+            policy.observe(e(60_103L)).action)
+
+        // A new process resets only the PID-bound click sequence; the same run/screen restart budget remains used.
+        policy.reset()
+        repeat(3) { index ->
+            assertEquals(EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT,
+                policy.observe(e(61_004L + index)).action)
+        }
+        assertEquals("client-restart-cap-exhausted", policy.observe(e(61_106L)).reason)
+
+        // A genuine new work run gets a new bounded restart allowance.
+        policy.reset()
+        repeat(3) { index ->
+            assertEquals(EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT,
+                policy.observe(e(62_007L + index, run = 8L)).action)
+        }
+        assertEquals(EventQuestOverlayRecoveryPolicy.Action.RESTART_CLIENT,
+            policy.observe(e(62_109L, run = 8L)).action)
+    }
+
+    @Test
+    fun `stale fill deck after final gameover dispatches only exact postgame overlay clicks`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/event-quest-overlay-deck-selection-20261029.png",
+        )))
+        val screenKind = UpstreamScreenStateRecovery.classifyImageForTest("", image)
+        assertEquals("EVENT_QUEST_OVERLAY", screenKind)
+        val terminal = CurrentGamePowerLogTerminalTracker().apply {
+            observeLine("D 21:19:00.000 CREATE_GAME")
+            observeLine("Entity=self tag=PLAYSTATE value=WON")
+            observeLine("Entity=opponent tag=PLAYSTATE value=CONCEDED")
+            observeLine("Entity=GameEntity tag=STEP value=FINAL_GAMEOVER")
+            observeLine("Entity=GameEntity tag=STATE value=COMPLETE")
+        }
+        val verifiedTerminal = terminal.hasCompleteTerminalEvidence() &&
+            terminal.currentGameSurrenderEvidence("self", "opponent")?.ownPlayState == "WON"
+        assertTrue(verifiedTerminal)
+        assertTrue(EventQuestOverlayRecoveryContextPolicy.allowsDismiss(
+            mode = "TOURNAMENT", phase = "FILL_DECK", currentSessionReady = true,
+            nextModeGameplay = false, activeGame = false, activeQueueScreen = false,
+            recentInputIntent = true, shortRaceWindow = false, matchmakingSearchVisual = false,
+            terminalOrResult = true, working = true, paused = false,
+            postGameTerminalProof = verifiedTerminal,
+        ))
+
+        val policy = EventQuestOverlayRecoveryPolicy()
+        var overlayStillVisible = true
+        var dispatched = 0
+        repeat(3) { index ->
+            val decision = policy.observe(evidence(
+                nowMs = 60_000L + index * 500L, terminal = true, postGameTerminal = verifiedTerminal,
+            ))
+            assertEquals(EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT, decision.action)
+            assertTrue(EventQuestOverlayClickDispatch.dispatch(
+                decision.action, freshCaptureTrusted = true, foregroundVerified = true, safeContext = true,
+            ) { dispatched++; true })
+            assertTrue(overlayStillVisible,
+                "SendInput acceptance must not itself be recorded as a visual transition")
+        }
+        assertEquals(3, dispatched)
+        assertEquals(EventQuestOverlayRecoveryPolicy.Action.WAIT_AND_REPROBE,
+            policy.observe(evidence(nowMs = 120_999L, terminal = true, postGameTerminal = verifiedTerminal)).action)
+        assertEquals(EventQuestOverlayRecoveryPolicy.Action.UNBLOCK_SAFE_TRANSITION,
+            policy.observe(evidence(nowMs = 121_000L, exact = false, safeTransition = true,
+                terminal = true, postGameTerminal = verifiedTerminal)).action)
+        overlayStillVisible = false
+        assertFalse(overlayStillVisible)
+
+        val falseOverlay = UpstreamScreenStateRecovery.classifyImageForTest("", BufferedImage(960, 540, BufferedImage.TYPE_INT_RGB))
+        assertNotEquals("EVENT_QUEST_OVERLAY", falseOverlay)
+    }
+
+    @Test
     fun `recovery context permits fill deck with historical intent but fences current queue evidence`() {
         fun allows(
             mode: String = "TOURNAMENT",
@@ -257,6 +424,9 @@ class EventQuestOverlayRecoveryPolicyTest {
         activeGame: Boolean = false,
         activeQueue: Boolean = false,
         terminal: Boolean = false,
+        postGameTerminal: Boolean = false,
+        automationRunId: Long = 0L,
+        semanticScreenIdentity: String = "EVENT_QUEST_OVERLAY",
     ) = EventQuestOverlayRecoveryPolicy.Evidence(
         nowMs = nowMs,
         captureTrusted = trusted,
@@ -268,6 +438,9 @@ class EventQuestOverlayRecoveryPolicyTest {
         activeGame = activeGame,
         activeQueue = activeQueue,
         terminalOrResult = terminal,
+        postGameTerminalProof = postGameTerminal,
         stableForMs = stableForMs,
+        automationRunId = automationRunId,
+        semanticScreenIdentity = semanticScreenIdentity,
     )
 }

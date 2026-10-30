@@ -563,6 +563,21 @@ this deletion boundary.
   before its final restart. Known-screen identity must tolerate
   small animation/glow changes but distinguish a real screen transition; it is
   bound to PID/HWND rather than lifecycle phase labels.
+- A post-game Event Quest overlay can leave the in-memory Tournament phase at
+  `FILL_DECK` after `WarEx` cleanup. Permit its exact top-left dismiss only
+  when the fresh foreground-owned client capture confirms the structural Event
+  Quest card and the current-session Power.log has complete terminal markers
+  plus a locally verified `WON`, `LOST`, or `CONCEDED` outcome. This terminal
+  exception is limited to Tournament/FILL_DECK; it cannot override active
+  gameplay, a current matchmaking screen or short race guard, pause, or either
+  mandatory-rank-surrender guard. After each dispatch, capture and classify
+  again: accepted SendInput is not proof that the card or game menu changed.
+  Restart at most once per automation run and semantic underlay; a repeated
+  post-restart overlay logs an alert and stops automatic restarts. Regress the
+  `FINAL_GAMEOVER` + stale `FILL_DECK` path with exact overlay, incomplete or
+  unowned terminal log, false overlay, failed foreground proof, active game,
+  active queue, pause, accepted click without visual transition, verified
+  transition, and restart-cap exhaustion.
 - For an exact reconnect screen, the 60-second no-pause restart grace must
   schedule its own fresh authorized capture at the threshold rather than wait
   for the next slow periodic OCR pass. Re-evaluate current active-game,

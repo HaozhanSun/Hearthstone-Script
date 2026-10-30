@@ -4,6 +4,7 @@ import club.xiaojiawei.hsscript.strategy.mode.MatchmakingGuardPolicy
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.status.ActionDispatchGate
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
+import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ResultPageDismissalPolicy
 import club.xiaojiawei.hsscript.status.ScreenStateRecovery
@@ -27,6 +28,44 @@ class MandatoryRankSurrenderGuardTest {
         MandatoryRankSurrenderGuard.resetForTest()
         MulliganRankDispatchBarrier.resetForTest()
         PowerLogListener.resetTerminalInputFenceForTest()
+    }
+
+    @Test
+    fun `only complete current game local outcome is terminal overlay authority`() {
+        val wasReplaying = PowerLogListener.replayingExistingLog
+        val oldLocalGameId = WarEx.war.me.gameId
+        try {
+            PowerLogListener.replayingExistingLog = false
+            WarEx.war.me.gameId = "self#1"
+            PowerLogListener.observeCurrentGameTerminalEvidenceLine("D 21:00:00.000 CREATE_GAME")
+            PowerLogListener.observeCurrentGameTerminalEvidenceLine(
+                "Player EntityID=1 PlayerID=1 GameAccountId=[hi=12 lo=34]",
+            )
+            PowerLogListener.observeCurrentGameTerminalEvidenceLine(
+                "Player EntityID=2 PlayerID=2 GameAccountId=[hi=56 lo=78]",
+            )
+            PowerLogListener.observeCurrentGameTerminalEvidenceLine("PlayerID=1, PlayerName=self#1")
+            PowerLogListener.observeCurrentGameTerminalEvidenceLine("PlayerID=2, PlayerName=opponent#2")
+            PowerLogListener.bindVerifiedLocalMulliganEntity("self#1")
+            PowerLogListener.observeCurrentGameTerminalEvidenceLine(
+                "TAG_CHANGE Entity=self#1 tag=PLAYSTATE value=WON",
+            )
+            PowerLogListener.observeCurrentGameTerminalEvidenceLine(
+                "TAG_CHANGE Entity=opponent#2 tag=PLAYSTATE value=CONCEDED",
+            )
+            PowerLogListener.observeCurrentGameTerminalEvidenceLine(
+                "TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER",
+            )
+            assertFalse(PowerLogListener.hasVerifiedCurrentGameTerminalOutcome(),
+                "FINAL_GAMEOVER without the complete marker must not authorize recovery")
+            PowerLogListener.observeCurrentGameTerminalEvidenceLine(
+                "TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE",
+            )
+            assertTrue(PowerLogListener.hasVerifiedCurrentGameTerminalOutcome())
+        } finally {
+            WarEx.war.me.gameId = oldLocalGameId
+            PowerLogListener.replayingExistingLog = wasReplaying
+        }
     }
 
     @Test
