@@ -7,6 +7,49 @@ import java.awt.Rectangle
 internal object SeasonRankAwardRecoveryPolicy {
     const val DISPATCH_ACTION = "recovery.season-rank-award.continue"
 
+    /** Current, final-edge facts for the only mouse event the award recovery may send. */
+    data class ContinueDispatchContext(
+        val action: String,
+        val scopedToExactAwardContinue: Boolean,
+        val expectedProcessId: Int,
+        val currentProcessId: Int?,
+        val windowVerified: Boolean,
+        val mode: String?,
+        val currentGameSessionReady: Boolean,
+        val activeGame: Boolean,
+        val currentModeGameplay: Boolean,
+        val nextModeGameplay: Boolean,
+        val terminalOrResult: Boolean,
+        val activeQueueScreen: Boolean,
+        val activeQueueEntryGuard: Boolean,
+        val rankSurrenderPending: Boolean,
+        val terminalCleanupPending: Boolean,
+        val working: Boolean,
+        val paused: Boolean,
+        val windowValid: Boolean,
+    )
+
+    /** Explains the final revalidation decision without weakening any dispatch fence. */
+    fun continueDispatchBlockReason(context: ContinueDispatchContext): String? = when {
+        context.action != DISPATCH_ACTION -> "wrong-action"
+        !context.scopedToExactAwardContinue -> "exact-award-continue-scope-missing"
+        context.expectedProcessId <= 0 || context.currentProcessId != context.expectedProcessId -> "process-changed"
+        !context.windowValid -> "window-invalid"
+        !context.windowVerified -> "window-owner-mismatch"
+        !allowsMenuContext(context.mode, context.currentGameSessionReady) -> "unsafe-menu-or-current-session"
+        context.activeGame -> "active-game"
+        context.currentModeGameplay -> "current-mode-gameplay"
+        context.nextModeGameplay -> "next-mode-gameplay"
+        context.terminalOrResult -> "terminal-or-result"
+        context.activeQueueScreen -> "active-matchmaking-screen"
+        context.activeQueueEntryGuard -> "active-matchmaking-entry-guard"
+        context.rankSurrenderPending -> "rank-surrender-pending"
+        context.terminalCleanupPending -> "terminal-cleanup-pending"
+        !context.working -> "not-working"
+        context.paused -> "paused"
+        else -> null
+    }
+
     fun allowsDedicatedStartupRecovery(
         screenKind: String?,
         detectionEvidence: String?,

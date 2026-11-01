@@ -551,20 +551,45 @@ object MouseUtil {
         if (preSessionSeasonRankAwardContinue) {
             val hwnd = ScriptStatus.gameHWND ?: return false
             val pid = GameUtil.findGameProcessIdForDiagnostics()?.toInt() ?: return false
-            fun safe(): Boolean = ActionDispatchGate.isSeasonRankAwardContinueDispatchScoped() &&
-                GameUtil.findGameProcessIdForDiagnostics() == pid.toLong() &&
-                GameUtil.isVerifiedCurrentGameWindow(hwnd, pid.toLong()) &&
-                SeasonRankAwardRecoveryPolicy.allowsMenuContext(
-                    Mode.currMode?.name,
-                    !ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
-                ) && !WarEx.inWar && Mode.currMode != ModeEnum.GAMEPLAY && Mode.nextMode != ModeEnum.GAMEPLAY &&
-                !GameUtil.isTerminalGameState() &&
-                !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
-                !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() &&
-                !MandatoryRankSurrenderGuard.isPending() && !MandatoryRankSurrenderGuard.isTerminalCleanupPending() &&
-                WorkTimeListener.working && !PauseStatus.isPause
-            if (!safe() || !hwndIsValid(hwnd)) {
-                log.warn { "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=dispatch-revalidation-failed pid=$pid hwnd=$hwnd input=not-sent" }
+            fun blockReason(): String? {
+                val context = SeasonRankAwardRecoveryPolicy.ContinueDispatchContext(
+                    action = dispatchAction,
+                    scopedToExactAwardContinue = ActionDispatchGate.isSeasonRankAwardContinueDispatchScoped(),
+                    expectedProcessId = pid,
+                    currentProcessId = GameUtil.findGameProcessIdForDiagnostics()?.toInt(),
+                    windowVerified = GameUtil.isVerifiedCurrentGameWindow(hwnd, pid.toLong()),
+                    mode = Mode.currMode?.name,
+                    currentGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+                    activeGame = WarEx.inWar,
+                    currentModeGameplay = Mode.currMode == ModeEnum.GAMEPLAY,
+                    nextModeGameplay = Mode.nextMode == ModeEnum.GAMEPLAY,
+                    terminalOrResult = GameUtil.isTerminalGameState(),
+                    activeQueueScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
+                    activeQueueEntryGuard = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+                    rankSurrenderPending = MandatoryRankSurrenderGuard.isPending(),
+                    terminalCleanupPending = MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+                    working = WorkTimeListener.working,
+                    paused = PauseStatus.isPause,
+                    windowValid = hwndIsValid(hwnd),
+                )
+                return SeasonRankAwardRecoveryPolicy.continueDispatchBlockReason(context)
+            }
+            fun logBlocked(stage: String, reason: String) {
+                log.warn {
+                    "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=$reason stage=$stage " +
+                        "pid=$pid hwnd=$hwnd currentSessionReady=${ScreenStateRecovery.isCurrentGameSessionReadyForStart()} " +
+                        "mode=${Mode.currMode?.name} nextMode=${Mode.nextMode?.name} inWar=${WarEx.inWar} " +
+                        "terminal=${GameUtil.isTerminalGameState()} " +
+                        "queueScreen=${LifecycleTrace.hasRecentActiveMatchmakingScreen()} " +
+                        "queueEntryGuard=${LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()} " +
+                        "rankSurrenderPending=${MandatoryRankSurrenderGuard.isPending()} " +
+                        "terminalCleanupPending=${MandatoryRankSurrenderGuard.isTerminalCleanupPending()} " +
+                        "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} input=not-sent"
+                }
+            }
+            val initialBlockReason = blockReason()
+            if (initialBlockReason != null) {
+                logBlocked("pre-lock", initialBlockReason)
                 return false
             }
             val lockAcquired = try { DRIVER_LOCK.tryLock(3000, TimeUnit.MILLISECONDS) }
@@ -575,10 +600,22 @@ object MouseUtil {
             }
             try {
                 synchronized(e2eRobotLock) {
-                    if (!ActionDispatchGate.allow(dispatchAction) || !safe() ||
-                        !forceFocusWindowForRecovery(hwnd) || !safe()
-                    ) {
-                        log.warn { "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=dispatch-recheck-failed pid=$pid hwnd=$hwnd input=not-sent" }
+                    if (!ActionDispatchGate.allow(dispatchAction)) {
+                        logBlocked("input-lock-gate", "dispatch-gate-denied")
+                        return false
+                    }
+                    val lockedBlockReason = blockReason()
+                    if (lockedBlockReason != null) {
+                        logBlocked("input-lock-recheck", lockedBlockReason)
+                        return false
+                    }
+                    if (!forceFocusWindowForRecovery(hwnd)) {
+                        logBlocked("foreground-recheck", "foreground-focus-failed")
+                        return false
+                    }
+                    val foregroundBlockReason = blockReason()
+                    if (foregroundBlockReason != null) {
+                        logBlocked("post-focus-recheck", foregroundBlockReason)
                         return false
                     }
                     val accepted = sendE2eWindowsClick(pos)
