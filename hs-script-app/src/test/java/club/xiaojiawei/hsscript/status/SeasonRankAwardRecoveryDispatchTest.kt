@@ -249,73 +249,78 @@ class SeasonRankAwardRecoveryDispatchTest {
         val chest = fixture("season-rank-award-chest-20261101.png")
         val detection = requireNotNull(UpstreamScreenStateRecovery.classifyImageForTest("", chest))
         assertEquals("SEASON_RANK_AWARD_CHEST", detection)
-        assertTrue(SeasonRankAwardRecoveryPolicy.allowsDedicatedChestOpenStartupRecovery(
-            screenKind = detection,
-            detectionEvidence = "season-rank-award-chest-structural-visual",
-            visualChestVerified = SeasonRankAwardChestVisualClassifier.isSeasonRankAwardChest(chest),
-            purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
-            captureForegroundAuthorized = true,
-            processWindowVerified = true,
-            mode = "HUB",
-            currentGameSessionReady = false,
-            activeGame = false,
-            activeQueue = false,
-            terminalOrResult = false,
-            working = true,
-            paused = false,
-            stateStillCurrent = true,
-        ), "an empty current Power.log does not block the exact, fresh chest action")
 
-        val baseline = mapOf(
-            "screenKind" to detection,
-            "detectionEvidence" to "season-rank-award-chest-structural-visual",
-            "visualChestVerified" to true,
-            "purpose" to ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
-            "captureForegroundAuthorized" to true,
-            "processWindowVerified" to true,
-            "mode" to "HUB",
-            "currentGameSessionReady" to false,
-            "activeGame" to false,
-            "activeQueue" to false,
-            "terminalOrResult" to false,
-            "working" to true,
-            "paused" to false,
-            "stateStillCurrent" to true,
+        fun candidate(
+            screenKind: String? = detection,
+            evidence: String? = "season-rank-award-chest-structural-visual",
+            visualVerified: Boolean = SeasonRankAwardChestVisualClassifier.isSeasonRankAwardChest(chest),
+            purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            foregroundAuthorized: Boolean = true,
+            processWindowVerified: Boolean = true,
+            mode: String? = "HUB",
+            currentSessionReady: Boolean = false,
+            activeGame: Boolean = false,
+            activeQueue: Boolean = false,
+            terminal: Boolean = false,
+            working: Boolean = true,
+            paused: Boolean = false,
+            stillCurrent: Boolean = true,
+        ) = SeasonRankAwardRecoveryPolicy.allowsDedicatedChestOpenStartupRecovery(
+            screenKind = screenKind,
+            detectionEvidence = evidence,
+            visualChestVerified = visualVerified,
+            purpose = purpose,
+            captureForegroundAuthorized = foregroundAuthorized,
+            processWindowVerified = processWindowVerified,
+            mode = mode,
+            currentGameSessionReady = currentSessionReady,
+            activeGame = activeGame,
+            activeQueue = activeQueue,
+            terminalOrResult = terminal,
+            working = working,
+            paused = paused,
+            stateStillCurrent = stillCurrent,
         )
-        assertFalse(SeasonRankAwardRecoveryPolicy.allowsDedicatedChestOpenStartupRecovery(
-            screenKind = "AMAZON_APPSTORE_NOTICE",
-            detectionEvidence = "season-rank-award-chest-structural-visual",
-            visualChestVerified = true,
-            purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
-            captureForegroundAuthorized = true,
-            processWindowVerified = true,
-            mode = "HUB",
-            currentGameSessionReady = false,
-            activeGame = false,
-            activeQueue = false,
-            terminalOrResult = false,
-            working = true,
-            paused = false,
-            stateStillCurrent = true,
-        ))
-        assertFalse(SeasonRankAwardRecoveryPolicy.allowsDedicatedChestOpenStartupRecovery(
-            screenKind = baseline["screenKind"] as String,
-            detectionEvidence = baseline["detectionEvidence"] as String,
-            visualChestVerified = baseline["visualChestVerified"] as Boolean,
-            purpose = baseline["purpose"] as ScreenRecoveryCapturePurpose,
-            captureForegroundAuthorized = baseline["captureForegroundAuthorized"] as Boolean,
-            processWindowVerified = baseline["processWindowVerified"] as Boolean,
-            mode = baseline["mode"] as String,
-            currentGameSessionReady = true,
-            activeGame = false,
-            activeQueue = false,
-            terminalOrResult = false,
-            working = true,
-            paused = false,
-            stateStillCurrent = true,
-        ), "a current session remains fenced")
-    }
 
+        assertTrue(candidate(), "an empty current Power.log does not block the exact, fresh chest action")
+        val rejected = mutableListOf<Pair<String, () -> Boolean>>()
+        rejected.add("wrong screen kind" to { candidate(screenKind = "AMAZON_APPSTORE_NOTICE") })
+        rejected.add("wrong detection evidence" to { candidate(evidence = "generic-amazon-visual") })
+        rejected.add("unverified chest visual" to { candidate(visualVerified = false) })
+        val dedicatedPurposes = setOf(
+            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+        )
+        enumValues<ScreenRecoveryCapturePurpose>().filterNot { it in dedicatedPurposes }.forEach { purpose ->
+            rejected.add("disallowed probe purpose $purpose" to { candidate(purpose = purpose) })
+        }
+        rejected.add("foreground capture unauthorized" to { candidate(foregroundAuthorized = false) })
+        rejected.add("process/window unverified" to { candidate(processWindowVerified = false) })
+        rejected.add("wrong mode" to { candidate(mode = "LOGIN") })
+        rejected.add("current session ready" to { candidate(currentSessionReady = true) })
+        rejected.add("active game" to { candidate(activeGame = true) })
+        rejected.add("active queue" to { candidate(activeQueue = true) })
+        rejected.add("terminal/result" to { candidate(terminal = true) })
+        rejected.add("not working" to { candidate(working = false) })
+        rejected.add("paused" to { candidate(paused = true) })
+        rejected.add("stale state" to { candidate(stillCurrent = false) })
+        rejected.forEach { (reason, allows) -> assertFalse(allows(), reason) }
+
+        assertFalse(StartupInputAuthorizationPolicy.allows(
+            action = SeasonRankAwardRecoveryPolicy.OPEN_CHEST_ACTION,
+            currentSessionReady = false,
+            freshOnlineMenuReady = false,
+        ), "candidate eligibility is not the one-use dispatch capability")
+        for (action in listOf("mouse.left", "strategy.card.play", "matchmaking.start", "surrender.request")) {
+            assertFalse(StartupInputAuthorizationPolicy.allows(
+                action = action,
+                currentSessionReady = false,
+                freshOnlineMenuReady = false,
+                seasonRankAwardChestOpenPermitValid = true,
+            ), "the chest-specific permit must not authorize $action")
+        }
+    }
     @Test
     fun `two reward overlays require a fresh hub chooser before matchmaking proof`() {
         val continueImage = fixture("season-rank-award-20261101.png")
