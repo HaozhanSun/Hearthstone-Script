@@ -636,6 +636,13 @@ this deletion boundary.
   rejected it; do not collapse a preflight, foreground, window, or frame failure
   into one generic unavailable reason. Regress the retry callsite with an empty
   Power.log and verify it selects a pre-session probe without granting input.
+- A post-game Event Quest completion popup may use a blue-violet ribbon instead
+  of the startup modal's gold title while retaining the dimmed HUB and centered
+  parchment card. The structural classifier must recognize both title variants
+  without broadening to rank progression or the four-choice HUB chooser. Keep
+  the exact 1920x1080 completion screenshot as a SHA-256-pinned fixture and
+  assert it enters the bounded three-click, fresh-recheck, one-minute restart
+  flow; retain rank-medal and chooser neighbor fixtures as negative cases.
 - An OCR `UNKNOWN` mode can support only `matchmaking.start` when the same
   verified client has a recent independent configured-mode selection proof and
   a fresh exact deck-selection frame with enabled Start. A fresh visible

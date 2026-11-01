@@ -4,6 +4,7 @@ import java.awt.Point
 import java.awt.Rectangle
 import java.awt.image.BufferedImage
 import java.io.File
+import java.security.MessageDigest
 import javax.imageio.ImageIO
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -169,6 +170,63 @@ class EventQuestOverlayRecoveryPolicyTest {
         assertFalse(UpstreamScreenStateRecovery.dispatchEventQuestRecovery(laterReconnectClassification) {
             error("reconnect classification must not dispatch stale quest-overlay recovery")
         })
+    }
+
+    @Test
+    fun `postgame completion popup fixture enters bounded Event Quest recovery and stays distinct from neighbors`() {
+        val bytes = requireNotNull(javaClass.getResourceAsStream(COMPLETION_POPUP_FIXTURE)).use { it.readBytes() }
+        assertEquals(COMPLETION_POPUP_SHA256, sha256(bytes))
+        val completion = ImageIO.read(bytes.inputStream())
+        assertEquals(1920, completion.width)
+        assertEquals(1080, completion.height)
+        val completionEvidence = StartupQuestOverlayVisualClassifier.inspect(completion)
+        assertEquals(0.0, completionEvidence.titleGoldRatio, 0.0001,
+            "this completion modal uses the purple ribbon that the former gold-title gate missed")
+        assertTrue(completionEvidence.dimmedHubRatio >= 0.20, "background is visibly dimmed: $completionEvidence")
+        assertTrue(completionEvidence.singleQuestCardParchmentRatio >= 0.34, "centered quest card detected: $completionEvidence")
+        assertTrue(completionEvidence.completionHeaderPurpleRatio >= 0.30, "completion ribbon detected: $completionEvidence")
+        assertTrue(completionEvidence.isQuestOverlay, "the postgame completion popup is a quest overlay: $completionEvidence")
+
+        val completionKind = UpstreamScreenStateRecovery.classifyImageForTest("", completion)
+        assertEquals("EVENT_QUEST_OVERLAY", completionKind)
+        var recoveryStarted = false
+        assertTrue(UpstreamScreenStateRecovery.dispatchEventQuestRecovery(completionKind) {
+            recoveryStarted = true
+            val policy = EventQuestOverlayRecoveryPolicy()
+            repeat(3) { index ->
+                assertEquals(
+                    EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT,
+                    policy.observe(evidence(nowMs = 132_000L + index * 500L)).action,
+                )
+            }
+            assertEquals(
+                EventQuestOverlayRecoveryPolicy.Action.WAIT_AND_REPROBE,
+                policy.observe(evidence(nowMs = 192_999L)).action,
+            )
+            assertEquals(
+                EventQuestOverlayRecoveryPolicy.Action.RESTART_CLIENT,
+                policy.observe(evidence(nowMs = 193_000L)).action,
+            )
+            true
+        })
+        assertTrue(recoveryStarted, "the captured stale-probe frame must invoke bounded recovery")
+
+        val rankProgress = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/result-flow/terminal-rank-progress-live-regression-20261026.png",
+        )))
+        assertFalse(StartupQuestOverlayVisualClassifier.isQuestOverlay(rankProgress),
+            "rank medal/progression remains distinct from a quest popup")
+        assertNotEquals("EVENT_QUEST_OVERLAY", UpstreamScreenStateRecovery.classifyImageForTest("", rankProgress))
+
+        val chooser = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/hub-mode-chooser-live-20261029-035630.png",
+        )))
+        assertFalse(StartupQuestOverlayVisualClassifier.isQuestOverlay(chooser),
+            "the actual four-choice HUB chooser remains distinct")
+        assertEquals("TOURNAMENT", UpstreamScreenStateRecovery.classifyImageForTest("", chooser))
+        assertFalse(UpstreamScreenStateRecovery.dispatchEventQuestRecovery(
+            UpstreamScreenStateRecovery.classifyImageForTest("", chooser),
+        ) { error("hub chooser must not dispatch quest dismissal") })
     }
 
     @Test
@@ -705,4 +763,12 @@ class EventQuestOverlayRecoveryPolicyTest {
         automationRunId = automationRunId,
         semanticScreenIdentity = semanticScreenIdentity,
     )
+
+    private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
+        .digest(bytes).joinToString("") { "%02X".format(it) }
+
+    private companion object {
+        const val COMPLETION_POPUP_FIXTURE = "/offline-ocr/screen-recovery/event-quest-completion-popup-20261030.png"
+        const val COMPLETION_POPUP_SHA256 = "57671B5659DB6574426AA7BBCBEBF82E1687A15CB05EEC9403A9E8C99DCA7DDF"
+    }
 }

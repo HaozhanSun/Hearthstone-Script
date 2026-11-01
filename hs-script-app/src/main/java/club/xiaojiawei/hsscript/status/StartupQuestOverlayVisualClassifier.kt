@@ -11,13 +11,16 @@ internal object StartupQuestOverlayVisualClassifier {
         val cardGutterDarkRatio: Double,
         val dimmedHubRatio: Double,
         val singleQuestCardParchmentRatio: Double,
+        val completionHeaderPurpleRatio: Double,
     ) {
         val isQuestOverlay: Boolean
-            get() = titleGoldRatio >= MIN_TITLE_GOLD_RATIO &&
-                dimmedHubRatio >= MIN_DIMMED_HUB_RATIO &&
-                (leftCardParchmentRatio >= MIN_CARD_PARCHMENT_RATIO &&
+            get() = dimmedHubRatio >= MIN_DIMMED_HUB_RATIO &&
+                (titleGoldRatio >= MIN_TITLE_GOLD_RATIO &&
+                    (leftCardParchmentRatio >= MIN_CARD_PARCHMENT_RATIO &&
                     rightCardParchmentRatio >= MIN_CARD_PARCHMENT_RATIO &&
                     cardGutterDarkRatio >= MIN_CARD_GUTTER_DARK_RATIO ||
+                    singleQuestCardParchmentRatio >= MIN_CARD_PARCHMENT_RATIO) ||
+                    completionHeaderPurpleRatio >= MIN_COMPLETION_HEADER_PURPLE_RATIO &&
                     singleQuestCardParchmentRatio >= MIN_CARD_PARCHMENT_RATIO)
     }
 
@@ -25,11 +28,12 @@ internal object StartupQuestOverlayVisualClassifier {
     private const val MIN_CARD_PARCHMENT_RATIO = 0.34
     private const val MIN_CARD_GUTTER_DARK_RATIO = 0.55
     private const val MIN_DIMMED_HUB_RATIO = 0.20
+    private const val MIN_COMPLETION_HEADER_PURPLE_RATIO = 0.30
 
     fun inspect(image: BufferedImage): Evidence {
         val aspect = image.width.toDouble() / image.height.coerceAtLeast(1)
         if (image.width < 800 || image.height < 450 || aspect !in 1.65..1.90) {
-            return Evidence(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            return Evidence(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         }
         return Evidence(
             titleGoldRatio = sample(image, .36, .64, .18, .30, ::isGold),
@@ -38,6 +42,7 @@ internal object StartupQuestOverlayVisualClassifier {
             cardGutterDarkRatio = sample(image, .49, .51, .35, .66) { isDark(it) },
             dimmedHubRatio = sample(image, .18, .82, .76, .94) { isDimmed(it) },
             singleQuestCardParchmentRatio = sample(image, .42, .58, .35, .66, ::isParchment),
+            completionHeaderPurpleRatio = sample(image, .37, .63, .385, .435, ::isQuestPurple),
         )
     }
 
@@ -90,5 +95,13 @@ internal object StartupQuestOverlayVisualClassifier {
         val green = rgb ushr 8 and 0xff
         val blue = rgb and 0xff
         return (red + green + blue) / 3 < 90
+    }
+
+    /** The completion popup uses a blue-violet title ribbon instead of the gold startup title. */
+    private fun isQuestPurple(rgb: Int): Boolean {
+        val red = rgb ushr 16 and 0xff
+        val green = rgb ushr 8 and 0xff
+        val blue = rgb and 0xff
+        return blue >= 95 && blue >= red * 1.30 && blue >= green * 1.35
     }
 }
