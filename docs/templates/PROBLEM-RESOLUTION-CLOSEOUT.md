@@ -2,6 +2,7 @@
 
 Issue: <short name and task/topic identifier>
 Date: <YYYY-MM-DD>
+Status: CLOSED
 
 Investigation and cause: PASS — <evidence reviewed and cause established>
 

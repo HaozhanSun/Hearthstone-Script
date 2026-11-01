@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $requiredFields = @(
+    'Status',
     'Investigation and cause',
     'Fix',
     'Verification',
@@ -36,12 +37,29 @@ foreach ($field in $requiredFields) {
     $values[$field] = $matches[0].Groups[1].Value.Trim()
 }
 
-foreach ($field in $requiredFields) {
+$isOpen = $false
+if ($values['Status'] -match '^OPEN\s*[—-]\s*(.+)$') {
+    $openReason = $Matches[1].Trim()
+    if ($openReason.Length -lt 12) {
+        throw 'An OPEN status needs a specific reason'
+    }
+    $isOpen = $true
+} elseif ($values['Status'] -cne 'CLOSED') {
+    throw "Status must be 'CLOSED' or 'OPEN — <specific reason>'"
+}
+
+foreach ($field in ($requiredFields | Where-Object { $_ -ne 'Status' })) {
     $value = $values[$field]
     if ($value -match '^N/A\s*[—-]\s*(.+)$') {
         $reason = $Matches[1].Trim()
         if ($reason.Length -lt 12 -or $reason -match '^(reason|n/?a|tbd)$') {
             throw "'$field' needs a specific N/A reason"
+        }
+        continue
+    }
+    if ($isOpen -and $value -match '^(PARTIAL|DIAGNOSTIC-ONLY)\s*[—-]\s*(.+)$') {
+        if ($Matches[2].Trim().Length -lt 12) {
+            throw "'$field' needs a specific explanation for its open status"
         }
         continue
     }
