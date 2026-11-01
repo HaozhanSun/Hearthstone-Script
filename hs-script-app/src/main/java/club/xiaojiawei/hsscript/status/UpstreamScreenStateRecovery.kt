@@ -70,6 +70,7 @@ object UpstreamScreenStateRecovery {
     private val eventQuestOverlayRecoveryPolicy = EventQuestOverlayRecoveryPolicy()
     private val startupDeckModeNavigationAttempts = StartupDeckModeNavigationAttemptGate()
     private val seasonRankAwardRecoveryAttemptGate = SeasonRankAwardRecoveryAttemptGate()
+    private val seasonRankAwardHumanInterventionPolicy = SeasonRankAwardHumanInterventionPolicy()
     private val stuckScreenUnblockRecheckGate = StuckScreenUnblockRecheckGate()
     private val stuckScreenUnblockBatchInFlight = AtomicBoolean(false)
 
@@ -145,6 +146,7 @@ object UpstreamScreenStateRecovery {
         val seasonRankAwardVisual: Boolean = false,
         val seasonRankAwardChestVisual: Boolean = false,
         val seasonRankAwardRewardsVisual: Boolean = false,
+        val seasonRankAwardRewardsContinueVisual: Boolean = false,
         val battleNetLauncherVisual: Boolean = false,
         val tournamentModeSelectorVisual: Boolean = false,
     ) {
@@ -164,6 +166,7 @@ object UpstreamScreenStateRecovery {
                 "seasonRankAwardVisual=$seasonRankAwardVisual " +
                 "seasonRankAwardChestVisual=$seasonRankAwardChestVisual " +
                 "seasonRankAwardRewardsVisual=$seasonRankAwardRewardsVisual " +
+                "seasonRankAwardRewardsContinueVisual=$seasonRankAwardRewardsContinueVisual " +
                 "battleNetLauncherVisual=$battleNetLauncherVisual " +
                 "tournamentModeSelectorVisual=$tournamentModeSelectorVisual"
     }
@@ -422,6 +425,34 @@ object UpstreamScreenStateRecovery {
             }
             return false
         }
+        val monthlyRewardAttention = seasonRankAwardHumanInterventionPolicy.observe(
+            screenKind = detection?.kind?.code,
+            rewardPresentationVisible = capture.visual.seasonRankAwardRewardsVisual,
+            continueVisible = capture.visual.seasonRankAwardRewardsContinueVisual,
+            freshAuthorizedCapture = authorizedCapture.foregroundVerified &&
+                authorizedCapture.purpose in setOf(
+                    ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                    ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+                    ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+                ),
+            stateStillCurrent = stateStillCurrent(),
+            notifyUser = {
+                SystemUtil.notice(
+                    "Hearthstone is showing the five-chest monthly reward screen with no Continue button. " +
+                        "Dismiss it manually, then resume the script.",
+                    title = "Human action needed",
+                    forceNotify = true,
+                )
+            },
+            holdAutomation = { PauseStatus.setManualPause(true) },
+        )
+        if (monthlyRewardAttention.holdAutomation) {
+            log.warn {
+                "SEASON_RANK_MONTHLY_REWARD_HUMAN_REQUIRED notification=${monthlyRewardAttention.notifyUser} " +
+                    "action=MANUAL_PAUSE_NO_INPUT_NO_RESTART"
+            }
+            return false
+        }
         // Stale probes also run before Power.log/session readiness. They must
         // classify a deck chooser as classification-only unless fresh mode
         // proof matches the configured format; treating these as generic stale
@@ -480,7 +511,7 @@ object UpstreamScreenStateRecovery {
         val seasonAwardRewardsContinueCandidate = SeasonRankAwardRecoveryPolicy.allowsDedicatedRewardsContinueStartupRecovery(
             screenKind = detection?.kind?.code,
             detectionEvidence = detection?.evidence,
-            visualRewardsVerified = capture.visual.seasonRankAwardRewardsVisual,
+            visualRewardsVerified = capture.visual.seasonRankAwardRewardsContinueVisual,
             purpose = authorizedCapture.purpose,
             captureForegroundAuthorized = authorizedCapture.foregroundVerified,
             processWindowVerified = currentPid != null && currentHwnd == authorizedCapture.gameWindow.toString() &&
@@ -825,6 +856,17 @@ object UpstreamScreenStateRecovery {
                             "genericMenuProof=false action=EXACT_REWARD_CONTINUE_ONLY authority=FRESH_CAPTURE"
                     }
                 }
+            }
+        }
+        if (detection?.kind == ScreenKind.SEASON_RANK_AWARD_REWARDS &&
+            !capture.visual.seasonRankAwardRewardsContinueVisual
+        ) {
+            val rewardEvidence = SeasonRankAwardRewardsVisualClassifier.inspect(capture.image)
+            log.warn {
+                "SEASON_RANK_AWARD_REWARDS_BLOCKED reason=continue-label-not-visible action=NO_INPUT " +
+                    "activeContinueInnerRatio=${"%.4f".format(Locale.ROOT, rewardEvidence.activeContinueRatio)} " +
+                    "rewardChestRegions=${rewardEvidence.rewardChestRatios.count { it >= .018 }}/5 " +
+                    "capturePurpose=${authorizedCapture.purpose}"
             }
         }
         log.info {
@@ -1678,7 +1720,10 @@ object UpstreamScreenStateRecovery {
             startupQuestOverlayVisual = StartupQuestOverlayVisualClassifier.isQuestOverlay(image),
             seasonRankAwardVisual = SeasonRankAwardVisualClassifier.isSeasonRankAward(image),
             seasonRankAwardChestVisual = SeasonRankAwardChestVisualClassifier.isSeasonRankAwardChest(image),
-            seasonRankAwardRewardsVisual = SeasonRankAwardRewardsVisualClassifier.isRewardPresentation(image),
+            seasonRankAwardRewardsVisual = SeasonRankAwardRewardsVisualClassifier
+                .inspect(image).isRewardPresentation,
+            seasonRankAwardRewardsContinueVisual = SeasonRankAwardRewardsVisualClassifier
+                .inspect(image).isRewardContinueReady,
             battleNetLauncherVisual = BattleNetLauncherVisualPolicy.isVisible(image),
             tournamentModeSelectorVisual = TournamentModeSelectorVisualPolicy.isVisible(image),
         )
@@ -2043,7 +2088,11 @@ object UpstreamScreenStateRecovery {
                 ScreenKind.SEASON_RANK_AWARD_REWARDS,
                 ModeEnum.HUB,
                 98,
-                "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+                if (visual.seasonRankAwardRewardsContinueVisual) {
+                    "season-rank-award-rewards-five-chests-and-labeled-continue-structural-visual"
+                } else {
+                    "season-rank-award-five-chests-continue-not-visible"
+                },
             )
         }
         if (visual.amazonAppstoreSunsetNoticeVisual) {
@@ -3824,7 +3873,7 @@ object UpstreamScreenStateRecovery {
                     screenKind = detection.kind.code,
                     detectionEvidence = detection.evidence,
                     visualRewardsVerified = detection.evidence ==
-                        "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+                        "season-rank-award-rewards-five-chests-and-labeled-continue-structural-visual",
                     windowBounds = Rectangle(
                         gameBounds.left.toInt(), gameBounds.top.toInt(),
                         (gameBounds.right.toInt() - gameBounds.left.toInt()).coerceAtLeast(1),

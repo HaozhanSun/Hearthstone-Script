@@ -12,7 +12,11 @@ internal object SeasonRankAwardRewardsVisualClassifier {
     ) {
         val isRewardPresentation: Boolean
             get() = seasonPlaqueRatio >= .34 && rankBadgeRatio >= .14 &&
-                activeContinueRatio >= .25 && rewardChestRatios.count { it >= .018 } >= 4
+                rewardChestRatios.count { it >= .018 } >= 4
+
+        /** A screen layout never proves its Continue control is enabled. */
+        val isRewardContinueReady: Boolean
+            get() = isRewardPresentation && activeContinueRatio >= .25
     }
 
     fun inspect(image: BufferedImage): Evidence {
@@ -34,7 +38,10 @@ internal object SeasonRankAwardRewardsVisualClassifier {
             rankBadgeRatio = sample(image, .46, .54, .54, .68) { r, g, b ->
                 b >= 95 && b >= r * 1.12 && b >= g * .92
             },
-            activeContinueRatio = sample(image, .43, .57, .77, .87) { r, g, b ->
+            // Measure the inner button label, not the gold outer rim. On the
+            // live five-closed-chest screen the rim is warm/gold even though
+            // the control is blank and clicks do not advance the stage.
+            activeContinueRatio = sample(image, .465, .535, .79, .86) { r, g, b ->
                 r >= 135 && g >= 105 && r >= b * 1.12 && g >= b * 1.04
             },
             rewardChestRatios = rewardChestRegions.map { (left, right, top, bottom) ->

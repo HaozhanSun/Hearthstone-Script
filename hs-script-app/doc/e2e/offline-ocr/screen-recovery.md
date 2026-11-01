@@ -693,3 +693,22 @@ this deletion boundary.
   menu, and gameplay input remain denied until their own proofs are fresh.
   Continue is navigation only; matchmaking Start remains blocked until
   independent fresh numeric-rank preflight and configured-mode/deck proof.
+- For the five-chest seasonal reward layout, a warm/gold outer rim is not proof
+  that the lower-center Continue is enabled. Require the inner button label in
+  a fresh authorized frame before dispatching Continue. Keep screenshots with
+  blank controls as negative replay fixtures; OS-level `SendInput accepted=true`
+  is not proof of a UI transition. Do not infer individual chest-click targets
+  until a fresh before/after capture pair shows that exact interaction
+  advancing the screen.
+- The five-closed-chest monthly rank reward modal with no visible Continue is a
+  human-intervention screen, not an idle-recovery target. Require both the
+  five-chest modal signature and absence of the inner Continue label; a reward
+  layout with a visible Continue follows its dedicated bounded reward flow.
+  On the exact fresh authorized blank-Continue classification, send one
+  forced user notification per occurrence and apply a manual pause; do not open
+  chests, click Continue, press Escape, or restart Hearthstone/Battle.net.
+  Repeated probes must keep automation paused without repeating the notification.
+  Clear the notification dedupe only after a fresh different screen is observed,
+  so a later occurrence can notify again. Regress the exact captured
+  blank-Continue frame for one notification, a held pause, zero input/restart,
+  and reset/re-arm after the modal is gone.

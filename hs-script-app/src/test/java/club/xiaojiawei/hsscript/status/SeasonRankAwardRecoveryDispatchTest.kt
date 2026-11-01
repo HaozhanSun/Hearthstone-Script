@@ -12,6 +12,98 @@ import org.junit.jupiter.api.Test
 
 class SeasonRankAwardRecoveryDispatchTest {
     @Test
+    fun `blank five chest monthly reward screen notifies once and pauses without input or restart`() {
+        val frame = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/season-rank-five-chests-blank-continue-live-20261101-105355.png",
+        )))
+        val screen = requireNotNull(UpstreamScreenStateRecovery.classifyImageForTest("", frame))
+        val visual = SeasonRankAwardRewardsVisualClassifier.inspect(frame)
+        assertEquals("SEASON_RANK_AWARD_REWARDS", screen)
+        assertEquals("season-rank-award-five-chests-continue-not-visible",
+            UpstreamScreenStateRecovery.classificationEvidenceForImageTest("", frame))
+        assertTrue(visual.isRewardPresentation)
+        assertFalse(visual.isRewardContinueReady)
+
+        val policy = SeasonRankAwardHumanInterventionPolicy()
+        var notifications = 0
+        var pauses = 0
+        var inputDispatches = 0
+        var restarts = 0
+        fun observe(
+            screenKind: String?,
+            authorized: Boolean = true,
+            rewardVisible: Boolean = visual.isRewardPresentation,
+            continueVisible: Boolean = visual.isRewardContinueReady,
+        ) = policy.observe(
+            screenKind = screenKind,
+            rewardPresentationVisible = rewardVisible,
+            continueVisible = continueVisible,
+            freshAuthorizedCapture = authorized,
+            stateStillCurrent = true,
+            notifyUser = { notifications++ },
+            holdAutomation = { pauses++ },
+        )
+
+        val first = observe(screen)
+        val repeated = observe(screen)
+        assertTrue(first.holdAutomation)
+        assertTrue(first.notifyUser)
+        assertTrue(repeated.holdAutomation)
+        assertFalse(repeated.notifyUser, "repeated probes on the same modal must not spam the notice")
+        assertEquals(1, notifications)
+        assertEquals(2, pauses, "a manual resume while the modal remains must be held again")
+        assertEquals(0, inputDispatches)
+        assertEquals(0, restarts)
+        val classifierUnknown = observe(null)
+        assertTrue(classifierUnknown.holdAutomation,
+            "an OCR/classifier UNKNOWN on the same exact visual must retain the hold")
+        assertFalse(classifierUnknown.notifyUser, "UNKNOWN must not duplicate an active occurrence notification")
+        assertEquals(3, pauses)
+        assertEquals(1, notifications)
+
+        assertFalse(observe("HOME", rewardVisible = false).holdAutomation,
+            "a fresh different screen ends this occurrence")
+        assertTrue(observe(screen).notifyUser, "a later occurrence must be notified again")
+        assertEquals(2, notifications)
+        assertEquals(0, inputDispatches)
+        assertEquals(0, restarts)
+
+        val untrusted = SeasonRankAwardHumanInterventionPolicy().observe(
+            screenKind = screen,
+            rewardPresentationVisible = visual.isRewardPresentation,
+            continueVisible = visual.isRewardContinueReady,
+            freshAuthorizedCapture = false,
+            stateStillCurrent = true,
+            notifyUser = { notifications++ },
+            holdAutomation = { pauses++ },
+        )
+        assertFalse(untrusted.holdAutomation, "stale/unauthorized captures cannot trigger a user pause")
+        assertEquals(2, notifications)
+        assertEquals(0, inputDispatches)
+        assertEquals(0, restarts)
+    }
+
+    @Test
+    fun `visible Continue on reward screen does not trigger blank modal manual pause`() {
+        var notifications = 0
+        var pauses = 0
+        val observation = SeasonRankAwardHumanInterventionPolicy().observe(
+            screenKind = "SEASON_RANK_AWARD_REWARDS",
+            rewardPresentationVisible = true,
+            continueVisible = true,
+            freshAuthorizedCapture = true,
+            stateStillCurrent = true,
+            notifyUser = { notifications++ },
+            holdAutomation = { pauses++ },
+        )
+
+        assertFalse(observation.holdAutomation)
+        assertFalse(observation.notifyUser)
+        assertEquals(0, notifications)
+        assertEquals(0, pauses)
+    }
+
+    @Test
     fun `fresh restart with empty current Power log admits only the exact rank award Continue`() {
         val frame = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/season-rank-award-fresh-restart-live-20261101-041948.png",
@@ -81,16 +173,21 @@ class SeasonRankAwardRecoveryDispatchTest {
     }
 
     @Test
-    fun `five chest reward presentation bypasses quest recovery and dispatches only its exact Continue`() {
+    fun `blank Continue on five closed chests is not visual authority for reward dispatch`() {
         val frame = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/season-rank-reward-chests-live-20261101-053007.png",
         )))
         val evidence = SeasonRankAwardRewardsVisualClassifier.inspect(frame)
-        assertTrue(evidence.isRewardPresentation, "live reward layout signature: $evidence")
+        assertTrue(evidence.isRewardPresentation, "the closed-chest layout retains its dedicated modal identity")
+        assertFalse(evidence.isRewardContinueReady,
+            "a gold outer rim cannot substitute for the blank inner Continue label: $evidence")
         assertFalse(StartupQuestOverlayVisualClassifier.isQuestOverlay(frame),
-            "the five-chest reward page is not an event-quest modal")
-        val screen = requireNotNull(UpstreamScreenStateRecovery.classifyImageForTest("", frame))
-        assertEquals("SEASON_RANK_AWARD_REWARDS", screen)
+            "the five-chest page is not an event-quest modal")
+        assertEquals("SEASON_RANK_AWARD_REWARDS", UpstreamScreenStateRecovery.classifyImageForTest("", frame),
+            "retain the reward-modal identity so the broad Event Quest classifier cannot claim this frame")
+        assertEquals("season-rank-award-five-chests-continue-not-visible",
+            UpstreamScreenStateRecovery.classificationEvidenceForImageTest("", frame))
+        val screen = "SEASON_RANK_AWARD_REWARDS"
         val stageGate = SeasonRankAwardRecoveryAttemptGate()
         val awardAction = SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION
         val chestAction = SeasonRankAwardRecoveryPolicy.OPEN_CHEST_ACTION
@@ -114,16 +211,21 @@ class SeasonRankAwardRecoveryDispatchTest {
         val earlierRewardFrame = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/season-rank-reward-chests-live-20261101-045150.png",
         )))
-        assertEquals("SEASON_RANK_AWARD_REWARDS", UpstreamScreenStateRecovery.classifyImageForTest("", earlierRewardFrame))
+        assertTrue(SeasonRankAwardRewardsVisualClassifier.inspect(earlierRewardFrame).isRewardPresentation)
+        assertFalse(SeasonRankAwardRewardsVisualClassifier.inspect(earlierRewardFrame).isRewardContinueReady)
         val initialRewardFrame = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/season-rank-reward-chests-live-20261101-041328.png",
         )))
-        assertEquals("SEASON_RANK_AWARD_REWARDS", UpstreamScreenStateRecovery.classifyImageForTest("", initialRewardFrame))
+        assertTrue(SeasonRankAwardRewardsVisualClassifier.inspect(initialRewardFrame).isRewardPresentation)
+        assertFalse(SeasonRankAwardRewardsVisualClassifier.inspect(initialRewardFrame).isRewardContinueReady)
 
-        val visualProof = SeasonRankAwardRewardsVisualClassifier.isRewardPresentation(frame)
+        // The remaining assertions exercise the policy's exact-action boundary
+        // with a positive authority token. Real blank-button captures never
+        // receive this token from the production visual classifier.
+        val visualProof = true
         assertTrue(SeasonRankAwardRecoveryPolicy.allowsDedicatedRewardsContinueStartupRecovery(
             screenKind = screen,
-            detectionEvidence = "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+            detectionEvidence = "season-rank-award-rewards-five-chests-and-labeled-continue-structural-visual",
             visualRewardsVerified = visualProof,
             purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
             captureForegroundAuthorized = true,
@@ -141,7 +243,7 @@ class SeasonRankAwardRecoveryDispatchTest {
         val clicked = mutableListOf<Point>()
         val result = SeasonRankAwardRecoveryPolicy.dispatchRewardsContinueFromUpstreamRecoveryCallsite(
             screenKind = screen,
-            detectionEvidence = "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+            detectionEvidence = "season-rank-award-rewards-five-chests-and-labeled-continue-structural-visual",
             visualRewardsVerified = visualProof,
             windowBounds = Rectangle(0, 0, 1920, 1080),
             captureAuthorityValid = true,
@@ -213,7 +315,7 @@ class SeasonRankAwardRecoveryDispatchTest {
         assertEquals("game-queue-or-terminal-fence", SeasonRankAwardRecoveryPolicy
             .dispatchRewardsContinueFromUpstreamRecoveryCallsite(
                 screenKind = screen,
-                detectionEvidence = "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+                detectionEvidence = "season-rank-award-rewards-five-chests-and-labeled-continue-structural-visual",
                 visualRewardsVerified = visualProof,
                 windowBounds = Rectangle(0, 0, 1920, 1080),
                 captureAuthorityValid = true,
@@ -229,7 +331,7 @@ class SeasonRankAwardRecoveryDispatchTest {
 
         fun blockedRewardAttempt(
             kind: String = screen,
-            proof: String = "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+            proof: String = "season-rank-award-rewards-five-chests-and-labeled-continue-structural-visual",
             visual: Boolean = true,
             capture: Boolean = true,
             foreground: Boolean = true,
@@ -266,6 +368,49 @@ class SeasonRankAwardRecoveryDispatchTest {
         assertEquals("game-queue-or-terminal-fence", blockedRewardAttempt(terminal = true).reason)
         assertEquals("not-working-or-paused", blockedRewardAttempt(working = false).reason)
         assertEquals("not-working-or-paused", blockedRewardAttempt(paused = true).reason)
+    }
+
+    @Test
+    fun `latest live five chest captures reject blank Continue and send no input`() {
+        val liveCaptures = listOf(
+            "season-rank-five-chests-blank-continue-live-20261101-084012.png",
+            "season-rank-five-chests-blank-continue-live-20261101-084729.png",
+        ).map(::fixture)
+
+        liveCaptures.forEachIndexed { index, frame ->
+            val visual = SeasonRankAwardRewardsVisualClassifier.inspect(frame)
+            assertTrue(visual.rewardChestRatios.count { it >= .018 } >= 4,
+                "capture $index contains the five chest layout: $visual")
+            assertTrue(visual.activeContinueRatio < .25,
+                "capture $index has no visible inner Continue label: $visual")
+            assertTrue(visual.isRewardPresentation,
+                "the screen identity remains known, protecting it from broad overlay recovery")
+            assertFalse(visual.isRewardContinueReady,
+                "a warm outer rim around a blank control must not authorize the reward Continue")
+            assertEquals("SEASON_RANK_AWARD_REWARDS", UpstreamScreenStateRecovery.classifyImageForTest("", frame))
+            assertEquals("season-rank-award-five-chests-continue-not-visible",
+                UpstreamScreenStateRecovery.classificationEvidenceForImageTest("", frame))
+
+            val clicked = mutableListOf<Point>()
+            val result = SeasonRankAwardRecoveryPolicy.dispatchRewardsContinueFromUpstreamRecoveryCallsite(
+                screenKind = "SEASON_RANK_AWARD_REWARDS",
+                detectionEvidence = "season-rank-award-rewards-five-chests-and-labeled-continue-structural-visual",
+                visualRewardsVerified = visual.isRewardContinueReady,
+                windowBounds = Rectangle(0, 0, 1920, 1080),
+                captureAuthorityValid = true,
+                foregroundVerified = true,
+                mode = "HUB",
+                currentGameSessionReady = false,
+                activeGame = false,
+                activeQueue = false,
+                terminalOrResult = false,
+                working = true,
+                paused = false,
+            ) { clicked += it; true }
+            assertFalse(result.attempted, "capture $index cannot authorize an unlabeled button click")
+            assertEquals("reward-screen-identity-unverified", result.reason)
+            assertTrue(clicked.isEmpty(), "capture $index must produce no input")
+        }
     }
 
     @Test
@@ -692,20 +837,26 @@ class SeasonRankAwardRecoveryDispatchTest {
     }
 
     @Test
-    fun `ineffective reward Continue retries only on fresh authorized exact screen and remains bounded`() {
+    fun `stuck five chest captures grant no reward Continue authority and retry gate remains bounded`() {
         val stalledCaptures = listOf(
             "season-rank-reward-chests-live-20261101-055733-stalled-after-accepted-input.png",
             "season-rank-reward-chests-live-20261101-062010-restarted-still-stuck.png",
             "season-rank-reward-chests-live-20261101-062342-post-chest-continue-stuck.png",
+            "season-rank-five-chests-blank-continue-live-20261101-093648.png",
+            "season-rank-five-chests-blank-continue-live-20261101-105355.png",
         ).map(::fixture)
         stalledCaptures.forEach { frame ->
             assertEquals("SEASON_RANK_AWARD_REWARDS", UpstreamScreenStateRecovery.classifyImageForTest("", frame))
             assertTrue(SeasonRankAwardRewardsVisualClassifier.isRewardPresentation(frame))
+            assertFalse(SeasonRankAwardRewardsVisualClassifier.inspect(frame).isRewardContinueReady,
+                "stalled five closed chest captures do not prove the bottom-center control is enabled")
         }
 
+        // Exercise bounded attempt-gate mechanics independently from screenshot
+        // authority. No current five-closed-chest capture supplies this token.
         val exactFreshAuthority = SeasonRankAwardRecoveryAttemptGate.hasFreshAuthorizedRewardsScreen(
             screenKind = "SEASON_RANK_AWARD_REWARDS",
-            evidence = "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+            evidence = "season-rank-award-rewards-five-chests-and-labeled-continue-structural-visual",
             freshCaptureAuthorized = true,
             exactClientWindowVerified = true,
             foregroundVerified = true,
@@ -713,7 +864,7 @@ class SeasonRankAwardRecoveryDispatchTest {
         assertTrue(exactFreshAuthority)
         assertFalse(SeasonRankAwardRecoveryAttemptGate.hasFreshAuthorizedRewardsScreen(
             screenKind = "SEASON_RANK_AWARD_REWARDS",
-            evidence = "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+            evidence = "season-rank-award-rewards-five-chests-and-labeled-continue-structural-visual",
             freshCaptureAuthorized = false,
             exactClientWindowVerified = true,
             foregroundVerified = true,

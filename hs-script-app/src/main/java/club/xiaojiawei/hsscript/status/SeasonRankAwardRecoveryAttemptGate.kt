@@ -30,7 +30,7 @@ internal class SeasonRankAwardRecoveryAttemptGate {
             exactClientWindowVerified: Boolean,
             foregroundVerified: Boolean,
         ): Boolean = screenKind == "SEASON_RANK_AWARD_REWARDS" &&
-            evidence == "season-rank-award-rewards-five-chests-and-continue-structural-visual" &&
+            evidence == "season-rank-award-rewards-five-chests-and-labeled-continue-structural-visual" &&
             freshCaptureAuthorized && exactClientWindowVerified && foregroundVerified
     }
 

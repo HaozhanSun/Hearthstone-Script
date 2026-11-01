@@ -120,7 +120,7 @@ internal object SeasonRankAwardRecoveryPolicy {
         paused: Boolean,
         stateStillCurrent: Boolean,
     ): Boolean = screenKind == "SEASON_RANK_AWARD_REWARDS" &&
-        detectionEvidence == "season-rank-award-rewards-five-chests-and-continue-structural-visual" &&
+        detectionEvidence == "season-rank-award-rewards-five-chests-and-labeled-continue-structural-visual" &&
         visualRewardsVerified && purpose in setOf(
             ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
             ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
@@ -297,7 +297,7 @@ internal object SeasonRankAwardRecoveryPolicy {
         click: (Point) -> Boolean,
     ): CallsiteDispatchResult {
         if (screenKind != "SEASON_RANK_AWARD_REWARDS" ||
-            detectionEvidence != "season-rank-award-rewards-five-chests-and-continue-structural-visual" ||
+            detectionEvidence != "season-rank-award-rewards-five-chests-and-labeled-continue-structural-visual" ||
             !visualRewardsVerified
         ) return CallsiteDispatchResult(false, false, null, "reward-screen-identity-unverified")
         if (!captureAuthorityValid) return CallsiteDispatchResult(false, false, null, "capture-authority-invalid")
