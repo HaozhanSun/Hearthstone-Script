@@ -11,6 +11,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$shortcutPolicyPath = Join-Path $PSScriptRoot 'tools/shortcut-sync-policy.ps1'
+. $shortcutPolicyPath
 $runtimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\')
 $launcher = Join-Path $runtimeRoot "launch-as-admin.vbs"
 $icon = if ([string]::IsNullOrWhiteSpace($IconPath)) { Join-Path $runtimeRoot "hs-script.exe" } else { [System.IO.Path]::GetFullPath($IconPath) }
@@ -41,6 +43,19 @@ foreach ($directory in $shortcutDirectories) {
     $shortcut.WindowStyle = 1
     $shortcut.Save()
     $updated.Add($shortcutPath)
+}
+
+# Windows may preserve a numbered copy of the channel pin after shortcut
+# replacement. Remove only numbered Beta aliases that resolve to this exact
+# Beta launcher; leave Stable, RC, and unrelated pins untouched.
+$taskbarDirectory = $shortcutDirectories[2]
+$removedBetaDuplicates = Remove-BetaTaskbarDuplicateShortcuts `
+    -TaskbarDirectory $taskbarDirectory `
+    -Channel $Channel `
+    -ShortcutName $ShortcutName `
+    -LauncherPath $launcher
+foreach ($path in $removedBetaDuplicates) {
+    Write-Output "REMOVED_DUPLICATE_BETA_TASKBAR_SHORTCUT=$path"
 }
 
 # Repair the pre-channel generic Desktop shortcut when it still exists. Older

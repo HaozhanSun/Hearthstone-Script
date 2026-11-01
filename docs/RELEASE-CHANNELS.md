@@ -72,6 +72,12 @@ runtime and shortcut separation. The deployment manifest records the channel,
 runtime root, and shortcut name so stale beta artifacts cannot be selected by a
 stable launcher.
 
+When syncing the Beta channel, `sync-shortcuts.ps1` removes only numbered
+Taskbar aliases whose exact channel name and launcher argument both identify
+the canonical Beta pin. Stable, Release Candidate, wrong-target, and unrelated
+shortcuts are left untouched. The offline regression is
+`tests/SyncShortcutsBetaDuplicate.Tests.ps1`.
+
 ## Beta to Release Candidate promotion
 
 Use the checked-in promotion command from a named Beta checkout after the Beta
