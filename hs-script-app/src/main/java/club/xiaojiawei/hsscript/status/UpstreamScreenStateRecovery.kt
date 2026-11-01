@@ -3529,19 +3529,23 @@ object UpstreamScreenStateRecovery {
             ScreenKind.SEASON_RANK_AWARD -> {
                 val pid = GameUtil.findGameProcessIdForDiagnostics()
                 val hwnd = ScriptStatus.gameHWND
-                val safeMenuContext = SeasonRankAwardRecoveryPolicy.allowsMenuContext(
-                    Mode.currMode?.name,
-                    ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
-                )
-                val allowed = SeasonRankAwardRecoveryPolicy.allowsContinue(
-                    exactSeasonRankAward = detection.evidence == "season-rank-award-structural-visual",
-                    freshCaptureAuthorized = pid != null && hwnd != null &&
+                val gameBounds = ScriptStatus.GAME_RECT
+                val result = SeasonRankAwardRecoveryPolicy.dispatchFromUpstreamRecoveryCallsite(
+                    screenKind = detection.kind.code,
+                    detectionEvidence = detection.evidence,
+                    windowBounds = Rectangle(
+                        gameBounds.left.toInt(), gameBounds.top.toInt(),
+                        (gameBounds.right.toInt() - gameBounds.left.toInt()).coerceAtLeast(1),
+                        (gameBounds.bottom.toInt() - gameBounds.top.toInt()).coerceAtLeast(1),
+                    ),
+                    captureAuthorityValid = pid != null && hwnd != null &&
                         GameUtil.isVerifiedCurrentGameWindow(hwnd, pid),
                     foregroundVerified = hwnd != null &&
                         runCatching {
                             User32.INSTANCE.GetForegroundWindow()?.toString() == hwnd.toString()
                         }.getOrDefault(false),
-                    safeMenuContext = safeMenuContext,
+                    mode = Mode.currMode?.name,
+                    currentGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
                     activeGame = WarEx.inWar || GameUtil.isTerminalGameState(),
                     activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
                         LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
@@ -3550,49 +3554,21 @@ object UpstreamScreenStateRecovery {
                         MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
                     working = WorkTimeListener.working,
                     paused = PauseStatus.isPause,
-                )
-                if (!allowed) {
+                ) { point -> MouseUtil.leftButtonClickForRecovery(point) }
+                if (!result.attempted) {
                     log.warn {
-                        "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=authority-or-state-fence " +
+                        "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=${result.reason} " +
                             "action=NO_INPUT mode=${Mode.currMode?.name} phase=${WarEx.war.currentPhase?.name} " +
                             "activeGame=${WarEx.inWar} queue=${LifecycleTrace.hasRecentActiveMatchmakingScreen()} " +
                             "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
                     }
                     return false
                 }
-                val gameBounds = ScriptStatus.GAME_RECT
-                var dispatchedPoint: java.awt.Point? = null
-                val accepted = SeasonRankAwardRecoveryPolicy.dispatchContinue(
-                    windowBounds = Rectangle(
-                        gameBounds.left.toInt(), gameBounds.top.toInt(),
-                        (gameBounds.right.toInt() - gameBounds.left.toInt()).coerceAtLeast(1),
-                        (gameBounds.bottom.toInt() - gameBounds.top.toInt()).coerceAtLeast(1),
-                    ),
-                    exactSeasonRankAward = true,
-                    freshCaptureAuthorized = pid != null && hwnd != null &&
-                        GameUtil.isVerifiedCurrentGameWindow(hwnd, pid),
-                    foregroundVerified = hwnd != null &&
-                        runCatching {
-                            User32.INSTANCE.GetForegroundWindow()?.toString() == hwnd.toString()
-                        }.getOrDefault(false),
-                    safeMenuContext = safeMenuContext,
-                    activeGame = WarEx.inWar || GameUtil.isTerminalGameState(),
-                    activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
-                        LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
-                    terminalOrResult = GameUtil.isTerminalGameState() ||
-                        MandatoryRankSurrenderGuard.isPending() ||
-                        MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
-                    working = WorkTimeListener.working,
-                    paused = PauseStatus.isPause,
-                ) { point ->
-                    dispatchedPoint = point
-                    MouseUtil.leftButtonClickForRecovery(point)
-                }
                 log.warn {
-                    "SEASON_RANK_AWARD_CONTINUE_DISPATCH accepted=$accepted point=$dispatchedPoint " +
+                    "SEASON_RANK_AWARD_CONTINUE_DISPATCH accepted=${result.accepted} point=${result.point} " +
                         "action=VISIBLE_CONTINUE_ONLY rankPreflightRequiredBeforeGameplay=true"
                 }
-                return accepted
+                return result.accepted
             }
             ScreenKind.AMAZON_APPSTORE_NOTICE -> {
                 log.warn {

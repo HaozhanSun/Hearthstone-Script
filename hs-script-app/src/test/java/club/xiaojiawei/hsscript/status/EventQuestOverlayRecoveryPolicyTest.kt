@@ -25,7 +25,76 @@ class EventQuestOverlayRecoveryPolicyTest {
         assertFalse(SeasonRankAwardRecoveryPolicy.allowsMenuContext("STARTUP", currentGameSessionReady = true))
         assertFalse(StartupQuestOverlayVisualClassifier.isQuestOverlay(award),
             "rank award must not enter the top-left Event Quest click ladder")
-        assertEquals("SEASON_RANK_AWARD", UpstreamScreenStateRecovery.classifyImageForTest("", award))
+        val classifiedScreen = requireNotNull(UpstreamScreenStateRecovery.classifyImageForTest("", award))
+        assertEquals("SEASON_RANK_AWARD", classifiedScreen)
+        val windowBounds = Rectangle(137, 83, award.width, award.height)
+        var callsitePoint: Point? = null
+        val callsiteResult = SeasonRankAwardRecoveryPolicy.dispatchFromUpstreamRecoveryCallsite(
+            screenKind = classifiedScreen,
+            detectionEvidence = "season-rank-award-structural-visual",
+            windowBounds = windowBounds,
+            captureAuthorityValid = true,
+            foregroundVerified = true,
+            mode = "STARTUP",
+            currentGameSessionReady = false,
+            activeGame = false,
+            activeQueue = false,
+            terminalOrResult = false,
+            working = true,
+            paused = false,
+        ) { point -> callsitePoint = point; true }
+        assertTrue(callsiteResult.attempted, "the production recovery adapter should dispatch this verified frame")
+        assertTrue(callsiteResult.accepted)
+        assertEquals(callsiteResult.point, callsitePoint)
+        val fixtureRelativePoint = Point(callsitePoint!!.x - windowBounds.x, callsitePoint!!.y - windowBounds.y)
+        assertTrue(fixtureRelativePoint.x in (award.width * .43).toInt()..(award.width * .57).toInt())
+        assertTrue(fixtureRelativePoint.y in (award.height * .78).toInt()..(award.height * .87).toInt(),
+            "Upstream callsite point mapped through client bounds must land on Continue: $fixtureRelativePoint")
+        val blockedCallsiteCases = listOf(
+            mapOf("captureAuthorityValid" to false),
+            mapOf("foregroundVerified" to false),
+            mapOf("activeGame" to true),
+            mapOf("activeQueue" to true),
+            mapOf("terminalOrResult" to true),
+            mapOf("currentGameSessionReady" to true),
+            mapOf("paused" to true),
+        )
+        blockedCallsiteCases.forEach { overrides ->
+            var inputDispatched = false
+            val result = SeasonRankAwardRecoveryPolicy.dispatchFromUpstreamRecoveryCallsite(
+                screenKind = classifiedScreen,
+                detectionEvidence = "season-rank-award-structural-visual",
+                windowBounds = windowBounds,
+                captureAuthorityValid = overrides["captureAuthorityValid"] as? Boolean ?: true,
+                foregroundVerified = overrides["foregroundVerified"] as? Boolean ?: true,
+                mode = "STARTUP",
+                currentGameSessionReady = overrides["currentGameSessionReady"] as? Boolean ?: false,
+                activeGame = overrides["activeGame"] as? Boolean ?: false,
+                activeQueue = overrides["activeQueue"] as? Boolean ?: false,
+                terminalOrResult = overrides["terminalOrResult"] as? Boolean ?: false,
+                working = true,
+                paused = overrides["paused"] as? Boolean ?: false,
+            ) { inputDispatched = true; true }
+            assertFalse(result.attempted, "case must be blocked: $overrides")
+            assertFalse(inputDispatched, "blocked callsite must send no input: $overrides")
+        }
+        var wrongScreenInputDispatched = false
+        val wrongScreenResult = SeasonRankAwardRecoveryPolicy.dispatchFromUpstreamRecoveryCallsite(
+            screenKind = "EVENT_QUEST_OVERLAY",
+            detectionEvidence = "season-rank-award-structural-visual",
+            windowBounds = windowBounds,
+            captureAuthorityValid = true,
+            foregroundVerified = true,
+            mode = "STARTUP",
+            currentGameSessionReady = false,
+            activeGame = false,
+            activeQueue = false,
+            terminalOrResult = false,
+            working = true,
+            paused = false,
+        ) { wrongScreenInputDispatched = true; true }
+        assertFalse(wrongScreenResult.attempted)
+        assertFalse(wrongScreenInputDispatched)
         var dispatchedPoint: Point? = null
         assertTrue(SeasonRankAwardRecoveryPolicy.dispatchContinue(
             windowBounds = Rectangle(0, 0, award.width, award.height),
