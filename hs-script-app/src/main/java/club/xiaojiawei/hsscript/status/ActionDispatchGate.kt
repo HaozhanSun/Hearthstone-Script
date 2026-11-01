@@ -20,6 +20,25 @@ import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 object ActionDispatchGate {
     private val terminalCleanupBlockLogThrottle = TerminalCleanupBlockLogThrottle()
     private val startupQuestOverlayDispatchScope = ThreadLocal<Boolean>()
+    private val seasonRankAwardContinueDispatchScope = ThreadLocal<Boolean>()
+
+    internal fun isSeasonRankAwardContinueDispatchScoped(): Boolean =
+        seasonRankAwardContinueDispatchScope.get() == true
+
+    internal fun isStartupQuestRecoveryFenceBlocking(action: String): Boolean =
+        StartupQuestOverlayRecoveryFence.isActive() &&
+            startupQuestOverlayDispatchScope.get() != true &&
+            !(action == SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION && isSeasonRankAwardContinueDispatchScoped())
+
+    internal fun dispatchSeasonRankAwardContinue(dispatch: () -> Boolean): Boolean {
+        if (isSeasonRankAwardContinueDispatchScoped()) return false
+        seasonRankAwardContinueDispatchScope.set(true)
+        return try {
+            dispatch()
+        } finally {
+            seasonRankAwardContinueDispatchScope.remove()
+        }
+    }
 
     /** Mirrors normal-input startup readiness without emitting a block log or dispatching input. */
     internal fun isStartupScreenConfirmedForAction(action: String): Boolean {
@@ -53,6 +72,10 @@ object ActionDispatchGate {
         val startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationReady(
             action, processId, gameWindow?.toString(), exactGameWindowVerified, currentSessionReady,
         )
+        val seasonRankAwardContinuePermitValid = seasonRankAwardContinuePermitValid(
+            action, processId, gameWindow, exactGameWindowVerified, currentSessionReady,
+            PauseStatus.isPause, WorkTimeListener.working,
+        )
         return StartupInputAuthorizationPolicy.allows(
             action = action,
             currentSessionReady = currentSessionReady,
@@ -60,6 +83,7 @@ object ActionDispatchGate {
             freshDeckSelectionStartReady = freshDeckSelectionStartReady,
             selectedModeStartPermitValid = selectedModeStartPermitValid,
             startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationReady,
+            seasonRankAwardContinuePermitValid = seasonRankAwardContinuePermitValid,
         )
     }
 
@@ -119,9 +143,7 @@ object ActionDispatchGate {
         terminalCleanupCapability: MandatoryRankSurrenderGuard.TerminalCleanupCapability? = null,
         rankSurrenderCapability: MulliganRankDispatchBarrier.SurrenderCapability? = null,
     ): Boolean {
-        if (StartupQuestOverlayRecoveryFence.isActive() &&
-            startupQuestOverlayDispatchScope.get() != true
-        ) {
+        if (isStartupQuestRecoveryFenceBlocking(action)) {
             log.warn {
                 "ACTION_BLOCKED action=$action reason=startup-quest-overlay-unresolved " +
                     "pause=${PauseStatus.isPause} working=${WorkTimeListener.working} dispatch=false"
@@ -197,6 +219,9 @@ object ActionDispatchGate {
         val startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationReady(
             action, processId, gameWindow?.toString(), exactGameWindowVerified, currentSessionReady,
         )
+        val seasonRankAwardContinuePermitValid = seasonRankAwardContinuePermitValid(
+            action, processId, gameWindow, exactGameWindowVerified, currentSessionReady, paused, working,
+        )
         val selectedModeStartPermitValid = action == "matchmaking.start" && processId != null && gameWindow != null &&
             exactGameWindowVerified && DeckStrategyManager.currentRunMode != null &&
             StartupInputReadiness.hasSelectedTournamentModeStartPermit(
@@ -231,6 +256,7 @@ object ActionDispatchGate {
             freshDeckSelectionStartReady = freshDeckSelectionStartReady,
             selectedModeStartPermitValid = selectedModeStartPermitValid,
             startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationReady,
+            seasonRankAwardContinuePermitValid = seasonRankAwardContinuePermitValid,
         )
         if (!startupGateAllowed) {
             log.warn {
@@ -273,6 +299,7 @@ object ActionDispatchGate {
                 startupQuestOverlayDispatchScope.get() == true,
             freshDeckSelectionStartReady = freshDeckSelectionStartReady,
             startupDeckSelectionModeNavigationPermitValid = startupDeckSelectionModeNavigationReady,
+            seasonRankAwardContinuePermitValid = seasonRankAwardContinuePermitValid,
         )
         if (!allowed) return false
         if (action == "surrender.request" && rankSurrenderCapability != null &&
@@ -383,6 +410,7 @@ object ActionDispatchGate {
         freshDeckSelectionStartReady: Boolean = false,
         selectedModeStartPermitValid: Boolean = false,
         startupDeckSelectionModeNavigationPermitValid: Boolean = false,
+        seasonRankAwardContinuePermitValid: Boolean = false,
     ): Boolean {
         if (paused || !working) {
             log.warn {
@@ -405,6 +433,7 @@ object ActionDispatchGate {
                 freshDeckSelectionStartReady = freshDeckSelectionStartReady,
                 selectedModeStartPermitValid = selectedModeStartPermitValid,
                 startupDeckSelectionModeNavigationReady = startupDeckSelectionModeNavigationPermitValid,
+                seasonRankAwardContinuePermitValid = seasonRankAwardContinuePermitValid,
             )
         ) {
             log.warn {
@@ -459,7 +488,27 @@ object ActionDispatchGate {
     private fun isRankIndependentAction(action: String): Boolean =
         action.startsWith("startup.") || action.startsWith("matchmaking.") || action.startsWith("queue.") ||
             action == "recovery.reconnect" ||
-            action == StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION
+            action == StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION ||
+            action == SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION
+
+    private fun seasonRankAwardContinuePermitValid(
+        action: String,
+        processId: Int?,
+        gameWindow: com.sun.jna.platform.win32.WinDef.HWND?,
+        exactWindowVerified: Boolean,
+        currentSessionReady: Boolean,
+        paused: Boolean,
+        working: Boolean,
+    ): Boolean = action == SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION &&
+        isSeasonRankAwardContinueDispatchScoped() && processId != null && processId > 0 && gameWindow != null &&
+        exactWindowVerified && SeasonRankAwardRecoveryPolicy.allowsMenuContext(
+            Mode.currMode?.name, currentSessionReady,
+        ) && !WarEx.inWar && Mode.currMode != ModeEnum.GAMEPLAY && Mode.nextMode != ModeEnum.GAMEPLAY &&
+        !GameUtil.isTerminalGameState() &&
+        !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+        !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() &&
+        !MandatoryRankSurrenderGuard.isPending() && !MandatoryRankSurrenderGuard.isTerminalCleanupPending() &&
+        !paused && working
 
     internal fun allowedForState(paused: Boolean, working: Boolean): Boolean = !paused && working
 }

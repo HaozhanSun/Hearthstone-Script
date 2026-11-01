@@ -432,6 +432,25 @@ object UpstreamScreenStateRecovery {
         val activeQueueEvidence = capture.visual.matchmakingSearchVisual ||
             LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
             LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
+        val seasonAwardContinueCandidate = SeasonRankAwardRecoveryPolicy.allowsDedicatedStartupRecovery(
+            screenKind = detection?.kind?.code,
+            detectionEvidence = detection?.evidence,
+            visualAwardVerified = capture.visual.seasonRankAwardVisual,
+            purpose = authorizedCapture.purpose,
+            captureForegroundAuthorized = authorizedCapture.foregroundVerified,
+            processWindowVerified = currentPid != null && currentHwnd == authorizedCapture.gameWindow.toString() &&
+                GameUtil.isVerifiedCurrentGameWindow(authorizedCapture.gameWindow, currentPid.toLong()),
+            mode = Mode.currMode?.name,
+            currentGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+            activeGame = WarEx.inWar || Mode.currMode == ModeEnum.GAMEPLAY || Mode.nextMode == ModeEnum.GAMEPLAY,
+            activeQueue = activeQueueEvidence,
+            terminalOrResult = GameUtil.isTerminalGameState() ||
+                MandatoryRankSurrenderGuard.isPending() || MandatoryRankSurrenderGuard.isTerminalCleanupPending() ||
+                PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence(),
+            working = WorkTimeListener.working,
+            paused = PauseStatus.isPause,
+            stateStillCurrent = stateStillCurrent(),
+        )
         val startupHubModeChooser = StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
             purpose = authorizedCapture.purpose,
             currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
@@ -713,12 +732,18 @@ object UpstreamScreenStateRecovery {
                 }
             } else {
                 StartupInputReadiness.invalidate(pid, hwnd)
-                startupClassificationOnly = !isReconnectState
+                startupClassificationOnly = !isReconnectState && !seasonAwardContinueCandidate
                 log.warn {
                     "STARTUP_INPUT_READINESS_NOT_CONFIRMED screen=${detection?.kind?.code ?: "UNKNOWN"} " +
                         "modalVisible=${ScreenStateRecovery.hasCenteredModalPanel(capture.image)} " +
-                        "action=${if (startupClassificationOnly) "NO_INPUT" else "CLASSIFY_RECOVERY_ONLY"} " +
+                        "action=${if (seasonAwardContinueCandidate) "DEDICATED_CONTINUE_ONLY" else if (startupClassificationOnly) "NO_INPUT" else "CLASSIFY_RECOVERY_ONLY"} " +
                         "provider=UPSTREAM"
+                }
+                if (seasonAwardContinueCandidate) {
+                    log.warn {
+                        "STARTUP_INPUT_SPECIAL_RECOVERY screen=SEASON_RANK_AWARD " +
+                            "genericMenuProof=false action=EXACT_CONTINUE_ONLY authority=FRESH_CAPTURE"
+                    }
                 }
             }
         }
@@ -909,7 +934,9 @@ object UpstreamScreenStateRecovery {
             log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-before-apply state=$stateFingerprint" }
             return false
         }
-        if (authorizedCapture.purpose == ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE) {
+        if (authorizedCapture.purpose == ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE &&
+            !seasonAwardContinueCandidate
+        ) {
             val staleProbeDecision = ScreenRecoveryCapturePurposePolicy.staleProbeRecoveryDecision(
                 purpose = authorizedCapture.purpose,
                 screenKind = detection.kind.code,
@@ -3554,7 +3581,14 @@ object UpstreamScreenStateRecovery {
                         MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
                     working = WorkTimeListener.working,
                     paused = PauseStatus.isPause,
-                ) { point -> MouseUtil.leftButtonClickForRecovery(point) }
+                ) { point ->
+                    ActionDispatchGate.dispatchSeasonRankAwardContinue {
+                        MouseUtil.leftButtonClickForRecovery(
+                            point,
+                            preSessionSeasonRankAwardContinue = true,
+                        )
+                    }
+                }
                 if (!result.attempted) {
                     log.warn {
                         "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=${result.reason} " +

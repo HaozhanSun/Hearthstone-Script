@@ -20,6 +20,7 @@ import club.xiaojiawei.hsscript.status.LifecycleTrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.StartupInputReadiness
+import club.xiaojiawei.hsscript.status.SeasonRankAwardRecoveryPolicy
 import club.xiaojiawei.hsscript.status.StartupModeEntryDispatchPolicy
 import club.xiaojiawei.hsscript.status.BetaStartupResultConfirmationPolicy
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
@@ -525,9 +526,11 @@ object MouseUtil {
         preSessionReconnect: Boolean = false,
         preSessionStartupNotice: Boolean = false,
         preSessionBetaResultConfirmation: Boolean = false,
+        preSessionSeasonRankAwardContinue: Boolean = false,
     ): Boolean {
         val dispatchAction = when {
             terminalCleanupCapability != null -> "terminal-result.dismiss"
+            preSessionSeasonRankAwardContinue -> SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION
             preSessionBetaResultConfirmation -> BetaStartupResultConfirmationPolicy.DISPATCH_ACTION
             preSessionStartupNotice -> StartupNoticeRecoveryPolicy.DISPATCH_ACTION
             preSessionReconnect -> "recovery.reconnect"
@@ -543,6 +546,51 @@ object MouseUtil {
                 }
             }
             return false
+        }
+
+        if (preSessionSeasonRankAwardContinue) {
+            val hwnd = ScriptStatus.gameHWND ?: return false
+            val pid = GameUtil.findGameProcessIdForDiagnostics()?.toInt() ?: return false
+            fun safe(): Boolean = ActionDispatchGate.isSeasonRankAwardContinueDispatchScoped() &&
+                GameUtil.findGameProcessIdForDiagnostics() == pid.toLong() &&
+                GameUtil.isVerifiedCurrentGameWindow(hwnd, pid.toLong()) &&
+                SeasonRankAwardRecoveryPolicy.allowsMenuContext(
+                    Mode.currMode?.name,
+                    !ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+                ) && !WarEx.inWar && Mode.currMode != ModeEnum.GAMEPLAY && Mode.nextMode != ModeEnum.GAMEPLAY &&
+                !GameUtil.isTerminalGameState() &&
+                !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+                !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() &&
+                !MandatoryRankSurrenderGuard.isPending() && !MandatoryRankSurrenderGuard.isTerminalCleanupPending() &&
+                WorkTimeListener.working && !PauseStatus.isPause
+            if (!safe() || !hwndIsValid(hwnd)) {
+                log.warn { "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=dispatch-revalidation-failed pid=$pid hwnd=$hwnd input=not-sent" }
+                return false
+            }
+            val lockAcquired = try { DRIVER_LOCK.tryLock(3000, TimeUnit.MILLISECONDS) }
+            catch (error: InterruptedException) { Thread.currentThread().interrupt(); false }
+            if (!lockAcquired) {
+                log.warn { "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=input-lock-timeout pid=$pid hwnd=$hwnd input=not-sent" }
+                return false
+            }
+            try {
+                synchronized(e2eRobotLock) {
+                    if (!ActionDispatchGate.allow(dispatchAction) || !safe() ||
+                        !forceFocusWindowForRecovery(hwnd) || !safe()
+                    ) {
+                        log.warn { "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=dispatch-recheck-failed pid=$pid hwnd=$hwnd input=not-sent" }
+                        return false
+                    }
+                    val accepted = sendE2eWindowsClick(pos)
+                    log.warn {
+                        "SEASON_RANK_AWARD_CONTINUE_CLICK_SENT pid=$pid hwnd=$hwnd pos=$pos " +
+                            "accepted=$accepted input=SendInput scope=one-use"
+                    }
+                    return accepted
+                }
+            } finally {
+                DRIVER_LOCK.unlock()
+            }
         }
 
         if (preSessionStartupNotice) {

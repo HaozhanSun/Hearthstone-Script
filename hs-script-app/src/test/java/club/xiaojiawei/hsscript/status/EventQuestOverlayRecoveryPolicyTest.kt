@@ -15,6 +15,39 @@ import club.xiaojiawei.hsscript.status.surrender.CurrentGamePowerLogTerminalTrac
 
 class EventQuestOverlayRecoveryPolicyTest {
     @Test
+    fun `season award readiness exception is scoped to dedicated Continue despite unresolved quest fence`() {
+        val action = SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION
+        StartupQuestOverlayRecoveryFence.resetForTest()
+        try {
+            StartupQuestOverlayRecoveryFence.begin()
+            assertTrue(ActionDispatchGate.isStartupQuestRecoveryFenceBlocking(action))
+            assertFalse(StartupInputAuthorizationPolicy.allows(
+                action = action, currentSessionReady = false, freshOnlineMenuReady = false,
+            ), "a recognized-but-unscoped Continue action must remain blocked by startup readiness")
+            assertTrue(ActionDispatchGate.dispatchSeasonRankAwardContinue {
+                assertFalse(ActionDispatchGate.isStartupQuestRecoveryFenceBlocking(action))
+                assertTrue(StartupInputAuthorizationPolicy.allows(
+                    action = action,
+                    currentSessionReady = false,
+                    freshOnlineMenuReady = false,
+                    seasonRankAwardContinuePermitValid = ActionDispatchGate.isSeasonRankAwardContinueDispatchScoped(),
+                ))
+                assertFalse(StartupInputAuthorizationPolicy.allows(
+                    action = "recovery.left",
+                    currentSessionReady = false,
+                    freshOnlineMenuReady = false,
+                    seasonRankAwardContinuePermitValid = true,
+                ), "the special scope cannot open generic recovery or gameplay input")
+                true
+            })
+            assertTrue(ActionDispatchGate.isStartupQuestRecoveryFenceBlocking(action),
+                "the scoped exception must be removed immediately after the one Continue dispatch")
+        } finally {
+            StartupQuestOverlayRecoveryFence.resetForTest()
+        }
+    }
+
+    @Test
     fun `live season award frame is separated from Event Quest and only visible Continue is eligible`() {
         val award = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/season-rank-award-20261101.png",
@@ -27,6 +60,38 @@ class EventQuestOverlayRecoveryPolicyTest {
             "rank award must not enter the top-left Event Quest click ladder")
         val classifiedScreen = requireNotNull(UpstreamScreenStateRecovery.classifyImageForTest("", award))
         assertEquals("SEASON_RANK_AWARD", classifiedScreen)
+        assertTrue(SeasonRankAwardRecoveryPolicy.allowsDedicatedStartupRecovery(
+            screenKind = classifiedScreen,
+            detectionEvidence = "season-rank-award-structural-visual",
+            visualAwardVerified = true,
+            purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            captureForegroundAuthorized = true,
+            processWindowVerified = true,
+            mode = "HUB",
+            currentGameSessionReady = false,
+            activeGame = false,
+            activeQueue = false,
+            terminalOrResult = false,
+            working = true,
+            paused = false,
+            stateStillCurrent = true,
+        ), "fresh exact award proof may bypass generic startup readiness for dedicated Continue only")
+        assertFalse(SeasonRankAwardRecoveryPolicy.allowsDedicatedStartupRecovery(
+            screenKind = classifiedScreen,
+            detectionEvidence = "season-rank-award-structural-visual",
+            visualAwardVerified = true,
+            purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            captureForegroundAuthorized = true,
+            processWindowVerified = true,
+            mode = "HUB",
+            currentGameSessionReady = false,
+            activeGame = false,
+            activeQueue = true,
+            terminalOrResult = false,
+            working = true,
+            paused = false,
+            stateStillCurrent = true,
+        ), "active queue must never get the dedicated bypass")
         val windowBounds = Rectangle(137, 83, award.width, award.height)
         var callsitePoint: Point? = null
         val callsiteResult = SeasonRankAwardRecoveryPolicy.dispatchFromUpstreamRecoveryCallsite(

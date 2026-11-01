@@ -5,6 +5,33 @@ import java.awt.Rectangle
 
 /** Allows only the visible Continue navigation on a fresh, authorized award frame. */
 internal object SeasonRankAwardRecoveryPolicy {
+    const val DISPATCH_ACTION = "recovery.season-rank-award.continue"
+
+    fun allowsDedicatedStartupRecovery(
+        screenKind: String?,
+        detectionEvidence: String?,
+        visualAwardVerified: Boolean,
+        purpose: ScreenRecoveryCapturePurpose,
+        captureForegroundAuthorized: Boolean,
+        processWindowVerified: Boolean,
+        mode: String?,
+        currentGameSessionReady: Boolean,
+        activeGame: Boolean,
+        activeQueue: Boolean,
+        terminalOrResult: Boolean,
+        working: Boolean,
+        paused: Boolean,
+        stateStillCurrent: Boolean,
+    ): Boolean = screenKind == "SEASON_RANK_AWARD" &&
+        detectionEvidence == "season-rank-award-structural-visual" && visualAwardVerified &&
+        purpose in setOf(
+            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+        ) && captureForegroundAuthorized && processWindowVerified &&
+        allowsMenuContext(mode, currentGameSessionReady) && !activeGame && !activeQueue &&
+        !terminalOrResult && working && !paused && stateStillCurrent
+
     data class CallsiteDispatchResult(
         val attempted: Boolean,
         val accepted: Boolean,

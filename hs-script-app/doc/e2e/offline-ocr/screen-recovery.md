@@ -679,5 +679,8 @@ this deletion boundary.
   the top-left quest click/restart ladder. Recovery may dispatch only the
   fixture-calibrated Continue point from a fresh exact PID/HWND foreground
   capture while working, unpaused, and outside gameplay, queue, and terminal
-  states. Continue is navigation only; matchmaking Start remains blocked until
+  states. This dedicated scope must leave generic startup/menu readiness revoked
+  and must be removed immediately after one Continue attempt; ordinary recovery,
+  menu, and gameplay input remain denied until their own proofs are fresh.
+  Continue is navigation only; matchmaking Start remains blocked until
   independent fresh numeric-rank preflight and configured-mode/deck proof.
