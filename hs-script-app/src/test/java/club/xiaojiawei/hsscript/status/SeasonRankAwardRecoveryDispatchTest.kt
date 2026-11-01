@@ -68,6 +68,38 @@ class SeasonRankAwardRecoveryDispatchTest {
     }
 
     @Test
+    fun `continue boundary has an explicit reason for every ordered rejection branch`() {
+        val safe = safeContext()
+        val cases = listOf(
+            "wrong-action" to safe.copy(action = "mouse.left"),
+            "exact-award-continue-scope-missing" to safe.copy(scopedToExactAwardContinue = false),
+            "process-changed" to safe.copy(expectedProcessId = 0),
+            "process-changed" to safe.copy(currentProcessId = null),
+            "window-invalid" to safe.copy(windowValid = false),
+            "window-owner-mismatch" to safe.copy(windowVerified = false),
+            "unsafe-menu-or-current-session" to safe.copy(mode = "LOGIN"),
+            "unsafe-menu-or-current-session" to safe.copy(currentGameSessionReady = true),
+            "active-game" to safe.copy(activeGame = true),
+            "current-mode-gameplay" to safe.copy(currentModeGameplay = true),
+            "next-mode-gameplay" to safe.copy(nextModeGameplay = true),
+            "terminal-or-result" to safe.copy(terminalOrResult = true),
+            "active-matchmaking-screen" to safe.copy(activeQueueScreen = true),
+            "active-matchmaking-entry-guard" to safe.copy(activeQueueEntryGuard = true),
+            "rank-surrender-pending" to safe.copy(rankSurrenderPending = true),
+            "terminal-cleanup-pending" to safe.copy(terminalCleanupPending = true),
+            "not-working" to safe.copy(working = false),
+            "paused" to safe.copy(paused = true),
+        )
+        cases.forEach { (expected, context) ->
+            assertEquals(
+                expected,
+                SeasonRankAwardRecoveryPolicy.continueDispatchBlockReason(context),
+                "ordered Continue rejection reason for context=$context",
+            )
+        }
+    }
+
+    @Test
     fun `Continue exception cannot authorize generic mouse matchmaking or rank input`() {
         val specialPermit = true
         assertTrue(StartupInputAuthorizationPolicy.allows(
