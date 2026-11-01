@@ -28,6 +28,10 @@ jobs:
           $config = Get-Content .\release-channel.json -Raw | ConvertFrom-Json
           "release_channel=$($config.channel)" >> $env:GITHUB_OUTPUT
 
+      - name: Validate problem-resolution closeout gate
+        shell: pwsh
+        run: .\tests\ProblemResolutionCloseout.Tests.ps1
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:

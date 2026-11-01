@@ -40,6 +40,21 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
 - Every behavior change must include focused regression tests at the changed boundary and an integration-level check for its consumers. Tests should verify observable outcomes and rejection/failure behavior, not merely that an action was logged or requested.
 - When a request contains multiple verifications, track each item separately; a blocker pauses only dependent checks, while safe independent checks continue sequentially, and the whole task is not complete until every required item passes.
 
+## Problem-resolution closeout gate
+
+- For every issue or requested fix, complete and record the four-part workflow:
+  investigate the evidence and cause; implement the authorized fix; verify the
+  outcome; and add a concrete future-prevention step. Also record how that
+  prevention is enforced, preferably by a regression test or automated guard.
+- Use `docs/templates/PROBLEM-RESOLUTION-CLOSEOUT.md` for each issue. Every
+  section must contain evidence, or `N/A — <specific reason>` when the step is
+  genuinely ineligible. Do not use `PENDING`, `TODO`, or an unexplained blank
+  in a closed record. Incomplete verification means the issue remains open.
+- Before moving to the next task, run
+  `pwsh -NoProfile -File tools/validate-problem-resolution-closeout.ps1 -Path <record>`
+  and require it to pass. The validator's own regression suite runs in the
+  release-channel CI workflow.
+
 ## Rank authorization and surrender safety
 
 - Hard eligibility rule: the script may enter constructed matchmaking or
@@ -152,8 +167,10 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
   and matching screenshot; do not infer state from stale UI text.
 - Treat `F2`/pause, crash, idle, and blocked-action as different states; record
   the direct trigger before changing code or restarting anything.
-- Every fix needs an offline test plus a live log/screenshot correlation; a
-  green build alone is not evidence of end-to-end correctness.
+- Record offline tests and live log/screenshot correlation in the closeout
+  gate whenever those checks are eligible. A green build alone is not evidence
+  of end-to-end correctness; unavailable live checks require a specific N/A
+  reason and keep the issue open when live evidence is required.
 - Keep app launch, game launch, strategy refresh, and deployment separate;
   verify each explicitly and never launch during build-only work.
 - Bump the strategy version on every strategy change and verify the running
