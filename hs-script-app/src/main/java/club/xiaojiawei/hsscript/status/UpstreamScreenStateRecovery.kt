@@ -83,6 +83,7 @@ object UpstreamScreenStateRecovery {
         RANK_PROGRESS_CONTINUATION("RANK_PROGRESS_CONTINUATION"),
         SEASON_RANK_AWARD("SEASON_RANK_AWARD"),
         SEASON_RANK_AWARD_CHEST("SEASON_RANK_AWARD_CHEST"),
+        SEASON_RANK_AWARD_REWARDS("SEASON_RANK_AWARD_REWARDS"),
         RECONNECT("RECONNECT"),
         RECONNECT_FAILURE("RECONNECT_FAILURE"),
         AMAZON_APPSTORE_NOTICE("AMAZON_APPSTORE_NOTICE"),
@@ -143,6 +144,7 @@ object UpstreamScreenStateRecovery {
         val startupQuestOverlayVisual: Boolean = false,
         val seasonRankAwardVisual: Boolean = false,
         val seasonRankAwardChestVisual: Boolean = false,
+        val seasonRankAwardRewardsVisual: Boolean = false,
         val battleNetLauncherVisual: Boolean = false,
         val tournamentModeSelectorVisual: Boolean = false,
     ) {
@@ -161,6 +163,7 @@ object UpstreamScreenStateRecovery {
                 "startupQuestOverlayVisual=$startupQuestOverlayVisual " +
                 "seasonRankAwardVisual=$seasonRankAwardVisual " +
                 "seasonRankAwardChestVisual=$seasonRankAwardChestVisual " +
+                "seasonRankAwardRewardsVisual=$seasonRankAwardRewardsVisual " +
                 "battleNetLauncherVisual=$battleNetLauncherVisual " +
                 "tournamentModeSelectorVisual=$tournamentModeSelectorVisual"
     }
@@ -444,7 +447,7 @@ object UpstreamScreenStateRecovery {
             captureForegroundAuthorized = authorizedCapture.foregroundVerified,
             processWindowVerified = currentPid != null && currentHwnd == authorizedCapture.gameWindow.toString() &&
                 GameUtil.isVerifiedCurrentGameWindow(authorizedCapture.gameWindow, currentPid.toLong()),
-            mode = Mode.currMode?.name,
+            mode = detection?.mode?.name,
             currentGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
             activeGame = WarEx.inWar || Mode.currMode == ModeEnum.GAMEPLAY || Mode.nextMode == ModeEnum.GAMEPLAY,
             activeQueue = activeQueueEvidence,
@@ -463,7 +466,7 @@ object UpstreamScreenStateRecovery {
             captureForegroundAuthorized = authorizedCapture.foregroundVerified,
             processWindowVerified = currentPid != null && currentHwnd == authorizedCapture.gameWindow.toString() &&
                 GameUtil.isVerifiedCurrentGameWindow(authorizedCapture.gameWindow, currentPid.toLong()),
-            mode = Mode.currMode?.name,
+            mode = detection?.mode?.name,
             currentGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
             activeGame = WarEx.inWar || Mode.currMode == ModeEnum.GAMEPLAY || Mode.nextMode == ModeEnum.GAMEPLAY,
             activeQueue = activeQueueEvidence,
@@ -474,6 +477,44 @@ object UpstreamScreenStateRecovery {
             paused = PauseStatus.isPause,
             stateStillCurrent = stateStillCurrent(),
         )
+        val seasonAwardRewardsContinueCandidate = SeasonRankAwardRecoveryPolicy.allowsDedicatedRewardsContinueStartupRecovery(
+            screenKind = detection?.kind?.code,
+            detectionEvidence = detection?.evidence,
+            visualRewardsVerified = capture.visual.seasonRankAwardRewardsVisual,
+            purpose = authorizedCapture.purpose,
+            captureForegroundAuthorized = authorizedCapture.foregroundVerified,
+            processWindowVerified = currentPid != null && currentHwnd == authorizedCapture.gameWindow.toString() &&
+                GameUtil.isVerifiedCurrentGameWindow(authorizedCapture.gameWindow, currentPid.toLong()),
+            mode = detection?.mode?.name,
+            currentGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+            activeGame = WarEx.inWar || Mode.currMode == ModeEnum.GAMEPLAY || Mode.nextMode == ModeEnum.GAMEPLAY,
+            activeQueue = activeQueueEvidence,
+            terminalOrResult = GameUtil.isTerminalGameState() ||
+                MandatoryRankSurrenderGuard.isPending() || MandatoryRankSurrenderGuard.isTerminalCleanupPending() ||
+                PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence(),
+            working = WorkTimeListener.working,
+            paused = PauseStatus.isPause,
+            stateStillCurrent = stateStillCurrent(),
+        )
+        if (detection?.kind in setOf(
+                ScreenKind.SEASON_RANK_AWARD,
+                ScreenKind.SEASON_RANK_AWARD_CHEST,
+                ScreenKind.SEASON_RANK_AWARD_REWARDS,
+            ) && !seasonAwardContinueCandidate && !seasonAwardChestOpenCandidate &&
+            !seasonAwardRewardsContinueCandidate
+        ) {
+            log.warn {
+                "SEASON_RANK_AWARD_STARTUP_RECOVERY_BLOCKED screen=${detection?.kind?.code} " +
+                    "purpose=${authorizedCapture.purpose} evidence=${detection?.evidence} " +
+                    "awardVisual=${capture.visual.seasonRankAwardVisual} chestVisual=${capture.visual.seasonRankAwardChestVisual} " +
+                    "rewardsVisual=${capture.visual.seasonRankAwardRewardsVisual} " +
+                    "detectedMode=${detection?.mode?.name} runtimeMode=${Mode.currMode?.name} " +
+                    "currentSessionReady=${ScreenStateRecovery.isCurrentGameSessionReadyForStart()} " +
+                    "activeGame=${WarEx.inWar || Mode.currMode == ModeEnum.GAMEPLAY || Mode.nextMode == ModeEnum.GAMEPLAY} " +
+                    "activeQueue=$activeQueueEvidence terminal=${GameUtil.isTerminalGameState() || MandatoryRankSurrenderGuard.isPending() || MandatoryRankSurrenderGuard.isTerminalCleanupPending()} " +
+                    "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} action=NO_INPUT"
+            }
+        }
         val startupHubModeChooser = StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
             purpose = authorizedCapture.purpose,
             currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
@@ -756,11 +797,12 @@ object UpstreamScreenStateRecovery {
             } else {
                 StartupInputReadiness.invalidate(pid, hwnd)
                 startupClassificationOnly = !isReconnectState &&
-                    !seasonAwardContinueCandidate && !seasonAwardChestOpenCandidate
+                    !seasonAwardContinueCandidate && !seasonAwardChestOpenCandidate &&
+                    !seasonAwardRewardsContinueCandidate
                 log.warn {
                     "STARTUP_INPUT_READINESS_NOT_CONFIRMED screen=${detection?.kind?.code ?: "UNKNOWN"} " +
                         "modalVisible=${ScreenStateRecovery.hasCenteredModalPanel(capture.image)} " +
-                        "action=${when { seasonAwardContinueCandidate -> "DEDICATED_CONTINUE_ONLY"; seasonAwardChestOpenCandidate -> "DEDICATED_CHEST_OPEN_ONLY"; startupClassificationOnly -> "NO_INPUT"; else -> "CLASSIFY_RECOVERY_ONLY" }} " +
+                    "action=${when { seasonAwardContinueCandidate -> "DEDICATED_CONTINUE_ONLY"; seasonAwardChestOpenCandidate -> "DEDICATED_CHEST_OPEN_ONLY"; seasonAwardRewardsContinueCandidate -> "DEDICATED_REWARD_CONTINUE_ONLY"; startupClassificationOnly -> "NO_INPUT"; else -> "CLASSIFY_RECOVERY_ONLY" }} " +
                         "provider=UPSTREAM"
                 }
                 if (seasonAwardContinueCandidate) {
@@ -773,6 +815,12 @@ object UpstreamScreenStateRecovery {
                     log.warn {
                         "STARTUP_INPUT_SPECIAL_RECOVERY screen=SEASON_RANK_AWARD_CHEST " +
                             "genericMenuProof=false action=EXACT_CHEST_OPEN_ONLY authority=FRESH_CAPTURE"
+                    }
+                }
+                if (seasonAwardRewardsContinueCandidate) {
+                    log.warn {
+                        "STARTUP_INPUT_SPECIAL_RECOVERY screen=SEASON_RANK_AWARD_REWARDS " +
+                            "genericMenuProof=false action=EXACT_REWARD_CONTINUE_ONLY authority=FRESH_CAPTURE"
                     }
                 }
             }
@@ -965,7 +1013,8 @@ object UpstreamScreenStateRecovery {
             return false
         }
         if (authorizedCapture.purpose == ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE &&
-            !seasonAwardContinueCandidate && !seasonAwardChestOpenCandidate
+            !seasonAwardContinueCandidate && !seasonAwardChestOpenCandidate &&
+            !seasonAwardRewardsContinueCandidate
         ) {
             val staleProbeDecision = ScreenRecoveryCapturePurposePolicy.staleProbeRecoveryDecision(
                 purpose = authorizedCapture.purpose,
@@ -1627,6 +1676,7 @@ object UpstreamScreenStateRecovery {
             startupQuestOverlayVisual = StartupQuestOverlayVisualClassifier.isQuestOverlay(image),
             seasonRankAwardVisual = SeasonRankAwardVisualClassifier.isSeasonRankAward(image),
             seasonRankAwardChestVisual = SeasonRankAwardChestVisualClassifier.isSeasonRankAwardChest(image),
+            seasonRankAwardRewardsVisual = SeasonRankAwardRewardsVisualClassifier.isRewardPresentation(image),
             battleNetLauncherVisual = BattleNetLauncherVisualPolicy.isVisible(image),
             tournamentModeSelectorVisual = TournamentModeSelectorVisualPolicy.isVisible(image),
         )
@@ -1984,6 +2034,14 @@ object UpstreamScreenStateRecovery {
                 ModeEnum.HUB,
                 98,
                 "season-rank-award-chest-structural-visual",
+            )
+        }
+        if (visual.seasonRankAwardRewardsVisual) {
+            return Detection(
+                ScreenKind.SEASON_RANK_AWARD_REWARDS,
+                ModeEnum.HUB,
+                98,
+                "season-rank-award-rewards-five-chests-and-continue-structural-visual",
             )
         }
         if (visual.amazonAppstoreSunsetNoticeVisual) {
@@ -3620,7 +3678,7 @@ object UpstreamScreenStateRecovery {
                         runCatching {
                             User32.INSTANCE.GetForegroundWindow()?.toString() == hwnd.toString()
                         }.getOrDefault(false),
-                    mode = Mode.currMode?.name,
+                    mode = detection.mode.name,
                     currentGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
                     activeGame = WarEx.inWar || GameUtil.isTerminalGameState(),
                     activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
@@ -3631,7 +3689,7 @@ object UpstreamScreenStateRecovery {
                     working = WorkTimeListener.working,
                     paused = PauseStatus.isPause,
                 ) { point ->
-                    ActionDispatchGate.dispatchSeasonRankAwardContinue {
+                    ActionDispatchGate.dispatchSeasonRankAwardContinue(detection.mode.name) {
                         MouseUtil.leftButtonClickForRecovery(
                             point,
                             preSessionSeasonRankAwardContinue = true,
@@ -3684,7 +3742,7 @@ object UpstreamScreenStateRecovery {
                     foregroundVerified = hwnd != null &&
                         runCatching { User32.INSTANCE.GetForegroundWindow()?.toString() == hwnd.toString() }
                             .getOrDefault(false),
-                    mode = Mode.currMode?.name,
+                    mode = detection.mode.name,
                     currentGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
                     activeGame = WarEx.inWar || GameUtil.isTerminalGameState(),
                     activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
@@ -3717,6 +3775,69 @@ object UpstreamScreenStateRecovery {
                 log.warn {
                     "SEASON_RANK_AWARD_CHEST_OPEN_DISPATCH accepted=true point=${result.point} " +
                         "action=EXACT_CHEST_CENTER_ONLY next=FRESH_CAPTURE rankPreflightRequiredBeforeGameplay=true"
+                }
+                ScreenStateRecovery.scheduleFreshStartupScreenReprobe()
+                return true
+            }
+            ScreenKind.SEASON_RANK_AWARD_REWARDS -> {
+                val pid = GameUtil.findGameProcessIdForDiagnostics()
+                val hwnd = ScriptStatus.gameHWND
+                if (pid == null || hwnd == null || !seasonRankAwardRecoveryAttemptGate.tryBegin(
+                        pid, hwnd.toString(), SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION,
+                    )
+                ) {
+                    log.warn {
+                        "SEASON_RANK_AWARD_REWARDS_CONTINUE_BLOCKED reason=stage-already-accepted-or-client-unavailable " +
+                            "action=NO_REPEAT_INPUT pid=${pid ?: "none"} hwnd=${hwnd ?: "none"}"
+                    }
+                    return false
+                }
+                val gameBounds = ScriptStatus.GAME_RECT
+                val result = SeasonRankAwardRecoveryPolicy.dispatchRewardsContinueFromUpstreamRecoveryCallsite(
+                    screenKind = detection.kind.code,
+                    detectionEvidence = detection.evidence,
+                    visualRewardsVerified = detection.evidence ==
+                        "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+                    windowBounds = Rectangle(
+                        gameBounds.left.toInt(), gameBounds.top.toInt(),
+                        (gameBounds.right.toInt() - gameBounds.left.toInt()).coerceAtLeast(1),
+                        (gameBounds.bottom.toInt() - gameBounds.top.toInt()).coerceAtLeast(1),
+                    ),
+                    captureAuthorityValid = GameUtil.isVerifiedCurrentGameWindow(hwnd, pid),
+                    foregroundVerified =
+                        runCatching { User32.INSTANCE.GetForegroundWindow()?.toString() == hwnd.toString() }
+                            .getOrDefault(false),
+                    mode = detection.mode.name,
+                    currentGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+                    activeGame = WarEx.inWar || Mode.currMode == ModeEnum.GAMEPLAY ||
+                        Mode.nextMode == ModeEnum.GAMEPLAY || GameUtil.isTerminalGameState(),
+                    activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                        LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+                    terminalOrResult = GameUtil.isTerminalGameState() ||
+                        MandatoryRankSurrenderGuard.isPending() || MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+                    working = WorkTimeListener.working,
+                    paused = PauseStatus.isPause,
+                ) { point ->
+                    ActionDispatchGate.dispatchSeasonRankAwardRewardsContinue(detection.mode.name) {
+                        MouseUtil.leftButtonClickForRecovery(
+                            point,
+                            preSessionSeasonRankAwardRewardsContinue = true,
+                        )
+                    }
+                }
+                seasonRankAwardRecoveryAttemptGate.resolve(
+                    pid, hwnd.toString(), SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION, result.accepted,
+                )
+                if (!result.attempted || !result.accepted) {
+                    log.warn {
+                        "SEASON_RANK_AWARD_REWARDS_CONTINUE_BLOCKED reason=${result.reason} action=NO_INPUT " +
+                            "mode=${detection.mode.name} working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+                    }
+                    return false
+                }
+                log.warn {
+                    "SEASON_RANK_AWARD_REWARDS_CONTINUE_DISPATCH accepted=true point=${result.point} " +
+                        "action=EXACT_REWARD_CONTINUE_ONLY next=FRESH_CAPTURE noGameplayOrQueueAuthorization=true"
                 }
                 ScreenStateRecovery.scheduleFreshStartupScreenReprobe()
                 return true

@@ -7,6 +7,7 @@ import java.awt.Rectangle
 internal object SeasonRankAwardRecoveryPolicy {
     const val DISPATCH_ACTION = "recovery.season-rank-award.continue"
     const val OPEN_CHEST_ACTION = "recovery.season-rank-award.open-chest"
+    const val REWARDS_CONTINUE_ACTION = "recovery.season-rank-award.rewards-continue"
 
     /** Current, final-edge facts for the only mouse event the award recovery may send. */
     data class ContinueDispatchContext(
@@ -102,6 +103,32 @@ internal object SeasonRankAwardRecoveryPolicy {
         allowsMenuContext(mode, currentGameSessionReady) && !activeGame && !activeQueue &&
         !terminalOrResult && working && !paused && stateStillCurrent
 
+    /** The opened-reward presentation has its own exact Continue button and startup authority. */
+    fun allowsDedicatedRewardsContinueStartupRecovery(
+        screenKind: String?,
+        detectionEvidence: String?,
+        visualRewardsVerified: Boolean,
+        purpose: ScreenRecoveryCapturePurpose,
+        captureForegroundAuthorized: Boolean,
+        processWindowVerified: Boolean,
+        mode: String?,
+        currentGameSessionReady: Boolean,
+        activeGame: Boolean,
+        activeQueue: Boolean,
+        terminalOrResult: Boolean,
+        working: Boolean,
+        paused: Boolean,
+        stateStillCurrent: Boolean,
+    ): Boolean = screenKind == "SEASON_RANK_AWARD_REWARDS" &&
+        detectionEvidence == "season-rank-award-rewards-five-chests-and-continue-structural-visual" &&
+        visualRewardsVerified && purpose in setOf(
+            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+        ) && captureForegroundAuthorized && processWindowVerified &&
+        allowsMenuContext(mode, currentGameSessionReady) && !activeGame && !activeQueue &&
+        !terminalOrResult && working && !paused && stateStillCurrent
+
     data class CallsiteDispatchResult(
         val attempted: Boolean,
         val accepted: Boolean,
@@ -124,6 +151,9 @@ internal object SeasonRankAwardRecoveryPolicy {
         windowBounds.y + (windowBounds.height * .54).toInt(),
     )
 
+    /** Center of the enabled Continue control on the five-chest reward presentation. */
+    fun rewardsContinueTarget(windowBounds: Rectangle): Point = continueTarget(windowBounds)
+
     fun chestOpenDispatchBlockReason(context: ContinueDispatchContext): String? = when (
         continueDispatchBlockReason(context.copy(action = DISPATCH_ACTION))
     ) {
@@ -131,6 +161,26 @@ internal object SeasonRankAwardRecoveryPolicy {
         "exact-award-continue-scope-missing" -> "exact-award-chest-open-scope-missing"
         null -> null
         else -> continueDispatchBlockReason(context.copy(action = DISPATCH_ACTION))
+    }
+
+    fun rewardsContinueDispatchBlockReason(context: ContinueDispatchContext): String? = when {
+        context.action != REWARDS_CONTINUE_ACTION -> "wrong-action"
+        !context.scopedToExactAwardContinue -> "exact-award-rewards-continue-scope-missing"
+        context.expectedProcessId <= 0 || context.currentProcessId != context.expectedProcessId -> "process-changed"
+        !context.windowValid -> "window-invalid"
+        !context.windowVerified -> "window-owner-mismatch"
+        !allowsMenuContext(context.mode, context.currentGameSessionReady) -> "unsafe-menu-or-current-session"
+        context.activeGame -> "active-game"
+        context.currentModeGameplay -> "current-mode-gameplay"
+        context.nextModeGameplay -> "next-mode-gameplay"
+        context.terminalOrResult -> "terminal-or-result"
+        context.activeQueueScreen -> "active-matchmaking-screen"
+        context.activeQueueEntryGuard -> "active-matchmaking-entry-guard"
+        context.rankSurrenderPending -> "rank-surrender-pending"
+        context.terminalCleanupPending -> "terminal-cleanup-pending"
+        !context.working -> "not-working"
+        context.paused -> "paused"
+        else -> null
     }
 
     fun allowsContinue(
@@ -228,5 +278,38 @@ internal object SeasonRankAwardRecoveryPolicy {
         if (!working || paused) return CallsiteDispatchResult(false, false, null, "not-working-or-paused")
         val point = chestOpenTarget(windowBounds)
         return CallsiteDispatchResult(true, click(point), point, "exact-chest-center-only")
+    }
+
+    fun dispatchRewardsContinueFromUpstreamRecoveryCallsite(
+        screenKind: String,
+        detectionEvidence: String,
+        visualRewardsVerified: Boolean,
+        windowBounds: Rectangle,
+        captureAuthorityValid: Boolean,
+        foregroundVerified: Boolean,
+        mode: String?,
+        currentGameSessionReady: Boolean,
+        activeGame: Boolean,
+        activeQueue: Boolean,
+        terminalOrResult: Boolean,
+        working: Boolean,
+        paused: Boolean,
+        click: (Point) -> Boolean,
+    ): CallsiteDispatchResult {
+        if (screenKind != "SEASON_RANK_AWARD_REWARDS" ||
+            detectionEvidence != "season-rank-award-rewards-five-chests-and-continue-structural-visual" ||
+            !visualRewardsVerified
+        ) return CallsiteDispatchResult(false, false, null, "reward-screen-identity-unverified")
+        if (!captureAuthorityValid) return CallsiteDispatchResult(false, false, null, "capture-authority-invalid")
+        if (!foregroundVerified) return CallsiteDispatchResult(false, false, null, "foreground-unverified")
+        if (!allowsMenuContext(mode, currentGameSessionReady)) {
+            return CallsiteDispatchResult(false, false, null, "unsafe-menu-or-current-session")
+        }
+        if (activeGame || activeQueue || terminalOrResult) {
+            return CallsiteDispatchResult(false, false, null, "game-queue-or-terminal-fence")
+        }
+        if (!working || paused) return CallsiteDispatchResult(false, false, null, "not-working-or-paused")
+        val point = rewardsContinueTarget(windowBounds)
+        return CallsiteDispatchResult(true, click(point), point, "exact-reward-continue-only")
     }
 }

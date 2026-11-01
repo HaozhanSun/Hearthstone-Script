@@ -47,7 +47,10 @@ internal object StartupQuestOverlayVisualClassifier {
     }
 
     fun isQuestOverlay(image: BufferedImage): Boolean =
-        inspect(image).isQuestOverlay && !SeasonRankAwardVisualClassifier.isSeasonRankAward(image)
+        inspect(image).isQuestOverlay &&
+            !SeasonRankAwardVisualClassifier.isSeasonRankAward(image) &&
+            !SeasonRankAwardChestVisualClassifier.isSeasonRankAwardChest(image) &&
+            !SeasonRankAwardRewardsVisualClassifier.isRewardPresentation(image)
 
     private fun sample(
         image: BufferedImage,

@@ -12,6 +12,239 @@ import org.junit.jupiter.api.Test
 
 class SeasonRankAwardRecoveryDispatchTest {
     @Test
+    fun `fresh restart with empty current Power log admits only the exact rank award Continue`() {
+        val frame = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/season-rank-award-fresh-restart-live-20261101-041948.png",
+        )))
+        val screen = requireNotNull(UpstreamScreenStateRecovery.classifyImageForTest("", frame))
+        assertEquals("SEASON_RANK_AWARD", screen)
+        assertTrue(SeasonRankAwardVisualClassifier.isSeasonRankAward(frame))
+
+        assertTrue(SeasonRankAwardRecoveryPolicy.allowsDedicatedStartupRecovery(
+            screenKind = screen,
+            detectionEvidence = "season-rank-award-structural-visual",
+            visualAwardVerified = SeasonRankAwardVisualClassifier.isSeasonRankAward(frame),
+            purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            captureForegroundAuthorized = true,
+            processWindowVerified = true,
+            mode = "HUB",
+            currentGameSessionReady = false,
+            activeGame = false,
+            activeQueue = false,
+            terminalOrResult = false,
+            working = true,
+            paused = false,
+            stateStillCurrent = true,
+        ), "the GameStarter fresh-restart probe remains eligible while current Power.log is empty")
+
+        assertFalse(StartupInputAuthorizationPolicy.allows(
+            action = SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION,
+            currentSessionReady = false,
+            freshOnlineMenuReady = false,
+        ), "classification alone does not authorize dispatch")
+        assertTrue(StartupInputAuthorizationPolicy.allows(
+            action = SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION,
+            currentSessionReady = false,
+            freshOnlineMenuReady = false,
+            seasonRankAwardContinuePermitValid = true,
+        ), "the exact one-use Continue permit supplies only this reward action")
+        for (action in listOf("mouse.left", "strategy.card.play", "matchmaking.start", "surrender.request")) {
+            assertFalse(StartupInputAuthorizationPolicy.allows(
+                action = action,
+                currentSessionReady = false,
+                freshOnlineMenuReady = false,
+                seasonRankAwardContinuePermitValid = true,
+            ), "the Continue permit cannot authorize $action")
+        }
+        val clicked = mutableListOf<Point>()
+        val dispatched = SeasonRankAwardRecoveryPolicy.dispatchFromUpstreamRecoveryCallsite(
+            screenKind = screen,
+            detectionEvidence = "season-rank-award-structural-visual",
+            windowBounds = Rectangle(0, 0, 1920, 1080),
+            captureAuthorityValid = true,
+            foregroundVerified = true,
+            mode = "HUB",
+            currentGameSessionReady = false,
+            activeGame = false,
+            activeQueue = false,
+            terminalOrResult = false,
+            working = true,
+            paused = false,
+        ) { clicked += it; true }
+        assertTrue(dispatched.accepted)
+        assertEquals(Point(960, 885), clicked.single())
+        assertTrue(ActionDispatchGate.dispatchSeasonRankAwardContinue("HUB") {
+            assertTrue(ActionDispatchGate.isSeasonRankAwardContinueDispatchScoped())
+            assertEquals("HUB", ActionDispatchGate.seasonRankAwardDispatchMode())
+            true
+        })
+    }
+
+    @Test
+    fun `five chest reward presentation bypasses quest recovery and dispatches only its exact Continue`() {
+        val frame = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/season-rank-reward-chests-live-20261101-045150.png",
+        )))
+        val evidence = SeasonRankAwardRewardsVisualClassifier.inspect(frame)
+        assertTrue(evidence.isRewardPresentation, "live reward layout signature: $evidence")
+        assertFalse(StartupQuestOverlayVisualClassifier.isQuestOverlay(frame),
+            "the five-chest reward page is not an event-quest modal")
+        val screen = requireNotNull(UpstreamScreenStateRecovery.classifyImageForTest("", frame))
+        assertEquals("SEASON_RANK_AWARD_REWARDS", screen)
+        val questFixture = fixture("event-quest-overlay-deck-selection-20261029.png")
+        assertTrue(StartupQuestOverlayVisualClassifier.isQuestOverlay(questFixture))
+        assertEquals("EVENT_QUEST_OVERLAY", UpstreamScreenStateRecovery.classifyImageForTest("", questFixture))
+        val earlierRewardFrame = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/season-rank-reward-chests-live-20261101-041328.png",
+        )))
+        assertEquals("SEASON_RANK_AWARD_REWARDS", UpstreamScreenStateRecovery.classifyImageForTest("", earlierRewardFrame))
+
+        val visualProof = SeasonRankAwardRewardsVisualClassifier.isRewardPresentation(frame)
+        assertTrue(SeasonRankAwardRecoveryPolicy.allowsDedicatedRewardsContinueStartupRecovery(
+            screenKind = screen,
+            detectionEvidence = "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+            visualRewardsVerified = visualProof,
+            purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            captureForegroundAuthorized = true,
+            processWindowVerified = true,
+            mode = "HUB",
+            currentGameSessionReady = false,
+            activeGame = false,
+            activeQueue = false,
+            terminalOrResult = false,
+            working = true,
+            paused = false,
+            stateStillCurrent = true,
+        ), "fresh exact reward visual is eligible without current-session Power.log readiness")
+
+        val clicked = mutableListOf<Point>()
+        val result = SeasonRankAwardRecoveryPolicy.dispatchRewardsContinueFromUpstreamRecoveryCallsite(
+            screenKind = screen,
+            detectionEvidence = "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+            visualRewardsVerified = visualProof,
+            windowBounds = Rectangle(0, 0, 1920, 1080),
+            captureAuthorityValid = true,
+            foregroundVerified = true,
+            mode = "HUB",
+            currentGameSessionReady = false,
+            activeGame = false,
+            activeQueue = false,
+            terminalOrResult = false,
+            working = true,
+            paused = false,
+        ) { clicked += it; true }
+        assertTrue(result.accepted)
+        assertEquals(Point(960, 885), clicked.single(), "only the visible bottom-center Continue is clicked")
+
+        assertFalse(StartupInputAuthorizationPolicy.allows(
+            action = SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION,
+            currentSessionReady = false,
+            freshOnlineMenuReady = false,
+        ))
+        assertTrue(StartupInputAuthorizationPolicy.allows(
+            action = SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION,
+            currentSessionReady = false,
+            freshOnlineMenuReady = false,
+            seasonRankAwardRewardsContinuePermitValid = true,
+        ))
+        for (action in listOf("mouse.left", "strategy.card.play", "matchmaking.start", "surrender.request")) {
+            assertFalse(StartupInputAuthorizationPolicy.allows(
+                action = action,
+                currentSessionReady = false,
+                freshOnlineMenuReady = false,
+                seasonRankAwardRewardsContinuePermitValid = true,
+            ), "reward Continue authority cannot authorize $action")
+        }
+        StartupQuestOverlayRecoveryFence.begin()
+        try {
+            assertTrue(ActionDispatchGate.dispatchSeasonRankAwardRewardsContinue("HUB") {
+                assertTrue(ActionDispatchGate.isSeasonRankAwardRewardsContinueDispatchScoped())
+                assertFalse(ActionDispatchGate.isSeasonRankAwardContinueDispatchScoped())
+                assertEquals("HUB", ActionDispatchGate.seasonRankAwardDispatchMode())
+                assertFalse(ActionDispatchGate.isStartupQuestRecoveryFenceBlocking(
+                    SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION,
+                ), "the exact reward action alone may pass its event-overlay fence")
+                assertTrue(ActionDispatchGate.isStartupQuestRecoveryFenceBlocking("mouse.left"))
+                assertTrue(ActionDispatchGate.isStartupQuestRecoveryFenceBlocking("matchmaking.start"))
+                assertTrue(StartupInputAuthorizationPolicy.allows(
+                    action = SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION,
+                    currentSessionReady = false,
+                    freshOnlineMenuReady = false,
+                    seasonRankAwardRewardsContinuePermitValid =
+                        ActionDispatchGate.isSeasonRankAwardRewardsContinueDispatchScoped(),
+                ))
+                assertFalse(StartupInputAuthorizationPolicy.allows(
+                    action = "matchmaking.start",
+                    currentSessionReady = false,
+                    freshOnlineMenuReady = false,
+                    seasonRankAwardRewardsContinuePermitValid = true,
+                ))
+                true
+            })
+            assertFalse(ActionDispatchGate.isSeasonRankAwardRewardsContinueDispatchScoped(),
+                "the exact reward action scope expires immediately")
+        } finally {
+            StartupQuestOverlayRecoveryFence.resolve()
+        }
+        assertEquals("game-queue-or-terminal-fence", SeasonRankAwardRecoveryPolicy
+            .dispatchRewardsContinueFromUpstreamRecoveryCallsite(
+                screenKind = screen,
+                detectionEvidence = "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+                visualRewardsVerified = visualProof,
+                windowBounds = Rectangle(0, 0, 1920, 1080),
+                captureAuthorityValid = true,
+                foregroundVerified = true,
+                mode = "HUB",
+                currentGameSessionReady = false,
+                activeGame = false,
+                activeQueue = true,
+                terminalOrResult = false,
+                working = true,
+                paused = false,
+            ) { error("active queue must not dispatch") }.reason)
+
+        fun blockedRewardAttempt(
+            kind: String = screen,
+            proof: String = "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+            visual: Boolean = true,
+            capture: Boolean = true,
+            foreground: Boolean = true,
+            mode: String? = "HUB",
+            sessionReady: Boolean = false,
+            game: Boolean = false,
+            queue: Boolean = false,
+            terminal: Boolean = false,
+            working: Boolean = true,
+            paused: Boolean = false,
+        ) = SeasonRankAwardRecoveryPolicy.dispatchRewardsContinueFromUpstreamRecoveryCallsite(
+            screenKind = kind,
+            detectionEvidence = proof,
+            visualRewardsVerified = visual,
+            windowBounds = Rectangle(0, 0, 1920, 1080),
+            captureAuthorityValid = capture,
+            foregroundVerified = foreground,
+            mode = mode,
+            currentGameSessionReady = sessionReady,
+            activeGame = game,
+            activeQueue = queue,
+            terminalOrResult = terminal,
+            working = working,
+            paused = paused,
+        ) { error("blocked reward context must not dispatch") }
+        assertEquals("reward-screen-identity-unverified", blockedRewardAttempt(kind = "EVENT_QUEST_OVERLAY").reason)
+        assertEquals("reward-screen-identity-unverified", blockedRewardAttempt(proof = "weak-ocr-only").reason)
+        assertEquals("reward-screen-identity-unverified", blockedRewardAttempt(visual = false).reason)
+        assertEquals("capture-authority-invalid", blockedRewardAttempt(capture = false).reason)
+        assertEquals("foreground-unverified", blockedRewardAttempt(foreground = false).reason)
+        assertEquals("unsafe-menu-or-current-session", blockedRewardAttempt(mode = "LOGIN").reason)
+        assertEquals("unsafe-menu-or-current-session", blockedRewardAttempt(sessionReady = true).reason)
+        assertEquals("game-queue-or-terminal-fence", blockedRewardAttempt(game = true).reason)
+        assertEquals("game-queue-or-terminal-fence", blockedRewardAttempt(terminal = true).reason)
+        assertEquals("not-working-or-paused", blockedRewardAttempt(working = false).reason)
+        assertEquals("not-working-or-paused", blockedRewardAttempt(paused = true).reason)
+    }
+
+    @Test
     fun `fresh exact award Continue passes final boundary before current Power log exists`() {
         val fixture = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/season-rank-award-20261101.png",
@@ -150,6 +383,12 @@ class SeasonRankAwardRecoveryDispatchTest {
         assertEquals("SEASON_RANK_AWARD_CHEST", UpstreamScreenStateRecovery.classifyImageForTest("", chest))
         assertEquals("SEASON_RANK_AWARD", UpstreamScreenStateRecovery.classifyImageForTest("", award))
         assertEquals("AMAZON_APPSTORE_NOTICE", UpstreamScreenStateRecovery.classifyImageForTest("", appStore))
+        assertFalse(SeasonRankAwardRewardsVisualClassifier.isRewardPresentation(chest),
+            "the single chest-open screen must not be mistaken for the five-chest Continue presentation")
+        assertFalse(SeasonRankAwardRewardsVisualClassifier.isRewardPresentation(award),
+            "the first rank-award presentation must not be mistaken for the post-open reward page")
+        assertFalse(SeasonRankAwardRewardsVisualClassifier.isRewardPresentation(appStore),
+            "the AppStore notice must not be mistaken for a season reward page")
         val evidence = SeasonRankAwardChestVisualClassifier.inspect(chest)
         assertTrue(evidence.isSeasonRankAwardChest)
         assertFalse(SeasonRankAwardChestVisualClassifier.inspect(award).isSeasonRankAwardChest)

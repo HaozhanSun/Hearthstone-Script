@@ -528,9 +528,11 @@ object MouseUtil {
         preSessionBetaResultConfirmation: Boolean = false,
         preSessionSeasonRankAwardContinue: Boolean = false,
         preSessionSeasonRankAwardChestOpen: Boolean = false,
+        preSessionSeasonRankAwardRewardsContinue: Boolean = false,
     ): Boolean {
         val dispatchAction = when {
             terminalCleanupCapability != null -> "terminal-result.dismiss"
+            preSessionSeasonRankAwardRewardsContinue -> SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION
             preSessionSeasonRankAwardChestOpen -> SeasonRankAwardRecoveryPolicy.OPEN_CHEST_ACTION
             preSessionSeasonRankAwardContinue -> SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION
             preSessionBetaResultConfirmation -> BetaStartupResultConfirmationPolicy.DISPATCH_ACTION
@@ -550,19 +552,25 @@ object MouseUtil {
             return false
         }
 
-        if (preSessionSeasonRankAwardContinue || preSessionSeasonRankAwardChestOpen) {
+        if (preSessionSeasonRankAwardContinue || preSessionSeasonRankAwardChestOpen ||
+            preSessionSeasonRankAwardRewardsContinue
+        ) {
             val hwnd = ScriptStatus.gameHWND ?: return false
             val pid = GameUtil.findGameProcessIdForDiagnostics()?.toInt() ?: return false
             fun blockReason(): String? {
                 val context = SeasonRankAwardRecoveryPolicy.ContinueDispatchContext(
                     action = dispatchAction,
-                    scopedToExactAwardContinue = if (preSessionSeasonRankAwardChestOpen)
-                        ActionDispatchGate.isSeasonRankAwardChestOpenDispatchScoped()
-                    else ActionDispatchGate.isSeasonRankAwardContinueDispatchScoped(),
+                    scopedToExactAwardContinue = when {
+                        preSessionSeasonRankAwardRewardsContinue ->
+                            ActionDispatchGate.isSeasonRankAwardRewardsContinueDispatchScoped()
+                        preSessionSeasonRankAwardChestOpen ->
+                            ActionDispatchGate.isSeasonRankAwardChestOpenDispatchScoped()
+                        else -> ActionDispatchGate.isSeasonRankAwardContinueDispatchScoped()
+                    },
                     expectedProcessId = pid,
                     currentProcessId = GameUtil.findGameProcessIdForDiagnostics()?.toInt(),
                     windowVerified = GameUtil.isVerifiedCurrentGameWindow(hwnd, pid.toLong()),
-                    mode = Mode.currMode?.name,
+                    mode = ActionDispatchGate.seasonRankAwardDispatchMode() ?: Mode.currMode?.name,
                     currentGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
                     activeGame = WarEx.inWar,
                     currentModeGameplay = Mode.currMode == ModeEnum.GAMEPLAY,
@@ -576,13 +584,22 @@ object MouseUtil {
                     paused = PauseStatus.isPause,
                     windowValid = hwndIsValid(hwnd),
                 )
-                return if (preSessionSeasonRankAwardChestOpen) {
-                    SeasonRankAwardRecoveryPolicy.chestOpenDispatchBlockReason(context)
-                } else SeasonRankAwardRecoveryPolicy.continueDispatchBlockReason(context)
+                return when {
+                    preSessionSeasonRankAwardRewardsContinue ->
+                        SeasonRankAwardRecoveryPolicy.rewardsContinueDispatchBlockReason(context)
+                    preSessionSeasonRankAwardChestOpen ->
+                        SeasonRankAwardRecoveryPolicy.chestOpenDispatchBlockReason(context)
+                    else -> SeasonRankAwardRecoveryPolicy.continueDispatchBlockReason(context)
+                }
+            }
+            val actionLog = when {
+                preSessionSeasonRankAwardRewardsContinue -> "SEASON_RANK_AWARD_REWARDS_CONTINUE"
+                preSessionSeasonRankAwardChestOpen -> "SEASON_RANK_AWARD_CHEST_OPEN"
+                else -> "SEASON_RANK_AWARD_CONTINUE"
             }
             fun logBlocked(stage: String, reason: String) {
                 log.warn {
-                    "${if (preSessionSeasonRankAwardChestOpen) "SEASON_RANK_AWARD_CHEST_OPEN_BLOCKED" else "SEASON_RANK_AWARD_CONTINUE_BLOCKED"} " +
+                    "${actionLog}_BLOCKED " +
                         "reason=$reason stage=$stage " +
                         "pid=$pid hwnd=$hwnd currentSessionReady=${ScreenStateRecovery.isCurrentGameSessionReadyForStart()} " +
                         "mode=${Mode.currMode?.name} nextMode=${Mode.nextMode?.name} inWar=${WarEx.inWar} " +
@@ -603,7 +620,7 @@ object MouseUtil {
             catch (error: InterruptedException) { Thread.currentThread().interrupt(); false }
             if (!lockAcquired) {
                     log.warn {
-                        "${if (preSessionSeasonRankAwardChestOpen) "SEASON_RANK_AWARD_CHEST_OPEN_BLOCKED" else "SEASON_RANK_AWARD_CONTINUE_BLOCKED"} " +
+                        "${actionLog}_BLOCKED " +
                             "reason=input-lock-timeout pid=$pid hwnd=$hwnd input=not-sent"
                     }
                 return false
@@ -630,7 +647,7 @@ object MouseUtil {
                     }
                     val accepted = sendE2eWindowsClick(pos)
                     log.warn {
-                        "${if (preSessionSeasonRankAwardChestOpen) "SEASON_RANK_AWARD_CHEST_OPEN_CLICK_SENT" else "SEASON_RANK_AWARD_CONTINUE_CLICK_SENT"} pid=$pid hwnd=$hwnd pos=$pos " +
+                        "${actionLog}_CLICK_SENT pid=$pid hwnd=$hwnd pos=$pos " +
                             "accepted=$accepted input=SendInput scope=one-use"
                     }
                     return accepted
