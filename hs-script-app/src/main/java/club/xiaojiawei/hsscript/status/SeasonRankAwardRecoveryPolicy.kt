@@ -6,6 +6,7 @@ import java.awt.Rectangle
 /** Allows only the visible Continue navigation on a fresh, authorized award frame. */
 internal object SeasonRankAwardRecoveryPolicy {
     const val DISPATCH_ACTION = "recovery.season-rank-award.continue"
+    const val OPEN_CHEST_ACTION = "recovery.season-rank-award.open-chest"
 
     /** Current, final-edge facts for the only mouse event the award recovery may send. */
     data class ContinueDispatchContext(
@@ -91,6 +92,21 @@ internal object SeasonRankAwardRecoveryPolicy {
         windowBounds.y + (windowBounds.height * .82).toInt(),
     )
 
+    /** Center of the cyan chest on the separately classified second-stage frame. */
+    fun chestOpenTarget(windowBounds: Rectangle): Point = Point(
+        windowBounds.x + (windowBounds.width * .50).toInt(),
+        windowBounds.y + (windowBounds.height * .54).toInt(),
+    )
+
+    fun chestOpenDispatchBlockReason(context: ContinueDispatchContext): String? = when (
+        continueDispatchBlockReason(context.copy(action = DISPATCH_ACTION))
+    ) {
+        "wrong-action" -> "wrong-action"
+        "exact-award-continue-scope-missing" -> "exact-award-chest-open-scope-missing"
+        null -> null
+        else -> continueDispatchBlockReason(context.copy(action = DISPATCH_ACTION))
+    }
+
     fun allowsContinue(
         exactSeasonRankAward: Boolean,
         freshCaptureAuthorized: Boolean,
@@ -155,5 +171,36 @@ internal object SeasonRankAwardRecoveryPolicy {
         if (!working || paused) return CallsiteDispatchResult(false, false, null, "not-working-or-paused")
         val point = continueTarget(windowBounds)
         return CallsiteDispatchResult(true, click(point), point, "visible-continue-only")
+    }
+
+    fun dispatchChestOpenFromUpstreamRecoveryCallsite(
+        screenKind: String,
+        detectionEvidence: String,
+        windowBounds: Rectangle,
+        captureAuthorityValid: Boolean,
+        foregroundVerified: Boolean,
+        mode: String?,
+        currentGameSessionReady: Boolean,
+        activeGame: Boolean,
+        activeQueue: Boolean,
+        terminalOrResult: Boolean,
+        working: Boolean,
+        paused: Boolean,
+        click: (Point) -> Boolean,
+    ): CallsiteDispatchResult {
+        if (screenKind != "SEASON_RANK_AWARD_CHEST" ||
+            detectionEvidence != "season-rank-award-chest-structural-visual"
+        ) return CallsiteDispatchResult(false, false, null, "chest-screen-identity-unverified")
+        if (!captureAuthorityValid) return CallsiteDispatchResult(false, false, null, "capture-authority-invalid")
+        if (!foregroundVerified) return CallsiteDispatchResult(false, false, null, "foreground-unverified")
+        if (!allowsMenuContext(mode, currentGameSessionReady)) {
+            return CallsiteDispatchResult(false, false, null, "unsafe-menu-or-current-session")
+        }
+        if (activeGame || activeQueue || terminalOrResult) {
+            return CallsiteDispatchResult(false, false, null, "game-queue-or-terminal-fence")
+        }
+        if (!working || paused) return CallsiteDispatchResult(false, false, null, "not-working-or-paused")
+        val point = chestOpenTarget(windowBounds)
+        return CallsiteDispatchResult(true, click(point), point, "exact-chest-center-only")
     }
 }

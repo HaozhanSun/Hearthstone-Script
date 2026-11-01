@@ -527,9 +527,11 @@ object MouseUtil {
         preSessionStartupNotice: Boolean = false,
         preSessionBetaResultConfirmation: Boolean = false,
         preSessionSeasonRankAwardContinue: Boolean = false,
+        preSessionSeasonRankAwardChestOpen: Boolean = false,
     ): Boolean {
         val dispatchAction = when {
             terminalCleanupCapability != null -> "terminal-result.dismiss"
+            preSessionSeasonRankAwardChestOpen -> SeasonRankAwardRecoveryPolicy.OPEN_CHEST_ACTION
             preSessionSeasonRankAwardContinue -> SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION
             preSessionBetaResultConfirmation -> BetaStartupResultConfirmationPolicy.DISPATCH_ACTION
             preSessionStartupNotice -> StartupNoticeRecoveryPolicy.DISPATCH_ACTION
@@ -548,13 +550,15 @@ object MouseUtil {
             return false
         }
 
-        if (preSessionSeasonRankAwardContinue) {
+        if (preSessionSeasonRankAwardContinue || preSessionSeasonRankAwardChestOpen) {
             val hwnd = ScriptStatus.gameHWND ?: return false
             val pid = GameUtil.findGameProcessIdForDiagnostics()?.toInt() ?: return false
             fun blockReason(): String? {
                 val context = SeasonRankAwardRecoveryPolicy.ContinueDispatchContext(
                     action = dispatchAction,
-                    scopedToExactAwardContinue = ActionDispatchGate.isSeasonRankAwardContinueDispatchScoped(),
+                    scopedToExactAwardContinue = if (preSessionSeasonRankAwardChestOpen)
+                        ActionDispatchGate.isSeasonRankAwardChestOpenDispatchScoped()
+                    else ActionDispatchGate.isSeasonRankAwardContinueDispatchScoped(),
                     expectedProcessId = pid,
                     currentProcessId = GameUtil.findGameProcessIdForDiagnostics()?.toInt(),
                     windowVerified = GameUtil.isVerifiedCurrentGameWindow(hwnd, pid.toLong()),
@@ -572,11 +576,14 @@ object MouseUtil {
                     paused = PauseStatus.isPause,
                     windowValid = hwndIsValid(hwnd),
                 )
-                return SeasonRankAwardRecoveryPolicy.continueDispatchBlockReason(context)
+                return if (preSessionSeasonRankAwardChestOpen) {
+                    SeasonRankAwardRecoveryPolicy.chestOpenDispatchBlockReason(context)
+                } else SeasonRankAwardRecoveryPolicy.continueDispatchBlockReason(context)
             }
             fun logBlocked(stage: String, reason: String) {
                 log.warn {
-                    "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=$reason stage=$stage " +
+                    "${if (preSessionSeasonRankAwardChestOpen) "SEASON_RANK_AWARD_CHEST_OPEN_BLOCKED" else "SEASON_RANK_AWARD_CONTINUE_BLOCKED"} " +
+                        "reason=$reason stage=$stage " +
                         "pid=$pid hwnd=$hwnd currentSessionReady=${ScreenStateRecovery.isCurrentGameSessionReadyForStart()} " +
                         "mode=${Mode.currMode?.name} nextMode=${Mode.nextMode?.name} inWar=${WarEx.inWar} " +
                         "terminal=${GameUtil.isTerminalGameState()} " +
@@ -595,7 +602,10 @@ object MouseUtil {
             val lockAcquired = try { DRIVER_LOCK.tryLock(3000, TimeUnit.MILLISECONDS) }
             catch (error: InterruptedException) { Thread.currentThread().interrupt(); false }
             if (!lockAcquired) {
-                log.warn { "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=input-lock-timeout pid=$pid hwnd=$hwnd input=not-sent" }
+                    log.warn {
+                        "${if (preSessionSeasonRankAwardChestOpen) "SEASON_RANK_AWARD_CHEST_OPEN_BLOCKED" else "SEASON_RANK_AWARD_CONTINUE_BLOCKED"} " +
+                            "reason=input-lock-timeout pid=$pid hwnd=$hwnd input=not-sent"
+                    }
                 return false
             }
             try {
@@ -620,7 +630,7 @@ object MouseUtil {
                     }
                     val accepted = sendE2eWindowsClick(pos)
                     log.warn {
-                        "SEASON_RANK_AWARD_CONTINUE_CLICK_SENT pid=$pid hwnd=$hwnd pos=$pos " +
+                        "${if (preSessionSeasonRankAwardChestOpen) "SEASON_RANK_AWARD_CHEST_OPEN_CLICK_SENT" else "SEASON_RANK_AWARD_CONTINUE_CLICK_SENT"} pid=$pid hwnd=$hwnd pos=$pos " +
                             "accepted=$accepted input=SendInput scope=one-use"
                     }
                     return accepted

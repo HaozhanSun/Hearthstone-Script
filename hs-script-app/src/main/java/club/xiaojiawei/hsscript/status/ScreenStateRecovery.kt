@@ -358,6 +358,11 @@ object ScreenStateRecovery {
 
     /** Re-observe the same verified client after the single authorized HUB entry click. */
     fun scheduleStartupMenuReprobeAfterModeSelection() {
+        scheduleFreshStartupScreenReprobe()
+    }
+
+    /** Re-observe the same client after a one-use startup recovery input. */
+    fun scheduleFreshStartupScreenReprobe() {
         if (!startupMenuReprobeInFlight.compareAndSet(false, true)) {
             startupMenuReprobePending.set(true)
             return
@@ -367,7 +372,7 @@ object ScreenStateRecovery {
                 if (!WorkTimeListener.working || PauseStatus.isPause || WarEx.inWar) return@schedule
                 inspectAndRecover(
                     stuckForMs = 0L,
-                    stateFingerprint = "STARTUP_MODE_ENTRY_POSTCHECK",
+                    stateFingerprint = "STARTUP_RECOVERY_POSTCHECK",
                     startupProbe = true,
                 )
             } finally {
@@ -375,7 +380,7 @@ object ScreenStateRecovery {
                 if (startupMenuReprobePending.getAndSet(false) &&
                     WorkTimeListener.working && !PauseStatus.isPause && !WarEx.inWar
                 ) {
-                    scheduleStartupMenuReprobeAfterModeSelection()
+                    scheduleFreshStartupScreenReprobe()
                 }
             }
         }, STARTUP_MODE_ENTRY_REPROBE_DELAY_MS, TimeUnit.MILLISECONDS)

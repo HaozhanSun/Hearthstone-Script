@@ -69,6 +69,7 @@ object UpstreamScreenStateRecovery {
     private val eventQuestOverlayRecoveryInFlight = AtomicBoolean(false)
     private val eventQuestOverlayRecoveryPolicy = EventQuestOverlayRecoveryPolicy()
     private val startupDeckModeNavigationAttempts = StartupDeckModeNavigationAttemptGate()
+    private val seasonRankAwardRecoveryAttemptGate = SeasonRankAwardRecoveryAttemptGate()
     private val stuckScreenUnblockRecheckGate = StuckScreenUnblockRecheckGate()
     private val stuckScreenUnblockBatchInFlight = AtomicBoolean(false)
 
@@ -81,6 +82,7 @@ object UpstreamScreenStateRecovery {
         RESULT("RESULT"),
         RANK_PROGRESS_CONTINUATION("RANK_PROGRESS_CONTINUATION"),
         SEASON_RANK_AWARD("SEASON_RANK_AWARD"),
+        SEASON_RANK_AWARD_CHEST("SEASON_RANK_AWARD_CHEST"),
         RECONNECT("RECONNECT"),
         RECONNECT_FAILURE("RECONNECT_FAILURE"),
         AMAZON_APPSTORE_NOTICE("AMAZON_APPSTORE_NOTICE"),
@@ -140,6 +142,7 @@ object UpstreamScreenStateRecovery {
         val amazonAppstoreSunsetNoticeVisual: Boolean = false,
         val startupQuestOverlayVisual: Boolean = false,
         val seasonRankAwardVisual: Boolean = false,
+        val seasonRankAwardChestVisual: Boolean = false,
         val battleNetLauncherVisual: Boolean = false,
         val tournamentModeSelectorVisual: Boolean = false,
     ) {
@@ -157,6 +160,7 @@ object UpstreamScreenStateRecovery {
                 "amazonAppstoreSunsetNoticeVisual=$amazonAppstoreSunsetNoticeVisual " +
                 "startupQuestOverlayVisual=$startupQuestOverlayVisual " +
                 "seasonRankAwardVisual=$seasonRankAwardVisual " +
+                "seasonRankAwardChestVisual=$seasonRankAwardChestVisual " +
                 "battleNetLauncherVisual=$battleNetLauncherVisual " +
                 "tournamentModeSelectorVisual=$tournamentModeSelectorVisual"
     }
@@ -1596,6 +1600,7 @@ object UpstreamScreenStateRecovery {
             amazonAppstoreSunsetNoticeVisual = ScreenStateRecovery.looksLikeAmazonAppstoreSunsetNoticeVisual(image),
             startupQuestOverlayVisual = StartupQuestOverlayVisualClassifier.isQuestOverlay(image),
             seasonRankAwardVisual = SeasonRankAwardVisualClassifier.isSeasonRankAward(image),
+            seasonRankAwardChestVisual = SeasonRankAwardChestVisualClassifier.isSeasonRankAwardChest(image),
             battleNetLauncherVisual = BattleNetLauncherVisualPolicy.isVisible(image),
             tournamentModeSelectorVisual = TournamentModeSelectorVisualPolicy.isVisible(image),
         )
@@ -1945,6 +1950,14 @@ object UpstreamScreenStateRecovery {
                 ModeEnum.HUB,
                 100,
                 "amazon-appstore-sunset-title-and-close-rois",
+            )
+        }
+        if (visual.seasonRankAwardChestVisual) {
+            return Detection(
+                ScreenKind.SEASON_RANK_AWARD_CHEST,
+                ModeEnum.HUB,
+                98,
+                "season-rank-award-chest-structural-visual",
             )
         }
         if (visual.amazonAppstoreSunsetNoticeVisual) {
@@ -3556,6 +3569,16 @@ object UpstreamScreenStateRecovery {
             ScreenKind.SEASON_RANK_AWARD -> {
                 val pid = GameUtil.findGameProcessIdForDiagnostics()
                 val hwnd = ScriptStatus.gameHWND
+                if (pid == null || hwnd == null || !seasonRankAwardRecoveryAttemptGate.tryBegin(
+                        pid, hwnd.toString(), SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION,
+                    )
+                ) {
+                    log.warn {
+                        "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=stage-already-accepted-or-client-unavailable " +
+                            "action=NO_REPEAT_INPUT pid=${pid ?: "none"} hwnd=${hwnd ?: "none"}"
+                    }
+                    return false
+                }
                 val gameBounds = ScriptStatus.GAME_RECT
                 val result = SeasonRankAwardRecoveryPolicy.dispatchFromUpstreamRecoveryCallsite(
                     screenKind = detection.kind.code,
@@ -3589,6 +3612,9 @@ object UpstreamScreenStateRecovery {
                         )
                     }
                 }
+                seasonRankAwardRecoveryAttemptGate.resolve(
+                    pid, hwnd.toString(), SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION, result.accepted,
+                )
                 if (!result.attempted) {
                     log.warn {
                         "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=${result.reason} " +
@@ -3602,7 +3628,72 @@ object UpstreamScreenStateRecovery {
                     "SEASON_RANK_AWARD_CONTINUE_DISPATCH accepted=${result.accepted} point=${result.point} " +
                         "action=VISIBLE_CONTINUE_ONLY rankPreflightRequiredBeforeGameplay=true"
                 }
+                if (result.accepted) ScreenStateRecovery.scheduleFreshStartupScreenReprobe()
                 return result.accepted
+            }
+            ScreenKind.SEASON_RANK_AWARD_CHEST -> {
+                val pid = GameUtil.findGameProcessIdForDiagnostics()
+                val hwnd = ScriptStatus.gameHWND
+                if (pid == null || hwnd == null || !seasonRankAwardRecoveryAttemptGate.tryBegin(
+                        pid, hwnd.toString(), SeasonRankAwardRecoveryPolicy.OPEN_CHEST_ACTION,
+                    )
+                ) {
+                    log.warn {
+                        "SEASON_RANK_AWARD_CHEST_OPEN_BLOCKED reason=stage-already-accepted-or-client-unavailable " +
+                            "action=NO_REPEAT_INPUT pid=${pid ?: "none"} hwnd=${hwnd ?: "none"}"
+                    }
+                    return false
+                }
+                val gameBounds = ScriptStatus.GAME_RECT
+                val result = SeasonRankAwardRecoveryPolicy.dispatchChestOpenFromUpstreamRecoveryCallsite(
+                    screenKind = detection.kind.code,
+                    detectionEvidence = detection.evidence,
+                    windowBounds = Rectangle(
+                        gameBounds.left.toInt(), gameBounds.top.toInt(),
+                        (gameBounds.right.toInt() - gameBounds.left.toInt()).coerceAtLeast(1),
+                        (gameBounds.bottom.toInt() - gameBounds.top.toInt()).coerceAtLeast(1),
+                    ),
+                    captureAuthorityValid = pid != null && hwnd != null &&
+                        GameUtil.isVerifiedCurrentGameWindow(hwnd, pid),
+                    foregroundVerified = hwnd != null &&
+                        runCatching { User32.INSTANCE.GetForegroundWindow()?.toString() == hwnd.toString() }
+                            .getOrDefault(false),
+                    mode = Mode.currMode?.name,
+                    currentGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+                    activeGame = WarEx.inWar || GameUtil.isTerminalGameState(),
+                    activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                        LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+                    terminalOrResult = GameUtil.isTerminalGameState() ||
+                        MandatoryRankSurrenderGuard.isPending() ||
+                        MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+                    working = WorkTimeListener.working,
+                    paused = PauseStatus.isPause,
+                ) { point ->
+                    ActionDispatchGate.dispatchSeasonRankAwardChestOpen {
+                        MouseUtil.leftButtonClickForRecovery(
+                            point,
+                            preSessionSeasonRankAwardChestOpen = true,
+                        )
+                    }
+                }
+                seasonRankAwardRecoveryAttemptGate.resolve(
+                    pid, hwnd.toString(), SeasonRankAwardRecoveryPolicy.OPEN_CHEST_ACTION, result.accepted,
+                )
+                if (!result.attempted || !result.accepted) {
+                    log.warn {
+                        "SEASON_RANK_AWARD_CHEST_OPEN_BLOCKED reason=${result.reason} " +
+                            "action=NO_INPUT mode=${Mode.currMode?.name} activeGame=${WarEx.inWar} " +
+                            "queue=${LifecycleTrace.hasRecentActiveMatchmakingScreen()} " +
+                            "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+                    }
+                    return false
+                }
+                log.warn {
+                    "SEASON_RANK_AWARD_CHEST_OPEN_DISPATCH accepted=true point=${result.point} " +
+                        "action=EXACT_CHEST_CENTER_ONLY next=FRESH_CAPTURE rankPreflightRequiredBeforeGameplay=true"
+                }
+                ScreenStateRecovery.scheduleFreshStartupScreenReprobe()
+                return true
             }
             ScreenKind.AMAZON_APPSTORE_NOTICE -> {
                 log.warn {
@@ -3997,6 +4088,15 @@ object UpstreamScreenStateRecovery {
             }
 
             else -> {
+                if (detection.kind == ScreenKind.TOURNAMENT && detection.mode == ModeEnum.HUB &&
+                    detection.evidence in setOf("hub-mode-chooser-visual", "hub-mode-chooser-visual-and-text")
+                ) {
+                    val pid = GameUtil.findGameProcessIdForDiagnostics()
+                    val hwnd = ScriptStatus.gameHWND?.toString()
+                    if (pid != null && hwnd != null && GameUtil.isVerifiedCurrentGameWindow(ScriptStatus.gameHWND)) {
+                        seasonRankAwardRecoveryAttemptGate.clearForFreshHubChooser(pid, hwnd)
+                    }
+                }
                 Mode.recover(detection.mode, "visible-${detection.kind.code.lowercase(Locale.ROOT)}", enterStrategy = true)
                 log.warn {
                     "SCREEN_RECOVERY_APPLIED screen=${detection.kind.code} mode=${detection.mode.name} " +

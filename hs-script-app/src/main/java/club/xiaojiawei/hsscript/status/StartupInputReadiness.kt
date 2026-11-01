@@ -460,6 +460,7 @@ internal object StartupInputAuthorizationPolicy {
         betaResultConfirmationPermitValid: Boolean = false,
         startupQuestOverlayDismissPermitValid: Boolean = false,
         seasonRankAwardContinuePermitValid: Boolean = false,
+        seasonRankAwardChestOpenPermitValid: Boolean = false,
         freshDeckSelectionStartReady: Boolean = false,
         selectedModeStartPermitValid: Boolean = false,
         startupDeckSelectionModeNavigationReady: Boolean = false,
@@ -481,6 +482,8 @@ internal object StartupInputAuthorizationPolicy {
         startupQuestOverlayDismissPermitValid
     } else if (action == SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION) {
         seasonRankAwardContinuePermitValid
+    } else if (action == SeasonRankAwardRecoveryPolicy.OPEN_CHEST_ACTION) {
+        seasonRankAwardChestOpenPermitValid
     } else if (action == "matchmaking.start") {
         // Mode-selection proof alone is not enough: the only button this path
         // authorizes is on the freshly captured, enabled deck-selection screen.
