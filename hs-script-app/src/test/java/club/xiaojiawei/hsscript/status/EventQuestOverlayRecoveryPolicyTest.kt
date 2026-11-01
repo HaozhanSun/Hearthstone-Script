@@ -15,6 +15,56 @@ import club.xiaojiawei.hsscript.status.surrender.CurrentGamePowerLogTerminalTrac
 
 class EventQuestOverlayRecoveryPolicyTest {
     @Test
+    fun `live season award frame is separated from Event Quest and only visible Continue is eligible`() {
+        val award = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/season-rank-award-20261101.png",
+        )))
+        assertTrue(SeasonRankAwardVisualClassifier.inspect(award).isSeasonRankAward)
+        assertTrue(SeasonRankAwardRecoveryPolicy.allowsMenuContext("STARTUP", currentGameSessionReady = false))
+        assertFalse(SeasonRankAwardRecoveryPolicy.allowsMenuContext("GAMEPLAY", currentGameSessionReady = false))
+        assertFalse(SeasonRankAwardRecoveryPolicy.allowsMenuContext("STARTUP", currentGameSessionReady = true))
+        assertFalse(StartupQuestOverlayVisualClassifier.isQuestOverlay(award),
+            "rank award must not enter the top-left Event Quest click ladder")
+        assertEquals("SEASON_RANK_AWARD", UpstreamScreenStateRecovery.classifyImageForTest("", award))
+        var dispatchedPoint: Point? = null
+        assertTrue(SeasonRankAwardRecoveryPolicy.dispatchContinue(
+            windowBounds = Rectangle(0, 0, award.width, award.height),
+            exactSeasonRankAward = true, freshCaptureAuthorized = true, foregroundVerified = true,
+            safeMenuContext = true, activeGame = false, activeQueue = false, terminalOrResult = false,
+            working = true, paused = false,
+        ) { point -> dispatchedPoint = point; true })
+        val continuePoint = requireNotNull(dispatchedPoint)
+        assertTrue(continuePoint.x in (award.width * .43).toInt()..(award.width * .57).toInt())
+        assertTrue(continuePoint.y in (award.height * .78).toInt()..(award.height * .87).toInt(),
+            "dispatched point must fall inside the fixture's visible Continue hitbox: $continuePoint")
+        assertTrue(SeasonRankAwardRecoveryPolicy.allowsContinue(
+            exactSeasonRankAward = true, freshCaptureAuthorized = true, foregroundVerified = true,
+            safeMenuContext = true, activeGame = false, activeQueue = false, terminalOrResult = false,
+            working = true, paused = false,
+        ), "same-frame visible Continue is the only safe navigation action")
+        assertFalse(SeasonRankAwardRecoveryPolicy.allowsContinue(
+            exactSeasonRankAward = true, freshCaptureAuthorized = false, foregroundVerified = true,
+            safeMenuContext = true, activeGame = false, activeQueue = false, terminalOrResult = false,
+            working = true, paused = false,
+        ), "stale or unauthorized capture cannot dispatch")
+        assertFalse(SeasonRankAwardRecoveryPolicy.allowsContinue(
+            exactSeasonRankAward = true, freshCaptureAuthorized = true, foregroundVerified = true,
+            safeMenuContext = true, activeGame = true, activeQueue = false, terminalOrResult = false,
+            working = true, paused = false,
+        ), "active gameplay remains fenced")
+        assertFalse(SeasonRankAwardRecoveryPolicy.allowsContinue(
+            exactSeasonRankAward = true, freshCaptureAuthorized = true, foregroundVerified = true,
+            safeMenuContext = true, activeGame = false, activeQueue = true, terminalOrResult = false,
+            working = true, paused = false,
+        ), "active queue remains fenced")
+        assertFalse(SeasonRankAwardRecoveryPolicy.allowsContinue(
+            exactSeasonRankAward = true, freshCaptureAuthorized = true, foregroundVerified = true,
+            safeMenuContext = true, activeGame = false, activeQueue = false, terminalOrResult = false,
+            working = true, paused = true,
+        ), "paused automation must not dispatch")
+    }
+
+    @Test
     fun `fresh exact HUB chooser releases dismissed Event Quest fence while unsafe destinations retain it`() {
         val hubChooser = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/hub-mode-chooser-live-20261029-035630.png",

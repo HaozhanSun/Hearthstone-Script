@@ -672,3 +672,12 @@ this deletion boundary.
   UNKNOWN post-click captures cannot mint or reuse it. A retry requires a new
   exact HUB capture. HUB proof never authorizes deck Start. Test after
   Hearthstone restart with an empty new Power.log and a captured HUB fixture.
+- A centered season-rank award modal (season title plaque, blue rank medal,
+  reward panel, and lower-center Continue control) can resemble a single-card
+  Event Quest overlay. Classify the award signature before the broad quest
+  signature, keep its exact live frame as a fixture, and assert it never enters
+  the top-left quest click/restart ladder. Recovery may dispatch only the
+  fixture-calibrated Continue point from a fresh exact PID/HWND foreground
+  capture while working, unpaused, and outside gameplay, queue, and terminal
+  states. Continue is navigation only; matchmaking Start remains blocked until
+  independent fresh numeric-rank preflight and configured-mode/deck proof.

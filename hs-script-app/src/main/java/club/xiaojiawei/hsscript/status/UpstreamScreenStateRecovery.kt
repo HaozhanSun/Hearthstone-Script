@@ -80,6 +80,7 @@ object UpstreamScreenStateRecovery {
         MATCHMAKING("MATCHMAKING"),
         RESULT("RESULT"),
         RANK_PROGRESS_CONTINUATION("RANK_PROGRESS_CONTINUATION"),
+        SEASON_RANK_AWARD("SEASON_RANK_AWARD"),
         RECONNECT("RECONNECT"),
         RECONNECT_FAILURE("RECONNECT_FAILURE"),
         AMAZON_APPSTORE_NOTICE("AMAZON_APPSTORE_NOTICE"),
@@ -138,6 +139,7 @@ object UpstreamScreenStateRecovery {
         val hubModeChooserVisual: Boolean = false,
         val amazonAppstoreSunsetNoticeVisual: Boolean = false,
         val startupQuestOverlayVisual: Boolean = false,
+        val seasonRankAwardVisual: Boolean = false,
         val battleNetLauncherVisual: Boolean = false,
         val tournamentModeSelectorVisual: Boolean = false,
     ) {
@@ -154,6 +156,7 @@ object UpstreamScreenStateRecovery {
                 "hubModeChooserVisual=$hubModeChooserVisual " +
                 "amazonAppstoreSunsetNoticeVisual=$amazonAppstoreSunsetNoticeVisual " +
                 "startupQuestOverlayVisual=$startupQuestOverlayVisual " +
+                "seasonRankAwardVisual=$seasonRankAwardVisual " +
                 "battleNetLauncherVisual=$battleNetLauncherVisual " +
                 "tournamentModeSelectorVisual=$tournamentModeSelectorVisual"
     }
@@ -1565,6 +1568,7 @@ object UpstreamScreenStateRecovery {
             hubModeChooserVisual = HubModeChooserVisualPolicy.isVisible(image),
             amazonAppstoreSunsetNoticeVisual = ScreenStateRecovery.looksLikeAmazonAppstoreSunsetNoticeVisual(image),
             startupQuestOverlayVisual = StartupQuestOverlayVisualClassifier.isQuestOverlay(image),
+            seasonRankAwardVisual = SeasonRankAwardVisualClassifier.isSeasonRankAward(image),
             battleNetLauncherVisual = BattleNetLauncherVisualPolicy.isVisible(image),
             tournamentModeSelectorVisual = TournamentModeSelectorVisualPolicy.isVisible(image),
         )
@@ -1956,6 +1960,14 @@ object UpstreamScreenStateRecovery {
                 ModeEnum.GAMEPLAY,
                 93,
                 "post-result-rank-progress-visual",
+            )
+        }
+        if (visual.seasonRankAwardVisual) {
+            return Detection(
+                ScreenKind.SEASON_RANK_AWARD,
+                ModeEnum.HUB,
+                97,
+                "season-rank-award-structural-visual",
             )
         }
         // Defeat result banners can coexist with Hub/deck geometry in the
@@ -3514,6 +3526,74 @@ object UpstreamScreenStateRecovery {
         }
 
         when (detection.kind) {
+            ScreenKind.SEASON_RANK_AWARD -> {
+                val pid = GameUtil.findGameProcessIdForDiagnostics()
+                val hwnd = ScriptStatus.gameHWND
+                val safeMenuContext = SeasonRankAwardRecoveryPolicy.allowsMenuContext(
+                    Mode.currMode?.name,
+                    ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+                )
+                val allowed = SeasonRankAwardRecoveryPolicy.allowsContinue(
+                    exactSeasonRankAward = detection.evidence == "season-rank-award-structural-visual",
+                    freshCaptureAuthorized = pid != null && hwnd != null &&
+                        GameUtil.isVerifiedCurrentGameWindow(hwnd, pid),
+                    foregroundVerified = hwnd != null &&
+                        runCatching {
+                            User32.INSTANCE.GetForegroundWindow()?.toString() == hwnd.toString()
+                        }.getOrDefault(false),
+                    safeMenuContext = safeMenuContext,
+                    activeGame = WarEx.inWar || GameUtil.isTerminalGameState(),
+                    activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                        LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+                    terminalOrResult = GameUtil.isTerminalGameState() ||
+                        MandatoryRankSurrenderGuard.isPending() ||
+                        MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+                    working = WorkTimeListener.working,
+                    paused = PauseStatus.isPause,
+                )
+                if (!allowed) {
+                    log.warn {
+                        "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=authority-or-state-fence " +
+                            "action=NO_INPUT mode=${Mode.currMode?.name} phase=${WarEx.war.currentPhase?.name} " +
+                            "activeGame=${WarEx.inWar} queue=${LifecycleTrace.hasRecentActiveMatchmakingScreen()} " +
+                            "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+                    }
+                    return false
+                }
+                val gameBounds = ScriptStatus.GAME_RECT
+                var dispatchedPoint: java.awt.Point? = null
+                val accepted = SeasonRankAwardRecoveryPolicy.dispatchContinue(
+                    windowBounds = Rectangle(
+                        gameBounds.left.toInt(), gameBounds.top.toInt(),
+                        (gameBounds.right.toInt() - gameBounds.left.toInt()).coerceAtLeast(1),
+                        (gameBounds.bottom.toInt() - gameBounds.top.toInt()).coerceAtLeast(1),
+                    ),
+                    exactSeasonRankAward = true,
+                    freshCaptureAuthorized = pid != null && hwnd != null &&
+                        GameUtil.isVerifiedCurrentGameWindow(hwnd, pid),
+                    foregroundVerified = hwnd != null &&
+                        runCatching {
+                            User32.INSTANCE.GetForegroundWindow()?.toString() == hwnd.toString()
+                        }.getOrDefault(false),
+                    safeMenuContext = safeMenuContext,
+                    activeGame = WarEx.inWar || GameUtil.isTerminalGameState(),
+                    activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                        LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+                    terminalOrResult = GameUtil.isTerminalGameState() ||
+                        MandatoryRankSurrenderGuard.isPending() ||
+                        MandatoryRankSurrenderGuard.isTerminalCleanupPending(),
+                    working = WorkTimeListener.working,
+                    paused = PauseStatus.isPause,
+                ) { point ->
+                    dispatchedPoint = point
+                    MouseUtil.leftButtonClickForRecovery(point)
+                }
+                log.warn {
+                    "SEASON_RANK_AWARD_CONTINUE_DISPATCH accepted=$accepted point=$dispatchedPoint " +
+                        "action=VISIBLE_CONTINUE_ONLY rankPreflightRequiredBeforeGameplay=true"
+                }
+                return accepted
+            }
             ScreenKind.AMAZON_APPSTORE_NOTICE -> {
                 log.warn {
                     "SCREEN_RECOVERY_AMAZON_NOTICE_UNAUTHORIZED action=NO_INPUT " +
