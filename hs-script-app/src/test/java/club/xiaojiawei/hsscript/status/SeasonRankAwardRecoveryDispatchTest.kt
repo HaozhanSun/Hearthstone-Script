@@ -83,7 +83,7 @@ class SeasonRankAwardRecoveryDispatchTest {
     @Test
     fun `five chest reward presentation bypasses quest recovery and dispatches only its exact Continue`() {
         val frame = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
-            "/offline-ocr/screen-recovery/season-rank-reward-chests-live-20261101-045150.png",
+            "/offline-ocr/screen-recovery/season-rank-reward-chests-live-20261101-053007.png",
         )))
         val evidence = SeasonRankAwardRewardsVisualClassifier.inspect(frame)
         assertTrue(evidence.isRewardPresentation, "live reward layout signature: $evidence")
@@ -91,13 +91,34 @@ class SeasonRankAwardRecoveryDispatchTest {
             "the five-chest reward page is not an event-quest modal")
         val screen = requireNotNull(UpstreamScreenStateRecovery.classifyImageForTest("", frame))
         assertEquals("SEASON_RANK_AWARD_REWARDS", screen)
+        val stageGate = SeasonRankAwardRecoveryAttemptGate()
+        val awardAction = SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION
+        val chestAction = SeasonRankAwardRecoveryPolicy.OPEN_CHEST_ACTION
+        val rewardsAction = SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION
+        assertTrue(stageGate.tryBegin(53952L, "hwnd-live", awardAction))
+        stageGate.resolve(53952L, "hwnd-live", awardAction, accepted = true)
+        assertTrue(stageGate.tryBegin(53952L, "hwnd-live", chestAction),
+            "the fresh chest stage is independent of the accepted award Continue")
+        stageGate.resolve(53952L, "hwnd-live", chestAction, accepted = true)
+        assertFalse(stageGate.tryBegin(53952L, "hwnd-live", awardAction),
+            "accepted award Continue remains non-repeatable")
+        assertFalse(stageGate.tryBegin(53952L, "hwnd-live", chestAction),
+            "accepted chest-open remains non-repeatable")
+        assertTrue(stageGate.tryBegin(53952L, "hwnd-live", rewardsAction),
+            "the fresh exact reward-presentation stage has its own action budget")
+        assertFalse(stageGate.tryBegin(53952L, "hwnd-live", rewardsAction),
+            "parallel reward probes cannot duplicate the same stage input")
         val questFixture = fixture("event-quest-overlay-deck-selection-20261029.png")
         assertTrue(StartupQuestOverlayVisualClassifier.isQuestOverlay(questFixture))
         assertEquals("EVENT_QUEST_OVERLAY", UpstreamScreenStateRecovery.classifyImageForTest("", questFixture))
         val earlierRewardFrame = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
-            "/offline-ocr/screen-recovery/season-rank-reward-chests-live-20261101-041328.png",
+            "/offline-ocr/screen-recovery/season-rank-reward-chests-live-20261101-045150.png",
         )))
         assertEquals("SEASON_RANK_AWARD_REWARDS", UpstreamScreenStateRecovery.classifyImageForTest("", earlierRewardFrame))
+        val initialRewardFrame = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/season-rank-reward-chests-live-20261101-041328.png",
+        )))
+        assertEquals("SEASON_RANK_AWARD_REWARDS", UpstreamScreenStateRecovery.classifyImageForTest("", initialRewardFrame))
 
         val visualProof = SeasonRankAwardRewardsVisualClassifier.isRewardPresentation(frame)
         assertTrue(SeasonRankAwardRecoveryPolicy.allowsDedicatedRewardsContinueStartupRecovery(
@@ -135,6 +156,9 @@ class SeasonRankAwardRecoveryDispatchTest {
         ) { clicked += it; true }
         assertTrue(result.accepted)
         assertEquals(Point(960, 885), clicked.single(), "only the visible bottom-center Continue is clicked")
+        stageGate.resolve(53952L, "hwnd-live", rewardsAction, accepted = result.accepted)
+        assertFalse(stageGate.tryBegin(53952L, "hwnd-live", rewardsAction),
+            "accepted reward Continue is not retried until a verified fresh HUB chooser")
 
         assertFalse(StartupInputAuthorizationPolicy.allows(
             action = SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION,
@@ -644,6 +668,26 @@ class SeasonRankAwardRecoveryDispatchTest {
         assertFalse(gate.tryBegin(41440L, "hwnd", continueAction), "another HWND cannot reset the stage budget")
         gate.clearForFreshHubChooser(41440L, "hwnd")
         assertTrue(gate.tryBegin(41440L, "hwnd", continueAction), "only the fresh chooser releases this client budget")
+    }
+
+    @Test
+    fun `rejected input retries same stage while new PID or HWND has an independent stage key`() {
+        val gate = SeasonRankAwardRecoveryAttemptGate()
+        val rewardsAction = SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION
+        assertEquals("process-unavailable", gate.tryBeginDetailed(null, "hwnd", rewardsAction).reason)
+        assertEquals("window-unavailable", gate.tryBeginDetailed(41440L, null, rewardsAction).reason)
+        assertEquals("unsupported-stage", gate.tryBeginDetailed(41440L, "hwnd", "generic.mouse").reason)
+
+        assertTrue(gate.tryBeginDetailed(41440L, "hwnd", rewardsAction).allowed)
+        gate.resolve(41440L, "hwnd", rewardsAction, accepted = false)
+        assertTrue(gate.tryBeginDetailed(41440L, "hwnd", rewardsAction).allowed,
+            "rejected SendInput does not consume this stage's one-use accepted-input budget")
+        gate.resolve(41440L, "hwnd", rewardsAction, accepted = true)
+        assertEquals("stage-already-accepted", gate.tryBeginDetailed(41440L, "hwnd", rewardsAction).reason)
+        assertTrue(gate.tryBeginDetailed(41441L, "hwnd", rewardsAction).allowed,
+            "a new process gets a distinct client-stage key")
+        assertTrue(gate.tryBeginDetailed(41440L, "new-hwnd", rewardsAction).allowed,
+            "a new window gets a distinct client-stage key")
     }
 
     private fun fixture(name: String) = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(

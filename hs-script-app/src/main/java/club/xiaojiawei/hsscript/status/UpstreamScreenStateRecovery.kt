@@ -3653,16 +3653,18 @@ object UpstreamScreenStateRecovery {
             ScreenKind.SEASON_RANK_AWARD -> {
                 val pid = GameUtil.findGameProcessIdForDiagnostics()
                 val hwnd = ScriptStatus.gameHWND
-                if (pid == null || hwnd == null || !seasonRankAwardRecoveryAttemptGate.tryBegin(
-                        pid, hwnd.toString(), SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION,
-                    )
-                ) {
+                val attempt = seasonRankAwardRecoveryAttemptGate.tryBeginDetailed(
+                    pid, hwnd?.toString(), SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION,
+                )
+                if (!attempt.allowed) {
                     log.warn {
-                        "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=stage-already-accepted-or-client-unavailable " +
+                        "SEASON_RANK_AWARD_CONTINUE_BLOCKED reason=${attempt.reason} " +
                             "action=NO_REPEAT_INPUT pid=${pid ?: "none"} hwnd=${hwnd ?: "none"}"
                     }
                     return false
                 }
+                val clientPid = requireNotNull(pid)
+                val clientHwnd = requireNotNull(hwnd).toString()
                 val gameBounds = ScriptStatus.GAME_RECT
                 val result = SeasonRankAwardRecoveryPolicy.dispatchFromUpstreamRecoveryCallsite(
                     screenKind = detection.kind.code,
@@ -3697,7 +3699,7 @@ object UpstreamScreenStateRecovery {
                     }
                 }
                 seasonRankAwardRecoveryAttemptGate.resolve(
-                    pid, hwnd.toString(), SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION, result.accepted,
+                    clientPid, clientHwnd, SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION, result.accepted,
                 )
                 if (!result.attempted) {
                     log.warn {
@@ -3718,16 +3720,18 @@ object UpstreamScreenStateRecovery {
             ScreenKind.SEASON_RANK_AWARD_CHEST -> {
                 val pid = GameUtil.findGameProcessIdForDiagnostics()
                 val hwnd = ScriptStatus.gameHWND
-                if (pid == null || hwnd == null || !seasonRankAwardRecoveryAttemptGate.tryBegin(
-                        pid, hwnd.toString(), SeasonRankAwardRecoveryPolicy.OPEN_CHEST_ACTION,
-                    )
-                ) {
+                val attempt = seasonRankAwardRecoveryAttemptGate.tryBeginDetailed(
+                    pid, hwnd?.toString(), SeasonRankAwardRecoveryPolicy.OPEN_CHEST_ACTION,
+                )
+                if (!attempt.allowed) {
                     log.warn {
-                        "SEASON_RANK_AWARD_CHEST_OPEN_BLOCKED reason=stage-already-accepted-or-client-unavailable " +
+                        "SEASON_RANK_AWARD_CHEST_OPEN_BLOCKED reason=${attempt.reason} " +
                             "action=NO_REPEAT_INPUT pid=${pid ?: "none"} hwnd=${hwnd ?: "none"}"
                     }
                     return false
                 }
+                val clientPid = requireNotNull(pid)
+                val clientHwnd = requireNotNull(hwnd).toString()
                 val gameBounds = ScriptStatus.GAME_RECT
                 val result = SeasonRankAwardRecoveryPolicy.dispatchChestOpenFromUpstreamRecoveryCallsite(
                     screenKind = detection.kind.code,
@@ -3761,7 +3765,7 @@ object UpstreamScreenStateRecovery {
                     }
                 }
                 seasonRankAwardRecoveryAttemptGate.resolve(
-                    pid, hwnd.toString(), SeasonRankAwardRecoveryPolicy.OPEN_CHEST_ACTION, result.accepted,
+                    clientPid, clientHwnd, SeasonRankAwardRecoveryPolicy.OPEN_CHEST_ACTION, result.accepted,
                 )
                 if (!result.attempted || !result.accepted) {
                     log.warn {
@@ -3782,16 +3786,18 @@ object UpstreamScreenStateRecovery {
             ScreenKind.SEASON_RANK_AWARD_REWARDS -> {
                 val pid = GameUtil.findGameProcessIdForDiagnostics()
                 val hwnd = ScriptStatus.gameHWND
-                if (pid == null || hwnd == null || !seasonRankAwardRecoveryAttemptGate.tryBegin(
-                        pid, hwnd.toString(), SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION,
-                    )
-                ) {
+                val attempt = seasonRankAwardRecoveryAttemptGate.tryBeginDetailed(
+                    pid, hwnd?.toString(), SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION,
+                )
+                if (!attempt.allowed) {
                     log.warn {
-                        "SEASON_RANK_AWARD_REWARDS_CONTINUE_BLOCKED reason=stage-already-accepted-or-client-unavailable " +
+                        "SEASON_RANK_AWARD_REWARDS_CONTINUE_BLOCKED reason=${attempt.reason} " +
                             "action=NO_REPEAT_INPUT pid=${pid ?: "none"} hwnd=${hwnd ?: "none"}"
                     }
                     return false
                 }
+                val clientPid = requireNotNull(pid)
+                val clientHwnd = requireNotNull(hwnd).toString()
                 val gameBounds = ScriptStatus.GAME_RECT
                 val result = SeasonRankAwardRecoveryPolicy.dispatchRewardsContinueFromUpstreamRecoveryCallsite(
                     screenKind = detection.kind.code,
@@ -3826,7 +3832,7 @@ object UpstreamScreenStateRecovery {
                     }
                 }
                 seasonRankAwardRecoveryAttemptGate.resolve(
-                    pid, hwnd.toString(), SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION, result.accepted,
+                    clientPid, clientHwnd, SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION, result.accepted,
                 )
                 if (!result.attempted || !result.accepted) {
                     log.warn {

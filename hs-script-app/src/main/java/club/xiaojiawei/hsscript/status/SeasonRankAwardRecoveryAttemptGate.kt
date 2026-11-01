@@ -2,17 +2,27 @@ package club.xiaojiawei.hsscript.status
 
 /** Limits recovery to one accepted input per exact reward stage and client window. */
 internal class SeasonRankAwardRecoveryAttemptGate {
+    data class BeginResult(val allowed: Boolean, val reason: String)
+
     private data class ClientStage(val pid: Long, val hwnd: String, val stage: String)
     private val inFlight = mutableSetOf<ClientStage>()
     private val completed = mutableSetOf<ClientStage>()
 
     @Synchronized
     fun tryBegin(pid: Long, hwnd: String, stage: String): Boolean {
-        if (pid <= 0L || hwnd.isBlank() || stage !in STAGES) return false
+        return tryBeginDetailed(pid, hwnd, stage).allowed
+    }
+
+    @Synchronized
+    fun tryBeginDetailed(pid: Long?, hwnd: String?, stage: String): BeginResult {
+        if (pid == null || pid <= 0L) return BeginResult(false, "process-unavailable")
+        if (hwnd.isNullOrBlank()) return BeginResult(false, "window-unavailable")
+        if (stage !in STAGES) return BeginResult(false, "unsupported-stage")
         val key = ClientStage(pid, hwnd, stage)
-        if (key in completed || key in inFlight) return false
+        if (key in inFlight) return BeginResult(false, "stage-in-flight")
+        if (key in completed) return BeginResult(false, "stage-already-accepted")
         inFlight += key
-        return true
+        return BeginResult(true, "eligible")
     }
 
     @Synchronized
@@ -32,6 +42,7 @@ internal class SeasonRankAwardRecoveryAttemptGate {
         val STAGES = setOf(
             SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION,
             SeasonRankAwardRecoveryPolicy.OPEN_CHEST_ACTION,
+            SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION,
         )
     }
 }
