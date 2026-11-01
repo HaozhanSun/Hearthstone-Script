@@ -148,10 +148,14 @@ internal object StartupInputReadiness {
         evidence: String,
         enabledStartButtonVisible: Boolean,
         modalVisible: Boolean,
+        wrongModeDeckTooltipVisible: Boolean = false,
         now: Long = System.currentTimeMillis(),
     ): Boolean {
+        val exactWildMismatchTooltip = wrongModeDeckTooltipVisible &&
+            expectedRunMode == "WILD" && observedRunMode == "STANDARD"
         if (pid <= 0 || hwnd.isBlank() || confidence < 90 ||
-            evidence !in DECK_SELECTION_START_EVIDENCE || !enabledStartButtonVisible || modalVisible ||
+            evidence !in DECK_SELECTION_START_EVIDENCE ||
+            (!enabledStartButtonVisible && !exactWildMismatchTooltip) || modalVisible ||
             expectedRunMode !in setOf("STANDARD", "WILD") || observedRunMode == expectedRunMode
         ) {
             invalidate(pid, hwnd)

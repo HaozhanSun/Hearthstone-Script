@@ -665,6 +665,15 @@ this deletion boundary.
   replay the live Standard chooser with its configured Wild deck tooltip,
   assert Return reaches the dispatcher, confirm the fresh selector stage, and
   keep Start denied until fresh WILD mode and deck proof exist.
+- A wrong-mode Wild-deck tooltip means Start may be visibly disabled by design.
+  Do not require an enabled Start control to recognize this recovery case:
+  require fresh deck-selection evidence, configured WILD, observed STANDARD,
+  the exact tooltip footprint, and the existing no-game/no-queue/no-terminal /
+  exact-window fences. Permit only opening the mode selector; require a fresh
+  selector capture before selecting Wild and a later fresh enabled Wild-deck
+  Start proof before queue entry. Keep a disabled-Start Standard/Wild tooltip
+  fixture and assert selector dispatch succeeds while matchmaking Start stays
+  blocked.
 - A fresh exact HUB chooser capture may authorize only one Traditional Battle
   entry action before a current Power.log exists, provided exact PID/HWND,
   foreground/pixel authority, no-game/no-queue/no-terminal fences, and

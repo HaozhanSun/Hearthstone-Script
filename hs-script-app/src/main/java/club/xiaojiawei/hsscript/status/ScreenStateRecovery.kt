@@ -1681,13 +1681,12 @@ object ScreenStateRecovery {
      * The Standard chooser shows a small fixed Wild-deck incompatibility tooltip
      * above the selected deck. Its dark border and gray body overlap the broad
      * centered-panel ROI, but it is a hover tooltip, not a blocking modal.
-     * Require the deck chooser's enabled Start visual and the exact tooltip
-     * footprint before suppressing the generic modal veto.
+     * Require the Standard-banner and tooltip footprint before suppressing the
+     * generic modal veto. Start is disabled for the very Wild-deck mismatch this
+     * tooltip explains, so Start visibility cannot be part of this proof.
      */
     internal fun isWrongModeDeckTooltip(image: BufferedImage): Boolean {
-        if (image.width < 1000 || image.height < 560 ||
-            !ScreenWatchdog.hasEnabledDeckSelectionStartButton(image)
-        ) return false
+        if (image.width < 1000 || image.height < 560) return false
         val tooltip = sampleRegion(image, 0.445, 0.56, 0.31, 0.40)
         val standardBanner = sampleRegion(image, 0.32, 0.48, 0.015, 0.065)
         return tooltip.lowSaturationRatio >= 0.30 && tooltip.darkRatio in 0.08..0.72 &&

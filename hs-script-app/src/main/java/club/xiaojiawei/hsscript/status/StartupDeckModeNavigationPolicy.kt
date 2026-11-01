@@ -59,7 +59,10 @@ internal object StartupDeckModeNavigationPolicy {
         activeMatchmaking: Boolean,
         terminal: Boolean,
         trustedCurrentWindow: Boolean,
+        wrongModeDeckTooltipVisible: Boolean = false,
     ): Decision {
+        val exactWildMismatchTooltip = wrongModeDeckTooltipVisible &&
+            expectedRunMode == "WILD" && observedRunMode == "STANDARD"
         val denial = when {
             purpose !in setOf(
                 "STARTUP_CLIENT_PROBE", "STALE_CLIENT_PROBE", "IDLE_CLIENT_PROBE", "SCREEN_STATE_RECOVERY",
@@ -69,7 +72,7 @@ internal object StartupDeckModeNavigationPolicy {
                 "deck-selection-title", "deck-selection-title-roi", "deck-selection-start-control-visual",
             ) ->
                 Denial.WEAK_SCREEN_PROOF
-            !enabledStartButtonVisible -> Denial.NO_ENABLED_START_CONTROL
+            !enabledStartButtonVisible && !exactWildMismatchTooltip -> Denial.NO_ENABLED_START_CONTROL
             modalVisible -> Denial.MODAL_VISIBLE
             expectedRunMode !in setOf("STANDARD", "WILD") -> Denial.UNSUPPORTED_TARGET
             observedRunMode == expectedRunMode -> Denial.MODE_ALREADY_CONFIRMED
@@ -118,7 +121,7 @@ internal object StartupDeckModeNavigationPolicy {
         return accepted
     }
 
-    /** Open only the mode crest from a fresh, exact opposite-mode deck page; selection requires a later probe. */
+    /** Open only the mode crest from a fresh, confirmed Standard/Wild-mismatch page; selection needs a later probe. */
     fun dispatchOpenSelectorForVerifiedDeckMismatch(
         image: java.awt.image.BufferedImage,
         expectedMode: String?,
@@ -126,8 +129,10 @@ internal object StartupDeckModeNavigationPolicy {
         dispatchOpenSelector: () -> Boolean,
         requestFreshSelectorProbe: () -> Unit,
     ): Boolean {
-        val exactOppositeMode = expectedMode == "WILD" &&
-            TournamentModeConfirmation.isConfirmedModeMismatch(image, expectedMode)
+        val exactOppositeMode = expectedMode == "WILD" && (
+            TournamentModeConfirmation.isConfirmedModeMismatch(image, expectedMode) ||
+                ScreenStateRecovery.isWrongModeDeckTooltip(image)
+            )
         if (!exactOppositeMode || !decision.allowed) return false
         val accepted = dispatchOpenSelector()
         if (accepted) requestFreshSelectorProbe()

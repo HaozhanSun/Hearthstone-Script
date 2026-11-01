@@ -714,6 +714,7 @@ object UpstreamScreenStateRecovery {
                         activeMatchmaking = activeQueue,
                         terminal = terminal,
                         trustedCurrentWindow = trustedWindow,
+                        wrongModeDeckTooltipVisible = wrongModeDeckTooltip,
                     )
                     var modeNavigationAttempted = false
                     if (navigationDecision.allowed && pid != null && trustedWindow &&
@@ -729,6 +730,7 @@ object UpstreamScreenStateRecovery {
                             evidence = currentDetection.evidence,
                             enabledStartButtonVisible = startVisible,
                             modalVisible = blockingModalVisible,
+                            wrongModeDeckTooltipVisible = wrongModeDeckTooltip,
                         )
                         val accepted = if (proofRecorded && stateStillCurrent() && !WarEx.inWar &&
                             !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&

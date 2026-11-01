@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscript.consts.GameRationConst
 import club.xiaojiawei.hsscript.status.ScriptStatus
 import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
 import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
+import java.awt.Color
 import java.io.File
 import java.awt.Point
 import java.util.concurrent.atomic.AtomicBoolean
@@ -491,6 +492,109 @@ class StartupDeckModeNavigationIntegrationTest {
                 25948, "captured-live-window", 10_501L,
             ),
         ))
+        StartupInputReadiness.resetForTest()
+    }
+
+    @Test
+    fun `fresh wrong-mode tooltip permits selector navigation when Start is disabled but never permits Start`() {
+        val capturedImage = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/standard-deck-selection-live-20261029-045427.png",
+        )))
+        val image = BufferedImage(capturedImage.width, capturedImage.height, BufferedImage.TYPE_INT_RGB).apply {
+            createGraphics().also { graphics ->
+                graphics.drawImage(capturedImage, 0, 0, null)
+                graphics.color = Color(65, 65, 65)
+                graphics.fillRect(
+                    (width * 0.665).toInt(),
+                    (height * 0.77).toInt(),
+                    (width * 0.14).toInt(),
+                    (height * 0.17).toInt(),
+                )
+                graphics.dispose()
+            }
+        }
+        assertFalse(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+        assertTrue(ScreenStateRecovery.isWrongModeDeckTooltip(image))
+        assertEquals("STANDARD", TournamentModeConfirmation.observeImage(image).observedMode.name)
+
+        val deniedWithoutExactTooltip = StartupDeckModeNavigationPolicy.decide(
+            purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE.name,
+            screenKind = "DECK_SELECTION",
+            confidence = 100,
+            evidence = "deck-selection-title",
+            expectedRunMode = "WILD",
+            observedRunMode = "STANDARD",
+            enabledStartButtonVisible = false,
+            modalVisible = false,
+            currentSessionReady = false,
+            activeGame = false,
+            activeMatchmaking = false,
+            terminal = false,
+            trustedCurrentWindow = true,
+        )
+        assertFalse(deniedWithoutExactTooltip.allowed)
+        assertEquals(StartupDeckModeNavigationPolicy.Denial.NO_ENABLED_START_CONTROL, deniedWithoutExactTooltip.denial)
+
+        val exactMismatch = StartupDeckModeNavigationPolicy.decide(
+            purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE.name,
+            screenKind = "DECK_SELECTION",
+            confidence = 100,
+            evidence = "deck-selection-title",
+            expectedRunMode = "WILD",
+            observedRunMode = "STANDARD",
+            enabledStartButtonVisible = false,
+            modalVisible = false,
+            currentSessionReady = false,
+            activeGame = false,
+            activeMatchmaking = false,
+            terminal = false,
+            trustedCurrentWindow = true,
+            wrongModeDeckTooltipVisible = true,
+        )
+        assertTrue(exactMismatch.allowed, "the disabled Start control is expected for an incompatible Wild deck")
+        assertTrue(StartupInputReadiness.recordDeckSelectionModeNavigation(
+            pid = 53552,
+            hwnd = "fresh-standard-deck-capture",
+            expectedRunMode = "WILD",
+            observedRunMode = "STANDARD",
+            confidence = 100,
+            evidence = "deck-selection-title",
+            enabledStartButtonVisible = false,
+            modalVisible = false,
+            wrongModeDeckTooltipVisible = true,
+            now = 70_000L,
+        ), "only exact tooltip evidence may replace Start visibility for the selector-only proof")
+        assertTrue(StartupInputReadiness.isDeckSelectionModeNavigationReady(
+            53552, "fresh-standard-deck-capture", now = 70_001L, expectedMode = "WILD",
+        ))
+        assertFalse(StartupInputReadiness.isDeckSelectionStartReady(53552, "fresh-standard-deck-capture", 70_001L))
+        assertFalse(StartupInputAuthorizationPolicy.allowsDeckSelectionStart(
+            action = "matchmaking.start",
+            processId = 53552,
+            hwnd = "fresh-standard-deck-capture",
+            exactWindowVerified = true,
+            freshDeckSelectionStartReady = false,
+        ))
+
+        var selectorDispatches = 0
+        var freshSelectorProbes = 0
+        assertTrue(StartupDeckModeNavigationPolicy.dispatchOpenSelectorForVerifiedDeckMismatch(
+            image = image,
+            expectedMode = "WILD",
+            decision = exactMismatch,
+            dispatchOpenSelector = { selectorDispatches++; true },
+            requestFreshSelectorProbe = { freshSelectorProbes++ },
+        ))
+        assertEquals(1, selectorDispatches, "the production correction action is dispatched only to open the selector")
+        assertEquals(1, freshSelectorProbes, "mode selection requires a separate fresh selector capture")
+        assertFalse(StartupDeckModeNavigationPolicy.dispatchOpenSelectorForVerifiedDeckMismatch(
+            image = image,
+            expectedMode = "STANDARD",
+            decision = exactMismatch,
+            dispatchOpenSelector = { selectorDispatches++; true },
+            requestFreshSelectorProbe = { freshSelectorProbes++ },
+        ), "the correction is scoped to the configured Wild run mode")
+        assertEquals(1, selectorDispatches)
         StartupInputReadiness.resetForTest()
     }
 
@@ -1182,6 +1286,11 @@ class StartupDeckModeNavigationIntegrationTest {
     fun `recovery source opens selector then requires fresh selector proof before Wild and Start`() {
         val upstream = File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt").readText()
         assertTrue(upstream.contains("dispatchOpenSelectorForVerifiedDeckMismatch("))
+        assertEquals(
+            2,
+            Regex("wrongModeDeckTooltipVisible = wrongModeDeckTooltip").findAll(upstream).count(),
+            "the production decision and same-window proof must both receive the fresh exact wrong-mode tooltip",
+        )
         assertTrue(upstream.contains("openModeSelectorAfterVerifiedDeckMismatch()"))
         assertTrue(upstream.contains("next=FRESH_SELECTOR_CAPTURE"))
         assertTrue(upstream.contains("hasFreshWildSelectorEvidence("))
