@@ -29,4 +29,16 @@ class GameStarterReadinessTest {
     fun `platform stays alive until the startup handshake is confirmed`() {
         assertFalse(PlatformCloseReadiness.shouldClose(true, true, false, 60_000L, 20_000L))
     }
+
+    @Test
+    fun `platform close deadline spans the bounded startup visual probe`() {
+        assertTrue(
+            PlatformCloseReadiness.STARTUP_HANDOFF_MAX_WAIT_MS >=
+                StartupScreenProbeRetryPolicy.MAX_DURATION_MS + 20_000L,
+        )
+        assertFalse(PlatformCloseReadiness.timeoutReached(45_929L),
+            "the observed 45.9 second launcher-to-client handoff is still inside the startup window")
+        assertFalse(PlatformCloseReadiness.timeoutReached(StartupScreenProbeRetryPolicy.MAX_DURATION_MS))
+        assertTrue(PlatformCloseReadiness.timeoutReached(PlatformCloseReadiness.STARTUP_HANDOFF_MAX_WAIT_MS))
+    }
 }

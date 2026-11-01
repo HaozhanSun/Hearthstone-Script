@@ -270,6 +270,30 @@ object UpstreamScreenStateRecovery {
                 "visual=${capture.visual}"
         }
 
+        val currentSessionReadyBeforeOcr = ScreenStateRecovery.isCurrentGameSessionReadyForStart()
+        val startupPreOcrAction = StartupHandoffProgressPolicy.preOcrAction(
+            purpose = authorizedCapture.purpose,
+            currentSessionReady = currentSessionReadyBeforeOcr,
+            battleNetLauncherVisual = capture.visual.battleNetLauncherVisual,
+            hubModeChooserVisual = capture.visual.hubModeChooserVisual,
+            modalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image),
+        )
+        if (startupPreOcrAction == StartupHandoffProgressPolicy.PreOcrAction.DEFER_BATTLENET_LAUNCHER) {
+            if (!stateStillCurrent()) {
+                log.info { "SCREEN_RECOVERY_SKIPPED reason=state-changed-before-startup-handoff-defer" }
+                return false
+            }
+            val pid = GameUtil.findGameProcessIdForDiagnostics()?.toInt()
+            StartupInputReadiness.invalidate(pid, authorizedCapture.gameWindow.toString())
+            log.info {
+                "STARTUP_HANDOFF_PROGRESS screen=BATTLENET_LAUNCHER " +
+                    "purpose=${authorizedCapture.purpose} pid=${pid ?: "none"} " +
+                    "hwnd=${authorizedCapture.gameWindow} currentSessionReady=false " +
+                    "proof=NONE action=DEFER_NO_INPUT_NO_OCR"
+            }
+            return false
+        }
+
         val questOverlayVisual = capture.visual.startupQuestOverlayVisual
         val deckSelectionVisualCandidate = authorizedCapture.purpose in setOf(
             ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
@@ -281,6 +305,13 @@ object UpstreamScreenStateRecovery {
             ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image)
         val ocrText = when {
             questOverlayVisual -> ""
+            startupPreOcrAction == StartupHandoffProgressPolicy.PreOcrAction.CLASSIFY_HUB_CHOOSER_VISUALLY -> {
+                log.info {
+                    "SCREEN_RECOVERY_OCR_SKIPPED reason=exact-startup-hub-mode-chooser-visual " +
+                        "action=CLASSIFY_CURRENT_CAPTURE"
+                }
+                ""
+            }
             deckSelectionVisualCandidate -> {
                 log.info { "SCREEN_RECOVERY_OCR_SKIPPED reason=exact-deck-selection-start-control-visual" }
                 ""

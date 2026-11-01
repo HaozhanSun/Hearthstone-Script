@@ -35,6 +35,11 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal object PlatformCloseReadiness {
+    /** Keep the launcher alive beyond the bounded startup probe and chooser handoff. */
+    const val STARTUP_HANDOFF_MAX_WAIT_MS = StartupScreenProbeRetryPolicy.MAX_DURATION_MS + 25_000L
+
+    fun timeoutReached(waitedMs: Long): Boolean = waitedMs >= STARTUP_HANDOFF_MAX_WAIT_MS
+
     fun shouldClose(
         gameAlive: Boolean,
         visibleGameWindow: Boolean,
@@ -75,7 +80,6 @@ class GameStarter : AbstractStarter() {
 
     private companion object {
         private const val PLATFORM_CLOSE_STABILITY_MS = 20_000L
-        private const val PLATFORM_CLOSE_MAX_WAIT_MS = 45_000L
         private const val PLATFORM_CLOSE_POLL_MS = 1_000L
     }
 
@@ -547,9 +551,10 @@ class GameStarter : AbstractStarter() {
             var stableSince = 0L
             log.info {
                 "PLATFORM_CLOSE_WAIT reason=game-startup-handshake " +
-                    "stabilityMs=$PLATFORM_CLOSE_STABILITY_MS maxWaitMs=$PLATFORM_CLOSE_MAX_WAIT_MS"
+                    "stabilityMs=$PLATFORM_CLOSE_STABILITY_MS " +
+                    "maxWaitMs=${PlatformCloseReadiness.STARTUP_HANDOFF_MAX_WAIT_MS}"
             }
-            while (System.currentTimeMillis() - waitStartedAt < PLATFORM_CLOSE_MAX_WAIT_MS) {
+            while (!PlatformCloseReadiness.timeoutReached(System.currentTimeMillis() - waitStartedAt)) {
                 if (!GameUtil.isAliveOfGame()) {
                     log.warn {
                         "PLATFORM_CLOSE_SKIPPED reason=game-exited-before-stable-readiness " +

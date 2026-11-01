@@ -1,6 +1,7 @@
 # Screen recovery evidence and gotchas
 
 - The HUB mode chooser's four stacked parchment buttons are a structural visual signature. Its real parchment faces can be brown and dim, so calibrate the pixel threshold against captured client frames instead of requiring bright-neutral pixels. Classify that signature before interpreting global OCR for deck or pack text, because text from unrelated regions can be noisy or stale. During the first 60 seconds after a matchmaking Start dispatch, recovery may accept positive matchmaking/game progress but must not change modes from menu OCR; this prevents a slow startup probe from overwriting the in-flight mode-entry sequence. Preserve the one authorized Traditional Battle entry action, allow queue start without rank preflight, and keep rank enforcement post-mulligan.
+- On a fresh startup probe with no current Power.log session, recognize the Battle.net launcher home as named handoff progress and defer without OCR, input, readiness, or unresolved-UNKNOWN escalation. When the Hearthstone four-button HUB chooser appears, classify it from the exact visual signature without broad OCR; only its fresh same-PID/HWND chooser proof may authorize the one Traditional Battle entry action. Keep the platform-close deadline longer than the bounded startup visual probe so the normal launcher-to-client handoff does not emit a false readiness timeout; retain a finite deadline and fail-closed input gate.
 
 ## Required evidence
 

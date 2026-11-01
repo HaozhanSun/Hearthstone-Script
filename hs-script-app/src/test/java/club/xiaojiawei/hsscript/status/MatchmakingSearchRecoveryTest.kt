@@ -323,6 +323,82 @@ class MatchmakingSearchRecoveryTest {
     }
 
     @Test
+    fun `startup handoff defers on captured Battle net frame then classifies fresh hub chooser without OCR`() {
+        val launcherPath = "/offline-ocr/screen-recovery/battlenet-launcher-startup-live-20261031-redacted.png"
+        val launcher = requireNotNull(javaClass.getResourceAsStream(launcherPath)) { "missing fixture $launcherPath" }
+            .use(ImageIO::read)
+        val chooserPath = "/offline-ocr/screen-recovery/hub-mode-chooser-live-20261029-035630.png"
+        val chooser = requireNotNull(javaClass.getResourceAsStream(chooserPath)) { "missing fixture $chooserPath" }
+            .use(ImageIO::read)
+
+        StartupInputReadiness.resetForTest()
+        try {
+            assertEquals(
+                StartupHandoffProgressPolicy.PreOcrAction.DEFER_BATTLENET_LAUNCHER,
+                StartupHandoffProgressPolicy.preOcrAction(
+                    purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                    currentSessionReady = false,
+                    battleNetLauncherVisual = BattleNetLauncherVisualPolicy.isVisible(launcher),
+                    hubModeChooserVisual = HubModeChooserVisualPolicy.isVisible(launcher),
+                    modalVisible = false,
+                ),
+            )
+            assertFalse(StartupInputReadiness.isMenuReady(7188, "native@0x1605ca", "TOURNAMENT"),
+                "a launcher handoff frame defers; it grants no startup readiness")
+            assertFalse(StartupInputReadiness.isHubTraditionalBattleSelectionReady(
+                7188, "native@0x1605ca", "HUB",
+            ), "a launcher frame grants no chooser action")
+            assertEquals(
+                StartupHandoffProgressPolicy.PreOcrAction.RUN_OCR,
+                StartupHandoffProgressPolicy.preOcrAction(
+                    purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+                    currentSessionReady = false,
+                    battleNetLauncherVisual = true,
+                    hubModeChooserVisual = false,
+                    modalVisible = false,
+                ),
+                "launcher fast-defer is restricted to the startup handoff purpose",
+            )
+
+            assertEquals(
+                StartupHandoffProgressPolicy.PreOcrAction.CLASSIFY_HUB_CHOOSER_VISUALLY,
+                StartupHandoffProgressPolicy.preOcrAction(
+                    purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                    currentSessionReady = false,
+                    battleNetLauncherVisual = BattleNetLauncherVisualPolicy.isVisible(chooser),
+                    hubModeChooserVisual = HubModeChooserVisualPolicy.isVisible(chooser),
+                    modalVisible = false,
+                ),
+            )
+            assertEquals("TOURNAMENT", UpstreamScreenStateRecovery.classifyImageForTest("", chooser),
+                "the fresh four-button chooser is classified visually without waiting on broad OCR")
+            assertTrue(StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
+                purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                currentSessionReady = false,
+                screenKind = "TOURNAMENT",
+                confidence = 94,
+                evidence = "hub-mode-chooser-visual",
+                currentMode = "HUB",
+                modalVisible = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                trustedCurrentWindow = true,
+            ), "fresh chooser evidence permits only its exact Traditional Battle entry action")
+            assertFalse(StartupInputReadiness.isMenuReady(7188, "native@0x1605ca", "TOURNAMENT"))
+            StartupInputReadiness.recordHubModeChooser(7188, "native@0x1605ca", now = 2_000L)
+            assertTrue(StartupInputReadiness.isHubTraditionalBattleSelectionReady(
+                7188, "native@0x1605ca", "HUB", now = 2_001L,
+            ), "only the later fresh chooser frame creates its narrow one-use entry proof")
+            assertFalse(StartupInputReadiness.isMenuReady(7188, "native@0x1605ca", "TOURNAMENT"),
+                "a chooser action proof never becomes generic online-menu readiness")
+            assertFalse(StartupInputReadiness.isDeckSelectionStartReady(7188, "native@0x1605ca", now = 2_001L),
+                "chooser proof cannot authorize matchmaking Start")
+        } finally {
+            StartupInputReadiness.resetForTest()
+        }
+    }
+
+    @Test
     fun `saved Hearthstone hub chooser keeps its narrow configured mode entry proof`() {
         val path = "/offline-ocr/screen-recovery/hub-mode-chooser-live-20261029-035630.png"
         val image = requireNotNull(javaClass.getResourceAsStream(path)) { "missing fixture $path" }
