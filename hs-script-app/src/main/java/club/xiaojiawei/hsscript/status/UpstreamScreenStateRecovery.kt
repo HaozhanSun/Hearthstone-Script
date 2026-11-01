@@ -455,6 +455,25 @@ object UpstreamScreenStateRecovery {
             paused = PauseStatus.isPause,
             stateStillCurrent = stateStillCurrent(),
         )
+        val seasonAwardChestOpenCandidate = SeasonRankAwardRecoveryPolicy.allowsDedicatedChestOpenStartupRecovery(
+            screenKind = detection?.kind?.code,
+            detectionEvidence = detection?.evidence,
+            visualChestVerified = capture.visual.seasonRankAwardChestVisual,
+            purpose = authorizedCapture.purpose,
+            captureForegroundAuthorized = authorizedCapture.foregroundVerified,
+            processWindowVerified = currentPid != null && currentHwnd == authorizedCapture.gameWindow.toString() &&
+                GameUtil.isVerifiedCurrentGameWindow(authorizedCapture.gameWindow, currentPid.toLong()),
+            mode = Mode.currMode?.name,
+            currentGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+            activeGame = WarEx.inWar || Mode.currMode == ModeEnum.GAMEPLAY || Mode.nextMode == ModeEnum.GAMEPLAY,
+            activeQueue = activeQueueEvidence,
+            terminalOrResult = GameUtil.isTerminalGameState() ||
+                MandatoryRankSurrenderGuard.isPending() || MandatoryRankSurrenderGuard.isTerminalCleanupPending() ||
+                PowerLogListener.hasCurrentGameCompleteTerminalPowerLogEvidence(),
+            working = WorkTimeListener.working,
+            paused = PauseStatus.isPause,
+            stateStillCurrent = stateStillCurrent(),
+        )
         val startupHubModeChooser = StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
             purpose = authorizedCapture.purpose,
             currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
@@ -736,17 +755,24 @@ object UpstreamScreenStateRecovery {
                 }
             } else {
                 StartupInputReadiness.invalidate(pid, hwnd)
-                startupClassificationOnly = !isReconnectState && !seasonAwardContinueCandidate
+                startupClassificationOnly = !isReconnectState &&
+                    !seasonAwardContinueCandidate && !seasonAwardChestOpenCandidate
                 log.warn {
                     "STARTUP_INPUT_READINESS_NOT_CONFIRMED screen=${detection?.kind?.code ?: "UNKNOWN"} " +
                         "modalVisible=${ScreenStateRecovery.hasCenteredModalPanel(capture.image)} " +
-                        "action=${if (seasonAwardContinueCandidate) "DEDICATED_CONTINUE_ONLY" else if (startupClassificationOnly) "NO_INPUT" else "CLASSIFY_RECOVERY_ONLY"} " +
+                        "action=${when { seasonAwardContinueCandidate -> "DEDICATED_CONTINUE_ONLY"; seasonAwardChestOpenCandidate -> "DEDICATED_CHEST_OPEN_ONLY"; startupClassificationOnly -> "NO_INPUT"; else -> "CLASSIFY_RECOVERY_ONLY" }} " +
                         "provider=UPSTREAM"
                 }
                 if (seasonAwardContinueCandidate) {
                     log.warn {
                         "STARTUP_INPUT_SPECIAL_RECOVERY screen=SEASON_RANK_AWARD " +
                             "genericMenuProof=false action=EXACT_CONTINUE_ONLY authority=FRESH_CAPTURE"
+                    }
+                }
+                if (seasonAwardChestOpenCandidate) {
+                    log.warn {
+                        "STARTUP_INPUT_SPECIAL_RECOVERY screen=SEASON_RANK_AWARD_CHEST " +
+                            "genericMenuProof=false action=EXACT_CHEST_OPEN_ONLY authority=FRESH_CAPTURE"
                     }
                 }
             }
@@ -939,7 +965,7 @@ object UpstreamScreenStateRecovery {
             return false
         }
         if (authorizedCapture.purpose == ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE &&
-            !seasonAwardContinueCandidate
+            !seasonAwardContinueCandidate && !seasonAwardChestOpenCandidate
         ) {
             val staleProbeDecision = ScreenRecoveryCapturePurposePolicy.staleProbeRecoveryDecision(
                 purpose = authorizedCapture.purpose,

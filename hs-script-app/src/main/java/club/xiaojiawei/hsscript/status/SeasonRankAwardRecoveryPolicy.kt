@@ -76,6 +76,32 @@ internal object SeasonRankAwardRecoveryPolicy {
         allowsMenuContext(mode, currentGameSessionReady) && !activeGame && !activeQueue &&
         !terminalOrResult && working && !paused && stateStillCurrent
 
+    /** Same narrow startup authority for the chest stage; generic readiness never stands in for this permit. */
+    fun allowsDedicatedChestOpenStartupRecovery(
+        screenKind: String?,
+        detectionEvidence: String?,
+        visualChestVerified: Boolean,
+        purpose: ScreenRecoveryCapturePurpose,
+        captureForegroundAuthorized: Boolean,
+        processWindowVerified: Boolean,
+        mode: String?,
+        currentGameSessionReady: Boolean,
+        activeGame: Boolean,
+        activeQueue: Boolean,
+        terminalOrResult: Boolean,
+        working: Boolean,
+        paused: Boolean,
+        stateStillCurrent: Boolean,
+    ): Boolean = screenKind == "SEASON_RANK_AWARD_CHEST" &&
+        detectionEvidence == "season-rank-award-chest-structural-visual" && visualChestVerified &&
+        purpose in setOf(
+            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+        ) && captureForegroundAuthorized && processWindowVerified &&
+        allowsMenuContext(mode, currentGameSessionReady) && !activeGame && !activeQueue &&
+        !terminalOrResult && working && !paused && stateStillCurrent
+
     data class CallsiteDispatchResult(
         val attempted: Boolean,
         val accepted: Boolean,
