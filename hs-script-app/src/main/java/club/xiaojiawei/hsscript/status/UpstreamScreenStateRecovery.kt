@@ -3786,13 +3786,32 @@ object UpstreamScreenStateRecovery {
             ScreenKind.SEASON_RANK_AWARD_REWARDS -> {
                 val pid = GameUtil.findGameProcessIdForDiagnostics()
                 val hwnd = ScriptStatus.gameHWND
+                // apply() has a single production caller inside dispatchIfAuthorized(evidence),
+                // after the current frame was freshly captured and authorized. Retry authority
+                // still requires the exact rewards visual, current client window, and foreground.
+                val rewardsObservationAuthorized = SeasonRankAwardRecoveryAttemptGate.hasFreshAuthorizedRewardsScreen(
+                    screenKind = detection.kind.code,
+                    evidence = detection.evidence,
+                    freshCaptureAuthorized = true,
+                    exactClientWindowVerified = pid != null && hwnd != null &&
+                        GameUtil.isVerifiedCurrentGameWindow(hwnd, pid),
+                    foregroundVerified = hwnd != null && runCatching {
+                        User32.INSTANCE.GetForegroundWindow()?.toString() == hwnd.toString()
+                    }.getOrDefault(false),
+                )
+                val decisionTimeMs = System.currentTimeMillis()
                 val attempt = seasonRankAwardRecoveryAttemptGate.tryBeginDetailed(
                     pid, hwnd?.toString(), SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION,
+                    nowMs = decisionTimeMs,
+                    freshExactScreenObservation = rewardsObservationAuthorized,
                 )
                 if (!attempt.allowed) {
                     log.warn {
                         "SEASON_RANK_AWARD_REWARDS_CONTINUE_BLOCKED reason=${attempt.reason} " +
-                            "action=NO_REPEAT_INPUT pid=${pid ?: "none"} hwnd=${hwnd ?: "none"}"
+                            "action=NO_INPUT pid=${pid ?: "none"} hwnd=${hwnd ?: "none"} " +
+                            "freshExactScreen=$rewardsObservationAuthorized " +
+                            "priorAcceptedAttempts=${attempt.priorAcceptedAttempts} " +
+                            "retryAfterMs=${attempt.retryAfterMs ?: 0}"
                     }
                     return false
                 }
@@ -3809,10 +3828,8 @@ object UpstreamScreenStateRecovery {
                         (gameBounds.right.toInt() - gameBounds.left.toInt()).coerceAtLeast(1),
                         (gameBounds.bottom.toInt() - gameBounds.top.toInt()).coerceAtLeast(1),
                     ),
-                    captureAuthorityValid = GameUtil.isVerifiedCurrentGameWindow(hwnd, pid),
-                    foregroundVerified =
-                        runCatching { User32.INSTANCE.GetForegroundWindow()?.toString() == hwnd.toString() }
-                            .getOrDefault(false),
+                    captureAuthorityValid = rewardsObservationAuthorized,
+                    foregroundVerified = rewardsObservationAuthorized,
                     mode = detection.mode.name,
                     currentGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
                     activeGame = WarEx.inWar || Mode.currMode == ModeEnum.GAMEPLAY ||
@@ -3832,18 +3849,22 @@ object UpstreamScreenStateRecovery {
                     }
                 }
                 seasonRankAwardRecoveryAttemptGate.resolve(
-                    clientPid, clientHwnd, SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION, result.accepted,
+                    clientPid, clientHwnd, SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION,
+                    result.accepted, nowMs = System.currentTimeMillis(),
                 )
                 if (!result.attempted || !result.accepted) {
                     log.warn {
                         "SEASON_RANK_AWARD_REWARDS_CONTINUE_BLOCKED reason=${result.reason} action=NO_INPUT " +
-                            "mode=${detection.mode.name} working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
+                            "mode=${detection.mode.name} acceptedInput=false freshExactScreen=$rewardsObservationAuthorized " +
+                            "working=${WorkTimeListener.working} paused=${PauseStatus.isPause}"
                     }
                     return false
                 }
                 log.warn {
-                    "SEASON_RANK_AWARD_REWARDS_CONTINUE_DISPATCH accepted=true point=${result.point} " +
-                        "action=EXACT_REWARD_CONTINUE_ONLY next=FRESH_CAPTURE noGameplayOrQueueAuthorization=true"
+                    "SEASON_RANK_AWARD_REWARDS_CONTINUE_DISPATCH sendInputAccepted=true " +
+                        "stageCompletion=UNCONFIRMED point=${result.point} " +
+                        "action=EXACT_REWARD_CONTINUE_ONLY next=FRESH_AUTHORIZED_CAPTURE " +
+                        "noGameplayOrQueueAuthorization=true"
                 }
                 ScreenStateRecovery.scheduleFreshStartupScreenReprobe()
                 return true

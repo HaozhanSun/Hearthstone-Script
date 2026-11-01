@@ -683,11 +683,73 @@ class SeasonRankAwardRecoveryDispatchTest {
         assertTrue(gate.tryBeginDetailed(41440L, "hwnd", rewardsAction).allowed,
             "rejected SendInput does not consume this stage's one-use accepted-input budget")
         gate.resolve(41440L, "hwnd", rewardsAction, accepted = true)
-        assertEquals("stage-already-accepted", gate.tryBeginDetailed(41440L, "hwnd", rewardsAction).reason)
+        assertEquals("fresh-exact-screen-required", gate.tryBeginDetailed(41440L, "hwnd", rewardsAction).reason,
+            "a reward retry requires a new exact authorized visual observation")
         assertTrue(gate.tryBeginDetailed(41441L, "hwnd", rewardsAction).allowed,
             "a new process gets a distinct client-stage key")
         assertTrue(gate.tryBeginDetailed(41440L, "new-hwnd", rewardsAction).allowed,
             "a new window gets a distinct client-stage key")
+    }
+
+    @Test
+    fun `ineffective reward Continue retries only on fresh authorized exact screen and remains bounded`() {
+        val stalledCaptures = listOf(
+            "season-rank-reward-chests-live-20261101-055733-stalled-after-accepted-input.png",
+            "season-rank-reward-chests-live-20261101-062010-restarted-still-stuck.png",
+            "season-rank-reward-chests-live-20261101-062342-post-chest-continue-stuck.png",
+        ).map(::fixture)
+        stalledCaptures.forEach { frame ->
+            assertEquals("SEASON_RANK_AWARD_REWARDS", UpstreamScreenStateRecovery.classifyImageForTest("", frame))
+            assertTrue(SeasonRankAwardRewardsVisualClassifier.isRewardPresentation(frame))
+        }
+
+        val exactFreshAuthority = SeasonRankAwardRecoveryAttemptGate.hasFreshAuthorizedRewardsScreen(
+            screenKind = "SEASON_RANK_AWARD_REWARDS",
+            evidence = "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+            freshCaptureAuthorized = true,
+            exactClientWindowVerified = true,
+            foregroundVerified = true,
+        )
+        assertTrue(exactFreshAuthority)
+        assertFalse(SeasonRankAwardRecoveryAttemptGate.hasFreshAuthorizedRewardsScreen(
+            screenKind = "SEASON_RANK_AWARD_REWARDS",
+            evidence = "season-rank-award-rewards-five-chests-and-continue-structural-visual",
+            freshCaptureAuthorized = false,
+            exactClientWindowVerified = true,
+            foregroundVerified = true,
+        ), "a stale/un-authorized capture cannot authorize a retry")
+        assertFalse(SeasonRankAwardRecoveryAttemptGate.hasFreshAuthorizedRewardsScreen(
+            screenKind = "SEASON_RANK_AWARD_REWARDS",
+            evidence = "ocr-text",
+            freshCaptureAuthorized = true,
+            exactClientWindowVerified = true,
+            foregroundVerified = true,
+        ), "OCR or an unrelated screen cannot authorize a reward Continue retry")
+
+        val gate = SeasonRankAwardRecoveryAttemptGate()
+        val action = SeasonRankAwardRecoveryPolicy.REWARDS_CONTINUE_ACTION
+        assertTrue(gate.tryBeginDetailed(54480L, "native@0x557b0970", action, 100_000L, exactFreshAuthority).allowed)
+        gate.resolve(54480L, "native@0x557b0970", action, accepted = true, nowMs = 100_000L)
+
+        assertEquals("accepted-reprobe-delay", gate.tryBeginDetailed(
+            54480L, "native@0x557b0970", action, 129_999L, exactFreshAuthority,
+        ).reason, "SendInput acceptance alone does not prove the Continue transition")
+        val second = gate.tryBeginDetailed(54480L, "native@0x557b0970", action, 130_000L, exactFreshAuthority)
+        assertTrue(second.allowed, "the same still-visible exact screen permits a bounded reattempt after 30s")
+        gate.resolve(54480L, "native@0x557b0970", action, accepted = true, nowMs = 130_000L)
+
+        assertTrue(gate.tryBeginDetailed(54480L, "native@0x557b0970", action, 160_000L, exactFreshAuthority).allowed)
+        gate.resolve(54480L, "native@0x557b0970", action, accepted = true, nowMs = 160_000L)
+        assertEquals("stage-attempt-limit", gate.tryBeginDetailed(
+            54480L, "native@0x557b0970", action, 190_000L, exactFreshAuthority,
+        ).reason, "three accepted-but-ineffective clicks cap recovery; no unbounded clicking")
+
+        assertTrue(gate.tryBeginDetailed(35068L, "native@0x557b0970", action, 200_000L, exactFreshAuthority).allowed,
+            "the post-restart capture is fresh for the new client process, while the old process budget stays capped")
+
+        gate.clearForFreshHubChooser(54480L, "native@0x557b0970")
+        assertTrue(gate.tryBeginDetailed(54480L, "native@0x557b0970", action, 190_001L).allowed,
+            "only the independently observed hub chooser transition rearms the stage")
     }
 
     private fun fixture(name: String) = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
