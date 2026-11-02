@@ -673,7 +673,12 @@ this deletion boundary.
   selector capture before selecting Wild and a later fresh enabled Wild-deck
   Start proof before queue entry. Keep a disabled-Start Standard/Wild tooltip
   fixture and assert selector dispatch succeeds while matchmaking Start stays
-  blocked.
+  blocked. The regression must exercise the accepted transition sequence
+  (OPEN_SELECTOR, fresh selector proof, Wild selection, fresh Wild deck/Start
+  proof, then one queue dispatch) and rejection paths (missing tooltip, stale or
+  wrong-window proof, disabled Start, active queue/game, terminal state, and
+  failed selector dispatch); assert the dispatch callback counts, not intent
+  logs or policy decisions alone.
 - A fresh exact HUB chooser capture may authorize only one Traditional Battle
   entry action before a current Power.log exists, provided exact PID/HWND,
   foreground/pixel authority, no-game/no-queue/no-terminal fences, and

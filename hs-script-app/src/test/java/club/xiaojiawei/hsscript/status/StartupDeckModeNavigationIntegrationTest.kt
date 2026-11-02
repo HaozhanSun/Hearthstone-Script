@@ -599,6 +599,191 @@ class StartupDeckModeNavigationIntegrationTest {
     }
 
     @Test
+    fun `disabled Start tooltip recovery requires selector and fresh Wild deck transitions before queue`() {
+        val pid = 53_552
+        val hwnd = "selector-transition-window"
+        val startTime = 70_000L
+        val capturedImage = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/standard-deck-selection-live-20261029-045427.png",
+        )))
+        val mismatchImage = BufferedImage(capturedImage.width, capturedImage.height, BufferedImage.TYPE_INT_RGB).apply {
+            createGraphics().also { graphics ->
+                graphics.drawImage(capturedImage, 0, 0, null)
+                graphics.color = Color(65, 65, 65)
+                graphics.fillRect((width * 0.665).toInt(), (height * 0.77).toInt(),
+                    (width * 0.14).toInt(), (height * 0.17).toInt())
+                graphics.dispose()
+            }
+        }
+        val wildDeckImage = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/deck-selection-screen.png",
+        )))
+        val selectorImage = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/mode-selector-wild-standard-casual-live-20261029-190503.png",
+        )))
+
+        StartupInputReadiness.resetForTest()
+        MulliganRankDispatchBarrier.resetForTest()
+        try {
+            // Stage 1: exact disabled-Start Standard/Wild tooltip authorizes only OPEN_SELECTOR.
+            assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyImageForTest("选择套牌", mismatchImage))
+            assertTrue(ScreenStateRecovery.isWrongModeDeckTooltip(mismatchImage))
+            assertFalse(ScreenWatchdog.hasEnabledDeckSelectionStartButton(mismatchImage))
+            assertEquals("STANDARD", TournamentModeConfirmation.observeImage(mismatchImage).observedMode.name)
+            val mismatch = StartupDeckModeNavigationPolicy.decide(
+                purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE.name,
+                screenKind = "DECK_SELECTION", confidence = 100, evidence = "deck-selection-title",
+                expectedRunMode = "WILD", observedRunMode = "STANDARD",
+                enabledStartButtonVisible = false, modalVisible = false,
+                currentSessionReady = false, activeGame = false, activeMatchmaking = false,
+                terminal = false, trustedCurrentWindow = true, wrongModeDeckTooltipVisible = true,
+            )
+            assertTrue(mismatch.allowed)
+            assertTrue(StartupInputReadiness.recordDeckSelectionModeNavigation(
+                pid, hwnd, "WILD", "STANDARD", 100, "deck-selection-title",
+                enabledStartButtonVisible = false, modalVisible = false,
+                wrongModeDeckTooltipVisible = true, now = startTime,
+            ))
+            val mismatchPermit = StartupDeckModeNavigationPolicy.allowsDispatch(
+                StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION,
+                proofFresh = StartupInputReadiness.isDeckSelectionModeNavigationReady(
+                    pid, hwnd, startTime + 1, expectedMode = "WILD",
+                ),
+                exactWindowVerified = true, currentSessionReady = false,
+                activeGame = false, activeMatchmaking = false, terminal = false,
+            )
+            assertTrue(ActionDispatchGate.allowForState(
+                action = StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION,
+                paused = false, working = true, currentSessionReady = false,
+                startupDeckSelectionModeNavigationPermitValid = mismatchPermit,
+            ))
+            var openSelectorDispatches = 0
+            var selectorReprobes = 0
+            assertFalse(StartupDeckModeNavigationPolicy.dispatchOpenSelectorForVerifiedDeckMismatch(
+                mismatchImage, "WILD", mismatch,
+                dispatchOpenSelector = { openSelectorDispatches++; false },
+                requestFreshSelectorProbe = { selectorReprobes++ },
+            ), "a rejected selector input must not claim a screen transition")
+            assertEquals(1, openSelectorDispatches)
+            assertEquals(0, selectorReprobes, "failed input must not schedule a success-stage selector probe")
+            assertTrue(StartupDeckModeNavigationPolicy.dispatchOpenSelectorForVerifiedDeckMismatch(
+                mismatchImage, "WILD", mismatch,
+                dispatchOpenSelector = { openSelectorDispatches++; true },
+                requestFreshSelectorProbe = { selectorReprobes++ },
+            ))
+            assertEquals(2, openSelectorDispatches)
+            assertEquals(1, selectorReprobes)
+
+            var queueDispatches = 0
+            val mismatchStartReady = ActionDispatchGate.allowForState(
+                action = "matchmaking.start", paused = false, working = true,
+                currentSessionReady = false, freshDeckSelectionStartReady = false,
+                selectedModeStartPermitValid = false,
+            )
+            assertFalse(mismatchStartReady, "mismatch proof cannot become a Start permit")
+            assertFalse(TournamentModeStrategy.dispatchMatchmakingStartControlIfAuthorized(
+                isAuthorized = { mismatchStartReady },
+                dispatchStartControl = { queueDispatches++; true },
+            ))
+            assertEquals(0, queueDispatches, "the disabled mismatch screen must dispatch no queue input")
+            assertFalse(StartupDeckModeNavigationPolicy.allowsDispatch(
+                StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION,
+                proofFresh = mismatchPermit, exactWindowVerified = true,
+                currentSessionReady = false, activeGame = false, activeMatchmaking = true, terminal = false,
+            ), "a current queue observation fences selector input")
+
+            // Stage 2: only a fresh exact selector capture allows the configured Wild control.
+            assertTrue(TournamentModeSelectorVisualPolicy.isVisible(selectorImage))
+            assertTrue(StartupInputReadiness.recordWildModeSelectorControl(
+                pid, hwnd, confidence = 96, modalVisible = true,
+                wildAndStandardOptionsVisible = true, structuralSelectorVisualVisible = true,
+                now = startTime + 2,
+            ))
+            val wildSelectorPermit = StartupDeckModeNavigationPolicy.allowsDispatch(
+                StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION,
+                proofFresh = StartupInputReadiness.isWildModeSelectorControlReady(pid, hwnd, startTime + 3),
+                exactWindowVerified = true, currentSessionReady = false,
+                activeGame = false, activeMatchmaking = false, terminal = false,
+            )
+            assertTrue(ActionDispatchGate.allowForState(
+                action = StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION,
+                paused = false, working = true, currentSessionReady = false,
+                startupDeckSelectionModeNavigationPermitValid = wildSelectorPermit,
+            ))
+            var wildOptionDispatches = 0
+            assertTrue(StartupDeckModeNavigationPolicy.dispatchIfAllowed(
+                StartupDeckModeNavigationPolicy.Decision(wildSelectorPermit, StartupDeckModeNavigationPolicy.Denial.NONE),
+            ) { wildOptionDispatches++; true })
+            assertEquals(1, wildOptionDispatches)
+            StartupInputReadiness.recordSelectedTournamentMode(pid, hwnd, "WILD", startTime + 4)
+            assertFalse(StartupInputReadiness.isDeckSelectionStartReady(pid, hwnd, startTime + 4),
+                "selector proof and selection alone still cannot authorize Start")
+            val beforeDeckStart = ActionDispatchGate.allowForState(
+                action = "matchmaking.start", paused = false, working = true,
+                currentSessionReady = false, freshDeckSelectionStartReady = false,
+                selectedModeStartPermitValid = StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+                    pid, hwnd, "WILD", startTime + 4,
+                ),
+            )
+            assertFalse(beforeDeckStart)
+            assertFalse(TournamentModeStrategy.dispatchMatchmakingStartControlIfAuthorized(
+                isAuthorized = { beforeDeckStart },
+                dispatchStartControl = { queueDispatches++; true },
+            ))
+            assertEquals(0, queueDispatches, "selector click must be followed by a new deck/Start capture")
+            assertFalse(StartupInputReadiness.isWildModeSelectorControlReady(pid, hwnd,
+                startTime + StartupInputReadiness.WILD_MODE_SELECTOR_CONTROL_PROOF_MAX_AGE_MS + 5))
+
+            // Stage 3: fresh configured-Wild deck title plus enabled Start is required for queue entry.
+            assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest(
+                "二=", wildDeckImage,
+            ))
+            assertEquals("WILD", TournamentModeConfirmation.observeImage(wildDeckImage).observedMode.name)
+            assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(wildDeckImage))
+            assertTrue(StartupInputReadiness.recordStartupOnlineScreen(
+                pid, hwnd, "DECK_SELECTION", confidence = 96,
+                evidence = "deck-selection-start-control-visual", expectedRunMode = "WILD",
+                observedRunMode = "WILD", enabledStartButtonVisible = true, modalVisible = false,
+                now = startTime + 5,
+            ))
+            val freshWildStartReady = StartupInputReadiness.isDeckSelectionStartReady(pid, hwnd, startTime + 6)
+            val freshSelectedWild = StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+                pid, hwnd, "WILD", startTime + 6,
+            )
+            assertTrue(ActionDispatchGate.allowForState(
+                action = "matchmaking.start", paused = false, working = true,
+                currentSessionReady = false, freshDeckSelectionStartReady = freshWildStartReady,
+                selectedModeStartPermitValid = freshSelectedWild,
+            ))
+            assertTrue(TournamentModeStrategy.dispatchMatchmakingStartControlIfAuthorized(
+                isAuthorized = { freshWildStartReady && freshSelectedWild },
+                dispatchStartControl = { queueDispatches++; true },
+            ))
+            assertEquals(1, queueDispatches, "only the fresh WILD deck/Start stage reaches matchmaking dispatch")
+
+            // Rejection paths: wrong HWND, stale deck proof, and stale selector proof never reach dispatch.
+            assertFalse(StartupInputReadiness.isDeckSelectionStartReady(pid, "other-window", startTime + 6))
+            val staleStartGate = ActionDispatchGate.allowForState(
+                action = "matchmaking.start", paused = false, working = true,
+                currentSessionReady = false,
+                freshDeckSelectionStartReady = StartupInputReadiness.isDeckSelectionStartReady(
+                    pid, hwnd, startTime + StartupInputReadiness.DECK_SELECTION_START_PROOF_MAX_AGE_MS + 6,
+                ),
+                selectedModeStartPermitValid = false,
+            )
+            assertFalse(staleStartGate)
+            assertFalse(TournamentModeStrategy.dispatchMatchmakingStartControlIfAuthorized(
+                isAuthorized = { staleStartGate },
+                dispatchStartControl = { queueDispatches++; true },
+            ))
+            assertEquals(1, queueDispatches, "stale/unsafe evidence must not create another queue dispatch")
+        } finally {
+            MulliganRankDispatchBarrier.resetForTest()
+            StartupInputReadiness.resetForTest()
+        }
+    }
+
+    @Test
     fun `deck chooser start proof requires exact configured mode and keeps queue rank policy separate`() {
         val wrongFormat = StartupInputReadiness.recordDeckSelectionStart(
             pid = 25948, hwnd = "live", confidence = 95, evidence = "deck-selection-title",
