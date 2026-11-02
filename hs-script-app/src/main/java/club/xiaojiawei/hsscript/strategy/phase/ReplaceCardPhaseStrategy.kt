@@ -283,6 +283,9 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
                     } ?: false
                 }
             },
+            holdSurrender = { result ->
+                NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(result.ruleId)
+            },
             provider = {
                 if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
             },

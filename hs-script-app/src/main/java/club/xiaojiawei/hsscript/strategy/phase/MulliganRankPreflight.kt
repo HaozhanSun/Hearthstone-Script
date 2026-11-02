@@ -87,6 +87,7 @@ internal class MulliganRankPreflight(
     private val inspect: () -> SurrenderRuleResult?,
     private val isResolved: () -> Boolean = { false },
     private val authorizeContinue: (SurrenderRuleResult) -> Boolean = { true },
+    private val holdSurrender: (SurrenderRuleResult) -> Boolean = { false },
     private val provider: () -> String,
     private val onSurrender: (SurrenderRuleResult) -> Unit,
     private val onContinue: () -> Unit,
@@ -259,6 +260,10 @@ internal class MulliganRankPreflight(
             }
 
             if (result?.shouldSurrender == true) {
+                if (holdSurrender(result)) {
+                    retryFreshRankAfterHeldDecision(context, result)
+                    return
+                }
                 state = MulliganRankPreflightState.SURRENDER_REQUESTED
                 log.warn {
                     "MULLIGAN_RANK_PREFLIGHT_DECISION attempt=${context.attemptNumber} " +
@@ -285,6 +290,10 @@ internal class MulliganRankPreflight(
                     reason = "rank-ocr-unresolved attempts=${context.attemptNumber}",
                     blocksAutomaticSurrender = false,
                 )
+                if (holdSurrender(failClosed)) {
+                    retryFreshRankAfterHeldDecision(context, failClosed)
+                    return
+                }
                 log.warn {
                     "MULLIGAN_RANK_PREFLIGHT_EXHAUSTED attempt=${context.attemptNumber} " +
                         "maxAttempts=${config.maxAttempts} provider=${provider()} " +
@@ -295,6 +304,19 @@ internal class MulliganRankPreflight(
                 onSurrender(failClosed)
             }
         }
+    }
+
+    /** Held unresolved ranks get another finite fresh-capture cycle until the lease expires. */
+    private fun retryFreshRankAfterHeldDecision(context: Attempt, result: SurrenderRuleResult) {
+        attempt = 0
+        state = MulliganRankPreflightState.WAITING_FOR_RANK
+        log.warn {
+            "MULLIGAN_RANK_PREFLIGHT_HELD attempt=${context.attemptNumber} " +
+                "maxAttempts=${config.maxAttempts} provider=${provider()} " +
+                "action=RETRY_FRESH_RANK_CAPTURE pause=false surrender=false " +
+                "ordinaryInput=false rule=${result.ruleId} reason=active-never-surrender-debug-lease"
+        }
+        scheduleNextLocked(context.expectedGeneration, config.retryIntervalMs)
     }
 
     private fun cancelLocked() {

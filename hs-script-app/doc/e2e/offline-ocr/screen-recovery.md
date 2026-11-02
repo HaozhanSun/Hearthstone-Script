@@ -738,3 +738,11 @@ this deletion boundary.
   schedule is active. Regression coverage: `NeverSurrenderPolicyTest`,
   `RankEligibilityPolicyTest`, `MulliganRankDispatchBarrierTest`,
   `MulliganRankPreflightTest`, and `DebugRunLeaseTest`.
+- If rank inspection is unresolved during that active Beta override, keep the
+  mulligan rank barrier pending: do not surrender and do not dispatch ordinary
+  mulligan/gameplay input until fresh numeric rank evidence authorizes it.
+  Continue bounded fresh-capture retry cycles only while the lease remains
+  active; after expiry, return to the existing bounded fail-closed rank policy.
+  Regression coverage: active-lease retry/hold and lease-expiry reversion in
+  `MulliganRankPreflightTest`, plus lease fence tests in
+  `NeverSurrenderPolicyTest`.

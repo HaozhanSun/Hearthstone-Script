@@ -303,6 +303,111 @@ class MulliganRankPreflightTest {
     }
 
     @Test
+    fun `active temporary Never Surrender lease holds unresolved rank without surrender or ordinary input`() {
+        val scheduler = ManualScheduler()
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+        var surrenderCount = 0
+        var continueCount = 0
+        var attempt = 0
+        val preflight = MulliganRankPreflight(
+            config = MulliganRankPreflightConfig(initialDelayMs = 7_000, maxAttempts = 1),
+            scheduler = scheduler,
+            isEligible = { true },
+            inspect = {
+                attempt++
+                if (attempt == 1) {
+                    SurrenderRuleResult(
+                        ruleId = "rank-ocr-unresolved",
+                        matched = false,
+                        shouldSurrender = true,
+                        reason = "rank OCR confidence below threshold",
+                    )
+                } else {
+                    SurrenderRuleResult(
+                        ruleId = "rank-continue-authorized",
+                        matched = true,
+                        shouldSurrender = false,
+                        reason = "fresh numeric rank verified",
+                        currentRank = 5,
+                    )
+                }
+            },
+            holdSurrender = { result ->
+                NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(
+                    result.ruleId,
+                    overrideActive = true,
+                )
+            },
+            authorizeContinue = { result ->
+                result.currentRank == 5 && MulliganRankDispatchBarrier.authorizeEligibleRank(ticket, 5)
+            },
+            provider = { "PADDLEX" },
+            onSurrender = { surrenderCount++ },
+            onContinue = { continueCount++ },
+        )
+
+        preflight.start()
+        scheduler.runScheduledAfter(7_000)
+        scheduler.runWorker()
+
+        assertEquals(MulliganRankPreflightState.WAITING_FOR_RANK, preflight.snapshot().state)
+        assertEquals(0, surrenderCount, "active Never Surrender lease must not dispatch a surrender")
+        assertEquals(0, continueCount, "unverified rank must not release ordinary mulligan input")
+        assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
+        assertFalse(PauseStatus.isPause)
+
+        // A new bounded probe must capture again; only its fresh rank proof releases the barrier.
+        scheduler.runScheduledAfter(7_000)
+        scheduler.runWorker()
+        assertEquals(MulliganRankPreflightState.RESOLVED, preflight.snapshot().state)
+        assertEquals(1, continueCount)
+        assertEquals(MulliganRankDispatchBarrier.State.ELIGIBLE, MulliganRankDispatchBarrier.currentState())
+    }
+
+    @Test
+    fun `lease expiry restores bounded unresolved-rank surrender behavior`() {
+        val scheduler = ManualScheduler()
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+        var leaseActive = true
+        var surrenderCount = 0
+        val preflight = MulliganRankPreflight(
+            config = MulliganRankPreflightConfig(initialDelayMs = 7_000, maxAttempts = 1),
+            scheduler = scheduler,
+            isEligible = { true },
+            inspect = {
+                SurrenderRuleResult(
+                    ruleId = "rank-ocr-unresolved",
+                    matched = false,
+                    shouldSurrender = true,
+                    reason = "unresolved rank",
+                )
+            },
+            holdSurrender = { result ->
+                NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(result.ruleId, leaseActive)
+            },
+            provider = { "PADDLEX" },
+            onSurrender = { result ->
+                assertTrue(MulliganRankDispatchBarrier.requireSurrender(ticket) != null)
+                assertEquals("rank-ocr-unresolved", result.ruleId)
+                surrenderCount++
+            },
+            onContinue = { error("unresolved rank must never release ordinary input") },
+        )
+
+        preflight.start()
+        scheduler.runScheduledAfter(7_000)
+        scheduler.runWorker()
+        assertEquals(0, surrenderCount, "active lease holds unresolved evidence")
+        assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
+
+        leaseActive = false
+        scheduler.runScheduledAfter(7_000)
+        scheduler.runWorker()
+        assertEquals(1, surrenderCount, "after lease expiry use the standard fail-closed rank policy")
+        assertEquals(MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED, MulliganRankDispatchBarrier.currentState())
+    }
+
+    @Test
     fun `retries after seven second grace without another Power log line`() {
         val scheduler = ManualScheduler()
         val attempts = mutableListOf<Long>()

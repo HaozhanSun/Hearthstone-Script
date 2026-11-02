@@ -37,6 +37,12 @@ object NeverSurrenderPolicy {
     ): Boolean = channel?.trim()?.equals("beta", ignoreCase = true) == true &&
         neverSurrenderEnabled && debugRunLeaseActive
 
+    /** During the explicit debug lease, unresolved rank must hold at the mulligan barrier. */
+    internal fun holdUnresolvedRankForTemporaryOverride(
+        ruleId: String?,
+        overrideActive: Boolean = temporaryRankOverrideActive(),
+    ): Boolean = ruleId == "rank-ocr-unresolved" && overrideActive
+
     internal fun enabledForChannel(channel: String?, setting: Boolean): Boolean =
         setting && BuildChannel.isBetaDerived(channel)
 

@@ -32,6 +32,29 @@ class NeverSurrenderPolicyTest {
     }
 
     @Test
+    fun `unresolved rank is held only during the temporary override`() {
+        assertTrue(
+            NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(
+                "rank-ocr-unresolved",
+                overrideActive = true,
+            ),
+        )
+        assertFalse(
+            NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(
+                "rank-ocr-unresolved",
+                overrideActive = false,
+            ),
+        )
+        assertFalse(
+            NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(
+                "current-rank-not-5-or-10",
+                overrideActive = true,
+            ),
+            "a confidently read non-target rank continues to follow the rank policy",
+        )
+    }
+
+    @Test
     fun `real debug lease state activates and expires the override at its monotonic deadline`() {
         var nowNanos = 10L
         val lease = DebugRunLease(
