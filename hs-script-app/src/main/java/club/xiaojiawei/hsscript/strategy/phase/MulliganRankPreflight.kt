@@ -87,6 +87,7 @@ internal class MulliganRankPreflight(
     private val inspect: () -> SurrenderRuleResult?,
     private val isResolved: () -> Boolean = { false },
     private val authorizeContinue: (SurrenderRuleResult) -> Boolean = { true },
+    private val authorizeUnresolvedContinue: (SurrenderRuleResult) -> Boolean = { false },
     private val holdSurrender: (SurrenderRuleResult) -> Boolean = { false },
     private val provider: () -> String,
     private val onSurrender: (SurrenderRuleResult) -> Unit,
@@ -260,6 +261,16 @@ internal class MulliganRankPreflight(
             }
 
             if (result?.shouldSurrender == true) {
+                if (result.ruleId == "rank-ocr-unresolved" && authorizeUnresolvedContinue(result)) {
+                    state = MulliganRankPreflightState.RESOLVED
+                    log.warn {
+                        "MULLIGAN_RANK_PREFLIGHT_TEMPORARY_OVERRIDE attempt=${context.attemptNumber} " +
+                            "provider=${provider()} rank=UNKNOWN evidence=ACTIVE_BETA_DEBUG_LEASE " +
+                            "action=CONTINUE_MULLIGAN surrender=false pause=false"
+                    }
+                    onContinue()
+                    return
+                }
                 if (holdSurrender(result)) {
                     retryFreshRankAfterHeldDecision(context, result)
                     return

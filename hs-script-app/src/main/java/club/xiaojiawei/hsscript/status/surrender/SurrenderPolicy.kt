@@ -170,6 +170,8 @@ object SurrenderPolicy {
     private var rankContinueAuthorizedNumber: Int? = null
     @Volatile
     private var rankContinueRequiresDebugRunLease = false
+    @Volatile
+    private var temporaryRunContinueAuthorized = false
     private var rankOverrideExpiryLogged = false
     private var rankCompletionDiagnosticLogged = false
     private var rankCompletionDiagnosticCount = 0
@@ -322,6 +324,7 @@ object SurrenderPolicy {
         rankContinueAuthorized = false
         rankContinueAuthorizedNumber = null
         rankContinueRequiresDebugRunLease = false
+        temporaryRunContinueAuthorized = false
         rankOverrideExpiryLogged = false
         rankCompletionDiagnosticLogged = false
         rankCompletionDiagnosticCount = 0
@@ -554,7 +557,8 @@ object SurrenderPolicy {
     private fun skipGenericSurrenderForEligibleRank(stage: SurrenderCheckStage): Boolean {
         if (!currentRankContinueAuthorized()) return false
         log.info {
-            "SURRENDER_POLICY_SKIPPED reason=verified-rank-eligibility stage=${stage.name} " +
+            "SURRENDER_POLICY_SKIPPED reason=${if (rankContinueAuthorized) "verified-rank-eligibility" else "temporary-debug-run-lease"} " +
+                "stage=${stage.name} " +
                 "action=CONTINUE surrender=false dispatch=false retry=false"
         }
         return true
@@ -562,7 +566,7 @@ object SurrenderPolicy {
 
     /** Common executor guard for direct GameUtil.surrender callers and stale requests. */
     internal fun surrenderDispatchBlockReason(mandatoryRank: Boolean): String? = when {
-        currentRankContinueAuthorized() -> "verified-rank-eligibility"
+        currentRankContinueAuthorized() -> if (rankContinueAuthorized) "verified-rank-eligibility" else "temporary-debug-run-lease"
         !rankCheckCompleted && !mandatoryRank -> "rank-eligibility-not-resolved"
         else -> null
     }
@@ -1063,7 +1067,16 @@ object SurrenderPolicy {
     internal fun currentRankContinueAuthorized(
         temporaryRankOverrideActive: Boolean = NeverSurrenderPolicy.temporaryRankOverrideActive(),
     ): Boolean {
-        if (!rankContinueAuthorized) return false
+        if (!rankContinueAuthorized) {
+            if (temporaryRunContinueAuthorized && !temporaryRankOverrideActive && !rankOverrideExpiryLogged) {
+                rankOverrideExpiryLogged = true
+                log.warn {
+                    "TEMPORARY_RANK_OVERRIDE_REVERTED reason=debug-run-lease-inactive rank=UNKNOWN " +
+                        "action=REQUIRE_STANDARD_RANK_POLICY"
+                }
+            }
+            return temporaryRunContinueAuthorized && temporaryRankOverrideActive
+        }
         if (!rankContinueRequiresDebugRunLease) return true
         if (temporaryRankOverrideActive) return true
         if (!rankOverrideExpiryLogged) {
@@ -1074,6 +1087,21 @@ object SurrenderPolicy {
             }
         }
         return false
+    }
+
+    /** Authorize rankless continuation only after the active temporary-run lease clears the first-action barrier. */
+    @Synchronized
+    internal fun authorizeTemporaryRunContinuation(
+        temporaryRankOverrideActive: Boolean = NeverSurrenderPolicy.temporaryRankOverrideActive(),
+    ): Boolean {
+        if (!temporaryRankOverrideActive) return false
+        temporaryRunContinueAuthorized = true
+        rankOverrideExpiryLogged = false
+        log.warn {
+            "TEMPORARY_RANK_OVERRIDE_RANK_UNRESOLVED action=ALLOW_GAMEPLAY_WITHIN_ACTIVE_LEASE " +
+                "rank=UNKNOWN evidence=NO_RANK_AUTHORIZATION surrender=false"
+        }
+        return true
     }
 
     /** Re-evaluate the already verified rank if the lease expires before mulligan dispatch. */
@@ -1184,8 +1212,10 @@ object SurrenderPolicy {
     /** True when a rank read already produced a final safe or unsafe result. */
     internal fun currentRankCheckCompleted(): Boolean = rankCheckCompleted
 
-    /** True only after this game's numeric rank was positively authorized. */
-    internal fun currentRankContinueAuthorized(): Boolean = rankContinueAuthorized
+    /** True after numeric rank authorization or live rankless temporary-run authorization. */
+    internal fun currentRankContinueAuthorized(): Boolean = currentRankContinueAuthorized(
+        temporaryRankOverrideActive = NeverSurrenderPolicy.temporaryRankOverrideActive(),
+    )
 
     internal fun currentRankAuthorizedNumber(): Int? = rankContinueAuthorizedNumber
 

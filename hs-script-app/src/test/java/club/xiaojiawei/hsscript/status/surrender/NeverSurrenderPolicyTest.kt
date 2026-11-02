@@ -55,6 +55,19 @@ class NeverSurrenderPolicyTest {
     }
 
     @Test
+    fun `rankless temporary continuation expires without inventing rank evidence`() {
+        SurrenderPolicy.resetForNewGame()
+        assertFalse(SurrenderPolicy.currentRankContinueAuthorized(temporaryRankOverrideActive = true))
+        assertTrue(SurrenderPolicy.authorizeTemporaryRunContinuation(temporaryRankOverrideActive = true))
+        assertTrue(SurrenderPolicy.currentRankContinueAuthorized(temporaryRankOverrideActive = true))
+        assertNull(SurrenderPolicy.currentRankAuthorizedNumber())
+
+        assertFalse(SurrenderPolicy.currentRankContinueAuthorized(temporaryRankOverrideActive = false))
+        assertNull(SurrenderPolicy.currentRankAuthorizedNumber())
+        SurrenderPolicy.resetForNewGame()
+    }
+
+    @Test
     fun `real debug lease state activates and expires the override at its monotonic deadline`() {
         var nowNanos = 10L
         val lease = DebugRunLease(

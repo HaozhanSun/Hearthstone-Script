@@ -727,22 +727,26 @@ this deletion boundary.
   callback is not invoked until a fresh clean destination appears. Keep the
   positive fresh DECK_SELECTION/MATCHMAKING confirmation path covered.
 - Temporary all-rank play is authorized only on the exact Beta channel when `NEVER_SURRENDER` is
-  enabled and the one-shot `DEBUG_RUN_MODE` lease is active. It must use the
-  ordinary fresh numeric-rank evidence checks (capture, mode/game state,
-  provider, confidence/repeated-read, and age); unknown, stale, conflicting,
-  or low-confidence evidence remains fail-closed. Lease expiry or either
-  setting/channel fence revokes non-target-rank authorization and restores the
-  standard rank policy. Operational runs must arm the owned-process hard cap
+  enabled and the one-shot `DEBUG_RUN_MODE` lease is active. Fresh numeric rank
+  evidence uses the ordinary capture, mode/game state, provider,
+  confidence/repeated-read, and age checks. During that exact lease only,
+  unresolved OCR may authorize rankless gameplay without fabricating a rank;
+  it must pass the mulligan barrier and remain gated by the live lease.
+  Stale/conflicting evidence cannot grant a numeric rank. Lease expiry or
+  either setting/channel fence revokes rankless authorization and restores
+  the standard rank policy. Operational runs must arm the owned-process hard cap
   so Beta and its owned game process stop at or before the 30-minute deadline;
   the in-app lease by itself is not process termination when the normal
   schedule is active. Regression coverage: `NeverSurrenderPolicyTest`,
   `RankEligibilityPolicyTest`, `MulliganRankDispatchBarrierTest`,
   `MulliganRankPreflightTest`, and `DebugRunLeaseTest`.
-- If rank inspection is unresolved during that active Beta override, keep the
-  mulligan rank barrier pending: do not surrender and do not dispatch ordinary
-  mulligan/gameplay input until fresh numeric rank evidence authorizes it.
-  Continue bounded fresh-capture retry cycles only while the lease remains
-  active; after expiry, return to the existing bounded fail-closed rank policy.
-  Regression coverage: active-lease retry/hold and lease-expiry reversion in
+- If rank inspection is unresolved while the active Beta override is valid,
+  the held preflight may pass the first-action barrier for gameplay. The live
+  lease must be rechecked at action dispatch; never surrender or fabricate
+  numeric rank evidence. If that authorization is unavailable, keep the barrier
+  pending and continue bounded fresh-capture retry cycles only while the lease
+  remains active. After expiry, return to the existing bounded fail-closed rank
+  policy. Regression coverage: active-lease authorization, no-rank-metadata,
+  and expiry reversion in
   `MulliganRankPreflightTest`, plus lease fence tests in
   `NeverSurrenderPolicyTest`.

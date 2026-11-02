@@ -365,6 +365,61 @@ class MulliganRankPreflightTest {
     }
 
     @Test
+    fun `active temporary lease allows gameplay dispatch without rank evidence`() {
+        SurrenderPolicy.resetForNewGame()
+        val scheduler = ManualScheduler()
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+        var leaseActive = true
+        var surrenderCount = 0
+        var continueCount = 0
+        val preflight = MulliganRankPreflight(
+            config = MulliganRankPreflightConfig(initialDelayMs = 7_000, maxAttempts = 1),
+            scheduler = scheduler,
+            isEligible = { true },
+            inspect = {
+                SurrenderRuleResult(
+                    ruleId = "rank-ocr-unresolved",
+                    matched = false,
+                    shouldSurrender = true,
+                    reason = "rank badge OCR confidence below threshold",
+                )
+            },
+            authorizeUnresolvedContinue = { result ->
+                result.ruleId == "rank-ocr-unresolved" &&
+                    MulliganRankDispatchBarrier.authorizeTemporaryRun(ticket) {
+                        NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(result.ruleId, leaseActive) &&
+                            SurrenderPolicy.authorizeTemporaryRunContinuation(leaseActive)
+                    }
+            },
+            holdSurrender = { result ->
+                NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(result.ruleId, leaseActive)
+            },
+            provider = { "PADDLEX" },
+            onSurrender = { surrenderCount++ },
+            onContinue = {
+                assertEquals(MulliganRankDispatchBarrier.State.ELIGIBLE, MulliganRankDispatchBarrier.currentState())
+                assertTrue(SurrenderPolicy.currentRankContinueAuthorized(leaseActive))
+                continueCount++
+            },
+        )
+
+        preflight.start()
+        scheduler.runScheduledAfter(7_000)
+        scheduler.runWorker()
+
+        assertEquals(MulliganRankPreflightState.RESOLVED, preflight.snapshot().state)
+        assertEquals(0, surrenderCount)
+        assertEquals(1, continueCount, "authorized active lease must reach the gameplay dispatch callback")
+        assertTrue(MulliganRankDispatchBarrier.hasTemporaryRunAuthorization())
+        assertNull(SurrenderPolicy.currentRankAuthorizedNumber(), "lease permission must not fabricate rank evidence")
+
+        leaseActive = false
+        assertFalse(SurrenderPolicy.currentRankContinueAuthorized(leaseActive), "lease expiry revokes gameplay authorization")
+        assertNull(SurrenderPolicy.currentRankAuthorizedNumber())
+        SurrenderPolicy.resetForNewGame()
+    }
+
+    @Test
     fun `lease expiry restores bounded unresolved-rank surrender behavior`() {
         val scheduler = ManualScheduler()
         val ticket = MulliganRankDispatchBarrier.beginCurrentGame()

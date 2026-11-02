@@ -189,10 +189,14 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         // mulligan UI exists. Rank OCR is not allowed before this boundary.
         val barrierTicket = MulliganRankDispatchBarrier.beginCurrentGame()
         rankBarrierTicket = barrierTicket
+        val requiredRankProof = if (NeverSurrenderPolicy.temporaryRankOverrideActive()) {
+            "TEMPORARY_BETA_DEBUG_LEASE_OR_VERIFIED_NUMERIC_RANK"
+        } else {
+            "RANK_5_OR_10"
+        }
         log.info {
             "MULLIGAN_RANK_DISPATCH_BARRIER state=PENDING ticket=$barrierTicket " +
-                "action=BLOCK_ORDINARY_INPUT_UNTIL_FRESH_" +
-                if (NeverSurrenderPolicy.temporaryRankOverrideActive()) "VERIFIED_NUMERIC_RANK" else "RANK_5_OR_10"
+                "required=$requiredRankProof action=BLOCK_ORDINARY_INPUT"
         }
         mulliganInputConfirmed.set(true)
         rankSurrenderRequested.set(false)
@@ -283,6 +287,13 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
                     } ?: false
                 }
             },
+            authorizeUnresolvedContinue = { result ->
+                result.ruleId == "rank-ocr-unresolved" &&
+                    MulliganRankDispatchBarrier.authorizeTemporaryRun(barrierTicket) {
+                        NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(result.ruleId) &&
+                            SurrenderPolicy.authorizeTemporaryRunContinuation()
+                    }
+            },
             holdSurrender = { result ->
                 NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(result.ruleId)
             },
@@ -336,9 +347,12 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             },
             onContinue = {
                 val rank = SurrenderPolicy.currentRankAuthorizedNumber()
+                val temporaryRun = MulliganRankDispatchBarrier.hasTemporaryRunAuthorization()
                 log.info {
-                    "MULLIGAN_RANK_DISPATCH_BARRIER state=ELIGIBLE ticket=$barrierTicket rank=$rank " +
-                        "evidence=fresh-policy-verified action=ALLOW_ORDINARY_INPUT"
+                    "MULLIGAN_RANK_DISPATCH_BARRIER state=ELIGIBLE ticket=$barrierTicket " +
+                        "rank=${rank ?: "UNKNOWN"} " +
+                        "evidence=${if (temporaryRun) "ACTIVE_BETA_DEBUG_LEASE_NO_RANK_AUTH" else "fresh-policy-verified"} " +
+                        "action=ALLOW_ORDINARY_INPUT"
                 }
                 log.info {
                     "MULLIGAN_RANK_PREFLIGHT_CONTINUE action=CONTINUE_MULLIGAN " +

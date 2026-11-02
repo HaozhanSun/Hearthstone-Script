@@ -71,6 +71,19 @@ class MulliganRankDispatchBarrierTest {
     }
 
     @Test
+    fun `rankless temporary run authorization is opt in and requires active authority`() {
+        val expiredTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+        assertFalse(MulliganRankDispatchBarrier.authorizeTemporaryRun(expiredTicket) { false })
+        assertFalse(MulliganRankDispatchBarrier.hasTemporaryRunAuthorization())
+        assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
+
+        val activeTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+        assertTrue(MulliganRankDispatchBarrier.authorizeTemporaryRun(activeTicket) { true })
+        assertTrue(MulliganRankDispatchBarrier.hasTemporaryRunAuthorization())
+        assertEquals(MulliganRankDispatchBarrier.State.ELIGIBLE, MulliganRankDispatchBarrier.currentState())
+    }
+
+    @Test
     fun `authoritative terminal result takes priority over pending rank preflight`() {
         val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
         assertTrue(MulliganRankDispatchBarrier.completeTerminalWithoutSurrender(ticket))

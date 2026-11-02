@@ -10,12 +10,14 @@ object MulliganRankDispatchBarrier {
     private var generation = 0L
     private var surrenderCapability: SurrenderCapability? = null
     private var surrenderCapabilityConsumed = false
+    private var temporaryRunAuthorized = false
 
     fun beginCurrentGame(): Long = synchronized(lock) {
         generation++
         state = State.PENDING
         surrenderCapability = null
         surrenderCapabilityConsumed = false
+        temporaryRunAuthorized = false
         generation
     }
 
@@ -29,7 +31,23 @@ object MulliganRankDispatchBarrier {
             (allowAnyVerifiedNumericRank && (rank in 1..10 || rank > 20))
         if (ticket != generation || state != State.PENDING || !rankAllowed || !authorizationStillValid()) return false
         state = State.ELIGIBLE
+        temporaryRunAuthorized = false
         true
+    }
+
+    /** Open the first-action barrier only for an explicitly live temporary-run authorization. */
+    fun authorizeTemporaryRun(
+        ticket: Long,
+        authorizationStillValid: () -> Boolean,
+    ): Boolean = synchronized(lock) {
+        if (ticket != generation || state != State.PENDING || !authorizationStillValid()) return false
+        state = State.ELIGIBLE
+        temporaryRunAuthorized = true
+        true
+    }
+
+    fun hasTemporaryRunAuthorization(): Boolean = synchronized(lock) {
+        state == State.ELIGIBLE && temporaryRunAuthorized
     }
 
     fun requireSurrender(ticket: Long): SurrenderCapability? = synchronized(lock) {
@@ -44,6 +62,7 @@ object MulliganRankDispatchBarrier {
         state = State.IDLE
         surrenderCapability = null
         surrenderCapabilityConsumed = false
+        temporaryRunAuthorized = false
         true
     }
 
@@ -53,6 +72,7 @@ object MulliganRankDispatchBarrier {
         state = State.IDLE
         surrenderCapability = null
         surrenderCapabilityConsumed = false
+        temporaryRunAuthorized = false
         true
     }
 
@@ -61,6 +81,7 @@ object MulliganRankDispatchBarrier {
         state = State.IDLE
         surrenderCapability = null
         surrenderCapabilityConsumed = false
+        temporaryRunAuthorized = false
         true
     }
 
@@ -69,6 +90,7 @@ object MulliganRankDispatchBarrier {
         state = State.IDLE
         surrenderCapability = null
         surrenderCapabilityConsumed = false
+        temporaryRunAuthorized = false
     }
 
     fun currentState(): State = state
@@ -89,6 +111,7 @@ object MulliganRankDispatchBarrier {
         state = State.IDLE
         surrenderCapability = null
         surrenderCapabilityConsumed = false
+        temporaryRunAuthorized = false
     }
 
     private val ELIGIBLE_RANKS = setOf(5, 10)
