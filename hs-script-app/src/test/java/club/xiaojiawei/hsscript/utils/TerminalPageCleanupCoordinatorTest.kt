@@ -320,11 +320,11 @@ class TerminalPageCleanupCoordinatorTest {
         assertEquals(1, coordinator.snapshot().failedEpisodeRearms)
 
         assertEquals(TerminalPageCleanupCoordinator.BeginState.ALREADY_RUNNING, coordinator.begin().state)
-        assertFalse(FreshPostResultDestinationPolicy.isConfirmed(null, 0, true))
-        assertTrue(FreshPostResultDestinationPolicy.isConfirmed("DECK_SELECTION", 90, true))
-        assertTrue(FreshPostResultDestinationPolicy.isConfirmed("MATCHMAKING", 95, true))
+        assertFalse(FreshPostResultDestinationPolicy.isConfirmed(null, 0, true, false))
+        assertTrue(FreshPostResultDestinationPolicy.isConfirmed("DECK_SELECTION", 90, true, false))
+        assertTrue(FreshPostResultDestinationPolicy.isConfirmed("MATCHMAKING", 95, true, false))
         assertFalse(
-            FreshPostResultDestinationPolicy.isConfirmed("MATCHMAKING", 95, false),
+            FreshPostResultDestinationPolicy.isConfirmed("MATCHMAKING", 95, false, false),
             "a stale or unauthorized destination capture cannot complete terminal cleanup",
         )
         assertFalse(

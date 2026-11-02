@@ -60,6 +60,7 @@ class PostResultRankProgressPolicyTest {
             captureAuthorized = true,
             destinationTransitionConfirmed = FreshPostResultDestinationPolicy.isConfirmed(
                 "MATCHMAKING", 90, freshCaptureAuthorized = true,
+                resultPageEvidenceVisible = false,
             ),
         )
         assertEquals(ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED, destinationDecision)

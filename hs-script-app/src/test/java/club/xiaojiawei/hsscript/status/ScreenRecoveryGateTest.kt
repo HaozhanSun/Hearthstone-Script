@@ -134,12 +134,13 @@ class ScreenRecoveryGateTest {
         val postResultRois = UpstreamScreenStateRecovery.postResultOcrRoiNamesForTest()
         assertEquals(ScreenStateRoiSelector.DECK_SELECTION_TITLE_ROI, postResultRois.first())
 
-        assertTrue(PostResultOcrOptimizationPolicy.shouldShortCircuit("DECK_SELECTION", 100, false, true))
-        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("DECK_SELECTION", 84, false, true))
-        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("DECK_SELECTION", 100, true, true))
-        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("DECK_SELECTION", 100, false, false))
-        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("MATCHMAKING", 98, false, true))
-        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("RANK_PROGRESS_CONTINUATION", 93, false, true))
+        assertTrue(PostResultOcrOptimizationPolicy.shouldShortCircuit("DECK_SELECTION", 100, false, true, false))
+        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("DECK_SELECTION", 84, false, true, false))
+        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("DECK_SELECTION", 100, true, true, false))
+        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("DECK_SELECTION", 100, false, false, false))
+        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("DECK_SELECTION", 100, false, true, true))
+        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("MATCHMAKING", 98, false, true, false))
+        assertFalse(PostResultOcrOptimizationPolicy.shouldShortCircuit("RANK_PROGRESS_CONTINUATION", 93, false, true, false))
     }
 
     private val originalEnabled = ConfigUtil.getBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED)

@@ -86,6 +86,7 @@ class GoldFourRankProgressFixtureTest {
                 captureAuthorized = true,
                 destinationTransitionConfirmed = FreshPostResultDestinationPolicy.isConfirmed(
                     "DECK_SELECTION", 90, freshCaptureAuthorized = true,
+                    resultPageEvidenceVisible = false,
                 ),
             ),
         )

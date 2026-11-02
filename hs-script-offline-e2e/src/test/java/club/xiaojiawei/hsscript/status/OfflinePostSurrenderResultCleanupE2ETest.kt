@@ -102,6 +102,7 @@ class OfflinePostSurrenderResultCleanupE2ETest {
             screenKind = null,
             confidence = 0,
             freshCaptureAuthorized = true,
+            resultPageEvidenceVisible = false,
         )
         assertFalse(noTransitionProof)
         assertEquals(TerminalPageCleanupCoordinator.State.RUNNING, coordinator.snapshot().state)
@@ -110,6 +111,7 @@ class OfflinePostSurrenderResultCleanupE2ETest {
             screenKind = fixture.postRetryDestinationKind,
             confidence = fixture.postRetryDestinationConfidence,
             freshCaptureAuthorized = fixture.postRetryDestinationFresh,
+            resultPageEvidenceVisible = false,
         )
         assertTrue(confirmedDeckTransition)
         assertTrue(coordinator.confirmDestination(retry), "completion occurs only after fresh destination policy accepts")
@@ -118,10 +120,10 @@ class OfflinePostSurrenderResultCleanupE2ETest {
 
         // Wrong destination, stale frame, low confidence, or unauthorized
         // capture is not transition proof and cannot release the episode.
-        assertFalse(FreshPostResultDestinationPolicy.isConfirmed("HOME", 92, true))
-        assertFalse(FreshPostResultDestinationPolicy.isConfirmed("DECK_SELECTION", 84, true))
-        assertFalse(FreshPostResultDestinationPolicy.isConfirmed("DECK_SELECTION", 92, false))
-        assertFalse(FreshPostResultDestinationPolicy.isConfirmed("RESULT", 99, true))
+        assertFalse(FreshPostResultDestinationPolicy.isConfirmed("HOME", 92, true, false))
+        assertFalse(FreshPostResultDestinationPolicy.isConfirmed("DECK_SELECTION", 84, true, false))
+        assertFalse(FreshPostResultDestinationPolicy.isConfirmed("DECK_SELECTION", 92, false, false))
+        assertFalse(FreshPostResultDestinationPolicy.isConfirmed("RESULT", 99, true, false))
     }
 
     private fun fixture(): Fixture = requireNotNull(

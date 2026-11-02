@@ -2284,6 +2284,8 @@ object GameUtil {
                         screenKind = observation.destinationScreen,
                         confidence = observation.destinationConfidence,
                         freshCaptureAuthorized = observation.captureAuthorized,
+                        resultPageEvidenceVisible = observation.resultVisible == true ||
+                            observation.rankProgressVisible || observation.continueControlVisible,
                     )
                 } else confirmed && MandatoryRankSurrenderGuard.confirmCompleted(
                     "SCREEN_RESULT_DISMISSED",

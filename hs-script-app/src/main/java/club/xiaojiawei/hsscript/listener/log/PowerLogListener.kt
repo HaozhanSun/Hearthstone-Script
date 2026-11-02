@@ -121,10 +121,12 @@ object PowerLogListener :
         screenKind: String,
         confidence: Int,
         freshCaptureAuthorized: Boolean,
+        resultPageEvidenceVisible: Boolean,
     ): Boolean = confirmCurrentGameTerminalDestinationForChannel(
         screenKind = screenKind,
         confidence = confidence,
         freshCaptureAuthorized = freshCaptureAuthorized,
+        resultPageEvidenceVisible = resultPageEvidenceVisible,
         channel = BuildInfo.RELEASE_CHANNEL,
     )
 
@@ -132,11 +134,13 @@ object PowerLogListener :
         screenKind: String,
         confidence: Int,
         freshCaptureAuthorized: Boolean,
+        resultPageEvidenceVisible: Boolean,
         channel: String,
     ): Boolean = confirmCurrentGameTerminalDestinationForChannel(
         screenKind = screenKind,
         confidence = confidence,
         freshCaptureAuthorized = freshCaptureAuthorized,
+        resultPageEvidenceVisible = resultPageEvidenceVisible,
         channel = channel,
     )
 
@@ -144,10 +148,14 @@ object PowerLogListener :
         screenKind: String,
         confidence: Int,
         freshCaptureAuthorized: Boolean,
+        resultPageEvidenceVisible: Boolean,
         channel: String,
     ): Boolean {
         if (BuildChannel.identityToken(channel) != "beta") return true
-        if (!FreshPostResultDestinationPolicy.isConfirmed(screenKind, confidence, freshCaptureAuthorized)) {
+        if (!FreshPostResultDestinationPolicy.isConfirmed(
+                screenKind, confidence, freshCaptureAuthorized, resultPageEvidenceVisible,
+            )
+        ) {
             return false
         }
         if (!currentGamePowerLogTerminalTracker.hasCompleteTerminalEvidence()) return true

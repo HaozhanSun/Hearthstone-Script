@@ -672,7 +672,17 @@ object ScreenStateRecovery {
             return InspectionResult.NO_ACTION
         }
         val sourcePid = GameUtil.findGameProcessIdForDiagnostics()
-        if (!apply(detection, recoveryToken, sessionReadyBeforeCapture)) return InspectionResult.NO_ACTION
+        val resultPageEvidenceVisible = detection.kind in setOf(
+            ScreenKind.RESULT,
+            ScreenKind.RANK_PROGRESS_CONTINUATION,
+        ) || ResultPageEvidencePolicy.continueControlVisible(capture.visual.resultContinueGrayLightRatio)
+        if (!apply(
+                detection,
+                recoveryToken,
+                sessionReadyBeforeCapture,
+                resultPageEvidenceVisible,
+            )
+        ) return InspectionResult.NO_ACTION
         val verified = confirmRecoveryTransition(detection, recoveryToken, sourcePid)
         log.info {
             "SCREEN_RECOVERY_POSTCHECK screen=${detection.kind.code} " +
@@ -2560,6 +2570,7 @@ object ScreenStateRecovery {
         detection: Detection,
         recoveryToken: Long,
         currentSessionReady: Boolean,
+        resultPageEvidenceVisible: Boolean,
     ): Boolean {
         val observationIsCurrent = ScreenRecoveryRuntime.isCurrent(recoveryToken)
         if (!observationIsCurrent) return false
@@ -2708,6 +2719,7 @@ object ScreenStateRecovery {
                         screenKind = detection.kind.code,
                         confidence = detection.confidence,
                         freshCaptureAuthorized = observationIsCurrent,
+                        resultPageEvidenceVisible = resultPageEvidenceVisible,
                     )
                 ) {
                     log.warn {
@@ -2805,6 +2817,7 @@ object ScreenStateRecovery {
                         screenKind = detection.kind.code,
                         confidence = detection.confidence,
                         freshCaptureAuthorized = observationIsCurrent,
+                        resultPageEvidenceVisible = resultPageEvidenceVisible,
                     )
                 ) {
                     log.warn {

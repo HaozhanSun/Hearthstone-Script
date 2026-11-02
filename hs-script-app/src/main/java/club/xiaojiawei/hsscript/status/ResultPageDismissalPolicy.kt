@@ -183,9 +183,12 @@ internal object PostResultOcrOptimizationPolicy {
         confidence: Int,
         centeredModalVisible: Boolean,
         freshCaptureAuthorized: Boolean,
+        resultPageEvidenceVisible: Boolean,
     ): Boolean = !centeredModalVisible &&
         screenKind == "DECK_SELECTION" &&
-        FreshPostResultDestinationPolicy.isConfirmed(screenKind, confidence, freshCaptureAuthorized)
+        FreshPostResultDestinationPolicy.isConfirmed(
+            screenKind, confidence, freshCaptureAuthorized, resultPageEvidenceVisible,
+        )
 }
 
 /** Null visibility is distinct from no capture: only an authorized current-client frame may ground a terminal fallback. */

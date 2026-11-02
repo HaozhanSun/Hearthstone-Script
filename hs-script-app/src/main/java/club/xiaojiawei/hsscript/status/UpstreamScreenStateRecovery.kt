@@ -1107,7 +1107,17 @@ object UpstreamScreenStateRecovery {
             }
             return false
         }
-        return applyWithVerifiedForeground(detection, authorizedCapture.gameWindow)
+        val resultPageEvidenceVisible = detection.kind in setOf(
+            ScreenKind.RESULT,
+            ScreenKind.RANK_PROGRESS_CONTINUATION,
+        ) || ResultPageEvidencePolicy.continueControlVisible(
+            authorizedCapture.capture.visual.resultContinueGrayLightRatio,
+        )
+        return applyWithVerifiedForeground(
+            detection,
+            authorizedCapture.gameWindow,
+            resultPageEvidenceVisible,
+        )
     }
 
     /** Resolve a fresh process-owned HWND, hold it foreground through capture, then capture. */
@@ -1278,7 +1288,11 @@ object UpstreamScreenStateRecovery {
     }
 
     /** Reacquire and revalidate the same Hearthstone HWND before applying any recovery action. */
-    private fun applyWithVerifiedForeground(detection: Detection, capturedWindow: WinDef.HWND): Boolean {
+    private fun applyWithVerifiedForeground(
+        detection: Detection,
+        capturedWindow: WinDef.HWND,
+        resultPageEvidenceVisible: Boolean,
+    ): Boolean {
         val currentWindow = resolveVerifiedGameWindow()
         if (currentWindow == null || currentWindow.toString() != capturedWindow.toString()) {
             log.warn {
@@ -1317,7 +1331,9 @@ object UpstreamScreenStateRecovery {
                 }
                 false
             } else {
-                ScreenRecoveryAuthorityGate.dispatchIfAuthorized(evidence) { apply(detection) }
+                ScreenRecoveryAuthorityGate.dispatchIfAuthorized(evidence) {
+                    apply(detection, resultPageEvidenceVisible)
+                }
             }
         }
         if (!foregroundResult.foregroundConfirmed) {
@@ -1537,6 +1553,12 @@ object UpstreamScreenStateRecovery {
                             confidence = detection?.confidence ?: 0,
                             centeredModalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image),
                             freshCaptureAuthorized = true,
+                            resultPageEvidenceVisible = detection?.kind in setOf(
+                                ScreenKind.RESULT,
+                                ScreenKind.RANK_PROGRESS_CONTINUATION,
+                            ) || ResultPageEvidencePolicy.continueControlVisible(
+                                capture.visual.resultContinueGrayLightRatio,
+                            ),
                         )
                     ) {
                         earlyDestination = true
@@ -2484,8 +2506,15 @@ object UpstreamScreenStateRecovery {
         screenKind: String,
         confidence: Int,
         freshCaptureAuthorized: Boolean,
+        resultPageEvidenceVisible: Boolean,
     ): Boolean {
-        if (!FreshPostResultDestinationPolicy.isConfirmed(screenKind, confidence, freshCaptureAuthorized)) return false
+        if (!FreshPostResultDestinationPolicy.isConfirmed(
+                screenKind,
+                confidence,
+                freshCaptureAuthorized,
+                resultPageEvidenceVisible,
+            )
+        ) return false
         val guard = club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
         if (guard.isTerminalCleanupPending()) {
             val capability = guard.existingTerminalCleanupCapability() ?: return false
@@ -2495,6 +2524,7 @@ object UpstreamScreenStateRecovery {
             screenKind = screenKind,
             confidence = confidence,
             freshCaptureAuthorized = freshCaptureAuthorized,
+            resultPageEvidenceVisible = resultPageEvidenceVisible,
         )
     }
 
@@ -3689,7 +3719,7 @@ object UpstreamScreenStateRecovery {
         }, delayMs, TimeUnit.MILLISECONDS)
     }
 
-    private fun apply(detection: Detection): Boolean {
+    private fun apply(detection: Detection, resultPageEvidenceVisible: Boolean): Boolean {
         val exactReconnectRecoveryEvidence = detection.kind == ScreenKind.RECONNECT ||
             detection.kind == ScreenKind.LOADING && detection.evidence == "reconnect-slow-loading-text"
         if (WarEx.inWar && !exactReconnectRecoveryEvidence) {
@@ -4005,6 +4035,7 @@ object UpstreamScreenStateRecovery {
                         screenKind = detection.kind.code,
                         confidence = detection.confidence,
                         freshCaptureAuthorized = true,
+                        resultPageEvidenceVisible = resultPageEvidenceVisible,
                     )
                 ) {
                     log.warn {
@@ -4079,6 +4110,7 @@ object UpstreamScreenStateRecovery {
                         screenKind = detection.kind.code,
                         confidence = detection.confidence,
                         freshCaptureAuthorized = true,
+                        resultPageEvidenceVisible = resultPageEvidenceVisible,
                     )
                 ) {
                     log.warn {

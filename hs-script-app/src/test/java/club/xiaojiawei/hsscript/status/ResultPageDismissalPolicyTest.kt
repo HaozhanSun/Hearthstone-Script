@@ -209,6 +209,7 @@ class ResultPageDismissalPolicyTest {
             destinationObservation.destinationScreen,
             destinationObservation.destinationConfidence,
             destinationObservation.captureAuthorized,
+            resultPageEvidenceVisible = false,
         )
         flow = ResultPageDismissalPolicy.observeFlow(flow, destinationObservation, destinationConfirmed)
         assertEquals(ResultPageDismissalPolicy.FlowScreen.POST_RESULT_DESTINATION, flow.lastObserved)

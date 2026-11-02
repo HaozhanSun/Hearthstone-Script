@@ -146,6 +146,7 @@ class MatchmakingSearchRecoveryTest {
                     screenKind = "MATCHMAKING",
                     confidence = 98,
                     freshCaptureAuthorized = true,
+                    resultPageEvidenceVisible = false,
                 ),
             )
             assertTrue(MatchmakingQueueLifecycleEvidencePolicy.propagateClassifiedSearchScreenIfAuthorized(
@@ -197,6 +198,7 @@ class MatchmakingSearchRecoveryTest {
                     screenKind = "UNKNOWN",
                     confidence = 0,
                     freshCaptureAuthorized = false,
+                    resultPageEvidenceVisible = false,
                 ),
             )
             assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
@@ -205,6 +207,45 @@ class MatchmakingSearchRecoveryTest {
         } finally {
             MandatoryRankSurrenderGuard.resetForTest()
             MulliganRankDispatchBarrier.resetForTest()
+            WorkTimeListener.working = wasWorking
+            PauseStatus.setManualPause(wasPaused)
+        }
+    }
+
+    @Test
+    fun `matchmaking classification cannot clear terminal cleanup while result Continue is visible`() {
+        val wasWorking = WorkTimeListener.working
+        val wasPaused = PauseStatus.isPause
+        MandatoryRankSurrenderGuard.resetForTest()
+        try {
+            WorkTimeListener.working = true
+            PauseStatus.setManualPause(false)
+            val capability = beginTerminalCleanup()
+
+            assertFalse(
+                UpstreamScreenStateRecovery.confirmPendingTerminalCleanupAtMatchmaking(
+                    screenKind = "MATCHMAKING",
+                    confidence = 98,
+                    freshCaptureAuthorized = true,
+                    resultPageEvidenceVisible = true,
+                ),
+                "contradictory visible result/Continue evidence must override generic queue classification",
+            )
+            assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+            assertTrue(MandatoryRankSurrenderGuard.isTerminalCleanupCapabilityValid(capability))
+
+            assertTrue(
+                MandatoryRankSurrenderGuard.confirmAtFreshDeckSelection(
+                    screenKind = "DECK_SELECTION",
+                    confidence = 98,
+                    visualEvidence = "deck-selection-title",
+                    freshObservation = true,
+                ),
+                "a clean, fresh deck destination remains able to complete terminal cleanup",
+            )
+            assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
+        } finally {
+            MandatoryRankSurrenderGuard.resetForTest()
             WorkTimeListener.working = wasWorking
             PauseStatus.setManualPause(wasPaused)
         }

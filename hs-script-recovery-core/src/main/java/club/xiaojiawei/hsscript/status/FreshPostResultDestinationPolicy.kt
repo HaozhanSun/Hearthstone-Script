@@ -8,7 +8,7 @@ object FreshPostResultDestinationPolicy {
         screenKind: String?,
         confidence: Int,
         freshCaptureAuthorized: Boolean,
-        resultPageEvidenceVisible: Boolean = false,
+        resultPageEvidenceVisible: Boolean,
     ): Boolean =
         freshCaptureAuthorized && !resultPageEvidenceVisible && confidence >= MIN_CONFIDENCE &&
             (screenKind == "DECK_SELECTION" || screenKind == "MATCHMAKING")
