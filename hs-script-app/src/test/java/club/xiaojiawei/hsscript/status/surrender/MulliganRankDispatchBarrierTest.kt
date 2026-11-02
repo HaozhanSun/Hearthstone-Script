@@ -36,6 +36,41 @@ class MulliganRankDispatchBarrierTest {
     }
 
     @Test
+    fun `temporary authorization admits numeric non-target ranks only while its authority remains active`() {
+        val deniedTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+        assertFalse(
+            MulliganRankDispatchBarrier.authorizeEligibleRank(
+                deniedTicket,
+                8,
+                allowAnyVerifiedNumericRank = true,
+                authorizationStillValid = { false },
+            ),
+        )
+        assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
+
+        val activeTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+        assertTrue(
+            MulliganRankDispatchBarrier.authorizeEligibleRank(
+                activeTicket,
+                8,
+                allowAnyVerifiedNumericRank = true,
+                authorizationStillValid = { true },
+            ),
+        )
+        assertEquals(MulliganRankDispatchBarrier.State.ELIGIBLE, MulliganRankDispatchBarrier.currentState())
+
+        val invalidRankTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+        assertFalse(
+            MulliganRankDispatchBarrier.authorizeEligibleRank(
+                invalidRankTicket,
+                11,
+                allowAnyVerifiedNumericRank = true,
+                authorizationStillValid = { true },
+            ),
+        )
+    }
+
+    @Test
     fun `authoritative terminal result takes priority over pending rank preflight`() {
         val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
         assertTrue(MulliganRankDispatchBarrier.completeTerminalWithoutSurrender(ticket))

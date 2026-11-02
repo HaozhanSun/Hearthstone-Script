@@ -231,7 +231,9 @@ internal class MulliganRankPreflight(
                 }
             }
 
-            if (!timeout && result?.ruleId == "rank-continue-authorized" && result.currentRank in setOf(5, 10)) {
+            if (!timeout && result?.ruleId == "rank-continue-authorized" &&
+                result.currentRank?.let { it in 1..10 || it > 20 } == true
+            ) {
                 if (authorizeContinue(result)) {
                     state = MulliganRankPreflightState.RESOLVED
                     log.info {
@@ -252,7 +254,7 @@ internal class MulliganRankPreflight(
                 log.warn {
                     "MULLIGAN_RANK_PREFLIGHT_CONTINUE_REJECTED attempt=${context.attemptNumber} " +
                         "provider=${provider()} rank=${result.currentRank ?: "UNKNOWN"} " +
-                        "reason=eligible-result-missing-exact-rank action=RETRY pause=false"
+                        "reason=eligible-result-missing-valid-numeric-rank action=RETRY pause=false"
                 }
             }
 

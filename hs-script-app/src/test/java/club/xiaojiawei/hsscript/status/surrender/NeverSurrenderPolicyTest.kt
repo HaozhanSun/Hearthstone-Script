@@ -1,7 +1,10 @@
 package club.xiaojiawei.hsscript.status.surrender
 
+import club.xiaojiawei.hsscript.status.DebugRunLease
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import java.nio.file.Files
 import java.nio.file.Path
@@ -19,6 +22,40 @@ class NeverSurrenderPolicyTest {
     }
 
     @Test
+    fun `temporary rank override requires beta never-surrender and active debug lease together`() {
+        assertTrue(NeverSurrenderPolicy.temporaryRankOverrideActive("beta", true, true))
+        assertFalse(NeverSurrenderPolicy.temporaryRankOverrideActive("release-candidate", true, true))
+        assertFalse(NeverSurrenderPolicy.temporaryRankOverrideActive("stable", true, true))
+        assertFalse(NeverSurrenderPolicy.temporaryRankOverrideActive("beta", false, true))
+        assertFalse(NeverSurrenderPolicy.temporaryRankOverrideActive("beta", true, false))
+        assertFalse(NeverSurrenderPolicy.temporaryRankOverrideActive("unknown", true, true))
+    }
+
+    @Test
+    fun `real debug lease state activates and expires the override at its monotonic deadline`() {
+        var nowNanos = 10L
+        val lease = DebugRunLease(
+            maxDurationMillis = 100L,
+            nanoTime = { nowNanos },
+            wallClockMillis = { 1_000L },
+        )
+        assertEquals(DebugRunLease.State.ACTIVE, lease.enable().state)
+        assertTrue(
+            NeverSurrenderPolicy.temporaryRankOverrideActive(
+                "beta", true, lease.snapshot().state == DebugRunLease.State.ACTIVE,
+            ),
+        )
+        nowNanos += 100_000_000L
+        val expiredState = lease.snapshot().state
+        assertEquals(DebugRunLease.State.EXPIRED, expiredState)
+        assertFalse(
+            NeverSurrenderPolicy.temporaryRankOverrideActive(
+                "beta", true, expiredState == DebugRunLease.State.ACTIVE,
+            ),
+        )
+    }
+
+    @Test
     fun `rank seven remains fail closed instead of being played when never surrender is enabled`() {
         assertTrue(NeverSurrenderPolicy.rankIsIneligible(7))
         assertTrue(NeverSurrenderPolicy.rankIsIneligible(233))
@@ -26,6 +63,47 @@ class NeverSurrenderPolicyTest {
         assertFalse(NeverSurrenderPolicy.rankIsIneligible(5))
         assertFalse(NeverSurrenderPolicy.rankIsIneligible(10))
         assertTrue(SurrenderPolicy.evaluateCurrentRank(7)!!.shouldSurrender)
+    }
+
+    @Test
+    fun `temporary authorization expires back to the known mandatory rank decision`() {
+        SurrenderPolicy.resetForNewGame()
+        val now = System.currentTimeMillis()
+        val detection = CurrentRankDetector.Detection(
+            rank = 8,
+            tier = CurrentRankDetector.RankTier.DIAMOND,
+            ocrText = "8",
+            confidence = 0.99,
+            captureBounds = java.awt.Rectangle(5, 6, 80, 90),
+            provider = "PADDLEX",
+            capturedAtMs = now,
+            agreementCount = 1,
+        )
+        try {
+            assertNull(
+                SurrenderPolicy.evaluateMulliganRankEvidence(
+                    detection = detection,
+                    actualMode = "GAMEPLAY",
+                    inWar = true,
+                    nowMs = now,
+                    persistentStreakDecision = null,
+                    temporaryRankOverrideActive = true,
+                ),
+                "fresh rank 8 should continue only while the lease is active",
+            )
+            assertTrue(SurrenderPolicy.currentRankContinueAuthorized(temporaryRankOverrideActive = true))
+            val activeDecision = SurrenderPolicy.currentRankContinuationDecision(temporaryRankOverrideActive = true)
+            assertEquals("rank-continue-authorized", activeDecision?.ruleId)
+            assertFalse(activeDecision?.shouldSurrender == true)
+
+            assertFalse(SurrenderPolicy.currentRankContinueAuthorized(temporaryRankOverrideActive = false))
+            val expiredDecision = SurrenderPolicy.currentRankContinuationDecision(temporaryRankOverrideActive = false)
+            assertEquals("current-rank-not-5-or-10", expiredDecision?.ruleId)
+            assertTrue(expiredDecision?.shouldSurrender == true)
+            assertEquals(8, expiredDecision?.currentRank)
+        } finally {
+            SurrenderPolicy.resetForNewGame()
+        }
     }
 
     @Test

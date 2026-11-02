@@ -19,8 +19,15 @@ object MulliganRankDispatchBarrier {
         generation
     }
 
-    fun authorizeEligibleRank(ticket: Long, rank: Int): Boolean = synchronized(lock) {
-        if (ticket != generation || state != State.PENDING || rank !in ELIGIBLE_RANKS) return false
+    fun authorizeEligibleRank(
+        ticket: Long,
+        rank: Int,
+        allowAnyVerifiedNumericRank: Boolean = false,
+        authorizationStillValid: () -> Boolean = { true },
+    ): Boolean = synchronized(lock) {
+        val rankAllowed = rank in ELIGIBLE_RANKS ||
+            (allowAnyVerifiedNumericRank && (rank in 1..10 || rank > 20))
+        if (ticket != generation || state != State.PENDING || !rankAllowed || !authorizationStillValid()) return false
         state = State.ELIGIBLE
         true
     }

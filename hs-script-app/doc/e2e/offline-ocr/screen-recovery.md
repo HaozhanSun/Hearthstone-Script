@@ -726,3 +726,15 @@ this deletion boundary.
   at every result-page destination callsite and regress that the cleanup
   callback is not invoked until a fresh clean destination appears. Keep the
   positive fresh DECK_SELECTION/MATCHMAKING confirmation path covered.
+- Temporary all-rank play is authorized only on the exact Beta channel when `NEVER_SURRENDER` is
+  enabled and the one-shot `DEBUG_RUN_MODE` lease is active. It must use the
+  ordinary fresh numeric-rank evidence checks (capture, mode/game state,
+  provider, confidence/repeated-read, and age); unknown, stale, conflicting,
+  or low-confidence evidence remains fail-closed. Lease expiry or either
+  setting/channel fence revokes non-target-rank authorization and restores the
+  standard rank policy. Operational runs must arm the owned-process hard cap
+  so Beta and its owned game process stop at or before the 30-minute deadline;
+  the in-app lease by itself is not process termination when the normal
+  schedule is active. Regression coverage: `NeverSurrenderPolicyTest`,
+  `RankEligibilityPolicyTest`, `MulliganRankDispatchBarrierTest`,
+  `MulliganRankPreflightTest`, and `DebugRunLeaseTest`.

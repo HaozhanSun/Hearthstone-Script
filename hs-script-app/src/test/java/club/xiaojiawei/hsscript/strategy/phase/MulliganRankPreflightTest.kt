@@ -10,6 +10,7 @@ import club.xiaojiawei.hsscript.status.surrender.SurrenderRuleResult
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -141,6 +142,71 @@ class MulliganRankPreflightTest {
                 }
             }
         }
+    }
+
+    @Test
+    fun `fresh rank eight continues through mulligan only during active temporary lease`() {
+        val now = System.currentTimeMillis()
+        val detection = CurrentRankDetector.Detection(
+            rank = 8,
+            tier = CurrentRankDetector.RankTier.DIAMOND,
+            ocrText = "8",
+            confidence = 0.99,
+            captureBounds = java.awt.Rectangle(10, 20, 80, 90),
+            provider = "PADDLEX",
+            capturedAtMs = now,
+            agreementCount = 1,
+        )
+        val scheduler = ManualScheduler()
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+        var leaseActive = true
+        var surrendered: SurrenderRuleResult? = null
+        var continued = 0
+        SurrenderPolicy.resetForNewGame()
+        val preflight = MulliganRankPreflight(
+            config = MulliganRankPreflightConfig(initialDelayMs = 0, maxAttempts = 1),
+            scheduler = scheduler,
+            isEligible = { true },
+            inspect = {
+                SurrenderPolicy.evaluateMulliganRankEvidence(
+                    detection = detection,
+                    actualMode = "GAMEPLAY",
+                    inWar = true,
+                    nowMs = now,
+                    persistentStreakDecision = null,
+                    temporaryRankOverrideActive = leaseActive,
+                ) ?: SurrenderPolicy.currentRankContinuationDecision(leaseActive)
+            },
+            authorizeContinue = { result ->
+                SurrenderPolicy.currentRankContinueAuthorized(leaseActive) &&
+                    (result.currentRank?.let {
+                        MulliganRankDispatchBarrier.authorizeEligibleRank(
+                            ticket = ticket,
+                            rank = it,
+                            allowAnyVerifiedNumericRank = it !in setOf(5, 10),
+                            authorizationStillValid = { SurrenderPolicy.currentRankContinueAuthorized(leaseActive) },
+                        )
+                    } ?: false)
+            },
+            provider = { "PADDLEX" },
+            onSurrender = { surrendered = it },
+            onContinue = { continued++ },
+        )
+
+        preflight.start()
+        scheduler.runScheduledAfter(0)
+        scheduler.runWorker()
+
+        assertNull(surrendered, "verified rank 8 must not concede during the temporary lease")
+        assertEquals(1, continued)
+        assertEquals(MulliganRankPreflightState.RESOLVED, preflight.snapshot().state)
+
+        leaseActive = false
+        assertFalse(SurrenderPolicy.currentRankContinueAuthorized(leaseActive))
+        val expired = SurrenderPolicy.currentRankContinuationDecision(leaseActive)
+        assertEquals("current-rank-not-5-or-10", expired?.ruleId)
+        assertTrue(expired?.shouldSurrender == true)
+        assertEquals(8, expired?.currentRank)
     }
 
     @Test

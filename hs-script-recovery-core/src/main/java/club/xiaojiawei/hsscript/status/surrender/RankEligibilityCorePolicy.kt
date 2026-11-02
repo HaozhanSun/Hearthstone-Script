@@ -11,7 +11,7 @@ data class RankEvidence(
     val agreementCount: Int,
 )
 
-/** GUI/OCR-free production decision logic shared by the app and offline replay module. */
+/** GUI/OCR-free decision logic. Temporary all-rank authorization still requires the same fresh, strong numeric OCR evidence. */
 object RankEligibilityCorePolicy {
     const val MIN_PADDLEX_CONFIDENCE = 0.90
     const val MAX_EVIDENCE_AGE_MS = 10_000L
@@ -24,6 +24,7 @@ object RankEligibilityCorePolicy {
         expectedInWar: Boolean,
         inWar: Boolean,
         nowMs: Long,
+        allowAnyVerifiedNumericRank: Boolean = false,
     ): Decision {
         if (actualMode != expectedMode) return Decision(false, "mode-mismatch")
         if (inWar != expectedInWar) return Decision(false, "war-state-mismatch")
@@ -35,7 +36,7 @@ object RankEligibilityCorePolicy {
         }
         val rank = evidence.rank ?: return Decision(false, "rank-unresolved")
         if (evidence.agreementCount < 1) return Decision(false, "rank-number-not-read-by-ocr")
-        val eligibleRank = rank == 5 || rank == 10
+        val validNumericRank = rank in 1..10 || rank > 20
         when (evidence.provider.uppercase()) {
             "PADDLEX" -> {
                 val confidence = evidence.confidence
@@ -46,7 +47,11 @@ object RankEligibilityCorePolicy {
             "LEGACY" -> if (evidence.agreementCount < 2) return Decision(false, "legacy-rank-not-repeated")
             else -> return Decision(false, "rank-provider-unverified")
         }
-        if (!eligibleRank) return Decision(false, "rank-not-5-or-10")
-        return Decision(true, "verified-exact-rank-$rank")
+        if (rank == 5 || rank == 10) return Decision(true, "verified-exact-rank-$rank")
+        if (allowAnyVerifiedNumericRank) {
+            if (!validNumericRank) return Decision(false, "rank-not-valid-numeric-rank")
+            return Decision(true, "verified-temporary-rank-override-$rank")
+        }
+        return Decision(false, "rank-not-5-or-10")
     }
 }

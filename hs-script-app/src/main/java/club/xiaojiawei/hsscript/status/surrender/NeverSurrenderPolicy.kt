@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.status.surrender
 
 import club.xiaojiawei.hsscript.enums.ConfigEnum
+import club.xiaojiawei.hsscript.status.DebugRunController
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
@@ -20,6 +21,21 @@ object NeverSurrenderPolicy {
         BuildInfo.RELEASE_CHANNEL,
         ConfigUtil.getBoolean(ConfigEnum.NEVER_SURRENDER),
     )
+
+    /** Temporary all-rank play is available only inside the live Beta debug-run lease. */
+    fun temporaryRankOverrideActive(): Boolean = temporaryRankOverrideActive(
+        channel = BuildInfo.RELEASE_CHANNEL,
+        neverSurrenderEnabled = ConfigUtil.getBoolean(ConfigEnum.NEVER_SURRENDER),
+        debugRunLeaseActive = DebugRunController.snapshot().state ==
+            club.xiaojiawei.hsscript.status.DebugRunLease.State.ACTIVE,
+    )
+
+    internal fun temporaryRankOverrideActive(
+        channel: String?,
+        neverSurrenderEnabled: Boolean,
+        debugRunLeaseActive: Boolean,
+    ): Boolean = channel?.trim()?.equals("beta", ignoreCase = true) == true &&
+        neverSurrenderEnabled && debugRunLeaseActive
 
     internal fun enabledForChannel(channel: String?, setting: Boolean): Boolean =
         setting && BuildChannel.isBetaDerived(channel)
