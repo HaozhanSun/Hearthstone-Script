@@ -4,7 +4,12 @@ package club.xiaojiawei.hsscript.status
 object FreshPostResultDestinationPolicy {
     const val MIN_CONFIDENCE = 85
 
-    fun isConfirmed(screenKind: String?, confidence: Int, freshCaptureAuthorized: Boolean): Boolean =
-        freshCaptureAuthorized && confidence >= MIN_CONFIDENCE &&
+    fun isConfirmed(
+        screenKind: String?,
+        confidence: Int,
+        freshCaptureAuthorized: Boolean,
+        resultPageEvidenceVisible: Boolean = false,
+    ): Boolean =
+        freshCaptureAuthorized && !resultPageEvidenceVisible && confidence >= MIN_CONFIDENCE &&
             (screenKind == "DECK_SELECTION" || screenKind == "MATCHMAKING")
 }

@@ -132,10 +132,13 @@ internal class TerminalResultSequenceController(
                 "TERMINAL_RESULT_MENU_CONTINUE action=FRESH_VISIBLE_CONTINUE_BUTTON_CLICK input=BOUNDED",
             )
         }
+        val resultPageEvidenceVisible = observation.resultVisible == true ||
+            observation.rankProgressVisible || observation.continueControlVisible
         val destinationConfirmed = FreshPostResultDestinationPolicy.isConfirmed(
             observation.destinationScreen,
             observation.destinationConfidence,
             observation.captureAuthorized,
+            resultPageEvidenceVisible = resultPageEvidenceVisible,
         )
         if (destinationConfirmed) {
             destinationDetected.set(true)
@@ -145,7 +148,7 @@ internal class TerminalResultSequenceController(
                 destinationConfirmed = confirmed,
             )
         }
-        if (!observation.destinationScreen.isNullOrBlank()) {
+        if (!observation.destinationScreen.isNullOrBlank() && !resultPageEvidenceVisible) {
             destinationDetected.set(true)
             return stop("positive-destination-unconfirmed", destinationConfirmed = false)
         }

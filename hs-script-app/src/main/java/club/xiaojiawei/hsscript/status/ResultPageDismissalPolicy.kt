@@ -163,8 +163,12 @@ internal object TerminalResultSequenceTimingPolicy {
         observation ?: return false
         val capturedAt = observation.capturedAtNanos
         val age = nowNanos - capturedAt
+        // A contradictory OCR destination can set resultVisible=false while
+        // the same authorized pixels still show the calibrated Continue band.
+        // The pixel control is required here; OCR's destination label is
+        // separately vetoed before it can confirm cleanup.
         if (!observation.captureAuthorized || !observation.continueControlVisible ||
-            observation.resultVisible == false || age !in 0..TimeUnit.MILLISECONDS.toNanos(25_000L)
+            age !in 0..TimeUnit.MILLISECONDS.toNanos(25_000L)
         ) return false
         return lastInputAtNanos == Long.MIN_VALUE ||
             (capturedAt > lastInputAtNanos &&

@@ -717,3 +717,12 @@ this deletion boundary.
   so a later occurrence can notify again. Regress the exact captured
   blank-Continue frame for one notification, a held pause, zero input/restart,
   and reset/re-arm after the modal is gone.
+- Beta v4.16.743 post-win evidence (2026-11-01): authoritative Power.log shows
+  the player WON, while the fresh post-result frame still visibly has the
+  Victory/Continue modal. OCR classified MATCHMAKING and result cleanup logged
+  destination confirmation without dispatch. OCR destination text alone is
+  insufficient when that same authorized frame still contains result, rank
+  progress, or calibrated Continue evidence. Preserve these competing signals
+  at every result-page destination callsite and regress that the cleanup
+  callback is not invoked until a fresh clean destination appears. Keep the
+  positive fresh DECK_SELECTION/MATCHMAKING confirmation path covered.

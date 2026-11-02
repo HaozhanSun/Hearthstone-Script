@@ -322,6 +322,20 @@ class TerminalPageCleanupCoordinatorTest {
         assertEquals(TerminalPageCleanupCoordinator.BeginState.ALREADY_RUNNING, coordinator.begin().state)
         assertFalse(FreshPostResultDestinationPolicy.isConfirmed(null, 0, true))
         assertTrue(FreshPostResultDestinationPolicy.isConfirmed("DECK_SELECTION", 90, true))
+        assertTrue(FreshPostResultDestinationPolicy.isConfirmed("MATCHMAKING", 95, true))
+        assertFalse(
+            FreshPostResultDestinationPolicy.isConfirmed("MATCHMAKING", 95, false),
+            "a stale or unauthorized destination capture cannot complete terminal cleanup",
+        )
+        assertFalse(
+            FreshPostResultDestinationPolicy.isConfirmed(
+                "MATCHMAKING",
+                95,
+                true,
+                resultPageEvidenceVisible = true,
+            ),
+            "destination OCR cannot override result/Continue evidence in the same frame",
+        )
         assertTrue(coordinator.confirmDestination(retry), "caller releases only after fresh authorized deck/queue proof")
         assertEquals(TerminalPageCleanupCoordinator.State.COMPLETED, coordinator.snapshot().state)
     }

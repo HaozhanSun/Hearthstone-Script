@@ -1651,6 +1651,8 @@ object GameUtil {
                                 observation.destinationScreen,
                                 observation.destinationConfidence,
                                 observation.captureAuthorized,
+                                resultPageEvidenceVisible = observation.resultVisible == true ||
+                                    observation.rankProgressVisible || observation.continueControlVisible,
                             ),
                         ) == ResultPageDismissalPolicy.Decision.CONFIRMED_CLEARED &&
                         terminalPageCleanupCoordinator.confirmDestination(heldTicket)
@@ -1685,6 +1687,8 @@ object GameUtil {
                             observation.destinationScreen,
                             observation.destinationConfidence,
                             observation.captureAuthorized,
+                            resultPageEvidenceVisible = observation.resultVisible == true ||
+                                observation.rankProgressVisible || observation.continueControlVisible,
                         ) &&
                         begin.ticket?.let(terminalPageCleanupCoordinator::confirmDestination) == true
                     if (destinationConfirmed &&
@@ -1864,6 +1868,8 @@ object GameUtil {
                         screenObservation.destinationScreen,
                         screenObservation.destinationConfidence,
                         screenObservation.captureAuthorized,
+                        resultPageEvidenceVisible = screenObservation.resultVisible == true ||
+                            screenObservation.rankProgressVisible || screenObservation.continueControlVisible,
                     )
                     resultFlowProgress = ResultPageDismissalPolicy.observeFlow(
                         resultFlowProgress,

@@ -320,6 +320,60 @@ class TerminalResultSequenceControllerTest {
     }
 
     @Test
+    fun `visible Continue evidence vetoes OCR MATCHMAKING callback and keeps bounded result action eligible`() {
+        val observerExecutor = Executors.newSingleThreadScheduledExecutor()
+        val inputExecutor = Executors.newSingleThreadScheduledExecutor()
+        val continueDispatched = CountDownLatch(1)
+        val dispatchCount = AtomicInteger()
+        val confirmCalls = AtomicInteger()
+        val controller = TerminalResultSequenceController(
+            observerExecutor = observerExecutor,
+            inputExecutor = inputExecutor,
+            initialInputCount = 0,
+            initialRetryIntervalMillis = 10L,
+            retryIntervalMillis = { 60_000L },
+            observerIntervalMillis = 10L,
+            monitorIntervalMillis = 10L,
+            maxDurationMillis = 30_000L,
+            observe = {
+                // Reproduce the live failure: OCR says MATCHMAKING while the
+                // authorized client frame still has the result Continue band.
+                ResultScreenObservation(
+                    resultVisible = false,
+                    captureAuthorized = true,
+                    continueControlVisible = true,
+                    destinationScreen = "MATCHMAKING",
+                    destinationConfidence = 95,
+                )
+            },
+            terminalProofValid = { true },
+            paused = { false },
+            sameGame = { true },
+            dispatchContinue = { _, _, _, recordDispatch ->
+                recordDispatch()
+                dispatchCount.incrementAndGet()
+                continueDispatched.countDown()
+                TerminalResultSequenceController.DispatchOutcome(attempted = true, dispatchAccepted = true)
+            },
+            confirmDestination = {
+                confirmCalls.incrementAndGet()
+                true
+            },
+            onStopped = { _, _ -> Unit },
+        )
+        try {
+            controller.start()
+            assertTrue(continueDispatched.await(3, TimeUnit.SECONDS), "visible Continue keeps bounded cleanup eligible")
+            assertEquals(0, confirmCalls.get(), "result pixels must not invoke destination completion callback")
+            assertEquals(1, dispatchCount.get())
+        } finally {
+            controller.cancel("test-cleanup")
+            observerExecutor.shutdownNow()
+            inputExecutor.shutdownNow()
+        }
+    }
+
+    @Test
     fun `fixture-backed second input waits for a post-click page proof and stops at destination`() {
         val defeatFrame = loadImage("/offline-ocr/result-flow/incident-defeat-20261021-124129.png")
         val rankFrame = loadImage("/offline-ocr/result-flow/incident-rank-progress-1-20261021-124134.png")
