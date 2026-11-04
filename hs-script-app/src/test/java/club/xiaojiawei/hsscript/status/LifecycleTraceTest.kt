@@ -1,5 +1,6 @@
 package club.xiaojiawei.hsscript.status
 
+import java.time.Instant
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
@@ -7,6 +8,7 @@ import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class LifecycleTraceTest {
@@ -70,5 +72,69 @@ class LifecycleTraceTest {
         } finally {
             LifecycleTrace.stop("offline-test-cleanup")
         }
+    }
+
+    @Test
+    fun hardCapStoppedGuardianStateRequiresMatchingLineageAndDeployment() {
+        val processStart = Instant.parse("2026-11-02T16:00:00Z")
+        val guardian = """
+            {"intent":"STOPPED","hardCapRunId":"run-1","pid":4242,
+             "processStartTimeUtc":"$processStart","deploymentId":"beta-v746"}
+        """.trimIndent().replace("\n", "")
+
+        assertTrue(
+            LifecycleTrace.hardCapStoppedGuardianStateMatches(
+                guardianJson = guardian,
+                processId = 4242L,
+                processStart = processStart,
+                deploymentId = "beta-v746",
+            ),
+            "a matching STOPPED tombstone must be recognized",
+        )
+        assertFalse(
+            LifecycleTrace.hardCapStoppedGuardianStateMatches(
+                guardian.replace("\"intent\":\"STOPPED\"", "\"intent\":\"RUNNING\""),
+                4242L,
+                processStart,
+                "beta-v746",
+            ),
+            "RUNNING state must never be treated as a hard-cap stop tombstone",
+        )
+        assertFalse(
+            LifecycleTrace.hardCapStoppedGuardianStateMatches(
+                guardian,
+                4243L,
+                processStart,
+                "beta-v746",
+            ),
+            "a stale PID must not suppress a new lifecycle heartbeat",
+        )
+        assertFalse(
+            LifecycleTrace.hardCapStoppedGuardianStateMatches(
+                guardian,
+                4242L,
+                processStart.plusSeconds(1),
+                "beta-v746",
+            ),
+            "a stale process start time must not suppress a new lifecycle heartbeat",
+        )
+        assertFalse(
+            LifecycleTrace.hardCapStoppedGuardianStateMatches(
+                guardian,
+                4242L,
+                processStart,
+                "beta-v747",
+            ),
+            "a stale deployment id must not suppress a new lifecycle heartbeat",
+        )
+        assertFalse(
+            LifecycleTrace.hardCapStoppedGuardianStateMatches(
+                guardian.replace("\"hardCapRunId\":\"run-1\",", ""),
+                4242L,
+                processStart,
+                "beta-v746",
+            ),
+            "a STOPPED state without a hard-cap run id is not authoritative",
+        )
     }
 }

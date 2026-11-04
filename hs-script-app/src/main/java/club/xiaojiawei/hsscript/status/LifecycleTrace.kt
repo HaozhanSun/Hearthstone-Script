@@ -140,15 +140,46 @@ object LifecycleTrace {
             val deploymentId = System.getProperty("hs.script.deployment.id", "unknown").replace(Regex("[^A-Za-z0-9_.-]"), "_")
             val processStart = ProcessHandle.current().info().startInstant().orElse(java.time.Instant.EPOCH)
             val json = """{"schema":3,"pid":${ProcessHandle.current().pid()},"processStartTimeUtc":"$processStart","deploymentId":"$deploymentId","releaseChannel":"${BuildInfo.RELEASE_CHANNEL}","intent":"$intent","working":$working,"paused":${PauseStatus.isPause},"pauseOrigin":"${PauseStatus.pauseOrigin}","gameAlive":${healthSnapshot?.gameAlive ?: false},"activeGame":${healthSnapshot?.activeGame ?: false},"activeMatchmaking":${healthSnapshot?.activeMatchmaking ?: false},"healthSnapshotKnown":${healthSnapshot != null},"appLogPath":"${appLogPath.toAbsolutePath().toString().replace("\\", "\\\\")}","lastAppLogWriteAtUtc":${appLogWriteAt?.let { "\"$it\"" } ?: "null"},"appLogAgeMs":${appLogAgeMs ?: "null"},"heartbeatAtUtc":"${java.time.Instant.now()}","reason":"${reason.replace(Regex("[^A-Za-z0-9_. -]"), "_")}"}"""
-            Files.writeString(temporary, json)
-            try {
-                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-            } catch (_: Exception) {
-                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING)
+            DebugRunHardCapSupervisor.withGuardianStateLock(target) {
+                val currentState = runCatching { Files.readString(target) }.getOrNull()
+                if (currentState != null && hardCapStoppedGuardianStateMatches(
+                        guardianJson = currentState,
+                        processId = ProcessHandle.current().pid(),
+                        processStart = processStart,
+                        deploymentId = deploymentId,
+                    )
+                ) {
+                    log.warn {
+                        "GUARDIAN_STATE_HEARTBEAT_SUPPRESSED reason=hard-cap-stopped-tombstone " +
+                            "pid=${ProcessHandle.current().pid()} processStartUtc=$processStart deploymentId=$deploymentId"
+                    }
+                    return@withGuardianStateLock
+                }
+                Files.writeString(temporary, json)
+                try {
+                    Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+                } catch (_: Exception) {
+                    Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING)
+                }
             }
         }.onFailure { error ->
             log.warn(error) { "GUARDIAN_STATE_WRITE_FAILED" }
         }
+    }
+
+    internal fun hardCapStoppedGuardianStateMatches(
+        guardianJson: String,
+        processId: Long,
+        processStart: java.time.Instant,
+        deploymentId: String,
+    ): Boolean {
+        fun stringField(name: String): String? = Regex("\\\"$name\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"")
+            .find(guardianJson)?.groupValues?.get(1)
+        val pid = Regex("\\\"pid\\\"\\s*:\\s*(\\d+)").find(guardianJson)?.groupValues?.get(1)?.toLongOrNull()
+        val stateStart = stringField("processStartTimeUtc")?.let { runCatching { java.time.Instant.parse(it) }.getOrNull() }
+        return stringField("intent") == "STOPPED" && !stringField("hardCapRunId").isNullOrBlank() &&
+            pid == processId && stateStart?.epochSecond == processStart.epochSecond &&
+            stateStart?.nano == processStart.nano && stringField("deploymentId") == deploymentId
     }
 
     private data class GuardianHealthSnapshot(

@@ -181,7 +181,8 @@ class MainController : MainView() {
     @FXML
     protected fun toggleDebugRun() {
         if (debugRunModeCheckBox.isSelected) {
-            DebugRunController.enable("ui-toggle-on")
+            val snapshot = DebugRunController.enable("ui-toggle-on")
+            debugRunModeCheckBox.isSelected = snapshot.state == DebugRunLease.State.ACTIVE
         } else {
             DebugRunController.disable("ui-toggle-off")
         }
@@ -191,7 +192,8 @@ class MainController : MainView() {
     private fun updateDebugRunStatus() {
         if (!::debugRunStatus.isInitialized) return
         val snapshot = DebugRunController.snapshot()
-        debugRunStatus.text = when (snapshot.state) {
+        val refusal = DebugRunController.hardCapRefusalReason()
+        debugRunStatus.text = refusal?.let { "REFUSED · $it" } ?: when (snapshot.state) {
             DebugRunLease.State.DISABLED -> "DISABLED"
             DebugRunLease.State.ACTIVE -> "ACTIVE · ${formatDebugRunRemaining(snapshot.remainingMillis)}"
             DebugRunLease.State.EXPIRED -> "EXPIRED"

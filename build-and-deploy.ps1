@@ -50,6 +50,8 @@ $cardSdkTarget = Join-Path $projectRoot 'hs-script-card-sdk\target\hs-script-car
 $debugRunnerSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\run-debug.ps1'
 $debugRunnerCmdSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\run-debug.cmd'
 $debugRunnerHardCapSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\debug-run-hardcap.psm1'
+$debugRunnerHardCapWatchdogSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\debug-run-hardcap-watchdog.ps1'
+$debugRunnerHardCapLauncherSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\debug-run-hardcap-launcher.ps1'
 $launcherVbsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-as-admin.vbs'
 $launcherPsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-newest-as-admin.ps1'
 $launcherGuardianPolicySource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launcher-guardian-policy.ps1'
@@ -207,7 +209,7 @@ Write-Output "BUILD_TIMESTAMP_PACIFIC=$buildTimestampPacific"
 
 $mavenBaseArgs = @('-f', $pomPath, '-pl', 'hs-script-app', '-am', '-Pjvm', '-Djava.version=24', '-Dproject.build.outputTimestamp=0', "-Dbuild-channel=$Channel")
 if (-not $SkipTests) {
-    $testArgs = $mavenBaseArgs + @('-DforkCount=0', '-Dtest=AbstractLogListenerTest,CardTimingPolicyTest,CardIdentityCoverageTest,ParsedCardActionFactoryTest,MonteCarloTreeNodeDeferredActionTest,MctsReplayTraceTest,MctsRoundScreenshotTest,SurrenderPolicyTest,GameUtilSurrenderGuardTest,ScreenStateRecoveryTest,ScreenStateRoiSelectorTest,ScreenRecoveryFocusRetryPolicyTest,UnknownStateScreenshotTest,TurnEndActionGuardTest,PirateDemonHunterMctsExperimentModelTest,PirateWarriorMctsGoldenScenarioTest,PirateWarriorMctsModelTest,PirateWarriorOfflineReplayTest,ElementalMageMctsStrategyTest,DebugRunLeaseTest,DebugRunUiContractTest,ScheduleOverrideLogGateTest,StartupRunWindowTest,WorkTimeJitterTest,WorkTimeRuleSetTest,WorkTimeRuleTest,GlobalHotkeyListenerTest,UiLogFormatterTest', '-Dsurefire.failIfNoSpecifiedTests=false', 'test')
+    $testArgs = $mavenBaseArgs + @('-DforkCount=0', '-Dtest=AbstractLogListenerTest,CardTimingPolicyTest,CardIdentityCoverageTest,ParsedCardActionFactoryTest,MonteCarloTreeNodeDeferredActionTest,MctsReplayTraceTest,MctsRoundScreenshotTest,SurrenderPolicyTest,GameUtilSurrenderGuardTest,ScreenStateRecoveryTest,ScreenStateRoiSelectorTest,ScreenRecoveryFocusRetryPolicyTest,UnknownStateScreenshotTest,TurnEndActionGuardTest,PirateDemonHunterMctsExperimentModelTest,PirateWarriorMctsGoldenScenarioTest,PirateWarriorMctsModelTest,PirateWarriorOfflineReplayTest,ElementalMageMctsStrategyTest,DebugRunLeaseTest,DebugRunHardCapSupervisorTest,DebugRunUiContractTest,BuildChannelUiContractTest,MulliganRankDispatchBarrierTest,RankEligibilityPolicyTest,NeverSurrenderPolicyTest,MulliganRankPreflightTest,StuckScreenUnblockCallsiteIntegrationTest,TerminalResultDismissalFixtureTest,ScheduleOverrideLogGateTest,StartupRunWindowTest,WorkTimeJitterTest,WorkTimeRuleSetTest,WorkTimeRuleTest,GlobalHotkeyListenerTest,UiLogFormatterTest', '-Dsurefire.failIfNoSpecifiedTests=false', 'test')
     Write-Output 'TARGETED_TESTS=enabled'
     & $mavenWrapper @testArgs
     if ($LASTEXITCODE -ne 0) { throw "Targeted regression tests failed with exit code $LASTEXITCODE" }
@@ -321,6 +323,8 @@ try {
     Copy-Item -LiteralPath $debugRunnerSource -Destination (Join-Path $runtimeRoot 'run-debug.ps1') -Force
     Copy-Item -LiteralPath $debugRunnerCmdSource -Destination (Join-Path $runtimeRoot 'run-debug.cmd') -Force
     Copy-Item -LiteralPath $debugRunnerHardCapSource -Destination (Join-Path $runtimeRoot 'debug-run-hardcap.psm1') -Force
+    Copy-Item -LiteralPath $debugRunnerHardCapWatchdogSource -Destination (Join-Path $runtimeRoot 'debug-run-hardcap-watchdog.ps1') -Force
+    Copy-Item -LiteralPath $debugRunnerHardCapLauncherSource -Destination (Join-Path $runtimeRoot 'debug-run-hardcap-launcher.ps1') -Force
     Copy-Item -LiteralPath $launcherVbsSource -Destination (Join-Path $runtimeRoot 'launch-as-admin.vbs') -Force
     Copy-Item -LiteralPath $launcherPsSource -Destination (Join-Path $runtimeRoot 'launch-newest-as-admin.ps1') -Force
     Copy-Item -LiteralPath $launcherGuardianPolicySource -Destination (Join-Path $runtimeRoot 'launcher-guardian-policy.ps1') -Force

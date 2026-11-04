@@ -74,6 +74,16 @@ class DebugRunUiContractTest {
         assertTrue(controllerText.contains("DEBUG_OVERRIDE_UI_PREARM_RETAINED"))
         assertTrue(controllerText.contains("startupDefaultHandled"))
         assertTrue(controllerText.contains("DEBUG_OVERRIDE_DEFAULT_ACTIVE"))
+        assertTrue(controllerText.contains("DebugRunHardCapSupervisor.arm("))
+        assertTrue(controllerText.contains("DebugRunHardCapSupervisor.cancel("))
+        assertTrue(controllerText.contains("NeverSurrenderPolicy.enabled()"))
+        assertTrue(controllerText.contains("ConfigUtil.addBooleanChangeListener"))
+        assertTrue(controllerText.contains("never-surrender-enabled-during-debug-run"))
+        assertTrue(controllerText.contains("refuseUncappedRun"))
+        assertTrue(controllerText.contains("prearmBeforeScheduleChecks"))
+        assertTrue(controllerText.contains("Hard-cap watchdog could not be armed"))
+        assertTrue(mainControllerText.contains("REFUSED · \$it"))
+        assertTrue(mainControllerText.contains("debugRunModeCheckBox.isSelected = snapshot.state == DebugRunLease.State.ACTIVE"))
 
         val runner = moduleRoot.resolve(Path.of("src", "main", "resources", "bat", "run-debug.ps1"))
         val runnerText = Files.readString(runner)
@@ -84,6 +94,10 @@ class DebugRunUiContractTest {
         assertTrue(runnerText.contains("E2E_HARD_CAP_EXPIRED"))
         assertTrue(runnerText.contains("deadline-anchored-to-first-beta-jvm-start"))
         assertTrue(runnerText.contains("debug-run-hardcap.psm1"))
+        assertTrue(runnerText.contains("Set-DebugRunHardCapLease"))
+        assertTrue(runnerText.contains("-LeasePath \$hardCapLeasePath"))
+        assertTrue(runnerText.contains("-StopMarkerPath \$hardCapStopMarkerPath"))
+        assertTrue(runnerText.contains("-OwnershipLockPath \$hardCapOwnershipLockPath"))
         assertTrue(runnerText.contains("deployment-manifest.json"))
         assertTrue(runnerText.contains("manifest.appJar"))
         assertTrue(runnerText.contains("manifest.appJarSha256"))
@@ -105,6 +119,8 @@ class DebugRunUiContractTest {
         assertTrue(deploy.contains("run-debug.ps1"))
         assertTrue(deploy.contains("debugRunnerSource"))
         assertTrue(deploy.contains("debugRunnerHardCapSource"))
+        assertTrue(deploy.contains("debugRunnerHardCapWatchdogSource"))
+        assertTrue(deploy.contains("debugRunnerHardCapLauncherSource"))
 
         val hardCapModule = moduleRoot.resolve(Path.of(
             "src", "main", "resources", "bat", "debug-run-hardcap.psm1",
@@ -115,6 +131,42 @@ class DebugRunUiContractTest {
         assertTrue(hardCapModuleText.contains("Get-DebugRunHearthstoneDescendantIds"))
         assertTrue(hardCapModuleText.contains("STALE_OR_EXITED_TARGET"))
         assertTrue(hardCapModuleText.contains("ALREADY_ISSUED"))
+        assertTrue(hardCapModuleText.contains("Test-DebugRunHardCapLeaseCurrent"))
+        assertTrue(hardCapModuleText.contains("Set-DebugRunHardCapGuardianStopIntent"))
+        assertTrue(hardCapModuleText.contains("CANCELLED_OR_REPLACED"))
+        assertTrue(hardCapModuleText.contains("GUARDIAN_STATE_UNVERIFIED"))
+        assertTrue(hardCapModuleText.contains("Enter-DebugRunHardCapOwnershipLock"))
+        assertTrue(hardCapModuleText.contains("Exit-DebugRunHardCapOwnershipLock"))
+        assertTrue(hardCapModuleText.contains("CANCELLED_OR_REPLACED_AFTER_PREPARE"))
+        assertTrue(hardCapModuleText.contains("StopMarkerPath"))
+        assertTrue(hardCapModuleText.contains("OWNERSHIP_LOCK_REQUIRED"))
+
+        val watchdog = moduleRoot.resolve(Path.of(
+            "src", "main", "resources", "bat", "debug-run-hardcap-watchdog.ps1",
+        ))
+        assertTrue(Files.isRegularFile(watchdog), "GUI Debug Run watchdog must remain packaged")
+        val watchdogText = Files.readString(watchdog)
+        assertTrue(watchdogText.contains("-LeasePath"))
+        assertTrue(watchdogText.contains("-GuardianStatePath"))
+        assertTrue(watchdogText.contains("-StopMarkerPath"))
+        assertTrue(watchdogText.contains("-OwnershipLockPath"))
+        assertTrue(watchdogText.contains("Invoke-DebugRunHardCapStop"))
+        assertTrue(watchdogText.contains("Write-DebugRunHardCapJsonAtomically"))
+
+        val hardCapLauncher = moduleRoot.resolve(Path.of(
+            "src", "main", "resources", "bat", "debug-run-hardcap-launcher.ps1",
+        ))
+        assertTrue(Files.isRegularFile(hardCapLauncher), "hard-cap launcher must remain packaged")
+        val hardCapLauncherText = Files.readString(hardCapLauncher)
+        assertTrue(hardCapLauncherText.contains("Start-Process"))
+        assertTrue(hardCapLauncherText.contains("-WindowStyle Hidden"))
+        assertTrue(hardCapLauncherText.contains("\$WatchdogPath"))
+
+        val lifecycle = Files.readString(moduleRoot.resolve(Path.of(
+            "src", "main", "java", "club", "xiaojiawei", "hsscript", "status", "LifecycleTrace.kt",
+        )))
+        assertTrue(lifecycle.contains("DebugRunHardCapSupervisor.withGuardianStateLock(target)"))
+        assertTrue(lifecycle.contains("GUARDIAN_STATE_HEARTBEAT_SUPPRESSED reason=hard-cap-stopped-tombstone"))
 
         val lease = moduleRoot.resolve(Path.of(
             "src",

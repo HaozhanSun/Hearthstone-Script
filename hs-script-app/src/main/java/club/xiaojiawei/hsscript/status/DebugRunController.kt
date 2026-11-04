@@ -3,9 +3,12 @@ package club.xiaojiawei.hsscript.status
 import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
+import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -19,7 +22,10 @@ object DebugRunController {
     private val timestampFormatter = DateTimeFormatter.ISO_OFFSET_DATE_TIME.withZone(ZoneOffset.UTC)
     private val metadataLock = Any()
     private var activeRunId: String? = null
+    private var hardCapArmedRunId: String? = null
     private var startupDefaultHandled = false
+    @Volatile
+    private var hardCapRefusalReason: String? = null
 
     private val lease = DebugRunLease(
         schedule = { delayNanos, task ->
@@ -35,13 +41,30 @@ object DebugRunController {
         },
     )
 
+    init {
+        // The diagnostic switch can be enabled after a Debug Run starts. Keep
+        // the external hard cap in sync with that live setting transition.
+        ConfigUtil.addBooleanChangeListener { key, enabled ->
+            if (key == ConfigEnum.NEVER_SURRENDER) {
+                onNeverSurrenderSettingChanged(enabled)
+            }
+        }
+    }
+
     fun enable(reason: String = "toggle-on"): DebugRunLease.Snapshot = synchronized(metadataLock) {
         val wasActive = lease.isActiveWithoutExpiring()
         val snapshot = lease.enable()
         if (snapshot.state == DebugRunLease.State.ACTIVE && !wasActive) {
             activeRunId = UUID.randomUUID().toString()
+            hardCapRefusalReason = null
         }
         logSnapshot("DEBUG_OVERRIDE_REQUESTED", snapshot, reason, activeRunId)
+        if (hardCapRequired() && hardCapArmedRunId != activeRunId) {
+            val armed = armHardCap(snapshot, reason)
+            if (DebugRunHardCapSettingPolicy.mustRefuseUncappedRun(true, armed)) {
+                return@synchronized refuseUncappedRun(snapshot, "enable:$reason")
+            }
+        }
         if (!wasActive) {
             logSnapshot("DEBUG_OVERRIDE_ACTIVE", snapshot, reason, activeRunId)
             logRuntime("ACTIVE", snapshot, activeRunId)
@@ -65,9 +88,20 @@ object DebugRunController {
     fun prearmBeforeScheduleChecks(): Boolean {
         if (System.getProperty(PREARM_PROPERTY) != "true") return false
         synchronized(metadataLock) {
-            if (lease.isActiveWithoutExpiring()) return true
-            val snapshot = lease.enable()
-            activeRunId = UUID.randomUUID().toString()
+            val wasActive = lease.isActiveWithoutExpiring()
+            val snapshot = if (wasActive) lease.snapshot() else lease.enable()
+            if (!wasActive) {
+                activeRunId = UUID.randomUUID().toString()
+                hardCapRefusalReason = null
+            }
+            if (hardCapRequired() && hardCapArmedRunId != activeRunId) {
+                val armed = armHardCap(snapshot, "process-prearm")
+                if (DebugRunHardCapSettingPolicy.mustRefuseUncappedRun(true, armed)) {
+                    refuseUncappedRun(snapshot, "process-prearm")
+                    return false
+                }
+            }
+            if (wasActive) return true
             logSnapshot("DEBUG_OVERRIDE_PREARMED", snapshot, "process-prearm", activeRunId)
             logSnapshot("DEBUG_OVERRIDE_ACTIVE", snapshot, "process-prearm", activeRunId)
             logRuntime("ACTIVE", snapshot, activeRunId)
@@ -78,9 +112,12 @@ object DebugRunController {
     fun disable(reason: String = "toggle-off"): DebugRunLease.Snapshot = synchronized(metadataLock) {
         val runId = activeRunId
         val snapshot = lease.disable()
+        DebugRunHardCapSupervisor.cancel(reason)
         logSnapshot("DEBUG_OVERRIDE_DISABLED", snapshot, reason, runId)
         logRuntime("STOPPED", snapshot, runId)
         activeRunId = null
+        hardCapArmedRunId = null
+        hardCapRefusalReason = null
         WorkTimeListener.checkWork()
         if (!WorkTimeListener.canWork()) WorkTimeListener.working = false
         snapshot
@@ -92,6 +129,12 @@ object DebugRunController {
             startupDefaultHandled = true
             if (System.getProperty(PREARM_PROPERTY) == "true" && lease.isActiveWithoutExpiring()) {
                 val snapshot = lease.snapshot()
+                if (hardCapRequired() && hardCapArmedRunId != activeRunId) {
+                    val armed = armHardCap(snapshot, "process-prearm-retained")
+                    if (DebugRunHardCapSettingPolicy.mustRefuseUncappedRun(true, armed)) {
+                        return@synchronized refuseUncappedRun(snapshot, "process-prearm-retained")
+                    }
+                }
                 ConfigUtil.putBoolean(ConfigEnum.DEBUG_RUN_MODE, true)
                 log.info { "DEBUG_OVERRIDE_UI_PREARM_RETAINED runId=${activeRunId ?: "unknown"}" }
                 return@synchronized snapshot
@@ -99,6 +142,13 @@ object DebugRunController {
 
             val snapshot = lease.resetForRestart(defaultEnabled = true)
             activeRunId = UUID.randomUUID().toString()
+            hardCapRefusalReason = null
+            if (hardCapRequired()) {
+                val armed = armHardCap(snapshot, reason)
+                if (DebugRunHardCapSettingPolicy.mustRefuseUncappedRun(true, armed)) {
+                    return@synchronized refuseUncappedRun(snapshot, "startup-default:$reason")
+                }
+            }
             ConfigUtil.putBoolean(ConfigEnum.DEBUG_RUN_MODE, true)
             logSnapshot("DEBUG_OVERRIDE_DEFAULT_ACTIVE", snapshot, reason, activeRunId)
             logRuntime("ACTIVE", snapshot, activeRunId)
@@ -110,6 +160,8 @@ object DebugRunController {
     fun snapshot(): DebugRunLease.Snapshot = lease.snapshot()
 
     fun isActive(): Boolean = lease.isActiveWithoutExpiring()
+
+    fun hardCapRefusalReason(): String? = hardCapRefusalReason
 
     fun currentOverrideInfo(): ScheduleOverrideInfo? = synchronized(metadataLock) {
         val snapshot = lease.snapshot()
@@ -130,10 +182,13 @@ object DebugRunController {
                 log.info { "DEBUG_OVERRIDE_UI_PREARM_RETAINED runId=${activeRunId ?: "unknown"}" }
                 return
             }
+            DebugRunHardCapSupervisor.cancel("process-restart-no-live-lease")
+            hardCapArmedRunId = null
             val snapshot = lease.resetForRestart()
             ConfigUtil.putBoolean(ConfigEnum.DEBUG_RUN_MODE, false)
             logSnapshot("DEBUG_OVERRIDE_DISABLED", snapshot, "process-restart-no-live-lease", activeRunId)
             activeRunId = null
+            hardCapRefusalReason = null
         }
     }
 
@@ -144,6 +199,63 @@ object DebugRunController {
             "$event source=debug-run runId=${runId ?: "n/a"} start=$start end=$end " +
                 "mode=${currentMode()} provider=${currentProvider()} reason=$reason remainingMs=${snapshot.remainingMillis}"
         }
+    }
+
+    /** Hard-stop ownership is required for a Beta Never Surrender Debug Run. */
+    private fun hardCapRequired(): Boolean =
+        BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta" && NeverSurrenderPolicy.enabled()
+
+    private fun armHardCap(snapshot: DebugRunLease.Snapshot, reason: String): Boolean {
+        if (!hardCapRequired()) return true
+        val runId = activeRunId ?: return false
+        val armed = DebugRunHardCapSupervisor.arm(
+            snapshot = snapshot,
+            runId = runId,
+            betaChannel = true,
+            neverSurrenderEnabled = true,
+            reason = reason,
+        )
+        if (armed) {
+            hardCapArmedRunId = runId
+            hardCapRefusalReason = null
+        }
+        return armed
+    }
+
+    private fun onNeverSurrenderSettingChanged(enabled: Boolean) = synchronized(metadataLock) {
+        val snapshot = lease.snapshot()
+        when (DebugRunHardCapSettingPolicy.action(
+            neverSurrenderEnabled = enabled,
+            leaseActive = snapshot.state == DebugRunLease.State.ACTIVE,
+        )) {
+            DebugRunHardCapSettingPolicy.Action.ARM ->
+                if (hardCapArmedRunId != activeRunId) {
+                    val armed = armHardCap(snapshot, "never-surrender-enabled-during-debug-run")
+                    if (DebugRunHardCapSettingPolicy.mustRefuseUncappedRun(true, armed)) {
+                        refuseUncappedRun(snapshot, "never-surrender-enabled-during-debug-run")
+                    }
+                }
+            DebugRunHardCapSettingPolicy.Action.NO_OP -> Unit
+        }
+    }
+
+    /** A refused cap must not leave the Debug Run or automation active without process-stop protection. */
+    private fun refuseUncappedRun(snapshot: DebugRunLease.Snapshot, reason: String): DebugRunLease.Snapshot {
+        val runId = activeRunId
+        val disabled = lease.disable()
+        DebugRunHardCapSupervisor.cancel("hard-cap-arm-failed:$reason")
+        activeRunId = null
+        hardCapArmedRunId = null
+        hardCapRefusalReason = "Hard-cap watchdog could not be armed; Debug Run was refused."
+        ConfigUtil.putBoolean(ConfigEnum.DEBUG_RUN_MODE, false)
+        PauseStatus.setManualPause(true)
+        WorkTimeListener.working = false
+        logSnapshot("DEBUG_OVERRIDE_REFUSED", disabled, reason, runId)
+        log.info { "DEBUG_OVERRIDE_REFUSAL_CONTEXT requestedEndEpochMs=${snapshot.endEpochMillis} activeBeforeRefusal=${snapshot.state}" }
+        logRuntime("STOPPED", disabled, runId)
+        log.error { "DEBUG_RUN_HARD_CAP_REFUSED reason=$reason runId=${runId ?: "n/a"} action=LEASE_DISABLED pause=MANUAL" }
+        WorkTimeListener.checkWork()
+        return disabled
     }
 
     private fun logRuntime(event: String, snapshot: DebugRunLease.Snapshot, runId: String?) {

@@ -54,6 +54,9 @@ if (-not (Test-Path -LiteralPath $hardCapModulePath -PathType Leaf)) {
 Import-Module -Name $hardCapModulePath -Force -ErrorAction Stop
 
 New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
+$hardCapLeasePath = Join-Path $logDirectory ("e2e-debug-run-hardcap-{0}.lease.json" -f $runId)
+$hardCapStopMarkerPath = Join-Path $logDirectory ("e2e-debug-run-hardcap-{0}.stop.json" -f $runId)
+$hardCapOwnershipLockPath = Join-Path $logDirectory ("e2e-debug-run-hardcap-{0}.ownership.lock" -f $runId)
 ## The ProcessStartInfo below supplies the working directory. Keeping the
 ## launcher in the caller's directory avoids permission failures from a
 ## secondary PowerShell session.
@@ -316,7 +319,12 @@ while ($true) {
         $hardCapDeadlineUtc = $processIdentity.StartUtc.AddSeconds($hardCapSeconds)
     }
     $hardCapContext = New-DebugRunHardCapContext -RunId $runId -ProcessId $processIdentity.ProcessId -ProcessStartUtc $processIdentity.StartUtc -DeadlineUtc $hardCapDeadlineUtc
-    $hardCapBackstop = Start-DebugRunHardCapBackstop -Context $hardCapContext -ModulePath $hardCapModulePath
+    if (-not (Set-DebugRunHardCapLease -Context $hardCapContext -LeasePath $hardCapLeasePath -OwnershipLockPath $hardCapOwnershipLockPath)) {
+        throw "Could not persist the E2E hard-cap lease: $hardCapLeasePath"
+    }
+    $hardCapBackstop = Start-DebugRunHardCapBackstop -Context $hardCapContext -ModulePath $hardCapModulePath `
+        -LeasePath $hardCapLeasePath -StopMarkerPath $hardCapStopMarkerPath `
+        -OwnershipLockPath $hardCapOwnershipLockPath
     $hardCapDelayMilliseconds = Get-DebugRunHardCapDelayMilliseconds -DeadlineUtc $hardCapDeadlineUtc
     Write-Trace ("E2E_HARD_CAP_ARMED runId={0} attempt={1} targetPid={2} targetStartUtc={3:o} deadlineUtc={4:o} capSeconds={5} remainingMs={6}" -f $runId, $attempt, $processIdentity.ProcessId, $processIdentity.StartUtc, $hardCapDeadlineUtc, $hardCapSeconds, $hardCapDelayMilliseconds)
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
@@ -445,7 +453,9 @@ while ($true) {
                 Write-Trace ("E2E_HARD_CAP_BACKSTOP_RESULT runId={0} attempt={1} status={2} rootStopped={3} hearthstoneChildren={4}" -f $runId, $attempt, $_.Status, $_.RootStopped, ($_.HearthstoneChildIds -join ','))
             }
             if (-not $process.HasExited) {
-                $fallbackResult = Invoke-DebugRunHardCapStop -Context $hardCapContext
+                $fallbackResult = Invoke-DebugRunHardCapStop -Context $hardCapContext `
+                    -LeasePath $hardCapLeasePath -StopMarkerPath $hardCapStopMarkerPath `
+                    -OwnershipLockPath $hardCapOwnershipLockPath
                 Write-Trace ("E2E_HARD_CAP_FALLBACK_RESULT runId={0} attempt={1} status={2} rootStopped={3} hearthstoneChildren={4}" -f $runId, $attempt, $fallbackResult.Status, $fallbackResult.RootStopped, ($fallbackResult.HearthstoneChildIds -join ','))
             }
             $process.WaitForExit(15000)
