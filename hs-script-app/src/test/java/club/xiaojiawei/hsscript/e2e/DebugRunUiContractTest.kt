@@ -11,6 +11,32 @@ import kotlin.test.assertTrue
  */
 class DebugRunUiContractTest {
     @Test
+    fun `deployment preflight rejects missing GUI hard cap scripts before runtime mutation`() {
+        val workingDirectory = Path.of("").toAbsolutePath().normalize()
+        val moduleRoot = sequenceOf(
+            workingDirectory,
+            workingDirectory.resolve("hs-script-app"),
+            workingDirectory.parent?.resolve("hs-script-app"),
+        ).filterNotNull().firstOrNull { Files.isDirectory(it.resolve("src")) }
+            ?: error("hs-script-app module root was not found from $workingDirectory")
+        val deploy = Files.readString(moduleRoot.parent.resolve("build-and-deploy.ps1"))
+        val preflight = deploy.indexOf("foreach (\$requiredSource in @(")
+        val runtimeGate = deploy.indexOf("Enter-HsScriptRuntimeGate")
+        assertTrue(preflight >= 0, "deployment must have a required-source preflight")
+        assertTrue(runtimeGate > preflight, "required-source preflight must precede runtime mutation")
+        assertTrue(deploy.indexOf("\$debugRunnerHardCapWatchdogSource", preflight) in preflight until runtimeGate)
+        assertTrue(deploy.indexOf("\$debugRunnerHardCapLauncherSource", preflight) in preflight until runtimeGate)
+        assertTrue(
+            deploy.indexOf("throw \"Required deployment source is missing:", preflight) in preflight until runtimeGate,
+            "a missing watchdog/bootstrap must refuse the release before runtime mutation",
+        )
+        val runnerValidation = deploy.indexOf("foreach (\$runner in @(")
+        assertTrue(runnerValidation > runtimeGate)
+        assertTrue(deploy.indexOf("\$debugRunnerHardCapWatchdogSource", runnerValidation) > runnerValidation)
+        assertTrue(deploy.indexOf("\$debugRunnerHardCapLauncherSource", runnerValidation) > runnerValidation)
+    }
+
+    @Test
     fun `debug run UI is wired to the non-persistent thirty minute lease`() {
         // Surefire normally runs with hs-script-app as user.dir, while an
         // IDE and a root Maven invocation can use the repository root.

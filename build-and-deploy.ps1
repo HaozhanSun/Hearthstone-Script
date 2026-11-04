@@ -64,7 +64,7 @@ $manifestPath = Join-Path $runtimeRoot 'deployment-manifest.json'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 . (Join-Path $projectRoot 'build-version-utils.ps1')
 
-foreach ($requiredSource in @($deploymentContractSource, $launcherGuardianPolicySource, $betaTempPolicySource, $diagnosticRetentionSource, $paddleXConfigUtilsSource, $betaDeploymentProcessUtilsSource)) {
+foreach ($requiredSource in @($deploymentContractSource, $launcherGuardianPolicySource, $betaTempPolicySource, $diagnosticRetentionSource, $paddleXConfigUtilsSource, $betaDeploymentProcessUtilsSource, $debugRunnerHardCapWatchdogSource, $debugRunnerHardCapLauncherSource)) {
     if (-not (Test-Path -LiteralPath $requiredSource -PathType Leaf)) {
         throw "Required deployment source is missing: $requiredSource"
     }
@@ -159,7 +159,7 @@ if (-not (Test-Path -LiteralPath $pomPath -PathType Leaf)) { throw "pom.xml miss
 if (-not (Test-Path -LiteralPath $mavenWrapper -PathType Leaf)) { throw "Maven wrapper missing: $mavenWrapper" }
 if (-not (Test-Path -LiteralPath $runtimeRoot -PathType Container)) { throw "Runtime root missing: $runtimeRoot" }
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'hs-script-app\assembly.xml') -PathType Leaf)) { throw 'Full reactor assembly descriptor is missing' }
-foreach ($runner in @($debugRunnerSource, $debugRunnerCmdSource, $debugRunnerHardCapSource)) {
+foreach ($runner in @($debugRunnerSource, $debugRunnerCmdSource, $debugRunnerHardCapSource, $debugRunnerHardCapWatchdogSource, $debugRunnerHardCapLauncherSource)) {
     if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw "Debug runner source missing: $runner" }
 }
 
@@ -209,7 +209,7 @@ Write-Output "BUILD_TIMESTAMP_PACIFIC=$buildTimestampPacific"
 
 $mavenBaseArgs = @('-f', $pomPath, '-pl', 'hs-script-app', '-am', '-Pjvm', '-Djava.version=24', '-Dproject.build.outputTimestamp=0', "-Dbuild-channel=$Channel")
 if (-not $SkipTests) {
-    $testArgs = $mavenBaseArgs + @('-DforkCount=0', '-Dtest=AbstractLogListenerTest,CardTimingPolicyTest,CardIdentityCoverageTest,ParsedCardActionFactoryTest,MonteCarloTreeNodeDeferredActionTest,MctsReplayTraceTest,MctsRoundScreenshotTest,SurrenderPolicyTest,GameUtilSurrenderGuardTest,ScreenStateRecoveryTest,ScreenStateRoiSelectorTest,ScreenRecoveryFocusRetryPolicyTest,UnknownStateScreenshotTest,TurnEndActionGuardTest,PirateDemonHunterMctsExperimentModelTest,PirateWarriorMctsGoldenScenarioTest,PirateWarriorMctsModelTest,PirateWarriorOfflineReplayTest,ElementalMageMctsStrategyTest,DebugRunLeaseTest,DebugRunHardCapSupervisorTest,DebugRunUiContractTest,BuildChannelUiContractTest,MulliganRankDispatchBarrierTest,RankEligibilityPolicyTest,NeverSurrenderPolicyTest,MulliganRankPreflightTest,StuckScreenUnblockCallsiteIntegrationTest,TerminalResultDismissalFixtureTest,ScheduleOverrideLogGateTest,StartupRunWindowTest,WorkTimeJitterTest,WorkTimeRuleSetTest,WorkTimeRuleTest,GlobalHotkeyListenerTest,UiLogFormatterTest', '-Dsurefire.failIfNoSpecifiedTests=false', 'test')
+    $testArgs = $mavenBaseArgs + @('-DforkCount=0', '-Dtest=AbstractLogListenerTest,CardTimingPolicyTest,CardIdentityCoverageTest,ParsedCardActionFactoryTest,MonteCarloTreeNodeDeferredActionTest,MctsReplayTraceTest,MctsRoundScreenshotTest,SurrenderPolicyTest,GameUtilSurrenderGuardTest,ScreenStateRecoveryTest,ScreenStateRoiSelectorTest,ScreenRecoveryFocusRetryPolicyTest,UnknownStateScreenshotTest,TurnEndActionGuardTest,PirateDemonHunterMctsExperimentModelTest,PirateWarriorMctsGoldenScenarioTest,PirateWarriorMctsModelTest,PirateWarriorOfflineReplayTest,ElementalMageMctsStrategyTest,DebugRunLeaseTest,DebugRunHardCapSupervisorTest,DebugRunUiContractTest,BuildChannelUiContractTest,ActionDispatchGateTest,MulliganRankDispatchBarrierTest,RankEligibilityPolicyTest,CurrentRankDetectorCancellationTest,NeverSurrenderPolicyTest,MulliganRankPreflightTest,StuckScreenUnblockCallsiteIntegrationTest,TerminalResultDismissalFixtureTest,MatchmakingGuardPolicyTest,MatchmakingSearchRecoveryTest,ScheduleOverrideLogGateTest,StartupRunWindowTest,WorkTimeJitterTest,WorkTimeRuleSetTest,WorkTimeRuleTest,GlobalHotkeyListenerTest,UiLogFormatterTest', '-Dsurefire.failIfNoSpecifiedTests=false', 'test')
     Write-Output 'TARGETED_TESTS=enabled'
     & $mavenWrapper @testArgs
     if ($LASTEXITCODE -ne 0) { throw "Targeted regression tests failed with exit code $LASTEXITCODE" }
