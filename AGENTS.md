@@ -2,6 +2,17 @@
 
 These rules apply to every Codex session that changes or builds this project.
 
+## Canonical operations SOP and reconciliation
+
+- Before any deployment, both the implementation worker and the secretary/release owner must read
+  [`docs/OPERATIONS-SOP.md`](docs/OPERATIONS-SOP.md) and record `Deployment SOP read` in their
+  deployment checklist or handoff. The SOP organizes operational procedure; the stricter
+  requirements in this file and `docs/RELEASE-CHANNELS.md` remain authoritative.
+- Before editing an SOP, audit this file, `docs/RELEASE-CHANNELS.md`, the current canonical SOP,
+  and relevant problem-resolution closeouts for duplicate or conflicting rules. Record what was
+  consolidated versus retained, reconcile to one authoritative rule by cross-reference, and never
+  silently weaken a channel, safety, retention, or evidence requirement.
+
 ## Completion requires forced installation
 
 For every user-requested code or configuration change that is reported as complete,
