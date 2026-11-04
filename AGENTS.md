@@ -10,8 +10,13 @@ These rules apply to every Codex session that changes or builds this project.
   requirements in this file and `docs/RELEASE-CHANNELS.md` remain authoritative.
 - Before editing an SOP, audit this file, `docs/RELEASE-CHANNELS.md`, the current canonical SOP,
   and relevant problem-resolution closeouts for duplicate or conflicting rules. Record what was
-  consolidated versus retained, reconcile to one authoritative rule by cross-reference, and never
+  consolidated versus retained, and reconcile to one authoritative rule by cross-reference. The
+  user's newest explicit instruction supersedes older local guidance; use the stricter safety rule
+  only when authority or intent remains genuinely ambiguous, record that resolution, and never
   silently weaken a channel, safety, retention, or evidence requirement.
+- Each deployment-related closeout must classify every gotcha, finding, error, and fix as either
+  a reusable categorized SOP step/check/test (then add it to the relevant Deployment subsection
+  after that audit) or a one-off item (then record the specific reason it is not reusable).
 
 ## Completion requires forced installation
 
@@ -68,28 +73,31 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
 
 ## Rank authorization and surrender safety
 
-- Hard eligibility rule: the script may enter constructed matchmaking or
-  continue a constructed game only after fresh, positively verified OCR reads
-  the current constructed rank as exactly `5` or exactly `10`. League/tier text
-  (Silver, Gold, Platinum, etc.) is not required to authorize those two
-  numbers; Legendary and every other numeric value are ineligible.
-- Enforce this before the first matchmaking input and again at the active-game
-  rank preflight. A post-match/pre-mulligan check alone is too late to satisfy
-  the no-matchmaking rule.
+- Matchmaking must not be blocked by rank. Always allow the constructed match
+  to start; rank policy begins after the game starts at the active-game,
+  pre-mulligan preflight.
+- Ordinary in-game play requires fresh, positively verified OCR of exactly
+  `5` or exactly `10`. League/tier text (Silver, Gold, Platinum, etc.) is not
+  required to authorize those two numbers; Legendary and every other numeric
+  value, missing evidence, and unknown evidence are ineligible and must route
+  to the mandatory surrender path.
 - Surrender-streak protection may block an automatic surrender, but it must
   never grant rank eligibility or bypass the rank gate. Win-streak policy also
   cannot turn an ineligible/unknown rank into an allowed match.
 - PaddleX timeout, cancellation, translated exception, missing/empty badge,
   unknown or conflicting OCR, confidence below `0.90`, stale
-  cached evidence, invalid capture bounds, and mode/phase mismatch all fail
-  closed: do not queue or continue. Never reuse a prior game's rank as current
-  evidence. Legacy OCR may authorize only with repeated agreeing numeric reads.
+  cached evidence, invalid capture bounds, and active-game mode/phase mismatch
+  all fail closed to mandatory surrender. Never reuse a prior game's rank as
+  current evidence. Legacy OCR may authorize only with repeated agreeing
+  numeric reads.
 - Every rank-policy change must have deterministic offline tests for exact
   boundaries `4/5/6`, `9/10/11`, Legendary numeric ratings `>20`, unknown and
   missing evidence, low confidence, PaddleX failure/cancellation/translated
   exception, stale cache, mode mismatch, and surrender-streak precedence. Tests
-  must assert that no matchmaking dispatch occurs unless the rank gate allows
-  it, and preserve this precedence against future strategy/streak changes.
+  must assert matchmaking dispatch remains rank-independent while the
+  post-match preflight permits ordinary input only for `5`/`10` and routes all
+  other/unknown evidence to surrender; preserve this precedence against future
+  strategy/streak changes.
 
 ## Visible build-footer timestamp verification
 

@@ -4,8 +4,25 @@ This is the canonical categorized operating procedure for work that can affect a
 user-facing Hearthstone Script runtime. It turns repeated deployment findings,
 failures, and fixes into a single routing document; it does **not** relax the
 binding rules in [`AGENTS.md`](../AGENTS.md) or the channel rules in
-[`RELEASE-CHANNELS.md`](RELEASE-CHANNELS.md). When sources differ, use the
-stricter requirement and reconcile the duplication before changing either one.
+[`RELEASE-CHANNELS.md`](RELEASE-CHANNELS.md). When sources differ, reconcile
+the duplication before changing either one: the user's newest explicit
+instruction supersedes older local text; use the stricter safety requirement
+only when authority or intent remains genuinely ambiguous, and record why.
+
+## Reconciliation record — 2026-11-03
+
+- Consolidated: cross-domain execution order, deployment preflight, release
+  artifact/shortcut/lineage checks, test invocation findings, retention-safe
+  fixture handling, and the current online gate are indexed here.
+- Retained as authoritative: binding release/installation and closeout rules
+  in `AGENTS.md`; channel isolation, promotion, rollback, and Beta process
+  identity rules in `RELEASE-CHANNELS.md`; issue-specific evidence in
+  `docs/problem-resolution/closeouts/`.
+- Resolved conflict: an older branch rule rank-gated queue entry. The user's
+  newest explicit instruction supersedes it: constructed queue admission is
+  rank-independent, while the active-game pre-mulligan gate permits ordinary
+  play only for fresh exact `5`/`10` and otherwise requires surrender. The
+  reconciled `AGENTS.md` rule and its queue/preflight tests own that behavior.
 
 ## 1. Operating model and evidence ownership
 
@@ -40,6 +57,10 @@ shortcut edit can substitute for it.
 4. Record the pre-deploy process/manifest/log ledger above. Preserve user
    `config`, `data`, `log`, and `plugin` backups. Fail closed if a target path,
    channel, ownership marker, or process identity cannot be verified.
+5. Validate every launcher/watchdog/bootstrap source before acquiring the
+   runtime gate, stopping processes, creating runtime directories, or copying
+   files. A component copied by the release path but omitted from preflight is
+   a release-blocking packaging defect.
 
 ### 2.2 Artifact and build
 
@@ -85,8 +106,8 @@ shortcut edit can substitute for it.
    manifest-backed launcher. Do not leave an old process using replaced files.
 2. Verify the new app PID, deployment ID, manifest/artifact hash, log lineage,
    and Hearthstone PID/state. A path-only or executable-name-only process match
-   is insufficient; use exact runtime/JAR or the guarded ownership-marker
-   fallback described in `RELEASE-CHANNELS.md`.
+   is insufficient; use the exact runtime/JAR identity and fail closed when
+   process ownership cannot be independently verified.
 3. Keep launch, game launch, strategy refresh, and deployment as separate
    observations. A visual-only check uses a passive launch mode when automation
    could otherwise begin gameplay.
@@ -95,10 +116,14 @@ shortcut edit can substitute for it.
 
 1. Capture the visible footer and compare it against the embedded artifact and
    manifest timestamp. Record the screenshot or equivalent visible-app evidence.
-2. Run the applicable online gate against the exact deployed artifact. The
-   current gate requires fresh process/log lineage, accepted-game evidence,
-   screenshots, and the specified consecutive games; offline success is never
-   a substitute.
+2. Run the online gate against the exact deployed artifact: execute two
+   consecutive new games, with at least one non-conceded player win in the
+   authoritative `Power.log`; correlate screenshots to that same run/log;
+   and accept zero accepted-chain errors, exceptions, timeouts, OCR failures,
+   unhandled `UNKNOWN` states, or stuck screens longer than 60 seconds. A
+   screen still stuck beyond the user's two-minute recovery threshold requires
+   a clean restart of the Beta Hearthstone and Battle.net processes, then a
+   fresh gate evaluation. Offline success is never a substitute.
 3. Reconcile all requested/worker commits against the deployed manifest before
    announcing completion. Report the version, timestamp, deployment ID/hash,
    shortcut targets, PIDs/log path, online-gate status, and pending items.
@@ -135,9 +160,13 @@ shortcut edit can substitute for it.
 - A dispatched click is not a completed transition. Require fresh authoritative
   post-action observation, bound retries, and retain action scope so recovery
   cannot broaden into generic gameplay, matchmaking, or surrender input.
-- Preserve rank authorization and surrender safety in `AGENTS.md`: only fresh
-  exact constructed rank 5 or 10 may queue/continue, and all ambiguous OCR,
-  cache, mode, or phase evidence fails closed.
+- Rank authorization is a separate safety gate. Matchmaking admission is not
+  rank-gated: allow the constructed match to start. After the game begins, the
+  active-game pre-mulligan preflight permits ordinary input only for fresh exact
+  rank `5` or `10`; every other, missing, or unknown rank routes to mandatory
+  surrender. Keep this queue-versus-in-game split and its exact tests in sync
+  with `AGENTS.md`; ambiguous OCR, cache, mode, or phase evidence never
+  broadens ordinary-play authorization.
 
 ## 5. Diagnostics, screenshots, and retention SOP
 
@@ -159,8 +188,16 @@ Before editing this document or another SOP, audit `AGENTS.md`,
 `RELEASE-CHANNELS.md`, this document, and relevant problem-resolution closeouts.
 List duplicate/conflicting rules in the change record; retain an existing
 authoritative rule by reference, or consolidate it here with a clear owner.
-Never silently relax a safety, channel-isolation, retention, evidence, or
-release-ownership constraint.
+The user's newest explicit instruction supersedes older local text; when that
+does not resolve the conflict, retain the stricter safety rule and record the
+reason. Never silently relax a safety, channel-isolation, retention, evidence,
+or release-ownership constraint.
+
+Every deployment-related closeout classifies each gotcha, finding, error, and
+fix. A reusable item becomes a named step, check, or test in the applicable
+Deployment subsection after this audit; a genuinely one-off item records the
+specific reason it is not reusable. This prevents historical closeouts from
+becoming an unindexed substitute for operating procedure.
 
 For every fix, create or update the required problem-resolution closeout with
 investigation/cause, authorized fix, verification, and an enforceable future
