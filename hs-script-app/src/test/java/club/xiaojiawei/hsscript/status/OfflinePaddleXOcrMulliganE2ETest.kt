@@ -25,8 +25,9 @@ import java.nio.file.Path
 import javax.imageio.ImageIO
 
 /**
- * Offline E2E replay for the provider/rank boundary.  It loads retained
- * runtime screenshots, but never launches Hearthstone or sends input.
+ * Offline E2E replay for the provider/rank boundary. It materializes
+ * source-controlled, sanitized screenshots into isolated test evidence, but
+ * never launches Hearthstone or sends input.
  */
 class OfflinePaddleXOcrMulliganE2ETest {
 
@@ -86,7 +87,7 @@ class OfflinePaddleXOcrMulliganE2ETest {
         assertTrue(fixture.timeline.first().line.contains("MULLIGAN_STATE value=INPUT"))
         assertTrue(fixture.timeline.last().line.contains("MULLIGAN_STATE value=DONE"))
         configurePaddleX { "8" }
-        val result = replay.run(image, Path.of(fixture.frame("mulligan").screenshotPath))
+        val result = replay.run(image, materializeFixture(fixture.frame("mulligan")))
 
         assertEquals(listOf("MULLIGAN_INPUT", "WAITING_FOR_RANK", "CONTINUE_MULLIGAN"), result.states)
         assertEquals(listOf("CONTINUE_MULLIGAN"), result.actions)
@@ -117,7 +118,7 @@ class OfflinePaddleXOcrMulliganE2ETest {
             PauseStatus.isPause = false
             configurePaddleX(response)
             val replay = MulliganReplay(fixture.timeline, maxRetries = 3)
-            val result = replay.run(image, Path.of(fixture.frame("mulligan").screenshotPath))
+            val result = replay.run(image, materializeFixture(fixture.frame("mulligan")))
 
             assertEquals("SURRENDER", result.states.last(), name)
             assertEquals(listOf("SURRENDER"), result.actions, name)
@@ -147,7 +148,7 @@ class OfflinePaddleXOcrMulliganE2ETest {
         assertEquals("8", result.text)
         assertEquals(OcrProviderKind.LEGACY, OcrRuntime.lastProviderUsed())
         assertFalse(PauseStatus.isPause)
-        assertTrue(Files.isRegularFile(Path.of(fixture.frame("mulligan").screenshotPath)))
+        assertTrue(Files.isRegularFile(materializeFixture(fixture.frame("mulligan"))))
     }
 
     @Test
@@ -208,7 +209,7 @@ class OfflinePaddleXOcrMulliganE2ETest {
         assertEquals(OcrProviderKind.LEGACY.name, unknown.provider)
         assertFalse(PauseStatus.isPause)
         assertTrue(unknown.reason.isNotBlank(), "the bounded recovery reason must be auditable")
-        assertTrue(Files.isRegularFile(Path.of(fixture.frame("unknown").screenshotPath)))
+        assertTrue(Files.isRegularFile(materializeFixture(fixture.frame("unknown"))))
 
         val captureFailed = ScreenWatchdog.inspectForSurrender(
             state = "mode=GAMEPLAY|mulliganState=WAITING_FOR_RANK",
@@ -246,10 +247,27 @@ class OfflinePaddleXOcrMulliganE2ETest {
         .use { FIXTURE_JSON.decodeFromString(it.readText()) }
 
     private fun loadImage(frame: Frame): BufferedImage {
-        val path = Path.of(frame.screenshotPath)
-        assertTrue(Files.isRegularFile(path), "missing retained screenshot id=${frame.id} path=$path")
+        val path = materializeFixture(frame)
+        assertTrue(Files.isRegularFile(path), "missing source-controlled fixture id=${frame.id} path=$path")
         val image = ImageIO.read(path.toFile())
         return image ?: error("unreadable retained screenshot id=${frame.id}")
+    }
+
+    /**
+     * Runtime diagnostic retention may delete historical live captures. Tests
+     * must instead consume a tracked, sanitized fixture and copy it into their
+     * isolated evidence directory so the existing path/provenance assertions
+     * remain real file checks rather than mocked paths.
+     */
+    private fun materializeFixture(frame: Frame): Path {
+        val destination = testEvidenceDirectory.resolve("fixture-${frame.id}.png")
+        if (!Files.isRegularFile(destination)) {
+            val resource = requireNotNull(javaClass.getResourceAsStream(frame.screenshotResourcePath)) {
+                "missing source-controlled fixture id=${frame.id} resource=${frame.screenshotResourcePath}"
+            }
+            resource.use { Files.copy(it, destination) }
+        }
+        return destination
     }
 
     @Serializable
@@ -265,7 +283,7 @@ class OfflinePaddleXOcrMulliganE2ETest {
     @Serializable
     private data class Frame(
         val id: String,
-        val screenshotPath: String,
+        val screenshotResourcePath: String,
         val sourceRunId: String,
         val role: String,
     )
