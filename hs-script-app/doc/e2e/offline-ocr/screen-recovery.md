@@ -368,6 +368,19 @@ this deletion boundary.
   authoritative current-session model. At dispatch, the process-bound chooser
   proof may bypass stale phase flags for `mode.select-traditional` only; keep
   generic clicks, matchmaking, and gameplay input blocked.
+  The exact four-button chooser can also satisfy both the broad centered-panel
+  and red/dark matchmaking pixel heuristics in the same capture. Treat the
+  generic panel result as explained only when the same fresh frame structurally
+  identifies the four-option chooser and does not identify the dedicated Event
+  Quest overlay; suppress OCR only for that same exact chooser signature. Its
+  same-frame queue-color hit is not active queue proof, but independent recent
+  active-matchmaking evidence and the active entry guard remain hard vetoes.
+  The regression fixture
+  `src/test/resources/offline-ocr/screen-recovery/hub-mode-chooser-live-20261101-234632.png`
+  reproduces both false positives and must pass through classification, exact
+  PID/HWND one-use chooser proof, and the Traditional-only dispatch. Never
+  replace that proof with generic online-menu readiness or loosen the ordinary
+  click gate.
   Regression case: after the Amazon notice closes, the mode chooser can be
   classified as `TOURNAMENT` while the script is still in `HUB`. A generic
   `STARTUP_READINESS_RECONFIRMED` proof is not sufficient for
@@ -644,6 +657,14 @@ this deletion boundary.
   the exact 1920x1080 completion screenshot as a SHA-256-pinned fixture and
   assert it enters the bounded three-click, fresh-recheck, one-minute restart
   flow; retain rank-medal and chooser neighbor fixtures as negative cases.
+- The v4.16.746 post-result card-back reward frame can satisfy broad Event Quest
+  geometry while showing a real Continue control. Pin
+  `card-back-reward-overlay-v746-20261101.png` to SHA-256
+  `60B6110F397AE2173185A4387F8497A04CCF69EB1B7F7BE14F667D7D418C88A3` and
+  recognize its blue-and-gold card back and blue reward ribbon before the Event
+  Quest branch. Both result observers must produce the same authorized,
+  timestamped Continue observation so only the bounded terminal-result flow
+  can dispatch input; never enter the generic Event Quest ladder for this page.
 - An OCR `UNKNOWN` mode can support only `matchmaking.start` when the same
   verified client has a recent independent configured-mode selection proof and
   a fresh exact deck-selection frame with enabled Start. A fresh visible

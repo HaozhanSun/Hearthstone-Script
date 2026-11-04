@@ -14,12 +14,15 @@ internal object StartupHandoffProgressPolicy {
         battleNetLauncherVisual: Boolean,
         hubModeChooserVisual: Boolean,
         modalVisible: Boolean,
+        startupQuestOverlayVisual: Boolean = false,
     ): PreOcrAction {
         if (purpose != ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE || currentSessionReady) {
             return PreOcrAction.RUN_OCR
         }
         if (battleNetLauncherVisual) return PreOcrAction.DEFER_BATTLENET_LAUNCHER
-        if (hubModeChooserVisual && !modalVisible) return PreOcrAction.CLASSIFY_HUB_CHOOSER_VISUALLY
+        if (hubModeChooserVisual && !modalVisible && !startupQuestOverlayVisual) {
+            return PreOcrAction.CLASSIFY_HUB_CHOOSER_VISUALLY
+        }
         return PreOcrAction.RUN_OCR
     }
 }

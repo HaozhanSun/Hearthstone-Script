@@ -27,8 +27,7 @@ class SeasonRankAwardRecoveryDispatchTest {
         val policy = SeasonRankAwardHumanInterventionPolicy()
         var notifications = 0
         var pauses = 0
-        var inputDispatches = 0
-        var restarts = 0
+        var recoveryBranchesReached = 0
         fun observe(
             screenKind: String?,
             authorized: Boolean = true,
@@ -45,6 +44,7 @@ class SeasonRankAwardRecoveryDispatchTest {
         )
 
         val first = observe(screen)
+        if (SeasonRankAwardAutomationGate.allowsRecovery(first)) recoveryBranchesReached++
         val repeated = observe(screen)
         assertTrue(first.holdAutomation)
         assertTrue(first.notifyUser)
@@ -52,8 +52,7 @@ class SeasonRankAwardRecoveryDispatchTest {
         assertFalse(repeated.notifyUser, "repeated probes on the same modal must not spam the notice")
         assertEquals(1, notifications)
         assertEquals(2, pauses, "a manual resume while the modal remains must be held again")
-        assertEquals(0, inputDispatches)
-        assertEquals(0, restarts)
+        assertEquals(0, recoveryBranchesReached, "five-chest screen must not reach any recovery input/restart branch")
         val classifierUnknown = observe(null)
         assertTrue(classifierUnknown.holdAutomation,
             "an OCR/classifier UNKNOWN on the same exact visual must retain the hold")
@@ -65,8 +64,7 @@ class SeasonRankAwardRecoveryDispatchTest {
             "a fresh different screen ends this occurrence")
         assertTrue(observe(screen).notifyUser, "a later occurrence must be notified again")
         assertEquals(2, notifications)
-        assertEquals(0, inputDispatches)
-        assertEquals(0, restarts)
+        assertEquals(0, recoveryBranchesReached)
 
         val untrusted = SeasonRankAwardHumanInterventionPolicy().observe(
             screenKind = screen,
@@ -79,12 +77,11 @@ class SeasonRankAwardRecoveryDispatchTest {
         )
         assertFalse(untrusted.holdAutomation, "stale/unauthorized captures cannot trigger a user pause")
         assertEquals(2, notifications)
-        assertEquals(0, inputDispatches)
-        assertEquals(0, restarts)
+        assertEquals(0, recoveryBranchesReached)
     }
 
     @Test
-    fun `visible Continue on reward screen does not trigger blank modal manual pause`() {
+    fun `visible Continue on monthly reward screen still triggers manual pause with no input`() {
         var notifications = 0
         var pauses = 0
         val observation = SeasonRankAwardHumanInterventionPolicy().observe(
@@ -97,10 +94,65 @@ class SeasonRankAwardRecoveryDispatchTest {
             holdAutomation = { pauses++ },
         )
 
-        assertFalse(observation.holdAutomation)
-        assertFalse(observation.notifyUser)
-        assertEquals(0, notifications)
-        assertEquals(0, pauses)
+        assertTrue(observation.holdAutomation)
+        assertTrue(observation.notifyUser)
+        assertEquals(1, notifications)
+        assertEquals(1, pauses)
+        assertFalse(SeasonRankAwardAutomationGate.allowsRecovery(observation),
+            "a Continue-looking monthly reward control must not reach the production dispatch branch")
+    }
+
+    @Test
+    fun `first unknown frame with verified monthly reward visual pauses before recovery`() {
+        var notices = 0
+        var pauses = 0
+        val observation = SeasonRankAwardHumanInterventionPolicy().observe(
+            screenKind = null, rewardPresentationVisible = true, continueVisible = false,
+            freshAuthorizedCapture = true, stateStillCurrent = true,
+            notifyUser = { notices++ }, holdAutomation = { pauses++ },
+        )
+        assertTrue(observation.holdAutomation)
+        assertTrue(observation.notifyUser)
+        assertFalse(SeasonRankAwardAutomationGate.allowsRecovery(observation))
+        assertEquals(1, notices)
+        assertEquals(1, pauses)
+    }
+
+    @Test
+    fun `first unknown monthly reward fixtures pause before every recovery branch`() {
+        listOf(
+            "season-rank-award-20261101.png" to { image: BufferedImage -> SeasonRankAwardVisualClassifier.isSeasonRankAward(image) },
+            "season-rank-award-chest-20261101.png" to { image: BufferedImage -> SeasonRankAwardChestVisualClassifier.isSeasonRankAwardChest(image) },
+            "season-rank-five-chests-blank-continue-live-20261101-105355.png" to { image: BufferedImage -> SeasonRankAwardRewardsVisualClassifier.inspect(image).isRewardPresentation },
+        ).forEach { (fileName, monthlyVisual) ->
+            val image = fixture(fileName)
+            val rewardPresentationVisible = monthlyVisual(image)
+            assertTrue(rewardPresentationVisible, "$fileName must provide exact monthly-reward visual identity")
+            val observation = SeasonRankAwardHumanInterventionPolicy().observe(
+                screenKind = null, rewardPresentationVisible = rewardPresentationVisible, continueVisible = false,
+                freshAuthorizedCapture = true, stateStillCurrent = true,
+            )
+            assertTrue(observation.holdAutomation)
+            assertFalse(SeasonRankAwardAutomationGate.allowsRecovery(observation))
+
+            val untrusted = SeasonRankAwardHumanInterventionPolicy().observe(
+                screenKind = null, rewardPresentationVisible = rewardPresentationVisible, continueVisible = false,
+                freshAuthorizedCapture = false, stateStillCurrent = true,
+            )
+            assertFalse(untrusted.holdAutomation, "$fileName must not pause automation from an unauthorized capture")
+        }
+    }
+
+    @Test
+    fun `award and chest stages are stopped before any recovery action`() {
+        listOf("SEASON_RANK_AWARD", "SEASON_RANK_AWARD_CHEST").forEach { stage ->
+            val observation = SeasonRankAwardHumanInterventionPolicy().observe(
+                screenKind = stage, rewardPresentationVisible = false, continueVisible = true,
+                freshAuthorizedCapture = true, stateStillCurrent = true,
+            )
+            assertFalse(SeasonRankAwardAutomationGate.allowsRecovery(observation),
+                "$stage must not reach its Continue or chest-open callsite")
+        }
     }
 
     @Test

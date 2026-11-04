@@ -23,6 +23,13 @@ only when authority or intent remains genuinely ambiguous, and record why.
   rank-independent, while the active-game pre-mulligan gate permits ordinary
   play only for fresh exact `5`/`10` and otherwise requires surrender. The
   reconciled `AGENTS.md` rule and its queue/preflight tests own that behavior.
+- 2026-11-03 recovery/retention follow-up audit: reviewed `AGENTS.md`, this
+  SOP, `RELEASE-CHANNELS.md`, the retention script allowlist, and
+  `2026-11-01-season-rank-award-continue.md`. Retained the channel-wide
+  30-day requirement in `AGENTS.md`; consolidated the exact extension/root
+  allowlist and manual Pester gate here. The five-chest no-input rule is an
+  issue-specific runtime exception retained here and its closeout, not copied
+  into unrelated card-back classifier policy.
 
 ## 1. Operating model and evidence ownership
 
@@ -72,7 +79,14 @@ shortcut edit can substitute for it.
 3. Run the checked-in targeted regression selection with the intended
    `-Dbuild-channel`; test behavior may legitimately differ from the root POM's
    default `UNKNOWN` channel. Preserve focused test coverage for new guards.
-4. Build and verify the exact JAR/ZIP and required plugin artifacts before any
+4. Before runtime mutation, manually run the applicable PowerShell contract
+   gates. `build-and-deploy.ps1` does **not** invoke Pester automatically:
+   `pwsh -NoProfile -File tests/DiagnosticRetentionScheduler.Tests.ps1`;
+   `pwsh -NoProfile -File tests/BetaDeploymentProcessStop.Tests.ps1`;
+   `pwsh -NoProfile -File tests/ReleaseChannelIsolation.Tests.ps1`; and
+   `pwsh -NoProfile -File tests/SyncShortcutsBetaDuplicate.Tests.ps1`.
+   Record results and add any changed deployment-contract test to this list.
+5. Build and verify the exact JAR/ZIP and required plugin artifacts before any
    runtime replacement. A failing test, missing artifact, or metadata mismatch
    stops the release.
 
@@ -167,6 +181,11 @@ shortcut edit can substitute for it.
   surrender. Keep this queue-versus-in-game split and its exact tests in sync
   with `AGENTS.md`; ambiguous OCR, cache, mode, or phase evidence never
   broadens ordinary-play authorization.
+- The monthly five-chest/season-reward flow is a user-owned exception: on a
+  fresh recognized award, chest, or rewards frame, notify once and apply a
+  manual pause. Do not click its chest or Continue-looking controls, restart
+  the client, or treat it as a card-back result page. Resume only after the
+  user dismisses it and a fresh non-reward destination is observed.
 
 ## 5. Diagnostics, screenshots, and retention SOP
 
@@ -177,9 +196,13 @@ shortcut edit can substitute for it.
   and Release Candidate. Each channel deployment installs and verifies that
   channel's scheduled `diagnostic-retention.ps1` cleanup before release
   completion.
-- Cleanup may remove only aged diagnostic logs and screenshots. It must not
-  delete live configuration, data, plugin backups, or source-controlled
-  fixtures.
+- The checked-in allowlist removes only aged files inside approved diagnostic
+  roots: `.log`, `.jsonl`, images (`.png`, `.jpg`, `.jpeg`, `.webp`), `.txt`,
+  `.state`, `.json`, `.csv`, and `.tsv`. It explicitly rejects config/settings/
+  user-data JSON, statistics databases, deployment manifests, rollback files,
+  and rollback backups. Never broaden it without matching Pester coverage;
+  live configuration, data, plugin backups, source-controlled fixtures, and
+  rollback/deployment records remain protected.
 - Rollout status (2026-11-03): the audited Beta `4.16.746` and Release
   Candidate `4.16.711` runtimes have the cleanup script/task; Stable `4.16.399`
   has a manifest but lacks both. Treat Stable retention installation as an open

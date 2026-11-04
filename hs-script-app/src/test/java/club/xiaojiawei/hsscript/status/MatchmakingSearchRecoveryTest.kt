@@ -490,6 +490,36 @@ class MatchmakingSearchRecoveryTest {
             "hub-mode-chooser-visual",
             UpstreamScreenStateRecovery.classificationEvidenceForImageTest("选择套牌 卡牌包", hubFrame),
         )
+        val chooserEvidence = UpstreamScreenStateRecovery.classificationEvidenceForImageTest(
+            "传统对战 酒馆战棋 竞技模式 其他模式", hubFrame,
+        )
+        val sameFrameActiveQueueEvidence = StartupHubModeChooserPolicy.hasActiveMatchmakingEvidence(
+            matchmakingSearchVisual = MatchmakingSearchVisualPolicy.isVisible(hubFrame),
+            hubModeChooserVisual = HubModeChooserVisualPolicy.isVisible(hubFrame),
+            screenKind = "TOURNAMENT",
+            screenMode = "HUB",
+            evidence = chooserEvidence,
+            modalVisible = false,
+            recentActiveMatchmaking = false,
+            activeEntryGuard = false,
+        )
+        assertFalse(
+            sameFrameActiveQueueEvidence,
+            "the exact four-option chooser explains the same-frame red/dark queue-color false positive",
+        )
+        assertTrue(
+            StartupHubModeChooserPolicy.hasActiveMatchmakingEvidence(
+                matchmakingSearchVisual = true,
+                hubModeChooserVisual = true,
+                screenKind = "TOURNAMENT",
+                screenMode = "HUB",
+                evidence = chooserEvidence,
+                modalVisible = false,
+                recentActiveMatchmaking = true,
+                activeEntryGuard = false,
+            ),
+            "independent recent queue evidence remains a hard veto",
+        )
         assertTrue(
             StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
                 purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
@@ -500,7 +530,7 @@ class MatchmakingSearchRecoveryTest {
                 currentMode = "HUB",
                 modalVisible = false,
                 activeGame = false,
-                activeMatchmaking = false,
+                activeMatchmaking = sameFrameActiveQueueEvidence,
                 trustedCurrentWindow = true,
             ),
             "a structural visual proof should remain sufficient for the one traditional-entry action",
@@ -517,6 +547,16 @@ class MatchmakingSearchRecoveryTest {
         // generic mouse.left tag and the last hard gate rejected the click.
         val ocr = "传统对战 酒馆战棋 竞技模式 其他模式"
         val evidence = UpstreamScreenStateRecovery.classificationEvidenceForImageTest(ocr, hubFrame)
+        val activeQueueEvidence = StartupHubModeChooserPolicy.hasActiveMatchmakingEvidence(
+            matchmakingSearchVisual = MatchmakingSearchVisualPolicy.isVisible(hubFrame),
+            hubModeChooserVisual = HubModeChooserVisualPolicy.isVisible(hubFrame),
+            screenKind = UpstreamScreenStateRecovery.classifyImageForTest(ocr, hubFrame),
+            screenMode = "HUB",
+            evidence = evidence,
+            modalVisible = false,
+            recentActiveMatchmaking = false,
+            activeEntryGuard = false,
+        )
         val activeGameFromStaleLatch = StartupGamePhaseEvidencePolicy.hasAuthoritativeActiveGame(
             warModelAuthoritative = false,
             warInProgress = true,
@@ -537,7 +577,7 @@ class MatchmakingSearchRecoveryTest {
             recentInputIntent = false,
             warModelAuthoritative = false,
             startupProbe = true,
-            noActiveQueueEvidence = true,
+            noActiveQueueEvidence = !activeQueueEvidence,
         )
         assertEquals(ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE, startupPurpose)
         assertTrue(
@@ -550,7 +590,7 @@ class MatchmakingSearchRecoveryTest {
                 currentMode = "HUB",
                 modalVisible = false,
                 activeGame = activeGameFromStaleLatch,
-                activeMatchmaking = false,
+                activeMatchmaking = activeQueueEvidence,
                 trustedCurrentWindow = true,
             ),
         )

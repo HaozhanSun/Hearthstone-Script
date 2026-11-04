@@ -48,6 +48,12 @@ internal object StartupQuestOverlayVisualClassifier {
 
     fun isQuestOverlay(image: BufferedImage): Boolean =
         inspect(image).isQuestOverlay &&
+            !HubModeChooserVisualPolicy.isVisible(image) &&
+            // Card-back rewards share enough of the old purple/card geometry
+            // to match this broad heuristic.  Exclude the actual identity
+            // directly; rank progression has its own existing classifier and
+            // must not become a proxy for a different reward popup.
+            !CardBackRewardOverlayVisualClassifier.isCardBackReward(image) &&
             !SeasonRankAwardVisualClassifier.isSeasonRankAward(image) &&
             !SeasonRankAwardChestVisualClassifier.isSeasonRankAwardChest(image) &&
             !SeasonRankAwardRewardsVisualClassifier.isRewardPresentation(image)

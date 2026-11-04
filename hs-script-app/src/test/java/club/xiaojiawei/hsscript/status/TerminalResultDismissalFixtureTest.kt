@@ -80,6 +80,8 @@ class TerminalResultDismissalFixtureTest {
             javaClass.getResourceAsStream("/offline-ocr/screen-recovery/event-quest-overlay-live-005412.png"),
         ).use { requireNotNull(ImageIO.read(it)) }
         assertTrue(HubModeChooserVisualPolicy.isVisible(modeChooser), "the four-button chooser has separated, brighter button faces")
+        assertFalse(StartupQuestOverlayVisualClassifier.isQuestOverlay(modeChooser),
+            "the exact four-button chooser must outrank broad single-card quest geometry")
         assertFalse(HubModeChooserVisualPolicy.isVisible(rankTen), "rank reward art is not a four-button chooser")
         assertFalse(HubModeChooserVisualPolicy.isVisible(eventQuest), "the event-quest modal is not a four-button chooser")
 

@@ -330,20 +330,24 @@ class EventQuestOverlayRecoveryPolicyTest {
         })
         assertTrue(attachedRecoveryStarted)
 
-        val upstreamSource = File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt").readText()
-        val upstreamResultProbe = upstreamSource.substring(
-            upstreamSource.indexOf("internal fun observeResultScreenForRecovery(): ResultScreenObservation"),
+        assertEquals("EVENT_QUEST", UpstreamScreenStateRecovery.classifyFastResultOverlayForTest(liveCapture))
+        assertEquals(
+            UpstreamScreenStateRecovery.classifyFastResultOverlayForTest(liveCapture),
+            ScreenStateRecovery.classifyFastResultOverlayForTest(liveCapture),
+            "both result observers must use the shared Event Quest fast-overlay classifier",
         )
-        assertTrue(upstreamResultProbe.indexOf("if (visual.startupQuestOverlayVisual)") <
-            upstreamResultProbe.indexOf("val ocrText = runOCR"),
-            "the exact live overlay classifier must short-circuit the 15s result OCR route")
-        val legacySource = File("src/main/java/club/xiaojiawei/hsscript/status/ScreenStateRecovery.kt").readText()
-        val legacyResultProbe = legacySource.substring(
-            legacySource.indexOf("internal fun observeResultScreenForRecovery(): ResultScreenObservation"),
+        val capturedAtNanos = 123_456_789L
+        val upstreamObservation = requireNotNull(
+            UpstreamScreenStateRecovery.observeFastResultOverlayForTest(liveCapture, capturedAtNanos),
         )
-        assertTrue(legacyResultProbe.indexOf("if (capture.visual.startupQuestOverlayVisual)") <
-            legacyResultProbe.indexOf("val ocrEvidence = runOCR"),
-            "the fallback result observer must use the same visual-first short circuit")
+        val legacyObservation = requireNotNull(
+            ScreenStateRecovery.observeFastResultOverlayForTest(liveCapture, capturedAtNanos),
+        )
+        assertEquals(upstreamObservation, legacyObservation,
+            "both result observers must produce the same authorized Event Quest observation")
+        assertEquals(null, upstreamObservation.resultVisible)
+        assertTrue(upstreamObservation.captureAuthorized)
+        assertTrue(upstreamObservation.gameMenuOverlayVisible)
 
         val laterReconnect = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/reconnect-failure-dialog-over-deck-selection.png",
@@ -415,8 +419,10 @@ class EventQuestOverlayRecoveryPolicyTest {
 
     @Test
     fun `event quest retry requests an empty session startup capture and reports the rejecting gate`() {
-        val source = File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt")
-            .readText()
+        val source = listOf(
+            File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt"),
+            File("hs-script-app/src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt"),
+        ).first(File::isFile).readText()
         val retry = source.substringAfter("private fun scheduleEventQuestOverlayRecovery(")
             .substringBefore("private fun apply(detection: Detection)")
 

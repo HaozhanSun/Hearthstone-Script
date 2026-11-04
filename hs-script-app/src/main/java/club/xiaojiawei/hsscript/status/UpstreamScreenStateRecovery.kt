@@ -186,6 +186,19 @@ object UpstreamScreenStateRecovery {
     )
 
     /**
+     * Test-facing projection of the same pure image classifier used by the
+     * screen-recovery callsite.  Keep the private enum and Detection types
+     * encapsulated while allowing integration tests to pass the actual
+     * classifier result into the authorization policies.
+     */
+    internal data class ImageClassificationForTest(
+        val screenKind: String?,
+        val screenMode: String?,
+        val confidence: Int,
+        val evidence: String?,
+    )
+
+    /**
      * A fresh, authoritative return to deck selection completes the visual
      * half of a mandatory rank surrender. The Power.log terminal capability
      * is still required by the guard; a screenshot by itself cannot release
@@ -290,6 +303,7 @@ object UpstreamScreenStateRecovery {
             battleNetLauncherVisual = capture.visual.battleNetLauncherVisual,
             hubModeChooserVisual = capture.visual.hubModeChooserVisual,
             modalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image),
+            startupQuestOverlayVisual = capture.visual.startupQuestOverlayVisual,
         )
         if (startupPreOcrAction == StartupHandoffProgressPolicy.PreOcrAction.DEFER_BATTLENET_LAUNCHER) {
             if (!stateStillCurrent()) {
@@ -427,7 +441,9 @@ object UpstreamScreenStateRecovery {
         }
         val monthlyRewardAttention = seasonRankAwardHumanInterventionPolicy.observe(
             screenKind = detection?.kind?.code,
-            rewardPresentationVisible = capture.visual.seasonRankAwardRewardsVisual,
+            rewardPresentationVisible = capture.visual.seasonRankAwardVisual ||
+                capture.visual.seasonRankAwardChestVisual ||
+                capture.visual.seasonRankAwardRewardsVisual,
             continueVisible = capture.visual.seasonRankAwardRewardsContinueVisual,
             freshAuthorizedCapture = authorizedCapture.foregroundVerified &&
                 authorizedCapture.purpose in setOf(
@@ -438,7 +454,7 @@ object UpstreamScreenStateRecovery {
             stateStillCurrent = stateStillCurrent(),
             notifyUser = {
                 SystemUtil.notice(
-                    "Hearthstone is showing the five-chest monthly reward screen with no Continue button. " +
+                    "Hearthstone is showing the monthly season-reward screen. " +
                         "Dismiss it manually, then resume the script.",
                     title = "Human action needed",
                     forceNotify = true,
@@ -446,7 +462,7 @@ object UpstreamScreenStateRecovery {
             },
             holdAutomation = { PauseStatus.setManualPause(true) },
         )
-        if (monthlyRewardAttention.holdAutomation) {
+        if (!SeasonRankAwardAutomationGate.allowsRecovery(monthlyRewardAttention)) {
             log.warn {
                 "SEASON_RANK_MONTHLY_REWARD_HUMAN_REQUIRED notification=${monthlyRewardAttention.notifyUser} " +
                     "action=MANUAL_PAUSE_NO_INPUT_NO_RESTART"
@@ -467,9 +483,18 @@ object UpstreamScreenStateRecovery {
             }
         }
         val currentHwnd = ScriptStatus.gameHWND?.toString().orEmpty()
-        val activeQueueEvidence = capture.visual.matchmakingSearchVisual ||
-            LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
-            LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
+        val chooserModalPanelVisual = ScreenStateRecovery.hasCenteredModalPanel(capture.image)
+        val chooserModalVisible = chooserModalPanelVisual
+        val activeQueueEvidence = StartupHubModeChooserPolicy.hasActiveMatchmakingEvidence(
+            matchmakingSearchVisual = capture.visual.matchmakingSearchVisual,
+            hubModeChooserVisual = capture.visual.hubModeChooserVisual,
+            screenKind = detection?.kind?.code,
+            screenMode = detection?.mode?.name,
+            evidence = detection?.evidence,
+            modalVisible = chooserModalVisible,
+            recentActiveMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
+            activeEntryGuard = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+        )
         val seasonAwardContinueCandidate = SeasonRankAwardRecoveryPolicy.allowsDedicatedStartupRecovery(
             screenKind = detection?.kind?.code,
             detectionEvidence = detection?.evidence,
@@ -552,8 +577,13 @@ object UpstreamScreenStateRecovery {
             screenKind = detection?.kind?.code,
             confidence = detection?.confidence ?: 0,
             evidence = detection?.evidence,
-            currentMode = Mode.currMode?.name,
-            modalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image),
+            currentMode = StartupHubModeChooserPolicy.modeForFreshChooserProof(
+                screenKind = detection?.kind?.code,
+                detectedMode = detection?.mode?.name,
+                evidence = detection?.evidence,
+                runtimeMode = Mode.currMode?.name,
+            ),
+            modalVisible = chooserModalVisible,
             activeGame = StartupGamePhaseEvidencePolicy.hasAuthoritativeActiveGame(
                 warModelAuthoritative = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
                 warInProgress = WarEx.inWar,
@@ -578,6 +608,11 @@ object UpstreamScreenStateRecovery {
                 "STARTUP_MODE_CHOOSER_CONFIRMED screen=TOURNAMENT mode=HUB pid=$currentPid " +
                     "hwnd=$currentHwnd confidence=${detection?.confidence ?: 0} " +
                     "evidence=${detection?.evidence} currentSessionReady=${ScreenStateRecovery.isCurrentGameSessionReadyForStart()} " +
+                    "proof=FRESH_PID_HWND_ONE_USE action=ALLOW_TRADITIONAL_ENTRY_ONLY"
+            }
+            log.warn {
+                "HUB_MODE_CHOOSER_PROOF_RECONFIRMED source=${authorizedCapture.purpose} pid=$currentPid " +
+                    "hwnd=$currentHwnd evidence=${detection?.evidence} modalPanelVisual=$chooserModalPanelVisual " +
                     "proof=FRESH_PID_HWND_ONE_USE action=ALLOW_TRADITIONAL_ENTRY_ONLY"
             }
         } else if (authorizedCapture.purpose in setOf(
@@ -676,6 +711,24 @@ object UpstreamScreenStateRecovery {
                 // The chooser is the HUB's Traditional Battle/Tavern Brawl/Arena
                 // list, not the tournament strategy screen. Keep it classification-
                 // only; its exact first action is authorized separately.
+            } else if (capture.visual.hubModeChooserVisual && detection?.kind == ScreenKind.TOURNAMENT &&
+                detection.mode == ModeEnum.HUB && detection.evidence in setOf(
+                    "hub-mode-chooser-visual", "hub-mode-chooser-visual-and-text",
+                )
+            ) {
+                // A same-frame queue-color false positive or external fence must
+                // never downgrade this chooser into broad generic menu proof.
+                startupClassificationOnly = true
+                log.warn {
+                    "HUB_MODE_CHOOSER_PROOF_BLOCKED reason=${when {
+                        activeQueueEvidence -> "active-matchmaking-evidence"
+                        chooserModalVisible -> "modal-visible"
+                        ScreenStateRecovery.isCurrentGameSessionReadyForStart() -> "current-session-ready"
+                        else -> "startup-chooser-authorization-rejected"
+                    }} pid=$pid hwnd=$hwnd evidence=${detection.evidence} " +
+                        "queueVisual=${capture.visual.matchmakingSearchVisual} " +
+                        "action=NO_INPUT_NO_GENERIC_MENU_PROOF"
+                }
             } else if (cleanMenu) {
                 val currentDetection = detection!!
                 val deckModeObservation = if (currentDetection.kind == ScreenKind.DECK_SELECTION) {
@@ -2458,6 +2511,24 @@ object UpstreamScreenStateRecovery {
         image,
     )?.kind?.code
 
+    internal fun classifyImageDetailsForTest(
+        ocrText: String,
+        image: BufferedImage,
+    ): ImageClassificationForTest {
+        val detection = detect(
+            ocrText,
+            visualSignature(image),
+            ScreenStateRecovery.hasCenteredModalPanel(image),
+            image,
+        )
+        return ImageClassificationForTest(
+            screenKind = detection?.kind?.code,
+            screenMode = detection?.mode?.name,
+            confidence = detection?.confidence ?: 0,
+            evidence = detection?.evidence,
+        )
+    }
+
     private fun startupDeckSelectionVisualDetection(
         purpose: ScreenRecoveryCapturePurpose,
         image: BufferedImage,
@@ -2562,6 +2633,48 @@ object UpstreamScreenStateRecovery {
     internal fun continueControlVisibleForFixture(image: BufferedImage): Boolean =
         ResultPageEvidencePolicy.continueControlVisible(visualSignature(image).resultContinueGrayLightRatio)
 
+    private fun fastResultOverlayKind(visual: VisualSignature, image: BufferedImage): FastResultOverlayKind? =
+        if (ResultPageEvidencePolicy.looksLikeRankProgressContinuationVisual(
+                visual.resultContinueGrayLightRatio,
+                visual.resultBannerLowSaturationRatio,
+                visual.loadingCentralDarkRatio,
+                visual.resultBannerWarmRatio,
+            )
+        ) null else FastResultOverlayRecoveryPolicy.classify(
+            continueControlVisible = ResultPageEvidencePolicy.continueControlVisible(
+                visual.resultContinueGrayLightRatio,
+            ),
+            startupQuestOverlayVisual = visual.startupQuestOverlayVisual,
+            image = image,
+        )
+
+    private fun fastResultOverlayObservation(
+        kind: FastResultOverlayKind?,
+        visual: VisualSignature,
+        capturedAtNanos: Long,
+    ): ResultScreenObservation? = FastResultOverlayRecoveryPolicy.observation(
+        kind = kind,
+        continueControlVisible = ResultPageEvidencePolicy.continueControlVisible(
+            visual.resultContinueGrayLightRatio,
+        ),
+        capturedAtNanos = capturedAtNanos,
+    )
+
+    internal fun classifyFastResultOverlayForTest(image: BufferedImage): String? =
+        fastResultOverlayKind(visualSignature(image), image)?.name
+
+    internal fun observeFastResultOverlayForTest(
+        image: BufferedImage,
+        capturedAtNanos: Long = System.nanoTime(),
+    ): ResultScreenObservation? {
+        val visual = visualSignature(image)
+        return fastResultOverlayObservation(
+            fastResultOverlayKind(visual, image),
+            visual,
+            capturedAtNanos,
+        )
+    }
+
     /**
      * Re-check the actual desktop after a result-page input was sent.
      *
@@ -2624,15 +2737,31 @@ object UpstreamScreenStateRecovery {
                 capturedAtNanos = authorizedCapture.capture.capturedAtNanos,
             ))
         }
-        if (visual.startupQuestOverlayVisual) {
-            decisionPath = "EXACT_EVENT_QUEST_VISUAL"
-            log.info { "SCREEN_RECOVERY_RESULT_FAST_OVERLAY kind=EVENT_QUEST_OVERLAY ocr=skipped" }
-            return@runCatching report(ResultScreenObservation(
-                resultVisible = null,
-                captureAuthorized = true,
-                gameMenuOverlayVisible = true,
-                capturedAtNanos = authorizedCapture.capture.capturedAtNanos,
-            ))
+        val fastOverlayKind = fastResultOverlayKind(visual, authorizedCapture.capture.image)
+        when (fastOverlayKind) {
+            FastResultOverlayKind.CARD_BACK_REWARD -> {
+                decisionPath = "CARD_BACK_REWARD_VISUAL"
+                val observation = requireNotNull(fastResultOverlayObservation(
+                    fastOverlayKind,
+                    visual,
+                    authorizedCapture.capture.capturedAtNanos,
+                ))
+                log.info {
+                    "SCREEN_RECOVERY_RESULT_FAST_OVERLAY kind=CARD_BACK_REWARD result=RESULT " +
+                        "continueBand=${observation.continueControlVisible} ocr=skipped"
+                }
+                return@runCatching report(observation)
+            }
+            FastResultOverlayKind.EVENT_QUEST -> {
+                decisionPath = "EXACT_EVENT_QUEST_VISUAL"
+                log.info { "SCREEN_RECOVERY_RESULT_FAST_OVERLAY kind=EVENT_QUEST_OVERLAY ocr=skipped" }
+                return@runCatching report(requireNotNull(fastResultOverlayObservation(
+                    fastOverlayKind,
+                    visual,
+                    authorizedCapture.capture.capturedAtNanos,
+                )))
+            }
+            null -> Unit
         }
         val visualDecisionStartedAt = System.nanoTime()
         val fastVisual = ResultPageEvidencePolicy.fastVisualObservation(

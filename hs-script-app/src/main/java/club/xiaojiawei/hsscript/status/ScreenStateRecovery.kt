@@ -1967,6 +1967,45 @@ object ScreenStateRecovery {
     internal fun continueControlVisibleForFixture(image: BufferedImage): Boolean =
         ResultPageEvidencePolicy.continueControlVisible(visualSignature(image).resultContinueGrayLightRatio)
 
+    private fun fastResultOverlayKind(image: BufferedImage, visual: VisualSignature): FastResultOverlayKind? =
+        if (ResultPageEvidencePolicy.looksLikeRankProgressContinuationVisual(
+                visual.resultContinueGrayLightRatio,
+                visual.resultBannerLowSaturationRatio,
+                visual.loadingCentralDarkRatio,
+                visual.resultBannerWarmRatio,
+            )
+        ) null else FastResultOverlayRecoveryPolicy.classify(
+            continueControlVisible = ResultPageEvidencePolicy.continueControlVisible(
+                visual.resultContinueGrayLightRatio,
+            ),
+            startupQuestOverlayVisual = visual.startupQuestOverlayVisual,
+            image = image,
+        )
+
+    private fun fastResultOverlayObservation(
+        kind: FastResultOverlayKind?,
+        visual: VisualSignature,
+        capturedAtNanos: Long,
+    ): ResultScreenObservation? = FastResultOverlayRecoveryPolicy.observation(
+        kind = kind,
+        continueControlVisible = ResultPageEvidencePolicy.continueControlVisible(
+            visual.resultContinueGrayLightRatio,
+        ),
+        capturedAtNanos = capturedAtNanos,
+    )
+
+    /** Offline seam for the same shared result-observation path used in production. */
+    internal fun classifyFastResultOverlayForTest(image: BufferedImage): String? =
+        fastResultOverlayKind(image, visualSignature(image))?.name
+
+    internal fun observeFastResultOverlayForTest(
+        image: BufferedImage,
+        capturedAtNanos: Long = System.nanoTime(),
+    ): ResultScreenObservation? {
+        val visual = visualSignature(image)
+        return fastResultOverlayObservation(fastResultOverlayKind(image, visual), visual, capturedAtNanos)
+    }
+
     /**
      * Re-check the actual desktop after a result-page input was sent.
      *
@@ -2033,15 +2072,31 @@ object ScreenStateRecovery {
                     capturedAtNanos = capture.capturedAtNanos,
                 ))
             }
-            if (capture.visual.startupQuestOverlayVisual) {
-                decisionPath = "EXACT_EVENT_QUEST_VISUAL"
-                log.info { "SCREEN_RECOVERY_RESULT_FAST_OVERLAY kind=EVENT_QUEST_OVERLAY ocr=skipped" }
-                return@runCatching report(ResultScreenObservation(
-                    resultVisible = null,
-                    captureAuthorized = true,
-                    gameMenuOverlayVisible = true,
-                    capturedAtNanos = capture.capturedAtNanos,
-                ))
+            val fastOverlayKind = fastResultOverlayKind(capture.image, capture.visual)
+            when (fastOverlayKind) {
+                FastResultOverlayKind.CARD_BACK_REWARD -> {
+                    decisionPath = "CARD_BACK_REWARD_VISUAL"
+                    val observation = requireNotNull(fastResultOverlayObservation(
+                        fastOverlayKind,
+                        capture.visual,
+                        capture.capturedAtNanos,
+                    ))
+                    log.info {
+                        "SCREEN_RECOVERY_RESULT_FAST_OVERLAY kind=CARD_BACK_REWARD result=RESULT " +
+                            "continueBand=${observation.continueControlVisible} ocr=skipped"
+                    }
+                    return@runCatching report(observation)
+                }
+                FastResultOverlayKind.EVENT_QUEST -> {
+                    decisionPath = "EXACT_EVENT_QUEST_VISUAL"
+                    log.info { "SCREEN_RECOVERY_RESULT_FAST_OVERLAY kind=EVENT_QUEST_OVERLAY ocr=skipped" }
+                    return@runCatching report(requireNotNull(fastResultOverlayObservation(
+                        fastOverlayKind,
+                        capture.visual,
+                        capture.capturedAtNanos,
+                    )))
+                }
+                null -> Unit
             }
             val visualDecisionStartedAt = System.nanoTime()
             val fastVisual = ResultPageEvidencePolicy.fastVisualObservation(

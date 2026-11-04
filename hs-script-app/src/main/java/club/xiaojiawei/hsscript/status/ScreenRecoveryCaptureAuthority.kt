@@ -205,6 +205,41 @@ internal object ScreenRecoveryCapturePurposePolicy {
 
 /** Exact evidence needed to permit only HUB -> Traditional Battle pre-session entry. */
 internal object StartupHubModeChooserPolicy {
+    /**
+     * The current runtime mode can lag one recovery frame behind a fresh, exact
+     * chooser capture.  Use the capture's narrow HUB classification only for
+     * the chooser proof; all other captures retain the runtime-mode value.
+     */
+    internal fun modeForFreshChooserProof(
+        screenKind: String?,
+        detectedMode: String?,
+        evidence: String?,
+        runtimeMode: String?,
+    ): String? = if (
+        screenKind.equals("TOURNAMENT", ignoreCase = true) && detectedMode == "HUB" &&
+        evidence in HUB_CHOOSER_EVIDENCE
+    ) {
+        "HUB"
+    } else {
+        runtimeMode
+    }
+
+    fun hasActiveMatchmakingEvidence(
+        matchmakingSearchVisual: Boolean,
+        hubModeChooserVisual: Boolean,
+        screenKind: String?,
+        screenMode: String?,
+        evidence: String?,
+        modalVisible: Boolean,
+        recentActiveMatchmaking: Boolean,
+        activeEntryGuard: Boolean,
+    ): Boolean {
+        val exactChooserFrame = hubModeChooserVisual && !modalVisible &&
+            screenKind.equals("TOURNAMENT", ignoreCase = true) && screenMode == "HUB" &&
+            evidence in HUB_CHOOSER_EVIDENCE
+        return (matchmakingSearchVisual && !exactChooserFrame) || recentActiveMatchmaking || activeEntryGuard
+    }
+
     fun shouldDeferGenericIdleUnblock(
         screenKind: String?,
         screenMode: String?,

@@ -212,6 +212,222 @@ class StuckScreenUnblockCallsiteIntegrationTest {
     }
 
     @Test
+    fun `captured live chooser survives modal and queue pixel heuristics through the startup proof callsite`() {
+        val nearThresholdChooser = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/hub-mode-chooser-live-20261101-234632.png",
+        )))
+        assertTrue(HubModeChooserVisualPolicy.isVisible(nearThresholdChooser))
+        assertFalse(
+            MatchmakingSearchVisualPolicy.isVisible(nearThresholdChooser),
+            "the 23:46:32 chooser is a near-threshold negative; its timer dark ratio is below the queue signature",
+        )
+
+        val liveChooser = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/hub-mode-chooser-live-20261101-234533.png",
+        )))
+        val ocrText = ""
+        val classification = UpstreamScreenStateRecovery.classifyImageDetailsForTest(ocrText, liveChooser)
+        val screen = classification.screenKind
+        val screenMode = classification.screenMode
+        val evidence = classification.evidence
+        val hubVisual = HubModeChooserVisualPolicy.isVisible(liveChooser)
+        val queueVisual = MatchmakingSearchVisualPolicy.isVisible(liveChooser)
+        val questVisual = StartupQuestOverlayVisualClassifier.isQuestOverlay(liveChooser)
+        val modalPanelVisual = ScreenStateRecovery.hasCenteredModalPanel(liveChooser)
+
+        assertTrue(hubVisual, "the saved live frame contains all four fixed HUB mode buttons")
+        assertTrue(queueVisual, "the 23:45:33 saved live frame reproduces the broad red/dark queue-color false-positive")
+        assertFalse(questVisual, "this capture is a mode chooser, not the Event Quest modal")
+        assertFalse(modalPanelVisual, "the real chooser has no covering centered modal")
+        assertEquals("TOURNAMENT", screen)
+        assertEquals("HUB", screenMode)
+        assertEquals("hub-mode-chooser-visual", evidence)
+        assertEquals(
+            StartupHandoffProgressPolicy.PreOcrAction.CLASSIFY_HUB_CHOOSER_VISUALLY,
+            StartupHandoffProgressPolicy.preOcrAction(
+                purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                currentSessionReady = false,
+                battleNetLauncherVisual = false,
+                hubModeChooserVisual = hubVisual,
+                modalVisible = modalPanelVisual,
+                startupQuestOverlayVisual = questVisual,
+            ),
+            "the exact four-button chooser must skip expensive/noisy OCR even when queue-color heuristics also match",
+        )
+
+        val activeQueue = StartupHubModeChooserPolicy.hasActiveMatchmakingEvidence(
+            matchmakingSearchVisual = queueVisual,
+            hubModeChooserVisual = hubVisual,
+            screenKind = screen,
+            screenMode = screenMode,
+            evidence = evidence,
+            modalVisible = modalPanelVisual,
+            recentActiveMatchmaking = false,
+            activeEntryGuard = false,
+        )
+        assertFalse(activeQueue, "the same-frame queue color match is explained by the exact chooser geometry")
+        val chooserProofMode = StartupHubModeChooserPolicy.modeForFreshChooserProof(
+            screenKind = screen,
+            detectedMode = screenMode,
+            evidence = evidence,
+            runtimeMode = "ONLINE_MENU",
+        )
+        assertEquals(
+            "HUB",
+            chooserProofMode,
+            "the same fresh chooser capture must authorize its one-use proof before Mode recovery catches up",
+        )
+        assertEquals(
+            "ONLINE_MENU",
+            StartupHubModeChooserPolicy.modeForFreshChooserProof(
+                screenKind = "DECK_SELECTION",
+                detectedMode = "HUB",
+                evidence = evidence,
+                runtimeMode = "ONLINE_MENU",
+            ),
+            "only the exact tournament chooser may replace a lagging runtime mode",
+        )
+        assertTrue(StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
+            purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            currentSessionReady = false,
+            screenKind = screen,
+            confidence = classification.confidence,
+            evidence = evidence,
+            currentMode = chooserProofMode,
+            modalVisible = modalPanelVisual,
+            activeGame = false,
+            activeMatchmaking = activeQueue,
+            trustedCurrentWindow = true,
+        ))
+
+        val pid = 41_710
+        val hwnd = "native@0x-chooser-live-capture"
+        val now = System.currentTimeMillis()
+        StartupInputReadiness.resetForTest()
+        try {
+            StartupInputReadiness.recordHubModeChooser(pid, hwnd, now)
+            val proof = StartupInputReadiness.isHubTraditionalBattleSelectionReady(pid, hwnd, "HUB", now + 1)
+            val dispatched = mutableListOf<String>()
+            assertTrue(StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
+                chooserProofFresh = proof,
+                paused = false,
+                processId = pid,
+                hwnd = hwnd,
+            ) { action ->
+                dispatched += action
+                StartupInputAuthorizationPolicy.allowsHubTraditionalBattleSelection(
+                    action = action,
+                    processId = pid,
+                    hwnd = hwnd,
+                    exactWindowVerified = true,
+                    freshHubChooserReady = proof,
+                    currentSessionReady = false,
+                    activeGame = false,
+                    activeMatchmaking = activeQueue,
+                    terminal = false,
+                )
+            })
+            assertEquals(listOf(StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION), dispatched)
+            assertFalse(StartupInputReadiness.isHubTraditionalBattleSelectionReady(pid, hwnd, "HUB", now + 2),
+                "accepted entry consumes the one-use chooser proof")
+        } finally {
+            StartupInputReadiness.resetForTest()
+        }
+
+
+        assertEquals(
+            StartupHandoffProgressPolicy.PreOcrAction.RUN_OCR,
+            StartupHandoffProgressPolicy.preOcrAction(
+                purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                currentSessionReady = false,
+                battleNetLauncherVisual = false,
+                hubModeChooserVisual = true,
+                modalVisible = true,
+                startupQuestOverlayVisual = true,
+            ),
+            "a dedicated quest overlay vetoes chooser fast classification",
+        )
+    }
+
+    @Test
+    fun `chooser proof remains fenced when a centered modal masks one chooser button band`() {
+        val chooser = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/hub-mode-chooser-live-20261101-234533.png",
+        )))
+        chooser.createGraphics().also { graphics ->
+            graphics.color = java.awt.Color(20, 20, 20)
+            graphics.fillRect(
+                (chooser.width * .32).toInt(),
+                (chooser.height * .25).toInt(),
+                (chooser.width * .36).toInt(),
+                (chooser.height * .40).toInt(),
+            )
+            graphics.dispose()
+        }
+
+        assertFalse(HubModeChooserVisualPolicy.isVisible(chooser),
+            "masking one chooser face must revoke exact chooser geometry")
+        assertFalse(MatchmakingSearchVisualPolicy.isVisible(chooser),
+            "a covering modal must not be mistaken for a visible queue modal")
+        assertTrue(ScreenStateRecovery.hasCenteredModalPanel(chooser),
+            "the centered modal detector must keep the covering panel visible")
+
+        val classification = UpstreamScreenStateRecovery.classifyImageDetailsForTest("", chooser)
+        val screenKind = classification.screenKind
+        val screenMode = classification.screenMode
+        val evidence = classification.evidence
+        val modalVisible = ScreenStateRecovery.hasCenteredModalPanel(chooser)
+        assertTrue(modalVisible, "the production classifier input must retain the centered modal veto")
+        val activeQueueWithoutExternalFence = StartupHubModeChooserPolicy.hasActiveMatchmakingEvidence(
+            matchmakingSearchVisual = MatchmakingSearchVisualPolicy.isVisible(chooser),
+            hubModeChooserVisual = HubModeChooserVisualPolicy.isVisible(chooser),
+            screenKind = screenKind,
+            screenMode = screenMode,
+            evidence = evidence,
+            modalVisible = modalVisible,
+            recentActiveMatchmaking = false,
+            activeEntryGuard = false,
+        )
+        assertFalse(activeQueueWithoutExternalFence,
+            "the masked frame has no independent queue visual or chooser proof")
+        val activeQueue = StartupHubModeChooserPolicy.hasActiveMatchmakingEvidence(
+            matchmakingSearchVisual = MatchmakingSearchVisualPolicy.isVisible(chooser),
+            hubModeChooserVisual = HubModeChooserVisualPolicy.isVisible(chooser),
+            screenKind = screenKind,
+            screenMode = screenMode,
+            evidence = evidence,
+            modalVisible = modalVisible,
+            recentActiveMatchmaking = false,
+            activeEntryGuard = true,
+        )
+        assertTrue(activeQueue, "an external active-entry fence must remain hard even while the modal masks the chooser")
+        assertFalse(StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
+            purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            currentSessionReady = false,
+            screenKind = screenKind,
+            confidence = classification.confidence,
+            evidence = evidence,
+            currentMode = screenMode,
+            modalVisible = modalVisible,
+            activeGame = false,
+            activeMatchmaking = activeQueueWithoutExternalFence,
+            trustedCurrentWindow = true,
+        ), "modal and active queue evidence must deny chooser entry")
+
+        var dispatched = 0
+        assertFalse(StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
+            chooserProofFresh = false,
+            paused = false,
+            processId = 41_710,
+            hwnd = "native@0x-chooser-modal",
+        ) {
+            dispatched++
+            true
+        })
+        assertEquals(0, dispatched, "a masked chooser must dispatch no click")
+    }
+
+    @Test
     fun `changed frame and active queue pause or terminal evidence prevent click and restart dispatch`() {
         assertLiveChooserClassifiesAsStructurallyVerifiedHub()
         val changedPolicy = StuckScreenUnblockPolicy()
