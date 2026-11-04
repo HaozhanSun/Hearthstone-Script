@@ -42,6 +42,14 @@ Every build that can be used to run the application is a new build and must:
 
 Do not call a build complete if the build succeeds but deployment or shortcut replacement fails. Do not delete user data directories such as `config`, `data`, `log`, or `plugin` backups while deploying.
 
+## Diagnostic retention
+
+- The automatic 30-day diagnostic retention applies independently to Stable, Beta, and Release
+  Candidate. Every channel deployment must install and verify its channel-scoped
+  `diagnostic-retention.ps1` scheduled cleanup.
+- Retention may remove only aged diagnostic logs and screenshots. It must never remove live
+  configuration/data/plugin backups or source-controlled test fixtures.
+
 ## Verification checklist
 
 - Confirm `pom.xml` contains a version greater than the previous build.

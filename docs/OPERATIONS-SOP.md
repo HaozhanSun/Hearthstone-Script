@@ -173,8 +173,18 @@ shortcut edit can substitute for it.
 - Store runtime evidence under the channel's designated diagnostic location;
   retain a provenance link (version/deployment ID, timestamp, log lineage, and
   screenshot hash/path) in the closeout or handoff.
-- Follow the user-approved retention period. Cleanup must not delete live
-  configuration, data, plugin backups, or source-controlled fixtures.
+- The automatic 30-day diagnostic retention applies separately to Stable, Beta,
+  and Release Candidate. Each channel deployment installs and verifies that
+  channel's scheduled `diagnostic-retention.ps1` cleanup before release
+  completion.
+- Cleanup may remove only aged diagnostic logs and screenshots. It must not
+  delete live configuration, data, plugin backups, or source-controlled
+  fixtures.
+- Rollout status (2026-11-03): the audited Beta `4.16.746` and Release
+  Candidate `4.16.711` runtimes have the cleanup script/task; Stable `4.16.399`
+  has a manifest but lacks both. Treat Stable retention installation as an open
+  channel-owned deployment item, not as proof that all-channel retention is
+  complete. Do not cross-install a Beta/RC artifact or task into Stable.
 - If retention removes historical runtime screenshots, state that precise
   limitation rather than treating a missing file as an application regression.
   Replace only with a new capture or a checked-in sanitized test fixture when
