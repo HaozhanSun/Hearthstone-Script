@@ -37,30 +37,6 @@ class RankEligibilityPolicyTest {
     }
 
     @Test
-    fun `temporary override allows any fresh verified constructed rank but never weak evidence`() {
-        for (rank in (1..10) + (21..25)) {
-            val decision = evaluate(detection(rank = rank), allowAnyVerifiedNumericRank = true)
-            assertTrue(decision.eligible, "rank=$rank reason=${decision.reason}")
-        }
-        for (rank in 11..20) {
-            val decision = evaluate(detection(rank = rank), allowAnyVerifiedNumericRank = true)
-            assertFalse(decision.eligible, "invalid constructed rank=$rank")
-        }
-        assertFalse(evaluate(null, allowAnyVerifiedNumericRank = true).eligible)
-        assertFalse(evaluate(detection(rank = 8, capturedAtMs = 1L), allowAnyVerifiedNumericRank = true).eligible)
-        assertFalse(evaluate(detection(rank = 8, confidence = 0.89), allowAnyVerifiedNumericRank = true).eligible)
-        assertFalse(evaluate(detection(rank = 8, provider = "UNKNOWN"), allowAnyVerifiedNumericRank = true).eligible)
-        assertFalse(evaluate(detection(rank = null), allowAnyVerifiedNumericRank = true).eligible)
-    }
-
-    @Test
-    fun `exact target ranks remain authorized without temporary override`() {
-        assertTrue(evaluate(detection(rank = 5)).eligible)
-        assertTrue(evaluate(detection(rank = 10)).eligible)
-        assertFalse(evaluate(detection(rank = 8)).eligible)
-    }
-
-    @Test
     fun `rank three progression reward never authorizes ordinary play`() {
         val decision = evaluate(detection(rank = 3, tier = CurrentRankDetector.RankTier.GOLD))
         assertFalse(decision.eligible, "post-surrender Gold 3 screen is cleanup evidence, not play authorization")
@@ -165,7 +141,6 @@ class RankEligibilityPolicyTest {
         detection: CurrentRankDetector.Detection?,
         actualMode: String = "TOURNAMENT",
         inWar: Boolean = false,
-        allowAnyVerifiedNumericRank: Boolean = false,
     ) = RankEligibilityPolicy.evaluate(
         detection = detection,
         expectedMode = "TOURNAMENT",
@@ -173,7 +148,6 @@ class RankEligibilityPolicyTest {
         expectedInWar = false,
         inWar = inWar,
         nowMs = now,
-        allowAnyVerifiedNumericRank = allowAnyVerifiedNumericRank,
     )
 
     private fun detection(

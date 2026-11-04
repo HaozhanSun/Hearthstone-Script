@@ -11,7 +11,6 @@ internal object RankEligibilityPolicy {
         expectedInWar: Boolean,
         inWar: Boolean,
         nowMs: Long,
-        allowAnyVerifiedNumericRank: Boolean = false,
     ): Decision {
         val evidence = detection?.let {
             RankEvidence(
@@ -31,7 +30,6 @@ internal object RankEligibilityPolicy {
             expectedInWar = expectedInWar,
             inWar = inWar,
             nowMs = nowMs,
-            allowAnyVerifiedNumericRank = allowAnyVerifiedNumericRank,
         )
         return Decision(core.eligible, core.reason)
     }

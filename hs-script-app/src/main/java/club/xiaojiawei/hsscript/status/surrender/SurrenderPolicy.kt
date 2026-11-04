@@ -168,11 +168,6 @@ object SurrenderPolicy {
     private var rankContinueAuthorized = false
     @Volatile
     private var rankContinueAuthorizedNumber: Int? = null
-    @Volatile
-    private var rankContinueRequiresDebugRunLease = false
-    @Volatile
-    private var temporaryRunContinueAuthorized = false
-    private var rankOverrideExpiryLogged = false
     private var rankCompletionDiagnosticLogged = false
     private var rankCompletionDiagnosticCount = 0
     private var rankInspectionAttempts = 0
@@ -323,9 +318,6 @@ object SurrenderPolicy {
         rankCheckCompleted = false
         rankContinueAuthorized = false
         rankContinueAuthorizedNumber = null
-        rankContinueRequiresDebugRunLease = false
-        temporaryRunContinueAuthorized = false
-        rankOverrideExpiryLogged = false
         rankCompletionDiagnosticLogged = false
         rankCompletionDiagnosticCount = 0
         rankInspectionAttempts = 0
@@ -555,10 +547,9 @@ object SurrenderPolicy {
 
     /** Keep every generic surrender policy subordinate to a verified eligible rank. */
     private fun skipGenericSurrenderForEligibleRank(stage: SurrenderCheckStage): Boolean {
-        if (!currentRankContinueAuthorized()) return false
+        if (!rankContinueAuthorized) return false
         log.info {
-            "SURRENDER_POLICY_SKIPPED reason=${if (rankContinueAuthorized) "verified-rank-eligibility" else "temporary-debug-run-lease"} " +
-                "stage=${stage.name} " +
+            "SURRENDER_POLICY_SKIPPED reason=verified-rank-eligibility stage=${stage.name} " +
                 "action=CONTINUE surrender=false dispatch=false retry=false"
         }
         return true
@@ -566,7 +557,7 @@ object SurrenderPolicy {
 
     /** Common executor guard for direct GameUtil.surrender callers and stale requests. */
     internal fun surrenderDispatchBlockReason(mandatoryRank: Boolean): String? = when {
-        currentRankContinueAuthorized() -> if (rankContinueAuthorized) "verified-rank-eligibility" else "temporary-debug-run-lease"
+        rankContinueAuthorized -> "verified-rank-eligibility"
         !rankCheckCompleted && !mandatoryRank -> "rank-eligibility-not-resolved"
         else -> null
     }
@@ -936,7 +927,6 @@ object SurrenderPolicy {
         nowMs: Long,
         persistentStreakDecision: SurrenderRuleResult?,
         winRateDecisionProvider: () -> SurrenderRuleResult? = { null },
-        temporaryRankOverrideActive: Boolean = NeverSurrenderPolicy.temporaryRankOverrideActive(),
     ): SurrenderRuleResult? {
         val authorization = RankEligibilityPolicy.evaluate(
             detection = detection,
@@ -945,7 +935,6 @@ object SurrenderPolicy {
             expectedInWar = true,
             inWar = inWar,
             nowMs = nowMs,
-            allowAnyVerifiedNumericRank = temporaryRankOverrideActive,
         )
         log.info {
             "RANK_ELIGIBILITY_CHECK stage=MULLIGAN provider=${detection?.provider ?: "NONE"} " +
@@ -957,13 +946,7 @@ object SurrenderPolicy {
         if (authorization.eligible) {
             val rank = detection!!.rank!!
             val winRateDecision = winRateDecisionProvider()
-            authorizeEligibleMulliganRank(
-                rank,
-                detection.tier,
-                authorization.reason,
-                persistentStreakDecision,
-                requiresDebugRunLease = authorization.reason.startsWith("verified-temporary-rank-override-"),
-            )
+            authorizeEligibleMulliganRank(rank, detection.tier, authorization.reason, persistentStreakDecision)
             if (winRateDecision != null) {
                 log.info {
                     "WIN_RATE_POLICY_BYPASS reason=verified-rank-eligibility " +
@@ -1033,13 +1016,11 @@ object SurrenderPolicy {
         tier: CurrentRankDetector.RankTier,
         reason: String,
         persistentStreakDecision: SurrenderRuleResult? = null,
-        requiresDebugRunLease: Boolean = false,
     ) {
         rankCheckCompleted = true
         setRankInspectionState(RankInspectionState.RESOLVED)
         rankContinueAuthorized = true
         rankContinueAuthorizedNumber = rank
-        rankContinueRequiresDebugRunLease = requiresDebugRunLease
         persistentStreakDecision?.let { streakDecision ->
             if (streakDecision.blocksAutomaticSurrender) {
                 logPersistentStreakContinueOnce("rank", streakDecision)
@@ -1053,89 +1034,8 @@ object SurrenderPolicy {
         log.info {
             "RANK_POLICY_CONTINUE stage=${SurrenderCheckStage.CURRENT_RANK_RESOLVED.name} " +
                 "rank=$rank tier=${tier.name} reason=verified-eligibility-$reason " +
-                "streakGuard=OVERRIDDEN_FOR_ELIGIBLE_RANK temporaryLeaseRequired=$requiresDebugRunLease"
+                "streakGuard=OVERRIDDEN_FOR_ELIGIBLE_RANK"
         }
-    }
-
-    /**
-     * A temporary all-rank authorization is live only while both Beta's
-     * Never Surrender setting and the monotonic Debug Run lease remain active.
-     * On expiry, a previously authorized non-target rank becomes the ordinary
-     * mandatory rank decision again.
-     */
-    @Synchronized
-    internal fun currentRankContinueAuthorized(
-        temporaryRankOverrideActive: Boolean = NeverSurrenderPolicy.temporaryRankOverrideActive(),
-    ): Boolean {
-        if (!rankContinueAuthorized) {
-            if (temporaryRunContinueAuthorized && !temporaryRankOverrideActive && !rankOverrideExpiryLogged) {
-                rankOverrideExpiryLogged = true
-                log.warn {
-                    "TEMPORARY_RANK_OVERRIDE_REVERTED reason=debug-run-lease-inactive rank=UNKNOWN " +
-                        "action=REQUIRE_STANDARD_RANK_POLICY"
-                }
-            }
-            return temporaryRunContinueAuthorized && temporaryRankOverrideActive
-        }
-        if (!rankContinueRequiresDebugRunLease) return true
-        if (temporaryRankOverrideActive) return true
-        if (!rankOverrideExpiryLogged) {
-            rankOverrideExpiryLogged = true
-            log.warn {
-                "TEMPORARY_RANK_OVERRIDE_REVERTED reason=debug-run-lease-inactive " +
-                    "rank=${rankContinueAuthorizedNumber ?: "UNKNOWN"} action=REQUIRE_STANDARD_RANK_POLICY"
-            }
-        }
-        return false
-    }
-
-    /** Authorize rankless continuation only after the active temporary-run lease clears the first-action barrier. */
-    @Synchronized
-    internal fun authorizeTemporaryRunContinuation(
-        temporaryRankOverrideActive: Boolean = NeverSurrenderPolicy.temporaryRankOverrideActive(),
-    ): Boolean {
-        if (!temporaryRankOverrideActive) return false
-        temporaryRunContinueAuthorized = true
-        rankOverrideExpiryLogged = false
-        log.warn {
-            "TEMPORARY_RANK_OVERRIDE_RANK_UNRESOLVED action=ALLOW_GAMEPLAY_WITHIN_ACTIVE_LEASE " +
-                "rank=UNKNOWN evidence=NO_RANK_AUTHORIZATION surrender=false"
-        }
-        return true
-    }
-
-    /** Re-evaluate the already verified rank if the lease expires before mulligan dispatch. */
-    @Synchronized
-    internal fun currentRankContinuationDecision(
-        temporaryRankOverrideActive: Boolean = NeverSurrenderPolicy.temporaryRankOverrideActive(),
-    ): SurrenderRuleResult? {
-        if (!rankContinueAuthorized) return null
-        val rank = rankContinueAuthorizedNumber ?: return null
-        if (currentRankContinueAuthorized(temporaryRankOverrideActive)) {
-            return SurrenderRuleResult(
-                ruleId = "rank-continue-authorized",
-                matched = true,
-                shouldSurrender = false,
-                reason = if (rankContinueRequiresDebugRunLease) "temporary-verified-rank-lease-active" else "verified-eligible-current-rank",
-                currentRank = rank,
-            )
-        }
-        return expiredTemporaryRankOverrideDecision(temporaryRankOverrideActive)
-    }
-
-    /** Restore the mandatory rank rule for the same game after its temporary lease ends. */
-    private fun expiredTemporaryRankOverrideDecision(
-        temporaryRankOverrideActive: Boolean = NeverSurrenderPolicy.temporaryRankOverrideActive(),
-    ): SurrenderRuleResult? {
-        if (!rankContinueAuthorized || !rankContinueRequiresDebugRunLease ||
-            currentRankContinueAuthorized(temporaryRankOverrideActive)
-        ) return null
-        val rank = rankContinueAuthorizedNumber ?: return null
-        val decision = evaluateCurrentRank(rank) ?: return null
-        return decision.copy(
-            reason = "temporary-rank-override-expired; current-rank=$rank; standard-target-ranks=5,10",
-            currentRank = rank,
-        )
     }
 
     /** Classification helper only; Legendary remains outside the allowed 5/10 ranks. */
@@ -1212,10 +1112,8 @@ object SurrenderPolicy {
     /** True when a rank read already produced a final safe or unsafe result. */
     internal fun currentRankCheckCompleted(): Boolean = rankCheckCompleted
 
-    /** True after numeric rank authorization or live rankless temporary-run authorization. */
-    internal fun currentRankContinueAuthorized(): Boolean = currentRankContinueAuthorized(
-        temporaryRankOverrideActive = NeverSurrenderPolicy.temporaryRankOverrideActive(),
-    )
+    /** True only after this game's numeric rank was positively authorized. */
+    internal fun currentRankContinueAuthorized(): Boolean = rankContinueAuthorized
 
     internal fun currentRankAuthorizedNumber(): Int? = rankContinueAuthorizedNumber
 
@@ -1343,13 +1241,6 @@ object SurrenderPolicy {
      * identified.
      */
     fun evaluateTurnStart(war: War): SurrenderRuleResult? {
-        expiredTemporaryRankOverrideDecision()?.let { decision ->
-            log.warn {
-                "TEMPORARY_RANK_OVERRIDE_EXPIRED_DECISION stage=TURN_START rank=${decision.currentRank} " +
-                    "action=SURRENDER rule=${decision.ruleId} reason=${decision.reason}"
-            }
-            return decision
-        }
         if (skipGenericSurrenderForEligibleRank(SurrenderCheckStage.TURN_START)) return null
         enforcePersistentStreakGuardForCurrentPolicy()?.let { streakDecision ->
             if (!streakDecision.blocksAutomaticSurrender) return streakDecision

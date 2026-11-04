@@ -36,51 +36,17 @@ class MulliganRankDispatchBarrierTest {
     }
 
     @Test
-    fun `temporary authorization admits numeric non-target ranks only while its authority remains active`() {
-        val deniedTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+    fun `rank eight cannot open the barrier when a caller asserts current authorization`() {
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+
         assertFalse(
             MulliganRankDispatchBarrier.authorizeEligibleRank(
-                deniedTicket,
-                8,
-                allowAnyVerifiedNumericRank = true,
-                authorizationStillValid = { false },
-            ),
-        )
-        assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
-
-        val activeTicket = MulliganRankDispatchBarrier.beginCurrentGame()
-        assertTrue(
-            MulliganRankDispatchBarrier.authorizeEligibleRank(
-                activeTicket,
-                8,
-                allowAnyVerifiedNumericRank = true,
+                ticket = ticket,
+                rank = 8,
                 authorizationStillValid = { true },
             ),
         )
-        assertEquals(MulliganRankDispatchBarrier.State.ELIGIBLE, MulliganRankDispatchBarrier.currentState())
-
-        val invalidRankTicket = MulliganRankDispatchBarrier.beginCurrentGame()
-        assertFalse(
-            MulliganRankDispatchBarrier.authorizeEligibleRank(
-                invalidRankTicket,
-                11,
-                allowAnyVerifiedNumericRank = true,
-                authorizationStillValid = { true },
-            ),
-        )
-    }
-
-    @Test
-    fun `rankless temporary run authorization is opt in and requires active authority`() {
-        val expiredTicket = MulliganRankDispatchBarrier.beginCurrentGame()
-        assertFalse(MulliganRankDispatchBarrier.authorizeTemporaryRun(expiredTicket) { false })
-        assertFalse(MulliganRankDispatchBarrier.hasTemporaryRunAuthorization())
         assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
-
-        val activeTicket = MulliganRankDispatchBarrier.beginCurrentGame()
-        assertTrue(MulliganRankDispatchBarrier.authorizeTemporaryRun(activeTicket) { true })
-        assertTrue(MulliganRankDispatchBarrier.hasTemporaryRunAuthorization())
-        assertEquals(MulliganRankDispatchBarrier.State.ELIGIBLE, MulliganRankDispatchBarrier.currentState())
     }
 
     @Test

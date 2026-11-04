@@ -11,7 +11,6 @@ import club.xiaojiawei.hsscript.strategy.DeckStrategyActuator.changeCard
 import club.xiaojiawei.hsscript.status.surrender.SurrenderPolicy
 import club.xiaojiawei.hsscript.status.surrender.SurrenderRuleResult
 import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
-import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
 import club.xiaojiawei.hsscript.status.E2ETrace
 import club.xiaojiawei.hsscript.status.PauseStatus
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
@@ -189,14 +188,9 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
         // mulligan UI exists. Rank OCR is not allowed before this boundary.
         val barrierTicket = MulliganRankDispatchBarrier.beginCurrentGame()
         rankBarrierTicket = barrierTicket
-        val requiredRankProof = if (NeverSurrenderPolicy.temporaryRankOverrideActive()) {
-            "TEMPORARY_BETA_DEBUG_LEASE_OR_VERIFIED_NUMERIC_RANK"
-        } else {
-            "RANK_5_OR_10"
-        }
         log.info {
             "MULLIGAN_RANK_DISPATCH_BARRIER state=PENDING ticket=$barrierTicket " +
-                "required=$requiredRankProof action=BLOCK_ORDINARY_INPUT"
+                "action=BLOCK_ORDINARY_INPUT_UNTIL_FRESH_RANK_5_OR_10"
         }
         mulliganInputConfirmed.set(true)
         rankSurrenderRequested.set(false)
@@ -206,13 +200,10 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
 
     /** Queue normal Mulligan work only after this game's fresh rank decision opens the barrier. */
     private fun scheduleMulliganAction() {
-        if (MulliganRankDispatchBarrier.currentState() != MulliganRankDispatchBarrier.State.ELIGIBLE ||
-            !SurrenderPolicy.currentRankContinueAuthorized()
-        ) {
+        if (MulliganRankDispatchBarrier.currentState() != MulliganRankDispatchBarrier.State.ELIGIBLE) {
             log.warn {
                 "MULLIGAN_ACTION_QUEUE_BLOCKED reason=rank-barrier-not-eligible " +
-                    "state=${MulliganRankDispatchBarrier.currentState()} " +
-                        "rankAuthorization=${SurrenderPolicy.currentRankContinueAuthorized()} queue=false"
+                    "state=${MulliganRankDispatchBarrier.currentState()} queue=false"
             }
             return
         }
@@ -267,35 +258,26 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             isEligible = ::isRankPreflightEligible,
             inspect = {
                 SurrenderPolicy.evaluateCurrentRankBeforeMulligan()
-                    ?: SurrenderPolicy.currentRankContinuationDecision()
+                    ?: if (SurrenderPolicy.currentRankContinueAuthorized()) {
+                        SurrenderRuleResult(
+                            ruleId = "rank-continue-authorized",
+                            matched = true,
+                            shouldSurrender = false,
+                            reason = "verified-eligible-current-rank",
+                            currentRank = SurrenderPolicy.currentRankAuthorizedNumber(),
+                        )
+                    } else {
+                        null
+                    }
             },
             // A null inspection result is never enough to continue: it can
             // mean OCR is unavailable, the policy is waiting, or a stale
             // completion flag leaked from another lifecycle.
             isResolved = { false },
             authorizeContinue = { result ->
-                if (!SurrenderPolicy.currentRankContinueAuthorized()) {
-                    false
-                } else {
-                    result.currentRank?.let { rank ->
-                        MulliganRankDispatchBarrier.authorizeEligibleRank(
-                            ticket = barrierTicket,
-                            rank = rank,
-                            allowAnyVerifiedNumericRank = rank !in setOf(5, 10),
-                            authorizationStillValid = { SurrenderPolicy.currentRankContinueAuthorized() },
-                        )
-                    } ?: false
-                }
-            },
-            authorizeUnresolvedContinue = { result ->
-                result.ruleId == "rank-ocr-unresolved" &&
-                    MulliganRankDispatchBarrier.authorizeTemporaryRun(barrierTicket) {
-                        NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(result.ruleId) &&
-                            SurrenderPolicy.authorizeTemporaryRunContinuation()
-                    }
-            },
-            holdSurrender = { result ->
-                NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(result.ruleId)
+                result.currentRank?.let { rank ->
+                    MulliganRankDispatchBarrier.authorizeEligibleRank(barrierTicket, rank)
+                } ?: false
             },
             provider = {
                 if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"
@@ -347,12 +329,9 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             },
             onContinue = {
                 val rank = SurrenderPolicy.currentRankAuthorizedNumber()
-                val temporaryRun = MulliganRankDispatchBarrier.hasTemporaryRunAuthorization()
                 log.info {
-                    "MULLIGAN_RANK_DISPATCH_BARRIER state=ELIGIBLE ticket=$barrierTicket " +
-                        "rank=${rank ?: "UNKNOWN"} " +
-                        "evidence=${if (temporaryRun) "ACTIVE_BETA_DEBUG_LEASE_NO_RANK_AUTH" else "fresh-policy-verified"} " +
-                        "action=ALLOW_ORDINARY_INPUT"
+                    "MULLIGAN_RANK_DISPATCH_BARRIER state=ELIGIBLE ticket=$barrierTicket rank=$rank " +
+                        "evidence=fresh-policy-verified action=ALLOW_ORDINARY_INPUT"
                 }
                 log.info {
                     "MULLIGAN_RANK_PREFLIGHT_CONTINUE action=CONTINUE_MULLIGAN " +

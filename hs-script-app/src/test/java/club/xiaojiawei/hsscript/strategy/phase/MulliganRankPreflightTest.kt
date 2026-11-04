@@ -10,13 +10,10 @@ import club.xiaojiawei.hsscript.status.surrender.SurrenderRuleResult
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.awt.image.BufferedImage
-import java.nio.file.Files
-import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Delayed
 import java.util.concurrent.Future
@@ -145,71 +142,6 @@ class MulliganRankPreflightTest {
     }
 
     @Test
-    fun `fresh rank eight continues through mulligan only during active temporary lease`() {
-        val now = System.currentTimeMillis()
-        val detection = CurrentRankDetector.Detection(
-            rank = 8,
-            tier = CurrentRankDetector.RankTier.DIAMOND,
-            ocrText = "8",
-            confidence = 0.99,
-            captureBounds = java.awt.Rectangle(10, 20, 80, 90),
-            provider = "PADDLEX",
-            capturedAtMs = now,
-            agreementCount = 1,
-        )
-        val scheduler = ManualScheduler()
-        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
-        var leaseActive = true
-        var surrendered: SurrenderRuleResult? = null
-        var continued = 0
-        SurrenderPolicy.resetForNewGame()
-        val preflight = MulliganRankPreflight(
-            config = MulliganRankPreflightConfig(initialDelayMs = 0, maxAttempts = 1),
-            scheduler = scheduler,
-            isEligible = { true },
-            inspect = {
-                SurrenderPolicy.evaluateMulliganRankEvidence(
-                    detection = detection,
-                    actualMode = "GAMEPLAY",
-                    inWar = true,
-                    nowMs = now,
-                    persistentStreakDecision = null,
-                    temporaryRankOverrideActive = leaseActive,
-                ) ?: SurrenderPolicy.currentRankContinuationDecision(leaseActive)
-            },
-            authorizeContinue = { result ->
-                SurrenderPolicy.currentRankContinueAuthorized(leaseActive) &&
-                    (result.currentRank?.let {
-                        MulliganRankDispatchBarrier.authorizeEligibleRank(
-                            ticket = ticket,
-                            rank = it,
-                            allowAnyVerifiedNumericRank = it !in setOf(5, 10),
-                            authorizationStillValid = { SurrenderPolicy.currentRankContinueAuthorized(leaseActive) },
-                        )
-                    } ?: false)
-            },
-            provider = { "PADDLEX" },
-            onSurrender = { surrendered = it },
-            onContinue = { continued++ },
-        )
-
-        preflight.start()
-        scheduler.runScheduledAfter(0)
-        scheduler.runWorker()
-
-        assertNull(surrendered, "verified rank 8 must not concede during the temporary lease")
-        assertEquals(1, continued)
-        assertEquals(MulliganRankPreflightState.RESOLVED, preflight.snapshot().state)
-
-        leaseActive = false
-        assertFalse(SurrenderPolicy.currentRankContinueAuthorized(leaseActive))
-        val expired = SurrenderPolicy.currentRankContinuationDecision(leaseActive)
-        assertEquals("current-rank-not-5-or-10", expired?.ruleId)
-        assertTrue(expired?.shouldSurrender == true)
-        assertEquals(8, expired?.currentRank)
-    }
-
-    @Test
     fun `rank policy surrenders verified non-target and fails closed for unknown evidence`() {
         val now = System.currentTimeMillis()
         val nonTarget = CurrentRankDetector.Detection(
@@ -300,166 +232,6 @@ class MulliganRankPreflightTest {
         assertEquals(1, surrenderCount)
         assertEquals(0, continueCount)
         assertEquals(MulliganRankPreflightState.SURRENDER_REQUESTED, preflight.snapshot().state)
-    }
-
-    @Test
-    fun `active temporary Never Surrender lease holds unresolved rank without surrender or ordinary input`() {
-        val scheduler = ManualScheduler()
-        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
-        var surrenderCount = 0
-        var continueCount = 0
-        var attempt = 0
-        val preflight = MulliganRankPreflight(
-            config = MulliganRankPreflightConfig(initialDelayMs = 7_000, maxAttempts = 1),
-            scheduler = scheduler,
-            isEligible = { true },
-            inspect = {
-                attempt++
-                if (attempt == 1) {
-                    SurrenderRuleResult(
-                        ruleId = "rank-ocr-unresolved",
-                        matched = false,
-                        shouldSurrender = true,
-                        reason = "rank OCR confidence below threshold",
-                    )
-                } else {
-                    SurrenderRuleResult(
-                        ruleId = "rank-continue-authorized",
-                        matched = true,
-                        shouldSurrender = false,
-                        reason = "fresh numeric rank verified",
-                        currentRank = 5,
-                    )
-                }
-            },
-            holdSurrender = { result ->
-                NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(
-                    result.ruleId,
-                    overrideActive = true,
-                )
-            },
-            authorizeContinue = { result ->
-                result.currentRank == 5 && MulliganRankDispatchBarrier.authorizeEligibleRank(ticket, 5)
-            },
-            provider = { "PADDLEX" },
-            onSurrender = { surrenderCount++ },
-            onContinue = { continueCount++ },
-        )
-
-        preflight.start()
-        scheduler.runScheduledAfter(7_000)
-        scheduler.runWorker()
-
-        assertEquals(MulliganRankPreflightState.WAITING_FOR_RANK, preflight.snapshot().state)
-        assertEquals(0, surrenderCount, "active Never Surrender lease must not dispatch a surrender")
-        assertEquals(0, continueCount, "unverified rank must not release ordinary mulligan input")
-        assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
-        assertFalse(PauseStatus.isPause)
-
-        // A new bounded probe must capture again; only its fresh rank proof releases the barrier.
-        scheduler.runScheduledAfter(7_000)
-        scheduler.runWorker()
-        assertEquals(MulliganRankPreflightState.RESOLVED, preflight.snapshot().state)
-        assertEquals(1, continueCount)
-        assertEquals(MulliganRankDispatchBarrier.State.ELIGIBLE, MulliganRankDispatchBarrier.currentState())
-    }
-
-    @Test
-    fun `active temporary lease allows gameplay dispatch without rank evidence`() {
-        SurrenderPolicy.resetForNewGame()
-        val scheduler = ManualScheduler()
-        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
-        var leaseActive = true
-        var surrenderCount = 0
-        var continueCount = 0
-        val preflight = MulliganRankPreflight(
-            config = MulliganRankPreflightConfig(initialDelayMs = 7_000, maxAttempts = 1),
-            scheduler = scheduler,
-            isEligible = { true },
-            inspect = {
-                SurrenderRuleResult(
-                    ruleId = "rank-ocr-unresolved",
-                    matched = false,
-                    shouldSurrender = true,
-                    reason = "rank badge OCR confidence below threshold",
-                )
-            },
-            authorizeUnresolvedContinue = { result ->
-                result.ruleId == "rank-ocr-unresolved" &&
-                    MulliganRankDispatchBarrier.authorizeTemporaryRun(ticket) {
-                        NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(result.ruleId, leaseActive) &&
-                            SurrenderPolicy.authorizeTemporaryRunContinuation(leaseActive)
-                    }
-            },
-            holdSurrender = { result ->
-                NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(result.ruleId, leaseActive)
-            },
-            provider = { "PADDLEX" },
-            onSurrender = { surrenderCount++ },
-            onContinue = {
-                assertEquals(MulliganRankDispatchBarrier.State.ELIGIBLE, MulliganRankDispatchBarrier.currentState())
-                assertTrue(SurrenderPolicy.currentRankContinueAuthorized(leaseActive))
-                continueCount++
-            },
-        )
-
-        preflight.start()
-        scheduler.runScheduledAfter(7_000)
-        scheduler.runWorker()
-
-        assertEquals(MulliganRankPreflightState.RESOLVED, preflight.snapshot().state)
-        assertEquals(0, surrenderCount)
-        assertEquals(1, continueCount, "authorized active lease must reach the gameplay dispatch callback")
-        assertTrue(MulliganRankDispatchBarrier.hasTemporaryRunAuthorization())
-        assertNull(SurrenderPolicy.currentRankAuthorizedNumber(), "lease permission must not fabricate rank evidence")
-
-        leaseActive = false
-        assertFalse(SurrenderPolicy.currentRankContinueAuthorized(leaseActive), "lease expiry revokes gameplay authorization")
-        assertNull(SurrenderPolicy.currentRankAuthorizedNumber())
-        SurrenderPolicy.resetForNewGame()
-    }
-
-    @Test
-    fun `lease expiry restores bounded unresolved-rank surrender behavior`() {
-        val scheduler = ManualScheduler()
-        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
-        var leaseActive = true
-        var surrenderCount = 0
-        val preflight = MulliganRankPreflight(
-            config = MulliganRankPreflightConfig(initialDelayMs = 7_000, maxAttempts = 1),
-            scheduler = scheduler,
-            isEligible = { true },
-            inspect = {
-                SurrenderRuleResult(
-                    ruleId = "rank-ocr-unresolved",
-                    matched = false,
-                    shouldSurrender = true,
-                    reason = "unresolved rank",
-                )
-            },
-            holdSurrender = { result ->
-                NeverSurrenderPolicy.holdUnresolvedRankForTemporaryOverride(result.ruleId, leaseActive)
-            },
-            provider = { "PADDLEX" },
-            onSurrender = { result ->
-                assertTrue(MulliganRankDispatchBarrier.requireSurrender(ticket) != null)
-                assertEquals("rank-ocr-unresolved", result.ruleId)
-                surrenderCount++
-            },
-            onContinue = { error("unresolved rank must never release ordinary input") },
-        )
-
-        preflight.start()
-        scheduler.runScheduledAfter(7_000)
-        scheduler.runWorker()
-        assertEquals(0, surrenderCount, "active lease holds unresolved evidence")
-        assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
-
-        leaseActive = false
-        scheduler.runScheduledAfter(7_000)
-        scheduler.runWorker()
-        assertEquals(1, surrenderCount, "after lease expiry use the standard fail-closed rank policy")
-        assertEquals(MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED, MulliganRankDispatchBarrier.currentState())
     }
 
     @Test
@@ -893,13 +665,12 @@ class MulliganRankPreflightTest {
 
     @Test
     fun `phase transition cancels pending retry and historical screenshot is retained`() {
-        val screenshot = Path.of(
-            "C:/Users/yzjsh/Documents/Codex/2026-08-15/for-all-these-delay-short-are-2/" +
-                "outputs/Hearthstone Script/log/mulligan/" +
-                "game-0001-before-selection-20260901-054413-930.png",
-        )
-        assertTrue(Files.isRegularFile(screenshot), "retained screenshot fixture must exist")
-        assertNotNull(javax.imageio.ImageIO.read(screenshot.toFile()))
+        val screenshot = requireNotNull(
+            javaClass.classLoader.getResourceAsStream(
+                "club/xiaojiawei/hsscript/status/surrender/rank6-live-mulligan-unknown-ocr.png",
+            ),
+        ) { "tracked mulligan screenshot fixture must exist" }
+        screenshot.use { assertNotNull(javax.imageio.ImageIO.read(it)) }
 
         val scheduler = ManualScheduler()
         var phaseActive = true
