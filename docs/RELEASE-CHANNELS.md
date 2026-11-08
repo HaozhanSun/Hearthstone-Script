@@ -34,7 +34,11 @@ manifests, single-instance identities, and shortcuts.
   and a successfully hash-validated current Beta manifest whose deployment ID
   matches the marker. Missing/corrupt marker data, missing or mismatched
   manifest identity, PID reuse, unreadable Java command lines without an exact
-  marker match, or unrelated process names fail closed. This
+  marker match, or unrelated process names fail closed. The one foreign-process
+  exclusion is an unreadable Java command line whose exact PID lookup reports
+  the exact Release Candidate window title `HS Script Release Candidate`; it is
+  recorded as foreign and never stopped, and does not establish Beta ownership.
+  A missing, altered, or unrelated title still fails closed. This
   fallback is Beta-root-only and must not be applied to Stable or Release
   Candidate process handling.
 

@@ -250,6 +250,30 @@ try {
     Assert-Equal $true $corruptMarkerRefused 'corrupt ownership marker fails closed'
 
     Remove-Item -LiteralPath (Join-Path $runtimeRoot 'hs-script.pid.json') -Force
+    $foreignRcRecord = @([pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 44880; CommandLine = '' })
+    $foreignRcStopped = @(Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot `
+        -GetProcessRecords { $foreignRcRecord } `
+        -GetWindowTitle { param($ProcessId) if ($ProcessId -eq 44880) { 'HS Script Release Candidate' } else { '' } } `
+        -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) })
+    Assert-Equal 0 $foreignRcStopped.Count 'exact RC titled JVM is excluded as a foreign process'
+
+    $unknownTitleRefused = $false
+    try {
+        Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot `
+            -GetProcessRecords { $foreignRcRecord } `
+            -GetWindowTitle { param($ProcessId) 'Unknown Java Window' } | Out-Null
+    } catch { $unknownTitleRefused = $_.Exception.Message -match 'no Beta ownership marker' }
+    Assert-Equal $true $unknownTitleRefused 'unknown titled JVM still fails closed without a Beta marker'
+
+    [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'hs-script.pid.json'), $marker)
+    $markerStoppedWithRcTitle = @(Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot `
+        -GetProcessRecords { $markerOnlyRecord } -GetIdentity $matchingIdentity `
+        -GetWindowTitle { param($ProcessId) 'HS Script Release Candidate' } `
+        -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) })
+    Assert-Equal 1 $markerStoppedWithRcTitle.Count 'exact Beta marker ownership is not suppressed by a foreign-title probe'
+    Assert-Equal 105 $markerStoppedWithRcTitle[0] 'verified Beta marker PID remains selected'
+
+    Remove-Item -LiteralPath (Join-Path $runtimeRoot 'hs-script.pid.json') -Force
     $missingMarkerRefused = $false
     try {
         Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot `
@@ -296,7 +320,7 @@ Write-Output ("CALLER_RESUMED stoppedCount={0}" -f $result.Count)
         Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot -GetProcessRecords { $staleRecord } -GetIdentity $staleIdentity -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) } | Out-Null
     } catch { $staleRejected = $_.Exception.Message -match 'cannot be verified' }
     Assert-Equal $true $staleRejected 'reused PID without Beta command line is refused'
-    Assert-Equal 3 $stopped.Count 'stale PID is never stopped; only the three verified Beta marker/JAR PIDs are selected'
+    Assert-Equal 4 $stopped.Count 'foreign RC is never stopped; only the four verified Beta marker/JAR PIDs are selected'
 
     $nonBetaRejected = $false
     try { Stop-ManagedHsScriptProcesses -RuntimeRoot $otherRoot -GetProcessRecords { @() } | Out-Null }
@@ -339,4 +363,4 @@ if (-not $deployScript.Contains('$betaDeploymentProcessUtilsSource = Join-Path $
     throw 'Beta process-stop helper must be loaded from the Beta source root'
 }
 
-Write-Output 'BetaDeploymentProcessStop.Tests: PASS (Beta-only ownership, game-preserving restart guard, canonical launch, exact deployment/PID verification, exact marker fallback, PID/name/manifest refusal, missing/corrupt marker, unrelated JVM, original error propagation)'
+Write-Output 'BetaDeploymentProcessStop.Tests: PASS (Beta-only ownership, exact foreign RC title exclusion, unknown-title refusal, game-preserving restart guard, canonical launch, exact deployment/PID verification, exact marker fallback, PID/name/manifest refusal, missing/corrupt marker, unrelated JVM, original error propagation)'

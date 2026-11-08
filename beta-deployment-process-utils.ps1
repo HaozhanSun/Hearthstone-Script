@@ -12,6 +12,33 @@ function Assert-HsScriptBetaGameProcessAbsent(
     return $true
 }
 
+function Get-HsScriptProcessWindowTitle([int]$ProcessId) {
+    try {
+        return [string](Get-Process -Id $ProcessId -ErrorAction Stop).MainWindowTitle
+    } catch {
+        return $null
+    }
+}
+
+function Test-HsScriptForeignReleaseCandidateWindow(
+    $Record,
+    [scriptblock]$GetWindowTitle = ${function:Get-HsScriptProcessWindowTitle}
+) {
+    if ([string]$Record.Name -notin @('java.exe', 'javaw.exe') -or
+        -not [string]::IsNullOrWhiteSpace([string]$Record.CommandLine)) {
+        return $false
+    }
+    $processId = 0
+    if (-not [int]::TryParse([string]$Record.ProcessId, [ref]$processId) -or $processId -le 0) {
+        return $false
+    }
+    $title = $null
+    try { $title = & $GetWindowTitle $processId } catch { }
+    # This is a foreign-process exclusion only. It never establishes Beta
+    # ownership and must remain an exact match so unknown Java stays fail-closed.
+    return [string]$title -ceq 'HS Script Release Candidate'
+}
+
 function Start-HsScriptBetaRuntimeAfterDeploy(
     [string]$RuntimeRoot,
     [string]$DeploymentId,
@@ -138,6 +165,7 @@ function Stop-ManagedHsScriptProcesses(
     [scriptblock]$GetProcessRecords = { @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop) },
     [scriptblock]$GetIdentity = ${function:Get-HsScriptProcessIdentity},
     [scriptblock]$GetProcessStartTime = ${function:Get-HsScriptProcessStartTimeUtc},
+    [scriptblock]$GetWindowTitle = ${function:Get-HsScriptProcessWindowTitle},
     [scriptblock]$StopProcess = { param($ProcessId) Stop-Process -Id ([int]$ProcessId) -Force -ErrorAction Stop }
 ) {
     $root = Get-HsScriptCanonicalRuntimeRoot $RuntimeRoot
@@ -155,6 +183,7 @@ function Stop-ManagedHsScriptProcesses(
     }
 
     $ownedProcessIds = [System.Collections.Generic.HashSet[int]]::new()
+    $foreignReleaseCandidateProcessIds = [System.Collections.Generic.HashSet[int]]::new()
     $jarPattern = '(?i)' + [regex]::Escape($root) + '[\\/]+hs-script_[^\\/\s"]+\.jar'
     foreach ($record in $processes) {
         if ([string]$record.Name -notin @('java.exe', 'javaw.exe')) { continue }
@@ -164,6 +193,10 @@ function Stop-ManagedHsScriptProcesses(
         } elseif ([string]::IsNullOrWhiteSpace([string]$record.CommandLine) -and
             -not (Test-Path -LiteralPath (Join-Path $root 'hs-script.pid.json') -PathType Leaf)
         ) {
+            if (Test-HsScriptForeignReleaseCandidateWindow -Record $record -GetWindowTitle $GetWindowTitle) {
+                [void]$foreignReleaseCandidateProcessIds.Add($processId)
+                continue
+            }
             throw "Unidentified Java PID $processId with no command line and no Beta ownership marker; refusing to assume idle"
         }
     }
@@ -262,6 +295,7 @@ function Stop-ManagedHsScriptProcesses(
             [string]::IsNullOrWhiteSpace([string]$record.CommandLine) -and
             -not $ownedProcessIds.Contains([int]$record.ProcessId)
         ) {
+            if ($foreignReleaseCandidateProcessIds.Contains([int]$record.ProcessId)) { continue }
             throw "Unidentified Java PID $($record.ProcessId) has no visible command line or exact Beta marker identity; refusing to assume idle"
         }
     }

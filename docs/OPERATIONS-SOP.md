@@ -63,7 +63,12 @@ shortcut edit can substitute for it.
    must have a known source lineage; do not absorb another worker's changes.
 4. Record the pre-deploy process/manifest/log ledger above. Preserve user
    `config`, `data`, `log`, and `plugin` backups. Fail closed if a target path,
-   channel, ownership marker, or process identity cannot be verified.
+   channel, ownership marker, or process identity cannot be verified. A blank
+   Java command line may be excluded as a foreign Release Candidate only when
+   an exact PID lookup reports the exact title `HS Script Release Candidate`;
+   record that PID/title as foreign and never stop it. This is not Beta
+   ownership evidence. Any missing, altered, or unrelated title remains a
+   hard refusal, as do all marker/PID/start-time mismatches.
 5. Validate every launcher/watchdog/bootstrap source before acquiring the
    runtime gate, stopping processes, creating runtime directories, or copying
    files. A component copied by the release path but omitted from preflight is
