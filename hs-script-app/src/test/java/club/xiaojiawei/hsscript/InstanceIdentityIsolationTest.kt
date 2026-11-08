@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript
 
 import club.xiaojiawei.hsscript.utils.ExistingInstanceSignal
+import club.xiaojiawei.hsscript.status.DebugRunHardCapSettingPolicy
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -148,6 +149,57 @@ class InstanceIdentityIsolationTest {
                 systemAutoStart = true,
                 configuredAutoStart = false,
             ),
+        )
+    }
+
+    @Test
+    fun `start on open cannot clear a Beta hard-cap refusal but keeps normal starts`() {
+        val betaHardCapArmFailed = DebugRunHardCapSettingPolicy.mustRefuseUncappedRun(
+            hardCapRequired = true,
+            watchdogArmed = false,
+        )
+        assertTrue(betaHardCapArmFailed)
+        assertFalse(
+            shouldAutoStart(
+                rawArgs = emptyList(),
+                namedPause = null,
+                systemAutoStart = false,
+                configuredAutoStart = true,
+                blockedByHardCapRefusal = betaHardCapArmFailed,
+            ),
+            "START_ON_OPEN must not clear the manual pause after the Beta hard-cap refusal",
+        )
+
+        val betaWatchdogArmed = DebugRunHardCapSettingPolicy.mustRefuseUncappedRun(
+            hardCapRequired = true,
+            watchdogArmed = true,
+        )
+        assertFalse(betaWatchdogArmed)
+        assertTrue(
+            shouldAutoStart(
+                rawArgs = emptyList(),
+                namedPause = null,
+                systemAutoStart = false,
+                configuredAutoStart = true,
+                blockedByHardCapRefusal = betaWatchdogArmed,
+            ),
+            "a successful Beta watchdog arm must preserve START_ON_OPEN",
+        )
+
+        val otherChannelDoesNotRequireTheBetaHardCap = DebugRunHardCapSettingPolicy.mustRefuseUncappedRun(
+            hardCapRequired = false,
+            watchdogArmed = false,
+        )
+        assertFalse(otherChannelDoesNotRequireTheBetaHardCap)
+        assertTrue(
+            shouldAutoStart(
+                rawArgs = emptyList(),
+                namedPause = null,
+                systemAutoStart = false,
+                configuredAutoStart = true,
+                blockedByHardCapRefusal = otherChannelDoesNotRequireTheBetaHardCap,
+            ),
+            "channels outside Beta Never Surrender must preserve START_ON_OPEN",
         )
     }
 

@@ -3,6 +3,7 @@ package club.xiaojiawei.hsscript.e2e
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -110,6 +111,19 @@ class DebugRunUiContractTest {
         assertTrue(controllerText.contains("Hard-cap watchdog could not be armed"))
         assertTrue(mainControllerText.contains("REFUSED · \$it"))
         assertTrue(mainControllerText.contains("debugRunModeCheckBox.isSelected = snapshot.state == DebugRunLease.State.ACTIVE"))
+
+        val mainApplicationText = Files.readString(moduleRoot.resolve(Path.of(
+            "src", "main", "java", "club", "xiaojiawei", "hsscript", "MainApplication.kt",
+        )))
+        assertTrue(mainApplicationText.contains("blockedByHardCapRefusal: Boolean = false"))
+        assertTrue(mainApplicationText.contains("DebugRunController.hardCapRefusalReason()"))
+        assertTrue(mainApplicationText.contains("resumeFromStartupAutoStart"))
+        assertTrue(mainApplicationText.contains("AUTO_START_BLOCKED source=\$source reason=debug-run-hard-cap-refused"))
+        assertEquals(
+            2,
+            Regex("blockedByHardCapRefusal = refusalReason != null").findAll(mainApplicationText).count(),
+            "both independent startup auto-start callsites must honor a hard-cap refusal",
+        )
 
         val runner = moduleRoot.resolve(Path.of("src", "main", "resources", "bat", "run-debug.ps1"))
         val runnerText = Files.readString(runner)

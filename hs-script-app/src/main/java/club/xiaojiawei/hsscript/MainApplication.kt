@@ -58,11 +58,15 @@ internal fun shouldAutoStart(
     namedPause: String?,
     systemAutoStart: Boolean,
     configuredAutoStart: Boolean,
+    blockedByHardCapRefusal: Boolean = false,
 ): Boolean {
+    if (blockedByHardCapRefusal) return false
     val explicitPause = rawArgs.firstOrNull { it.startsWith(ARG_PAUSE) }
         ?.substringAfter('=', missingDelimiterValue = "")
     return explicitPause == "false" || namedPause == "false" || systemAutoStart || configuredAutoStart
 }
+
+private fun String.toLogToken(): String = replace(Regex("\\s+"), "_")
 
 /**
  * javaFX启动器
@@ -278,11 +282,20 @@ class MainApplication : Application() {
         ExistingInstanceSignal.startWatcher()
         val explicitAutoStart = System.getProperty("hs.script.autostart") == "true"
         val configuredAutoStart = ConfigUtil.getBoolean(ConfigEnum.START_ON_OPEN)
-        if (explicitAutoStart || configuredAutoStart) {
+        val refusalReason = DebugRunController.hardCapRefusalReason()
+        val shouldStart = shouldAutoStart(
+            rawArgs = emptyList(),
+            namedPause = null,
+            systemAutoStart = explicitAutoStart,
+            configuredAutoStart = configuredAutoStart,
+            blockedByHardCapRefusal = refusalReason != null,
+        )
+        if (shouldStart) {
             go {
-                LifecycleTrace.mark("auto-start-requested source=${if (explicitAutoStart) "system-property" else "config"}")
-                PauseStatus.isPause = false
+                resumeFromStartupAutoStart(if (explicitAutoStart) "system-property" else "config")
             }
+        } else if (refusalReason != null && (explicitAutoStart || configuredAutoStart)) {
+            log.error { "AUTO_START_BLOCKED source=show-main-page reason=debug-run-hard-cap-refused refusal=${refusalReason.toLogToken()}" }
         }
     }
 
@@ -526,26 +539,42 @@ class MainApplication : Application() {
         val namedPause = this.parameters.named["pause"]
         val systemAutoStart = System.getProperty("hs.script.autostart") == "true"
         val startOnOpen = ConfigUtil.getBoolean(ConfigEnum.START_ON_OPEN)
+        val refusalReason = DebugRunController.hardCapRefusalReason()
         val shouldStart = shouldAutoStart(
             rawArgs = args,
             namedPause = namedPause ?: pause,
             systemAutoStart = systemAutoStart,
             configuredAutoStart = startOnOpen,
+            blockedByHardCapRefusal = refusalReason != null,
         )
         log.info {
             "AUTO_START_DECISION rawPause=$pause namedPause=$namedPause " +
-                "systemProperty=$systemAutoStart configStartOnOpen=$startOnOpen decision=$shouldStart"
+                "systemProperty=$systemAutoStart configStartOnOpen=$startOnOpen " +
+                "hardCapRefused=${refusalReason != null} decision=$shouldStart"
         }
         if (shouldStart) {
             log.info { "接收到开始参数，开始脚本" }
             Thread.sleep(1000)
-            PauseStatus.isPause = false
+            resumeFromStartupAutoStart("check-arg")
+        } else if (refusalReason != null) {
+            log.error { "AUTO_START_BLOCKED source=check-arg reason=debug-run-hard-cap-refused refusal=${refusalReason.toLogToken()}" }
         } else {
             // Keep normal launches quiet.  The About and Version windows
             // remain available from the main UI, but an upgrade or first run
             // must not cover the game/script window automatically.
             log.info { "启动提示窗口已跳过：项目介绍和版本说明可从主界面手动打开" }
         }
+    }
+
+    /** Recheck at dispatch time so a refusal racing with startup cannot be cleared by auto-start. */
+    private fun resumeFromStartupAutoStart(source: String) {
+        val refusalReason = DebugRunController.hardCapRefusalReason()
+        if (refusalReason != null) {
+            log.error { "AUTO_START_BLOCKED source=$source reason=debug-run-hard-cap-refused refusal=${refusalReason.toLogToken()}" }
+            return
+        }
+        LifecycleTrace.mark("auto-start-requested source=$source")
+        PauseStatus.isPause = false
     }
 
     private fun checkSystem() {
