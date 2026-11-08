@@ -50,6 +50,46 @@ class MulliganRankDispatchBarrierTest {
     }
 
     @Test
+    fun `fresh temporary Beta authorization can release only an ordinary numeric rank`() {
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+
+        assertTrue(
+            MulliganRankDispatchBarrier.authorizeEligibleRank(
+                ticket = ticket,
+                rank = 9,
+                allowVerifiedTemporaryRank = true,
+                authorizationStillValid = { true },
+            ),
+        )
+        assertEquals(MulliganRankDispatchBarrier.State.ELIGIBLE, MulliganRankDispatchBarrier.currentState())
+
+        val legendaryTicket = MulliganRankDispatchBarrier.beginCurrentGame()
+        assertFalse(
+            MulliganRankDispatchBarrier.authorizeEligibleRank(
+                ticket = legendaryTicket,
+                rank = 25,
+                allowVerifiedTemporaryRank = true,
+                authorizationStillValid = { true },
+            ),
+        )
+    }
+
+    @Test
+    fun `temporary rank authorization fails closed when revalidation is revoked`() {
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+
+        assertFalse(
+            MulliganRankDispatchBarrier.authorizeEligibleRank(
+                ticket = ticket,
+                rank = 9,
+                allowVerifiedTemporaryRank = true,
+                authorizationStillValid = { false },
+            ),
+        )
+        assertEquals(MulliganRankDispatchBarrier.State.PENDING, MulliganRankDispatchBarrier.currentState())
+    }
+
+    @Test
     fun `authoritative terminal result takes priority over pending rank preflight`() {
         val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
         assertTrue(MulliganRankDispatchBarrier.completeTerminalWithoutSurrender(ticket))

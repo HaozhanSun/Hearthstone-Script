@@ -22,9 +22,18 @@ object MulliganRankDispatchBarrier {
     fun authorizeEligibleRank(
         ticket: Long,
         rank: Int,
+        /**
+         * A non-target rank can pass only after the caller has independently
+         * revalidated the short-lived Beta never-surrender lease.  This is
+         * intentionally limited to ordinary numeric ladder ranks; Legendary
+         * or an arbitrary number can never use this escape hatch.
+         */
+        allowVerifiedTemporaryRank: Boolean = false,
         authorizationStillValid: () -> Boolean = { true },
     ): Boolean = synchronized(lock) {
-        if (ticket != generation || state != State.PENDING || rank !in ELIGIBLE_RANKS || !authorizationStillValid()) return false
+        val rankAllowed = rank in ELIGIBLE_RANKS ||
+            (allowVerifiedTemporaryRank && rank in TEMPORARY_OVERRIDE_RANKS)
+        if (ticket != generation || state != State.PENDING || !rankAllowed || !authorizationStillValid()) return false
         state = State.ELIGIBLE
         true
     }
@@ -89,4 +98,5 @@ object MulliganRankDispatchBarrier {
     }
 
     private val ELIGIBLE_RANKS = setOf(5, 10)
+    private val TEMPORARY_OVERRIDE_RANKS = 1..10
 }

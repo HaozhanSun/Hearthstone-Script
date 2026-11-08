@@ -200,10 +200,13 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
 
     /** Queue normal Mulligan work only after this game's fresh rank decision opens the barrier. */
     private fun scheduleMulliganAction() {
-        if (MulliganRankDispatchBarrier.currentState() != MulliganRankDispatchBarrier.State.ELIGIBLE) {
+        if (MulliganRankDispatchBarrier.currentState() != MulliganRankDispatchBarrier.State.ELIGIBLE ||
+            !SurrenderPolicy.currentRankContinueAuthorized()
+        ) {
             log.warn {
                 "MULLIGAN_ACTION_QUEUE_BLOCKED reason=rank-barrier-not-eligible " +
-                    "state=${MulliganRankDispatchBarrier.currentState()} queue=false"
+                    "state=${MulliganRankDispatchBarrier.currentState()} rankAuthorization=" +
+                    "${SurrenderPolicy.currentRankContinueAuthorized()} queue=false"
             }
             return
         }
@@ -275,9 +278,19 @@ object ReplaceCardPhaseStrategy : AbstractPhaseStrategy() {
             // completion flag leaked from another lifecycle.
             isResolved = { false },
             authorizeContinue = { result ->
-                result.currentRank?.let { rank ->
-                    MulliganRankDispatchBarrier.authorizeEligibleRank(barrierTicket, rank)
-                } ?: false
+                if (!SurrenderPolicy.currentRankContinueAuthorized()) {
+                    false
+                } else {
+                    result.currentRank?.let { rank ->
+                        MulliganRankDispatchBarrier.authorizeEligibleRank(
+                            ticket = barrierTicket,
+                            rank = rank,
+                            allowVerifiedTemporaryRank =
+                                SurrenderPolicy.currentRankUsesTemporaryNeverSurrenderOverride(),
+                            authorizationStillValid = SurrenderPolicy::currentRankContinueAuthorized,
+                        )
+                    } ?: false
+                }
             },
             provider = {
                 if (OcrRuntime.isLegacySelected()) "LEGACY" else "PADDLEX"

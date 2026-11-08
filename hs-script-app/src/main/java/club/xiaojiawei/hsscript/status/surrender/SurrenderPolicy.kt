@@ -182,6 +182,15 @@ object SurrenderPolicy {
     private var rankContinueAuthorized = false
     @Volatile
     private var rankContinueAuthorizedNumber: Int? = null
+    /**
+     * A non-target rank is never a durable authorization.  Keep the exact
+     * guard and lease identity that admitted it so every later dispatch can
+     * prove that the same full-duration Beta lease and toggle are still live.
+     */
+    @Volatile
+    private var temporaryRankOverrideGuard: BetaNeverSurrenderOverride? = null
+    @Volatile
+    private var temporaryRankOverrideLease: BetaNeverSurrenderOverride.ActiveLease? = null
     private var rankCompletionDiagnosticLogged = false
     private var rankCompletionDiagnosticCount = 0
     private var rankInspectionAttempts = 0
@@ -332,6 +341,8 @@ object SurrenderPolicy {
         rankCheckCompleted = false
         rankContinueAuthorized = false
         rankContinueAuthorizedNumber = null
+        temporaryRankOverrideGuard = null
+        temporaryRankOverrideLease = null
         rankCompletionDiagnosticLogged = false
         rankCompletionDiagnosticCount = 0
         rankInspectionAttempts = 0
@@ -561,7 +572,7 @@ object SurrenderPolicy {
 
     /** Keep every generic surrender policy subordinate to a verified eligible rank. */
     private fun skipGenericSurrenderForEligibleRank(stage: SurrenderCheckStage): Boolean {
-        if (!rankContinueAuthorized) return false
+        if (!currentRankContinueAuthorized()) return false
         log.info {
             "SURRENDER_POLICY_SKIPPED reason=verified-rank-eligibility stage=${stage.name} " +
                 "action=CONTINUE surrender=false dispatch=false retry=false"
@@ -571,7 +582,7 @@ object SurrenderPolicy {
 
     /** Common executor guard for direct GameUtil.surrender callers and stale requests. */
     internal fun surrenderDispatchBlockReason(mandatoryRank: Boolean): String? = when {
-        rankContinueAuthorized -> "verified-rank-eligibility"
+        currentRankContinueAuthorized() -> "verified-rank-eligibility"
         !rankCheckCompleted && !mandatoryRank -> "rank-eligibility-not-resolved"
         else -> null
     }
@@ -962,11 +973,12 @@ object SurrenderPolicy {
             betaOverride.allowsTemporaryContinue(detection, nowMs)
         ) {
             val rank = detection!!.rank!!
-            authorizeEligibleMulliganRank(
+            authorizeTemporaryBetaMulliganRank(
                 rank = rank,
                 tier = detection.tier,
-                reason = "beta-temporary-never-surrender-override",
                 persistentStreakDecision = persistentStreakDecision,
+                betaOverride = betaOverride,
+                nowMs = nowMs,
             )
             log.warn {
                 "BETA_NEVER_SURRENDER_OVERRIDE action=CONTINUE_MULLIGAN rank=$rank " +
@@ -1054,6 +1066,8 @@ object SurrenderPolicy {
         setRankInspectionState(RankInspectionState.RESOLVED)
         rankContinueAuthorized = true
         rankContinueAuthorizedNumber = rank
+        temporaryRankOverrideGuard = null
+        temporaryRankOverrideLease = null
         persistentStreakDecision?.let { streakDecision ->
             if (streakDecision.blocksAutomaticSurrender) {
                 logPersistentStreakContinueOnce("rank", streakDecision)
@@ -1069,6 +1083,34 @@ object SurrenderPolicy {
                 "rank=$rank tier=${tier.name} reason=verified-eligibility-$reason " +
                 "streakGuard=OVERRIDDEN_FOR_ELIGIBLE_RANK"
         }
+    }
+
+    /**
+     * Record a non-target rank only after [BetaNeverSurrenderOverride] has
+     * accepted its fresh OCR evidence.  The barrier reuses this state to
+     * reject dispatch as soon as the toggle, channel, or original lease is
+     * no longer valid.
+     */
+    private fun authorizeTemporaryBetaMulliganRank(
+        rank: Int,
+        tier: CurrentRankDetector.RankTier,
+        persistentStreakDecision: SurrenderRuleResult?,
+        betaOverride: BetaNeverSurrenderOverride,
+        nowMs: Long,
+    ) {
+        // The evidence freshness check already passed in
+        // evaluateMulliganRankEvidence. Capture the exact lease that proved
+        // it, then require that same lease for later game actions without
+        // wrongly applying the ten-second OCR window to the whole match.
+        val lease = betaOverride.activeLease(nowMs) ?: return
+        authorizeEligibleMulliganRank(
+            rank = rank,
+            tier = tier,
+            reason = "beta-temporary-never-surrender-override",
+            persistentStreakDecision = persistentStreakDecision,
+        )
+        temporaryRankOverrideGuard = betaOverride
+        temporaryRankOverrideLease = lease
     }
 
     /** Classification helper only; Legendary remains outside the allowed 5/10 ranks. */
@@ -1145,8 +1187,21 @@ object SurrenderPolicy {
     /** True when a rank read already produced a final safe or unsafe result. */
     internal fun currentRankCheckCompleted(): Boolean = rankCheckCompleted
 
-    /** True only after this game's numeric rank was positively authorized. */
-    internal fun currentRankContinueAuthorized(): Boolean = rankContinueAuthorized
+    /**
+     * True only after this game's numeric rank was positively authorized.
+     * Normal target ranks remain authorized for the game; a temporary Beta
+     * exception is rechecked at every hand-off and expires fail-closed.
+     */
+    internal fun currentRankContinueAuthorized(nowMs: Long = System.currentTimeMillis()): Boolean {
+        if (!rankContinueAuthorized) return false
+        val guard = temporaryRankOverrideGuard ?: return true
+        val lease = temporaryRankOverrideLease ?: return false
+        return guard.isSameLeaseStillActive(lease, nowMs)
+    }
+
+    /** Whether the current authorization is the narrow revalidated Beta exception. */
+    internal fun currentRankUsesTemporaryNeverSurrenderOverride(): Boolean =
+        temporaryRankOverrideGuard != null && currentRankContinueAuthorized()
 
     internal fun currentRankAuthorizedNumber(): Int? = rankContinueAuthorizedNumber
 
@@ -1162,6 +1217,9 @@ object SurrenderPolicy {
     ) {
         rankCheckCompleted = completed
         rankContinueAuthorized = authorized
+        rankContinueAuthorizedNumber = null
+        temporaryRankOverrideGuard = null
+        temporaryRankOverrideLease = null
         rankInspectionAttempts = attempts
         rankCompletionDiagnosticLogged = false
         rankCompletionDiagnosticCount = 0

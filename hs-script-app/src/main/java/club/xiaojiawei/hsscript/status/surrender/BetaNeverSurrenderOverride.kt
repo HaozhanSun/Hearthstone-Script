@@ -9,6 +9,11 @@ internal class BetaNeverSurrenderOverride(
     private val debugRunLease: () -> DebugRunLease.Snapshot,
     private val maxRankAgeMs: Long = MAX_RANK_AGE_MS,
 ) {
+    data class ActiveLease internal constructor(
+        val startEpochMillis: Long,
+        val endEpochMillis: Long,
+    )
+
     init {
         require(maxRankAgeMs >= 0)
     }
@@ -19,15 +24,27 @@ internal class BetaNeverSurrenderOverride(
      * A persisted toggle, an expired lease, or a shortened/non-Beta lease
      * cannot relax the mandatory exact-rank policy.
      */
-    fun active(nowMs: Long): Boolean {
+    fun active(nowMs: Long): Boolean = activeLease(nowMs) != null
+
+    /** A stable identity for the full lease that admitted the initial OCR proof. */
+    fun activeLease(nowMs: Long): ActiveLease? {
         val snapshot = debugRunLease()
         val duration = snapshot.endEpochMillis - snapshot.startEpochMillis
-        return betaBuild && neverSurrenderEnabled() &&
+        val active = betaBuild && neverSurrenderEnabled() &&
             snapshot.state == DebugRunLease.State.ACTIVE &&
             snapshot.startEpochMillis > 0L &&
             duration == DebugRunLease.MAX_DURATION_MILLIS &&
             nowMs >= snapshot.startEpochMillis && nowMs < snapshot.endEpochMillis
+        return if (active) ActiveLease(snapshot.startEpochMillis, snapshot.endEpochMillis) else null
     }
+
+    /**
+     * Fresh OCR is required to open the barrier, not for every later card
+     * action.  Later actions instead prove that the identical bounded lease
+     * and the live toggle are still active.
+     */
+    fun isSameLeaseStillActive(lease: ActiveLease, nowMs: Long): Boolean =
+        activeLease(nowMs) == lease
 
     val expiresAtMs: Long
         get() = debugRunLease().endEpochMillis

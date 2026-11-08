@@ -1,6 +1,8 @@
 package club.xiaojiawei.hsscript.strategy.phase
 
 import club.xiaojiawei.hsscript.status.PauseStatus
+import club.xiaojiawei.hsscript.status.DebugRunLease
+import club.xiaojiawei.hsscript.status.surrender.BetaNeverSurrenderOverride
 import club.xiaojiawei.hsscript.status.surrender.CurrentRankDetector
 import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
 import club.xiaojiawei.hsscript.status.surrender.NeverSurrenderPolicy
@@ -184,6 +186,104 @@ class MulliganRankPreflightTest {
         assertEquals("rank-ocr-unresolved", unresolved?.ruleId)
         assertTrue(unresolved?.shouldSurrender == true)
         assertFalse(SurrenderPolicy.currentRankContinueAuthorized())
+    }
+
+    @Test
+    fun `active Beta never surrender lease carries a fresh rank nine through dispatch and queues ordinary mulligan work`() {
+        val now = System.currentTimeMillis()
+        var neverSurrenderEnabled = true
+        val override = BetaNeverSurrenderOverride(
+            betaBuild = true,
+            neverSurrenderEnabled = { neverSurrenderEnabled },
+            debugRunLease = {
+                DebugRunLease.Snapshot(
+                    state = DebugRunLease.State.ACTIVE,
+                    startEpochMillis = now - 1_000L,
+                    endEpochMillis = now - 1_000L + DebugRunLease.MAX_DURATION_MILLIS,
+                    remainingMillis = DebugRunLease.MAX_DURATION_MILLIS - 1_000L,
+                )
+            },
+        )
+        val detection = CurrentRankDetector.Detection(
+            rank = 9,
+            tier = CurrentRankDetector.RankTier.DIAMOND,
+            ocrText = "9",
+            confidence = 0.95,
+            captureBounds = java.awt.Rectangle(10, 20, 80, 90),
+            provider = "PADDLEX",
+            capturedAtMs = now,
+            agreementCount = 1,
+        )
+        val scheduler = ManualScheduler()
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+        val actionGate = MulliganActionGate()
+        var continued = 0
+        var surrendered = 0
+
+        SurrenderPolicy.resetForNewGame()
+        val preflight = MulliganRankPreflight(
+            config = MulliganRankPreflightConfig(initialDelayMs = 1, maxAttempts = 1),
+            scheduler = scheduler,
+            isEligible = { true },
+            inspect = {
+                SurrenderPolicy.evaluateMulliganRankEvidence(
+                    detection = detection,
+                    actualMode = "GAMEPLAY",
+                    inWar = true,
+                    nowMs = now,
+                    persistentStreakDecision = null,
+                    betaOverride = override,
+                ) ?: SurrenderRuleResult(
+                    ruleId = "rank-continue-authorized",
+                    matched = true,
+                    shouldSurrender = false,
+                    reason = "fresh-beta-never-surrender-rank-nine",
+                    currentRank = SurrenderPolicy.currentRankAuthorizedNumber(),
+                )
+            },
+            authorizeContinue = { result ->
+                result.currentRank?.let { rank ->
+                    MulliganRankDispatchBarrier.authorizeEligibleRank(
+                        ticket = ticket,
+                        rank = rank,
+                        allowVerifiedTemporaryRank =
+                            SurrenderPolicy.currentRankUsesTemporaryNeverSurrenderOverride(),
+                        authorizationStillValid = SurrenderPolicy::currentRankContinueAuthorized,
+                    )
+                } ?: false
+            },
+            provider = { "PADDLEX" },
+            onSurrender = { surrendered++ },
+            onContinue = {
+                continued++
+                assertTrue(actionGate.tryReserve(), "a live temporary authorization must release ordinary mulligan work")
+            },
+        )
+
+        preflight.start()
+        scheduler.runScheduledAfter(1)
+        scheduler.runWorker()
+
+        assertEquals(0, surrendered)
+        assertEquals(1, continued)
+        assertEquals(MulliganRankDispatchBarrier.State.ELIGIBLE, MulliganRankDispatchBarrier.currentState())
+        assertTrue(SurrenderPolicy.currentRankContinueAuthorized())
+        assertTrue(
+            SurrenderPolicy.currentRankContinueAuthorized(
+                now + BetaNeverSurrenderOverride.MAX_RANK_AGE_MS + 1L,
+            ),
+            "fresh OCR admits the game once; the live lease, not OCR age, governs later turns",
+        )
+        assertFalse(
+            SurrenderPolicy.currentRankContinueAuthorized(
+                now - 1_000L + DebugRunLease.MAX_DURATION_MILLIS,
+            ),
+            "the same authorization must expire with its original thirty-minute lease",
+        )
+
+        neverSurrenderEnabled = false
+        assertFalse(SurrenderPolicy.currentRankContinueAuthorized(), "toggle revocation must invalidate later dispatch")
+        SurrenderPolicy.resetForNewGame()
     }
 
     @Test
