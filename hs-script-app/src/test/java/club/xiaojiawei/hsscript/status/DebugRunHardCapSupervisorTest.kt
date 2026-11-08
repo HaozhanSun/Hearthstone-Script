@@ -70,8 +70,19 @@ class DebugRunHardCapSupervisorTest {
         """.trimIndent()
 
         assertTrue(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready))
+        assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"schema\": 1", "\"schema\": 2")))
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"state\": \"READY\"", "\"state\": \"STALE\"")))
+        assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"runId\": \"gui-run\"", "\"runId\": \"other-run\"")))
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"processId\": 42", "\"processId\": 43")))
+        assertFalse(
+            DebugRunHardCapSupervisor.readyRecordMatches(
+                plan,
+                ready.replace(
+                    "\"deadlineEpochMillis\": ${plan.deadlineUtc.toEpochMilli()}",
+                    "\"deadlineEpochMillis\": ${plan.deadlineUtc.toEpochMilli() + 1}",
+                ),
+            ),
+        )
     }
 
     @Test

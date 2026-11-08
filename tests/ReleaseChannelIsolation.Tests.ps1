@@ -1,17 +1,48 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$branchName = 'beta/release-candidate-v4.16.551'
 $config = Get-Content -LiteralPath (Join-Path $projectRoot 'release-channel.json') -Raw | ConvertFrom-Json
-if ($config.channel -ne 'release-candidate' -or $config.branch -ne $branchName) {
-    throw 'Release Candidate metadata does not identify this isolated RC branch'
+if ($config.channel -ne 'beta' -or $config.branch -notlike 'beta/*' -or $config.branch -like 'beta/release-candidate-*') {
+    throw 'Current Beta source metadata does not identify a non-RC Beta branch'
 }
-if ($config.runtimeDirectoryName -ne 'Hearthstone Script Release Candidate' -or
-    $config.shortcutName -ne 'Hearthstone Script Release Candidate.lnk' -or
-    $config.iconFileName -ne 'hs-script-release-candidate.ico') {
-    throw 'Release Candidate runtime, shortcut, or icon identity is incorrect'
+if ($config.runtimeDirectoryName -ne 'Hearthstone Script Beta' -or
+    $config.shortcutName -ne 'Hearthstone Script Beta.lnk' -or
+    $config.iconFileName -ne 'hs-script-beta.ico') {
+    throw 'Beta runtime, shortcut, or icon identity is incorrect'
 }
 
-& (Join-Path $projectRoot '.github/scripts/verify-release-channel.ps1') -BranchName $branchName | Out-Null
+& (Join-Path $projectRoot '.github/scripts/verify-release-channel.ps1') -BranchName $config.branch | Out-Null
+
+# This test runs on Beta.  Validate the shared verifier's RC path with an
+# isolated canonical RC metadata fixture instead of pretending this checkout
+# is a historical RC branch.
+$rcMetadataRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("hs-rc-channel-metadata-" + [guid]::NewGuid().ToString('N'))
+try {
+    $rcVerifierDirectory = Join-Path $rcMetadataRoot '.github/scripts'
+    New-Item -ItemType Directory -Path $rcVerifierDirectory -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $rcMetadataRoot 'pom.xml'), @'
+<project>
+  <artifactId>hs-script</artifactId>
+  <version>v4.16.711</version>
+</project>
+'@)
+    [System.IO.File]::WriteAllText((Join-Path $rcMetadataRoot 'release-channel.json'), @'
+{
+  "schema": 1,
+  "channel": "release-candidate",
+  "branch": "beta/release-candidate-v4.16.708-daily-quest-overlay-20261027",
+  "displayName": "Hearthstone Script Release Candidate",
+  "runtimeDirectoryName": "Hearthstone Script Release Candidate",
+  "shortcutName": "Hearthstone Script Release Candidate.lnk",
+  "iconFileName": "hs-script-release-candidate.ico",
+  "artifactLabel": "release-candidate"
+}
+'@)
+    Copy-Item -LiteralPath (Join-Path $projectRoot '.github/scripts/verify-release-channel.ps1') -Destination $rcVerifierDirectory
+    $rcBranch = 'beta/release-candidate-v4.16.708-daily-quest-overlay-20261027'
+    & (Join-Path $rcVerifierDirectory 'verify-release-channel.ps1') -BranchName $rcBranch | Out-Null
+} finally {
+    if (Test-Path -LiteralPath $rcMetadataRoot) { Remove-Item -LiteralPath $rcMetadataRoot -Recurse -Force }
+}
 
 $deployScript = Get-Content -LiteralPath (Join-Path $projectRoot 'build-and-deploy.ps1') -Raw
 $shortcutScript = Get-Content -LiteralPath (Join-Path $projectRoot 'sync-shortcuts.ps1') -Raw

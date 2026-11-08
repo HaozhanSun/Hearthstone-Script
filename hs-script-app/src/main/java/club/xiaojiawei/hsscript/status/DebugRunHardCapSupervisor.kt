@@ -239,7 +239,8 @@ internal object DebugRunHardCapSupervisor {
      * ownership field required for an armed hard cap.
      */
     internal fun readyRecordMatches(plan: Plan, ready: String): Boolean =
-        ready.matchesJsonString("state", "READY") &&
+        ready.matchesJsonNumber("schema", 1L) &&
+            ready.matchesJsonString("state", "READY") &&
             ready.matchesJsonString("runId", safe(plan.runId)) &&
             ready.matchesJsonNumber("processId", plan.processId) &&
             ready.matchesJsonNumber("deadlineEpochMillis", plan.deadlineUtc.toEpochMilli())
