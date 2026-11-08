@@ -265,6 +265,40 @@ try {
     } catch { $unknownTitleRefused = $_.Exception.Message -match 'no Beta ownership marker' }
     Assert-Equal $true $unknownTitleRefused 'unknown titled JVM still fails closed without a Beta marker'
 
+    $staleValidMarker = @{
+        schema = 1
+        releaseChannel = 'beta'
+        runtimeDirectoryName = 'Hearthstone Script Beta'
+        runtimeRoot = $runtimeRoot
+        processId = 106
+        processStartTimeUtc = $markerStart
+        executablePath = $javaPath
+        deploymentId = $deploymentId
+    } | ConvertTo-Json
+    $markerPath = Join-Path $runtimeRoot 'hs-script.pid.json'
+    [System.IO.File]::WriteAllText($markerPath, $staleValidMarker)
+    $stoppedBeforeStaleMarkerRc = $stopped.Count
+    $staleMarkerRcStopped = @(Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot `
+        -GetProcessRecords { $foreignRcRecord } `
+        -GetIdentity { throw 'stale marker PID 106 is intentionally absent' } `
+        -GetWindowTitle { param($ProcessId) if ($ProcessId -eq 44880) { 'HS Script Release Candidate' } else { '' } } `
+        -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) })
+    Assert-Equal 0 $staleMarkerRcStopped.Count 'exact RC title remains foreign when a stale valid Beta marker exists'
+    Assert-Equal $stoppedBeforeStaleMarkerRc $stopped.Count 'stale-marker RC exclusion never requests a stop'
+    Assert-Equal $staleValidMarker ([System.IO.File]::ReadAllText($markerPath)) 'RC exclusion leaves stale Beta marker bytes unchanged'
+
+    $unknownTitleWithStaleMarkerRefused = $false
+    try {
+        Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot `
+            -GetProcessRecords { $foreignRcRecord } `
+            -GetIdentity { throw 'stale marker PID 106 is intentionally absent' } `
+            -GetWindowTitle { param($ProcessId) 'Unknown Java Window' } `
+            -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) } | Out-Null
+    } catch { $unknownTitleWithStaleMarkerRefused = $_.Exception.Message -match 'no visible command line or exact Beta marker identity' }
+    Assert-Equal $true $unknownTitleWithStaleMarkerRefused 'unknown titled JVM still fails closed with a stale valid Beta marker'
+    Assert-Equal $stoppedBeforeStaleMarkerRc $stopped.Count 'unknown-title refusal never requests a stop'
+    Assert-Equal $staleValidMarker ([System.IO.File]::ReadAllText($markerPath)) 'unknown-title refusal leaves stale Beta marker bytes unchanged'
+
     [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'hs-script.pid.json'), $marker)
     $markerStoppedWithRcTitle = @(Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot `
         -GetProcessRecords { $markerOnlyRecord } -GetIdentity $matchingIdentity `
@@ -363,4 +397,4 @@ if (-not $deployScript.Contains('$betaDeploymentProcessUtilsSource = Join-Path $
     throw 'Beta process-stop helper must be loaded from the Beta source root'
 }
 
-Write-Output 'BetaDeploymentProcessStop.Tests: PASS (Beta-only ownership, exact foreign RC title exclusion, unknown-title refusal, game-preserving restart guard, canonical launch, exact deployment/PID verification, exact marker fallback, PID/name/manifest refusal, missing/corrupt marker, unrelated JVM, original error propagation)'
+Write-Output 'BetaDeploymentProcessStop.Tests: PASS (Beta-only ownership, exact foreign RC title exclusion with absent/stale marker, unknown-title refusal, stale marker byte preservation, game-preserving restart guard, canonical launch, exact deployment/PID verification, exact marker fallback, PID/name/manifest refusal, missing/corrupt marker, unrelated JVM, original error propagation)'

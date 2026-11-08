@@ -190,14 +190,14 @@ function Stop-ManagedHsScriptProcesses(
         $processId = [int]$record.ProcessId
         if ([string]$record.CommandLine -match $jarPattern) {
             [void]$ownedProcessIds.Add($processId)
-        } elseif ([string]::IsNullOrWhiteSpace([string]$record.CommandLine) -and
-            -not (Test-Path -LiteralPath (Join-Path $root 'hs-script.pid.json') -PathType Leaf)
-        ) {
+        } elseif ([string]::IsNullOrWhiteSpace([string]$record.CommandLine)) {
             if (Test-HsScriptForeignReleaseCandidateWindow -Record $record -GetWindowTitle $GetWindowTitle) {
                 [void]$foreignReleaseCandidateProcessIds.Add($processId)
                 continue
             }
-            throw "Unidentified Java PID $processId with no command line and no Beta ownership marker; refusing to assume idle"
+            if (-not (Test-Path -LiteralPath (Join-Path $root 'hs-script.pid.json') -PathType Leaf)) {
+                throw "Unidentified Java PID $processId with no command line and no Beta ownership marker; refusing to assume idle"
+            }
         }
     }
 

@@ -36,9 +36,11 @@ manifests, single-instance identities, and shortcuts.
   manifest identity, PID reuse, unreadable Java command lines without an exact
   marker match, or unrelated process names fail closed. The one foreign-process
   exclusion is an unreadable Java command line whose exact PID lookup reports
-  the exact Release Candidate window title `HS Script Release Candidate`; it is
-  recorded as foreign and never stopped, and does not establish Beta ownership.
-  A missing, altered, or unrelated title still fails closed. This
+  the exact Release Candidate window title `HS Script Release Candidate`; this
+  lookup applies whether the Beta marker is absent or a valid marker is stale.
+  The PID is recorded as foreign only when it is not independently verified as
+  the exact Beta marker process, and the window title never establishes Beta
+  ownership. A missing, altered, or unrelated title still fails closed. This
   fallback is Beta-root-only and must not be applied to Stable or Release
   Candidate process handling.
 
