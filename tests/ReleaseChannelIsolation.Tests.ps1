@@ -13,8 +13,8 @@ if ($config.runtimeDirectoryName -ne 'Hearthstone Script Beta' -or
 & (Join-Path $projectRoot '.github/scripts/verify-release-channel.ps1') -BranchName $config.branch | Out-Null
 
 # This test runs on Beta.  Validate the shared verifier's RC path with an
-# isolated canonical RC metadata fixture instead of pretending this checkout
-# is a historical RC branch.
+# isolated synthetic RC metadata fixture instead of pretending this checkout
+# is any real or historical RC branch.
 $rcMetadataRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("hs-rc-channel-metadata-" + [guid]::NewGuid().ToString('N'))
 try {
     $rcVerifierDirectory = Join-Path $rcMetadataRoot '.github/scripts'
@@ -29,7 +29,7 @@ try {
 {
   "schema": 1,
   "channel": "release-candidate",
-  "branch": "beta/release-candidate-v4.16.708-daily-quest-overlay-20261027",
+  "branch": "beta/release-candidate-contract-test",
   "displayName": "Hearthstone Script Release Candidate",
   "runtimeDirectoryName": "Hearthstone Script Release Candidate",
   "shortcutName": "Hearthstone Script Release Candidate.lnk",
@@ -38,7 +38,7 @@ try {
 }
 '@)
     Copy-Item -LiteralPath (Join-Path $projectRoot '.github/scripts/verify-release-channel.ps1') -Destination $rcVerifierDirectory
-    $rcBranch = 'beta/release-candidate-v4.16.708-daily-quest-overlay-20261027'
+    $rcBranch = 'beta/release-candidate-contract-test'
     & (Join-Path $rcVerifierDirectory 'verify-release-channel.ps1') -BranchName $rcBranch | Out-Null
 } finally {
     if (Test-Path -LiteralPath $rcMetadataRoot) { Remove-Item -LiteralPath $rcMetadataRoot -Recurse -Force }
