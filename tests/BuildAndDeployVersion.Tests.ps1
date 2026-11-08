@@ -38,22 +38,38 @@ Assert-Equal $buildTimestamp $noManifestMetadata.BuildTimestampPacific 'first-de
 $pstMetadata = Get-ReleaseBuildMetadata 'v4.16.504' 'v4.16.503' ([datetime]'2026-01-04T03:11:22') 'PST'
 Assert-Equal '2026-01-04 03:11:22 PST' $pstMetadata.BuildTimestampPacific 'standard-time build timestamp'
 
-$collisionTarget = Join-Path ([System.IO.Path]::GetTempPath()) ("beta-artifact-collision-" + [guid]::NewGuid().ToString('N'))
+$collisionFixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("beta-artifact-collision-" + [guid]::NewGuid().ToString('N'))
+$collisionRuntime = Join-Path $collisionFixtureRoot 'Hearthstone Script Beta'
+$collisionSourceTarget = Join-Path $collisionFixtureRoot 'hs-script-app\target'
 try {
-    New-Item -ItemType Directory -Path $collisionTarget | Out-Null
+    New-Item -ItemType Directory -Path $collisionRuntime, $collisionSourceTarget -Force | Out-Null
     $retryVersion = 'v4.16.680-local-20261027-034150PDT'
-    [System.IO.File]::WriteAllText((Join-Path $collisionTarget "hs-script_$retryVersion.jar"), 'preserve existing artifact')
-    [System.IO.File]::WriteAllText((Join-Path $collisionTarget "hs-script_$retryVersion.zip"), 'preserve existing artifact')
+    [System.IO.File]::WriteAllText((Join-Path $collisionRuntime "hs-script_$retryVersion.jar"), 'preserve deployed artifact')
+    [System.IO.File]::WriteAllText((Join-Path $collisionRuntime "hs-script_$retryVersion.zip"), 'preserve deployed artifact')
     Assert-Equal 'v4.16.681-local-20261027-034200PDT' `
-        (Get-BetaCollisionSafeArtifactVersion $retryVersion ([datetime]'2026-10-27T03:42:00') $collisionTarget) `
-        'Beta retry bumps patch when prior target JAR and ZIP exist'
-    Assert-Equal 'preserve existing artifact' ([System.IO.File]::ReadAllText((Join-Path $collisionTarget "hs-script_$retryVersion.jar"))) 'collision detection leaves prior JAR intact'
-    Assert-Equal 'preserve existing artifact' ([System.IO.File]::ReadAllText((Join-Path $collisionTarget "hs-script_$retryVersion.zip"))) 'collision detection leaves prior ZIP intact'
+        (Get-BetaCollisionSafeArtifactVersion $retryVersion ([datetime]'2026-10-27T03:42:00') $collisionRuntime $collisionSourceTarget) `
+        'Beta retry bumps patch when prior runtime JAR and ZIP exist'
+    Assert-Equal 'preserve deployed artifact' ([System.IO.File]::ReadAllText((Join-Path $collisionRuntime "hs-script_$retryVersion.jar"))) 'collision detection leaves deployed JAR intact'
+    Assert-Equal 'preserve deployed artifact' ([System.IO.File]::ReadAllText((Join-Path $collisionRuntime "hs-script_$retryVersion.zip"))) 'collision detection leaves deployed ZIP intact'
+
+    $sourceRetryVersion = 'v4.16.748-local-20261107-235212PST'
+    [System.IO.File]::WriteAllText((Join-Path $collisionSourceTarget "hs-script_$sourceRetryVersion.jar"), 'preserve packaged source artifact')
+    [System.IO.File]::WriteAllText((Join-Path $collisionSourceTarget "hs-script_$sourceRetryVersion.zip"), 'preserve packaged source artifact')
+    Assert-Equal 'v4.16.749-local-20261108-001500PST' `
+        (Get-BetaCollisionSafeArtifactVersion $sourceRetryVersion ([datetime]'2026-11-08T00:15:00') $collisionRuntime $collisionSourceTarget) `
+        'Beta retry bumps patch when prior packaged source JAR and ZIP exist'
+    Assert-Equal 'preserve packaged source artifact' ([System.IO.File]::ReadAllText((Join-Path $collisionSourceTarget "hs-script_$sourceRetryVersion.jar"))) 'collision detection leaves packaged source JAR intact'
+    Assert-Equal 'preserve packaged source artifact' ([System.IO.File]::ReadAllText((Join-Path $collisionSourceTarget "hs-script_$sourceRetryVersion.zip"))) 'collision detection leaves packaged source ZIP intact'
+
     Assert-Equal 'v4.16.681-local-20261027-034200PDT' `
-        (Get-BetaCollisionSafeArtifactVersion 'v4.16.681-local-20261027-034200PDT' ([datetime]'2026-10-27T03:42:00') $collisionTarget) `
+        (Get-BetaCollisionSafeArtifactVersion 'v4.16.681-local-20261027-034200PDT' ([datetime]'2026-10-27T03:42:00') $collisionRuntime $collisionSourceTarget) `
         'Beta retry accepts a fresh artifact version'
+
+    Assert-Equal 'v4.16.748-local-20261107-235212PST' `
+        (Get-NextApplicationVersion 'v4.16.748-local-20261107-235212PST' 'v4.16.747-local-20261103-183415PST' ([datetime]'2026-11-08T00:15:00')) `
+        'normal newer source version remains the candidate before collision selection'
 } finally {
-    if (Test-Path -LiteralPath $collisionTarget) { Remove-Item -LiteralPath $collisionTarget -Recurse -Force }
+    if (Test-Path -LiteralPath $collisionFixtureRoot) { Remove-Item -LiteralPath $collisionFixtureRoot -Recurse -Force }
 }
 
 $pomFixture = '<project><local-build-timestamp-pacific>old</local-build-timestamp-pacific></project>'
@@ -75,6 +91,9 @@ $collisionHelperCall = $deployScript.IndexOf('Get-BetaCollisionSafeArtifactVersi
 $collisionVersionAssignment = $deployScript.IndexOf('$nextVersion = $collisionSafeVersion', [System.StringComparison]::Ordinal)
 if ($betaCollisionGuard -lt 0 -or $collisionHelperCall -lt $betaCollisionGuard -or $collisionVersionAssignment -lt $collisionHelperCall) {
     throw 'Artifact collision avoidance must be limited to Beta and applied before packaging'
+}
+if ($deployScript -notmatch 'Get-BetaCollisionSafeArtifactVersion\s+\$nextVersion\s+\$now\s+\$runtimeRoot\s+\$targetRoot') {
+    throw 'Beta collision avoidance must check both the canonical runtime and local packaged artifact output'
 }
 if ($deployScript -notmatch 'buildTimestampPacific\s*=\s*\$buildTimestampPacific') {
     throw 'Deployment manifest must record the exact artifact buildTimestampPacific value'

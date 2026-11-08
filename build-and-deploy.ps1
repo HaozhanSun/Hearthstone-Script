@@ -177,7 +177,7 @@ if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
     $releaseMetadata = Get-ReleaseBuildMetadata $currentVersion $deployedVersion $now $zoneName
     $nextVersion = $releaseMetadata.Version
     if ($Channel -eq 'beta') {
-        $collisionSafeVersion = Get-BetaCollisionSafeArtifactVersion $nextVersion $now $targetRoot
+        $collisionSafeVersion = Get-BetaCollisionSafeArtifactVersion $nextVersion $now $runtimeRoot $targetRoot
         if ($collisionSafeVersion -cne $nextVersion) {
             Write-Output "BETA_ARTIFACT_COLLISION_BUMP=$nextVersion->$collisionSafeVersion"
             $nextVersion = $collisionSafeVersion

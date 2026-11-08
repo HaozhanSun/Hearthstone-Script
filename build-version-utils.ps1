@@ -54,12 +54,25 @@ function Get-ReleaseBuildMetadata(
     }
 }
 
-function Get-BetaCollisionSafeArtifactVersion([string]$CandidateVersion, [datetime]$Now, [string]$TargetRoot) {
+function Get-BetaCollisionSafeArtifactVersion(
+    [string]$CandidateVersion,
+    [datetime]$Now,
+    [string]$RuntimeRoot,
+    [string]$SourceArtifactRoot
+) {
     $version = $CandidateVersion
+    $artifactRoots = @($RuntimeRoot, $SourceArtifactRoot | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
     while ($true) {
-        $jarPath = Join-Path $TargetRoot "hs-script_$version.jar"
-        $zipPath = Join-Path $TargetRoot "hs-script_$version.zip"
-        if (-not (Test-Path -LiteralPath $jarPath) -and -not (Test-Path -LiteralPath $zipPath)) {
+        $collision = $false
+        foreach ($root in $artifactRoots) {
+            $jarPath = Join-Path $root "hs-script_$version.jar"
+            $zipPath = Join-Path $root "hs-script_$version.zip"
+            if ((Test-Path -LiteralPath $jarPath) -or (Test-Path -LiteralPath $zipPath)) {
+                $collision = $true
+                break
+            }
+        }
+        if (-not $collision) {
             return $version
         }
         $version = Get-NextApplicationVersion $version $version $Now

@@ -76,7 +76,12 @@ shortcut edit can substitute for it.
 
 ### 2.2 Artifact and build
 
-1. Create a new version in `pom.xml`; never reuse a prior artifact name.
+1. Create a new version in `pom.xml`; never reuse a prior artifact name. For a
+   Beta retry, collision selection must inspect both the canonical Beta runtime
+   and the local `hs-script-app/target` packaged JAR/ZIP output before
+   packaging. Preserve prior artifacts; if either location already has the
+   candidate name, advance to a fresh unique version and timestamp rather than
+   overwrite or reuse the prior attempt.
 2. Capture one Pacific build timestamp before packaging and ensure the exact
    value is embedded in JAR `build.info`, the visible-app footer contract, and
    the deployment manifest. `manifest.generatedAt` and the current clock are
