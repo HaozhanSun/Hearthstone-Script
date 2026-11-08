@@ -47,6 +47,34 @@ class DebugRunHardCapSupervisorTest {
     }
 
     @Test
+    fun `PowerShell formatted READY record arms the configured beta debug-run lease`() {
+        val plan = requireNotNull(DebugRunHardCapSupervisor.plan(
+            snapshot = activeThirtyMinuteLease,
+            runId = "gui-run",
+            betaChannel = true,
+            neverSurrenderEnabled = true,
+            processId = 42L,
+            processStartUtc = Instant.parse("2026-11-02T16:00:00Z"),
+            runtimeDirectory = Path.of("C:/beta-runtime"),
+            guardianStatePath = Path.of("C:/beta-runtime/log/guardian-state.json"),
+        ))
+        val ready = """
+            {
+              "schema": 1,
+              "state": "READY",
+              "runId": "gui-run",
+              "processId": 42,
+              "deadlineEpochMillis": ${plan.deadlineUtc.toEpochMilli()},
+              "readyAtUtc": "2026-11-02T16:00:01Z"
+            }
+        """.trimIndent()
+
+        assertTrue(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready))
+        assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"state\": \"READY\"", "\"state\": \"STALE\"")))
+        assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"processId\": 42", "\"processId\": 43")))
+    }
+
+    @Test
     fun `hard cap eligibility requires beta active switch and exact thirty minute lease`() {
         fun plan(
             beta: Boolean = true,

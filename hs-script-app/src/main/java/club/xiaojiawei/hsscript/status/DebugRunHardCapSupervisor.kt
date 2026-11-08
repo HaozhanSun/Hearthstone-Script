@@ -221,10 +221,7 @@ internal object DebugRunHardCapSupervisor {
         val deadline = System.nanoTime() + WATCHDOG_READY_TIMEOUT_MS * 1_000_000L
         while (System.nanoTime() < deadline) {
             val ready = runCatching { Files.readString(plan.readyPath) }.getOrNull()
-            if (ready != null && ready.contains("\"state\":\"READY\"") &&
-                ready.contains("\"runId\":\"${safe(plan.runId)}\"") &&
-                ready.contains("\"processId\":${plan.processId}") &&
-                ready.contains("\"deadlineEpochMillis\":${plan.deadlineUtc.toEpochMilli()}")) return true
+            if (ready != null && readyRecordMatches(plan, ready)) return true
             try {
                 Thread.sleep(WATCHDOG_READY_POLL_MS)
             } catch (_: InterruptedException) {
@@ -234,6 +231,24 @@ internal object DebugRunHardCapSupervisor {
         }
         return false
     }
+
+    /**
+     * PowerShell's ConvertTo-Json formats records with spaces and newlines.
+     * The watchdog READY protocol is structural JSON, not a minified-text
+     * protocol, so accept optional JSON whitespace while retaining every
+     * ownership field required for an armed hard cap.
+     */
+    internal fun readyRecordMatches(plan: Plan, ready: String): Boolean =
+        ready.matchesJsonString("state", "READY") &&
+            ready.matchesJsonString("runId", safe(plan.runId)) &&
+            ready.matchesJsonNumber("processId", plan.processId) &&
+            ready.matchesJsonNumber("deadlineEpochMillis", plan.deadlineUtc.toEpochMilli())
+
+    private fun String.matchesJsonString(field: String, value: String): Boolean =
+        Regex("\\\"${Regex.escape(field)}\\\"\\s*:\\s*\\\"${Regex.escape(value)}\\\"").containsMatchIn(this)
+
+    private fun String.matchesJsonNumber(field: String, value: Long): Boolean =
+        Regex("\\\"${Regex.escape(field)}\\\"\\s*:\\s*${Regex.escape(value.toString())}(?![0-9])").containsMatchIn(this)
 
     /** Shared OS file lock serializes arm/cancel against the external watchdog's final stop transaction. */
     internal fun <T> withGuardianStateLock(guardianStatePath: Path, action: () -> T): T {
