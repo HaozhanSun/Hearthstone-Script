@@ -56,13 +56,17 @@ object ScreenStateRecovery {
 
     internal data class FreshScreenObservation(
         val screen: String,
+        val mode: String?,
         val confidence: Int,
+        val evidence: String?,
         val pid: Long,
         val hwnd: String,
         val screenshot: String?,
         val perceptualFingerprint: Long,
         val currentSessionReady: Boolean,
         val noActiveMatchmakingEvidence: Boolean,
+        val hubModeChooserVisible: Boolean,
+        val modalVisible: Boolean,
     )
 
     /** Use the configured PaddleX deadline so cold pipeline initialization isn't cut off at 4 seconds. */
@@ -274,13 +278,17 @@ object ScreenStateRecovery {
         val noActiveMatchmakingEvidence = !queueVisible && !queueLifecycleActive
         val observation = FreshScreenObservation(
             screen = detection?.kind?.code ?: "UNKNOWN",
+            mode = detection?.mode?.name,
             confidence = detection?.confidence ?: 0,
+            evidence = detection?.evidence,
             pid = initialPid,
             hwnd = gameWindow.toString(),
             screenshot = capture.file?.absolutePath,
             perceptualFingerprint = perceptualFingerprint(capture.image),
             currentSessionReady = currentSessionReady,
             noActiveMatchmakingEvidence = noActiveMatchmakingEvidence,
+            hubModeChooserVisible = HubModeChooserVisualPolicy.isVisible(capture.image),
+            modalVisible = hasCenteredModalPanel(capture.image),
         )
         log.info {
             "SCREEN_RECOVERY_FRESH_OBSERVATION detected=${observation.screen} " +
@@ -288,6 +296,8 @@ object ScreenStateRecovery {
                 "perceptualFingerprint=${java.lang.Long.toUnsignedString(observation.perceptualFingerprint, 16)} " +
                 "currentSessionReady=${observation.currentSessionReady} " +
                 "noActiveMatchmakingEvidence=${observation.noActiveMatchmakingEvidence} " +
+                "hubModeChooserVisible=${observation.hubModeChooserVisible} " +
+                "modalVisible=${observation.modalVisible} evidence=${observation.evidence ?: "none"} " +
                 "screenshot=${observation.screenshot ?: "not-saved"}"
         }
         return observation
@@ -382,6 +392,66 @@ object ScreenStateRecovery {
                 ) {
                     scheduleFreshStartupScreenReprobe()
                 }
+            }
+        }, STARTUP_MODE_ENTRY_REPROBE_DELAY_MS, TimeUnit.MILLISECONDS)
+    }
+
+    /**
+     * Captures and classifies an exact HUB chooser without running recovery or
+     * issuing any UI input.  The resulting one-use proof is still consumed by
+     * the separate, final traditional-battle dispatch gate.
+     */
+    fun scheduleReadOnlyHubModeChooserReprobe() {
+        if (!startupMenuReprobeInFlight.compareAndSet(false, true)) return
+        EXTRA_THREAD_POOL.schedule({
+            try {
+                if (!WorkTimeListener.working || PauseStatus.isPause || WarEx.inWar ||
+                    GameUtil.isTerminalGameState()
+                ) {
+                    log.info { "STARTUP_MODE_ENTRY_REPROBE_SKIPPED reason=runtime-fence action=NO_INPUT" }
+                    return@schedule
+                }
+                val observation = observeFreshScreenForWatchdog() ?: run {
+                    log.info { "STARTUP_MODE_ENTRY_REPROBE_RESULT proof=NOT_RECORDED reason=fresh-capture-unavailable action=NO_INPUT" }
+                    return@schedule
+                }
+                val activeQueue = !observation.noActiveMatchmakingEvidence ||
+                    LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                    LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
+                val activeGame = observation.currentSessionReady || WarEx.inWar ||
+                    Mode.currMode == ModeEnum.GAMEPLAY || Mode.nextMode == ModeEnum.GAMEPLAY
+                val permitted = StartupHubModeChooserPolicy.canAuthorizeTraditionalBattleSelection(
+                    purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                    currentSessionReady = observation.currentSessionReady,
+                    screenKind = observation.screen,
+                    confidence = observation.confidence,
+                    evidence = observation.evidence,
+                    currentMode = StartupHubModeChooserPolicy.modeForFreshChooserProof(
+                        screenKind = observation.screen,
+                        detectedMode = observation.mode,
+                        evidence = observation.evidence,
+                        runtimeMode = Mode.currMode?.name,
+                    ),
+                    modalVisible = observation.modalVisible,
+                    activeGame = activeGame,
+                    activeMatchmaking = activeQueue,
+                    trustedCurrentWindow = observation.pid > 0L && observation.hwnd.isNotBlank() &&
+                        GameUtil.findGameProcessIdForDiagnostics() == observation.pid &&
+                        GameUtil.isVerifiedCurrentGameWindow(resolveLiveGameWindow()),
+                ) && observation.hubModeChooserVisible && !GameUtil.isTerminalGameState() &&
+                    WorkTimeListener.working && !PauseStatus.isPause
+                if (permitted) {
+                    StartupInputReadiness.recordHubModeChooser(observation.pid.toInt(), observation.hwnd)
+                }
+                log.info {
+                    "STARTUP_MODE_ENTRY_REPROBE_RESULT proof=${if (permitted) "RECORDED" else "NOT_RECORDED"} " +
+                        "screen=${observation.screen} mode=${observation.mode ?: "UNKNOWN"} " +
+                        "confidence=${observation.confidence} evidence=${observation.evidence ?: "none"} " +
+                        "activeQueue=$activeQueue activeGame=$activeGame " +
+                        "screenshot=${observation.screenshot ?: "not-saved"} action=NO_INPUT"
+                }
+            } finally {
+                startupMenuReprobeInFlight.set(false)
             }
         }, STARTUP_MODE_ENTRY_REPROBE_DELAY_MS, TimeUnit.MILLISECONDS)
     }

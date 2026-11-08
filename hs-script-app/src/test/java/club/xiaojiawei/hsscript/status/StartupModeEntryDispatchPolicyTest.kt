@@ -7,6 +7,71 @@ import org.junit.jupiter.api.Test
 
 class StartupModeEntryDispatchPolicyTest {
     @Test
+    fun `missing exact HUB proof requests bounded read-only reprobe but never click`() {
+        StartupModeEntryReprobePolicy.resetForTest()
+        try {
+            fun request(
+                now: Long,
+                working: Boolean = true,
+                paused: Boolean = false,
+                mode: String? = "HUB",
+                session: Boolean = false,
+                activeGame: Boolean = false,
+                activeQueue: Boolean = false,
+                terminal: Boolean = false,
+                proof: Boolean = false,
+                pid: Int = 33512,
+                hwnd: String = "game-hwnd",
+            ) = StartupModeEntryReprobePolicy.shouldRequestFreshProbe(
+                pid = pid,
+                hwnd = hwnd,
+                currentMode = mode,
+                currentSessionReady = session,
+                nowMs = now,
+                working = working,
+                paused = paused,
+                chooserProofFresh = proof,
+                activeGame = activeGame,
+                activeQueue = activeQueue,
+                terminal = terminal,
+            )
+
+            assertTrue(request(100_000L), "the exact HUB runtime state requests an initial fresh capture")
+            assertFalse(request(100_001L), "same HWND is throttled")
+            assertFalse(request(99_000L), "clock rollback cannot bypass the throttle")
+            assertFalse(request(100_000L + StartupModeEntryReprobePolicy.MIN_INTERVAL_MS, paused = true))
+            assertFalse(request(100_000L + StartupModeEntryReprobePolicy.MIN_INTERVAL_MS, working = false))
+            assertFalse(request(100_000L + StartupModeEntryReprobePolicy.MIN_INTERVAL_MS, mode = "TOURNAMENT"))
+            assertFalse(request(100_000L + StartupModeEntryReprobePolicy.MIN_INTERVAL_MS, session = true))
+            assertFalse(request(100_000L + StartupModeEntryReprobePolicy.MIN_INTERVAL_MS, activeGame = true))
+            assertFalse(request(100_000L + StartupModeEntryReprobePolicy.MIN_INTERVAL_MS, activeQueue = true))
+            assertFalse(request(100_000L + StartupModeEntryReprobePolicy.MIN_INTERVAL_MS, terminal = true))
+            assertFalse(request(100_000L + StartupModeEntryReprobePolicy.MIN_INTERVAL_MS, proof = true))
+
+            assertTrue(request(100_000L + StartupModeEntryReprobePolicy.MIN_INTERVAL_MS))
+            assertTrue(
+                request(
+                    now = 100_001L,
+                    pid = 44120,
+                    hwnd = "replacement-game-window",
+                ),
+                "a replacement PID/HWND is not delayed by an old window's throttle",
+            )
+
+            val actions = mutableListOf<String>()
+            assertFalse(StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
+                chooserProofFresh = false,
+                paused = false,
+                processId = 33512,
+                hwnd = "game-hwnd",
+            ) { actions += it; true })
+            assertTrue(actions.isEmpty(), "reprobe request is not an observed transition or click permit")
+        } finally {
+            StartupModeEntryReprobePolicy.resetForTest()
+        }
+    }
+
+    @Test
     fun `scheduled chooser callback dispatches only the named Traditional Battle action`() {
         val actions = mutableListOf<String>()
 

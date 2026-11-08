@@ -81,6 +81,15 @@ Assert-Equal $stampedPom (Set-PomBuildTimestampPacific $stampedPom $buildTimesta
 Assert-Equal $buildTimestamp (Get-BuildInfoTimestampPacific "version=v4.16.504`nbuildTimestampPacific=$buildTimestamp`nchannel=beta") 'JAR build.info timestamp'
 
 $deployScript = [System.IO.File]::ReadAllText((Join-Path $root 'build-and-deploy.ps1'))
+$requiredFocusedRegressionTests = @(
+    'StartupModeEntryDispatchPolicyTest',
+    'BetaNeverSurrenderOverrideTest'
+)
+foreach ($requiredTest in $requiredFocusedRegressionTests) {
+    if ($deployScript -notmatch "-Dtest=.*$requiredTest") {
+        throw "Release focused test selector must include $requiredTest"
+    }
+}
 $metadataCall = $deployScript.IndexOf('$releaseMetadata = Get-ReleaseBuildMetadata', [System.StringComparison]::Ordinal)
 $deployedVersionGuard = $deployScript.IndexOf('if (-not [string]::IsNullOrWhiteSpace($deployedVersion))', [System.StringComparison]::Ordinal)
 if ($metadataCall -lt 0 -or $deployedVersionGuard -lt 0 -or $metadataCall -gt $deployedVersionGuard) {

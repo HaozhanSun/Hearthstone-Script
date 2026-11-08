@@ -13,6 +13,9 @@ import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.statistics.Record
 import club.xiaojiawei.hsscript.statistics.RecordDaoEx
+import club.xiaojiawei.hsscript.status.DebugRunController
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.strategy.phase.ReplaceCardPhaseStrategy
 import club.xiaojiawei.hsscript.enums.ConfigEnum
@@ -131,6 +134,17 @@ private data class SurrenderRule(
  * surrender wins, while every rule still emits a structured diagnostic line.
  */
 object SurrenderPolicy {
+
+    /**
+     * A temporary rank exception exists only while the explicitly enabled,
+     * full-duration Beta Debug Run lease is live. It must not inherit a
+     * process-start timestamp or a persisted Never Surrender toggle.
+     */
+    private val betaNeverSurrenderOverride = BetaNeverSurrenderOverride(
+        betaBuild = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
+        neverSurrenderEnabled = NeverSurrenderPolicy::enabled,
+        debugRunLease = DebugRunController::snapshot,
+    )
 
     /**
      * Surrender coordinates are only safe after the client has positively
@@ -927,6 +941,7 @@ object SurrenderPolicy {
         nowMs: Long,
         persistentStreakDecision: SurrenderRuleResult?,
         winRateDecisionProvider: () -> SurrenderRuleResult? = { null },
+        betaOverride: BetaNeverSurrenderOverride = betaNeverSurrenderOverride,
     ): SurrenderRuleResult? {
         val authorization = RankEligibilityPolicy.evaluate(
             detection = detection,
@@ -942,6 +957,24 @@ object SurrenderPolicy {
                 "confidence=${detection?.confidence ?: "unavailable"} agreement=${detection?.agreementCount ?: 0} " +
                 "mode=${actualMode ?: "NONE"} decision=${if (authorization.eligible) "ALLOW" else "DENY"} " +
                 "reason=${authorization.reason}"
+        }
+        if (!authorization.eligible && authorization.reason == "rank-not-5-or-10" &&
+            betaOverride.allowsTemporaryContinue(detection, nowMs)
+        ) {
+            val rank = detection!!.rank!!
+            authorizeEligibleMulliganRank(
+                rank = rank,
+                tier = detection.tier,
+                reason = "beta-temporary-never-surrender-override",
+                persistentStreakDecision = persistentStreakDecision,
+            )
+            log.warn {
+                "BETA_NEVER_SURRENDER_OVERRIDE action=CONTINUE_MULLIGAN rank=$rank " +
+                    "capturedAtMs=${detection.capturedAtMs} expiresAtMs=${betaOverride.expiresAtMs} " +
+                    "rankEvidenceFresh=true rankEvidenceProvider=${detection.provider} " +
+                    "rankEvidenceAgreement=${detection.agreementCount}"
+            }
+            return null
         }
         if (authorization.eligible) {
             val rank = detection!!.rank!!

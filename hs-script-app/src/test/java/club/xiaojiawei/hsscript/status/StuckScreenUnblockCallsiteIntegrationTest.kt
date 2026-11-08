@@ -330,6 +330,29 @@ class StuckScreenUnblockCallsiteIntegrationTest {
             assertEquals(listOf(StartupInputReadiness.HUB_TRADITIONAL_BATTLE_ACTION), dispatched)
             assertFalse(StartupInputReadiness.isHubTraditionalBattleSelectionReady(pid, hwnd, "HUB", now + 2),
                 "accepted entry consumes the one-use chooser proof")
+            assertFalse(StartupModeEntryReprobePolicy.shouldRequestFreshProbe(
+                pid = pid,
+                hwnd = hwnd,
+                currentMode = "HUB",
+                currentSessionReady = false,
+                nowMs = now + 3,
+                working = true,
+                paused = false,
+                chooserProofFresh = true,
+                activeGame = false,
+                activeQueue = false,
+                terminal = false,
+            ), "dispatch or still-fresh proof is not itself a screen transition")
+
+            val nextScreen = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+                "/offline-ocr/screen-recovery/mode-selector-wild-standard-casual-live-20261029-190503.png",
+            )))
+            assertTrue(TournamentModeSelectorVisualPolicy.isVisible(nextScreen))
+            assertEquals(
+                "TOURNAMENT_MODE_SELECTOR",
+                UpstreamScreenStateRecovery.classifyImageForTest("二=", nextScreen),
+                "only a later screenshot proves progress from the HUB chooser into Tournament mode selection",
+            )
         } finally {
             StartupInputReadiness.resetForTest()
         }

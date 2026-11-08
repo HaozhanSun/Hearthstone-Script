@@ -15,6 +15,7 @@ import club.xiaojiawei.hsscript.status.ScreenStateRecovery
 import club.xiaojiawei.hsscript.status.StartupInputReadiness
 import club.xiaojiawei.hsscript.status.StartupDeckModeNavigationPolicy
 import club.xiaojiawei.hsscript.status.StartupModeEntryDispatchPolicy
+import club.xiaojiawei.hsscript.status.StartupModeEntryReprobePolicy
 import club.xiaojiawei.hsscript.status.StrategyDefaultDeckSlotBindings
 import club.xiaojiawei.hsscript.status.TournamentModeConfirmation
 import club.xiaojiawei.hsscript.status.TournamentModeEntryDispatchGuard
@@ -121,6 +122,30 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
                             accepted
                         }
                         if (!dispatched) {
+                            val activeQueue = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                                LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
+                            val requestFreshProbe = StartupModeEntryReprobePolicy.shouldRequestFreshProbe(
+                                pid = gamePid ?: 0,
+                                hwnd = gameWindow?.toString().orEmpty(),
+                                currentMode = Mode.currMode?.name,
+                                currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
+                                nowMs = System.currentTimeMillis(),
+                                working = WorkTimeListener.working,
+                                paused = PauseStatus.isPause,
+                                chooserProofFresh = startupSelectionReady,
+                                activeGame = WarEx.inWar,
+                                activeQueue = activeQueue,
+                                terminal = GameUtil.isTerminalGameState(),
+                            )
+                            if (requestFreshProbe) {
+                                log.info {
+                                    "STARTUP_MODE_ENTRY_REPROBE_REQUESTED reason=chooser-proof-missing-or-stale " +
+                                        "pid=${gamePid ?: "none"} hwnd=${gameWindow ?: "none"} mode=${Mode.currMode?.name} " +
+                                        "activeQueue=$activeQueue throttleMs=${StartupModeEntryReprobePolicy.MIN_INTERVAL_MS} " +
+                                        "action=FRESH_READ_ONLY_PROBE_NO_INPUT"
+                                }
+                                ScreenStateRecovery.scheduleReadOnlyHubModeChooserReprobe()
+                            }
                             log.info {
                                 "STARTUP_MODE_ENTRY_WAITING_FOR_PROOF pid=${gamePid ?: "none"} " +
                                     "hwnd=${gameWindow ?: "none"} paused=${PauseStatus.isPause} " +

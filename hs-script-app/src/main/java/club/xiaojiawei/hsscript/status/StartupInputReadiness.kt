@@ -588,3 +588,39 @@ internal object StartupModeEntryDispatchPolicy {
     internal fun isModeEntryInFlight(processId: Int, hwnd: String): Boolean =
         activeModeEntry.get() == (processId to hwnd)
 }
+
+/** Throttle read-only chooser probes when the runtime mode is HUB but its one-use proof is absent. */
+internal object StartupModeEntryReprobePolicy {
+    const val MIN_INTERVAL_MS = 15_000L
+    private data class ProbeRequest(val pid: Int, val hwnd: String, val atMs: Long)
+    private val lastProbeRequest = AtomicReference<ProbeRequest?>(null)
+
+    fun shouldRequestFreshProbe(
+        pid: Int,
+        hwnd: String,
+        currentMode: String?,
+        currentSessionReady: Boolean,
+        nowMs: Long,
+        working: Boolean,
+        paused: Boolean,
+        chooserProofFresh: Boolean,
+        activeGame: Boolean,
+        activeQueue: Boolean,
+        terminal: Boolean,
+    ): Boolean {
+        if (pid <= 0 || hwnd.isBlank() || currentMode != "HUB" || currentSessionReady ||
+            !working || paused || chooserProofFresh || activeGame || activeQueue || terminal || nowMs <= 0L
+        ) {
+            return false
+        }
+        while (true) {
+            val previous = lastProbeRequest.get()
+            if (previous != null && previous.pid == pid && previous.hwnd == hwnd &&
+                (nowMs < previous.atMs || nowMs - previous.atMs < MIN_INTERVAL_MS)
+            ) return false
+            if (lastProbeRequest.compareAndSet(previous, ProbeRequest(pid, hwnd, nowMs))) return true
+        }
+    }
+
+    internal fun resetForTest() = lastProbeRequest.set(null)
+}
