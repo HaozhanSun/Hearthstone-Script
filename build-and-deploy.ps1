@@ -52,6 +52,7 @@ $debugRunnerCmdSource = Join-Path $projectRoot 'hs-script-app\src\main\resources
 $debugRunnerHardCapSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\debug-run-hardcap.psm1'
 $debugRunnerHardCapWatchdogSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\debug-run-hardcap-watchdog.ps1'
 $debugRunnerHardCapLauncherSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\debug-run-hardcap-launcher.ps1'
+$debugRunnerHardCapLauncherTest = Join-Path $projectRoot 'hs-script-app\src\test\resources\bat\DebugRunHardCapLauncher.Tests.ps1'
 $launcherVbsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-as-admin.vbs'
 $launcherPsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-newest-as-admin.ps1'
 $launcherGuardianPolicySource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launcher-guardian-policy.ps1'
@@ -72,6 +73,17 @@ foreach ($requiredSource in @($deploymentContractSource, $launcherGuardianPolicy
 . $deploymentContractSource
 . $paddleXConfigUtilsSource
 . $betaDeploymentProcessUtilsSource
+if ($Channel -eq 'beta') {
+    if (-not (Test-Path -LiteralPath $debugRunnerHardCapLauncherTest -PathType Leaf)) {
+        throw "Required Beta hard-cap launch contract test is missing: $debugRunnerHardCapLauncherTest"
+    }
+}
+if ($Channel -eq 'beta' -and -not $SkipTests) {
+    $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($null -eq $pwsh) { throw 'pwsh is required to run the hard-cap elevated-launch contract test before packaging' }
+    & $pwsh.Source -NoProfile -NonInteractive -File $debugRunnerHardCapLauncherTest
+    if ($LASTEXITCODE -ne 0) { throw "Hard-cap elevated-launch contract test failed with exit code $LASTEXITCODE" }
+}
 $runtimeGate = $null
 trap {
     $originalError = $_

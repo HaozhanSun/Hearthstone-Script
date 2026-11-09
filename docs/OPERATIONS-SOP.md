@@ -89,14 +89,19 @@ shortcut edit can substitute for it.
 3. Run the checked-in targeted regression selection with the intended
    `-Dbuild-channel`; test behavior may legitimately differ from the root POM's
    default `UNKNOWN` channel. Preserve focused test coverage for new guards.
-4. Before runtime mutation, manually run the applicable PowerShell contract
+4. For Beta releases, `build-and-deploy.ps1` runs
+   `hs-script-app/src/test/resources/bat/DebugRunHardCapLauncher.Tests.ps1`
+   before packaging whenever tests are enabled. This contract verifies the
+   elevated `RunAs` launch, READY publication, and launch-failure refusal; it is
+   automated by the release path and is not repeated in the manual list below.
+5. Before runtime mutation, manually run the applicable PowerShell contract
    gates. `build-and-deploy.ps1` does **not** invoke Pester automatically:
    `pwsh -NoProfile -File tests/DiagnosticRetentionScheduler.Tests.ps1`;
    `pwsh -NoProfile -File tests/BetaDeploymentProcessStop.Tests.ps1`;
    `pwsh -NoProfile -File tests/ReleaseChannelIsolation.Tests.ps1`; and
    `pwsh -NoProfile -File tests/SyncShortcutsBetaDuplicate.Tests.ps1`.
    Record results and add any changed deployment-contract test to this list.
-5. Build and verify the exact JAR/ZIP and required plugin artifacts before any
+6. Build and verify the exact JAR/ZIP and required plugin artifacts before any
    runtime replacement. A failing test, missing artifact, or metadata mismatch
    stops the release.
 

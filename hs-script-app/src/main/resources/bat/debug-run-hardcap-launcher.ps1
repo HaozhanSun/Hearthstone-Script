@@ -42,7 +42,23 @@ $escapedArguments = ($arguments | ForEach-Object {
 
 $logDirectory = Split-Path -Parent $WatchdogLogPath
 if ($logDirectory) { New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null }
-# READY is written only by the elevated watchdog. The application refuses
-# the run if elevation is denied or the handshake does not arrive.
-Start-Process -FilePath 'powershell.exe' -ArgumentList $escapedArguments -Verb RunAs -WindowStyle Hidden `
-    -RedirectStandardOutput $WatchdogLogPath -RedirectStandardError ($WatchdogLogPath + '.err') | Out-Null
+function Write-DebugRunHardCapLaunchEvent([string]$Event, [string]$Details = '') {
+    $line = '{0} event={1} runId={2} processId={3} readyPath={4} {5}' -f `
+        [datetime]::UtcNow.ToString('o'), $Event, $RunId, $ProcessId, $ReadyPath, $Details
+    Add-Content -LiteralPath $WatchdogLogPath -Value $line -Encoding UTF8
+}
+
+# -Verb RunAs selects Start-Process' ShellExecute parameter set, which does
+# not support -RedirectStandardOutput/Error. Keep the elevated launch in that
+# parameter set; the parent JVM confirms readiness from the exact READY file.
+try {
+    $watchdogProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $escapedArguments `
+        -Verb RunAs -WindowStyle Hidden -PassThru
+    if ($null -eq $watchdogProcess) { throw 'Start-Process returned no elevated watchdog process.' }
+    Write-DebugRunHardCapLaunchEvent 'ELEVATED_WATCHDOG_PROCESS_ACCEPTED' `
+        "watchdogPid=$($watchdogProcess.Id) deploymentId=$DeploymentId deadlineUtc=$($DeadlineUtc.ToUniversalTime().ToString('o'))"
+} catch {
+    $reason = ($_.Exception.Message -replace '[\r\n]+', ' ').Replace('=', ':')
+    Write-DebugRunHardCapLaunchEvent 'ELEVATED_WATCHDOG_LAUNCH_FAILED' "reason=$reason action=LEASE_REFUSED"
+    throw
+}

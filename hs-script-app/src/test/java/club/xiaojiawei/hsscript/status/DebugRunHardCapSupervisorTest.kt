@@ -48,6 +48,7 @@ class DebugRunHardCapSupervisorTest {
         assertTrue(DebugRunHardCapSupervisor.watchdogCommand(plan).contains("-WatchdogPath"))
         assertTrue(DebugRunHardCapSupervisor.watchdogCommand(plan).contains("-DeploymentId"))
         assertTrue(DebugRunHardCapSupervisor.watchdogCommand(plan).contains(plan.deploymentId))
+        assertTrue(DebugRunHardCapSupervisor.watchdogCommand(plan).contains("-WatchdogLogPath"))
     }
 
     @Test
@@ -76,11 +77,26 @@ class DebugRunHardCapSupervisorTest {
         """.trimIndent()
 
         assertTrue(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready))
+        assertFalse(
+            DebugRunHardCapSettingPolicy.mustRefuseUncappedRun(
+                hardCapRequired = true,
+                watchdogArmed = DebugRunHardCapSupervisor.readyRecordMatches(plan, ready),
+            ),
+            "only an exact accepted READY record permits the capped run",
+        )
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"schema\": 1", "\"schema\": 2")))
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"state\": \"READY\"", "\"state\": \"STALE\"")))
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"runId\": \"gui-run\"", "\"runId\": \"other-run\"")))
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"deploymentId\": \"test-deployment\"", "\"deploymentId\": \"other-deployment\"")))
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"processId\": 42", "\"processId\": 43")))
+        val mismatchedReady = ready.replace("\"deploymentId\": \"test-deployment\"", "\"deploymentId\": \"other-deployment\"")
+        assertTrue(
+            DebugRunHardCapSettingPolicy.mustRefuseUncappedRun(
+                hardCapRequired = true,
+                watchdogArmed = DebugRunHardCapSupervisor.readyRecordMatches(plan, mismatchedReady),
+            ),
+            "launch acceptance without the matching READY authority must refuse the run",
+        )
         assertFalse(
             DebugRunHardCapSupervisor.readyRecordMatches(
                 plan,
@@ -183,7 +199,27 @@ class DebugRunHardCapSupervisorTest {
             "packaged watchdog launcher resource is missing from the test classpath"
         }.bufferedReader().use { it.readText() }
         assertTrue(launcher.contains("-Verb RunAs"))
-        assertTrue(launcher.contains("READY is written only by the elevated watchdog"))
+        assertTrue(launcher.contains("-PassThru"))
+        assertFalse(launcher.contains("-RedirectStandardOutput \$WatchdogLogPath"))
+        assertFalse(launcher.contains("-RedirectStandardError (\$WatchdogLogPath"))
+        assertTrue(launcher.contains("ELEVATED_WATCHDOG_PROCESS_ACCEPTED"))
+        assertTrue(launcher.contains("ELEVATED_WATCHDOG_LAUNCH_FAILED"))
+        assertTrue(launcher.contains("action=LEASE_REFUSED"))
+        assertTrue(launcher.contains("parent JVM confirms readiness from the exact READY file"))
+
+        val watchdog = requireNotNull(javaClass.getResourceAsStream("/bat/debug-run-hardcap-watchdog.ps1")) {
+            "packaged watchdog resource is missing from the test classpath"
+        }.bufferedReader().use { it.readText() }
+        assertTrue(watchdog.contains("[Parameter(Mandatory)][string]\$WatchdogLogPath"))
+        assertTrue(watchdog.contains("WATCHDOG_READY"))
+        assertTrue(watchdog.contains("WATCHDOG_FAILED"))
+
+        val launcherHarness = requireNotNull(javaClass.getResourceAsStream("/bat/DebugRunHardCapLauncher.Tests.ps1")) {
+            "launcher acceptance/refusal regression harness is missing from the test classpath"
+        }.bufferedReader().use { it.readText() }
+        assertTrue(launcherHarness.contains("event=ELEVATED_WATCHDOG_PROCESS_ACCEPTED"))
+        assertTrue(launcherHarness.contains("event=ELEVATED_WATCHDOG_LAUNCH_FAILED"))
+        assertTrue(launcherHarness.contains("readiness binds deployment identity"))
     }
 
     @Test

@@ -71,6 +71,7 @@ try {
     $watchdogLockPath = Join-Path $watchdogDirectory 'watchdog.lock'
     $watchdogStdoutPath = Join-Path $watchdogDirectory 'watchdog.stdout.log'
     $watchdogStderrPath = Join-Path $watchdogDirectory 'watchdog.stderr.log'
+    $watchdogLogPath = Join-Path $watchdogDirectory 'watchdog.events.log'
     $watchdogDeadline = [datetime]::UtcNow.AddMinutes(5)
     $watchdogContext = New-DebugRunHardCapContext -RunId 'watchdog-ready' -ProcessId 424242 `
         -ProcessStartUtc $processStartUtc -DeadlineUtc $watchdogDeadline -DeploymentId 'beta-test'
@@ -89,7 +90,8 @@ try {
         '-StopMarkerPath', $watchdogStopMarkerPath,
         '-OwnershipLockPath', $watchdogLockPath,
         '-ModulePath', $modulePath,
-        '-ReadyPath', $watchdogReadyPath
+        '-ReadyPath', $watchdogReadyPath,
+        '-WatchdogLogPath', $watchdogLogPath
     )
     $escapedWatchdogArgs = ($watchdogArgs | ForEach-Object {
         $value = [string]$_
