@@ -58,6 +58,63 @@ $foreignMarker = [pscustomobject]@{
     ProcessStartTimeUtc = $foreignStart; ExecutablePath = 'C:\Java\bin\javaw.exe'
 }
 
+# PowerShell 7 coerces an ISO-8601 JSON timestamp into DateTime.  The contract
+# must preserve the raw JSON token rather than stringify that coerced object as
+# local time, otherwise a live foreign RC/Beta marker is misclassified stale.
+$markerFixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("hs-marker-timezone-" + [guid]::NewGuid().ToString('N'))
+$fixtureBetaRoot = Join-Path $markerFixtureRoot 'Hearthstone Script Beta'
+$fixtureRcRoot = Join-Path $markerFixtureRoot 'Hearthstone Script Release Candidate'
+New-Item -ItemType Directory -Path $fixtureRcRoot, $fixtureBetaRoot -Force | Out-Null
+try {
+    $fixtureTimestamp = '2026-11-08T07:09:37.5057863Z'
+    [System.IO.File]::WriteAllText((Join-Path $fixtureBetaRoot 'release-channel.json'), '{"channel":"beta","runtimeDirectoryName":"Hearthstone Script Beta"}')
+    [System.IO.File]::WriteAllText((Join-Path $fixtureRcRoot 'release-channel.json'), '{"channel":"release-candidate","runtimeDirectoryName":"Hearthstone Script Release Candidate"}')
+    $foreignMarkerJson = (@{
+        schema = 1
+        runtimeRoot = $fixtureRcRoot
+        runtimeDirectoryName = 'Hearthstone Script Release Candidate'
+        releaseChannel = 'release-candidate'
+        processId = 2202
+        processStartTimeUtc = $fixtureTimestamp
+        executablePath = 'C:\Java\bin\javaw.exe'
+    } | ConvertTo-Json -Compress)
+    [System.IO.File]::WriteAllText((Join-Path $fixtureRcRoot 'hs-script.pid.json'), $foreignMarkerJson)
+
+    $jsonCoercedMarker = $foreignMarkerJson | ConvertFrom-Json
+    if (-not ($jsonCoercedMarker.processStartTimeUtc -is [DateTime])) {
+        throw 'Regression fixture requires ConvertFrom-Json to exercise ISO timestamp DateTime coercion'
+    }
+    $fixtureMarkers = @(Get-HsScriptRuntimeMarkers $fixtureBetaRoot)
+    Assert-Equal ([DateTimeOffset]::Parse($fixtureTimestamp).UtcDateTime.Ticks) `
+        ([DateTimeOffset]::Parse($fixtureMarkers[0].ProcessStartTimeUtc).UtcDateTime.Ticks) `
+        'raw marker UTC instant must survive ConvertFrom-Json coercion'
+    $fixtureIdentityProvider = {
+        param($processId)
+        if ($processId -eq 2202) {
+            return [pscustomobject]@{ ProcessId = 2202; ProcessStartTimeUtc = $fixtureTimestamp; ExecutablePath = 'C:\Java\bin\javaw.exe' }
+        }
+        return $null
+    }.GetNewClosure()
+    $foreignFixture = Resolve-HsScriptProcessAssessment $fixtureBetaRoot @(
+        [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 2202; CommandLine = '' }
+    ) $fixtureMarkers $fixtureIdentityProvider
+    Assert-Equal 'IDLE' $foreignFixture.Status 'exact live foreign RC marker with blank command line must not block Beta launch'
+
+    # A genuinely stale marker for the same numeric PID remains ambiguous and
+    # fail-closed even though the raw timestamp parsing is now corrected.
+    $staleMarkerJson = $foreignMarkerJson.Replace($fixtureTimestamp, '2026-11-08T07:09:36.0000000Z')
+    [System.IO.File]::WriteAllText((Join-Path $fixtureRcRoot 'hs-script.pid.json'), $staleMarkerJson)
+    $staleFixtureMarkers = @(Get-HsScriptRuntimeMarkers $fixtureBetaRoot)
+    $reusedFixture = Resolve-HsScriptProcessAssessment $fixtureBetaRoot @(
+        [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 2202; CommandLine = '' }
+    ) $staleFixtureMarkers $fixtureIdentityProvider
+    Assert-Equal 'AMBIGUOUS' $reusedFixture.Status 'truly stale marker/PID reuse must remain fail-closed'
+} finally {
+    if (Test-Path -LiteralPath $markerFixtureRoot) {
+        Remove-Item -LiteralPath $markerFixtureRoot -Recurse -Force
+    }
+}
+
 # Blank or unavailable CIM CommandLine is identified by exact launcher PID,
 # process start time, and executable path instead of being dropped as empty.
 $blankLine = Resolve-HsScriptProcessAssessment $currentRoot @(

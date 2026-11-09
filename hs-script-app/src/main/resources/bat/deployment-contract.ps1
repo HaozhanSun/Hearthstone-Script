@@ -203,6 +203,31 @@ function Get-HsScriptProcessStartTimeUtc([int]$ProcessId) {
     }
 }
 
+function Get-HsScriptMarkerProcessStartTimeUtc([string]$RawMarker, [string]$MarkerPath) {
+    # ConvertFrom-Json on PowerShell 7 may eagerly turn a JSON ISO-8601 UTC
+    # string into DateTime. Casting that value back to string loses its offset
+    # (for example, "...Z" becomes a locale-local timestamp) and makes an
+    # exact foreign-channel marker look stale. Read the persisted JSON token
+    # directly, require its offset, and normalize it once at this boundary.
+    $startMatch = [regex]::Match($RawMarker, '"processStartTimeUtc"\s*:\s*"(?<value>[^"]+)"')
+    if (-not $startMatch.Success) {
+        throw "Runtime ownership marker has an invalid process start time: $MarkerPath"
+    }
+    $startText = $startMatch.Groups['value'].Value
+    if ($startText -notmatch '(?i)(Z|[+-]\d{2}:\d{2})$') {
+        throw "Runtime ownership marker has an offset-less process start time: $MarkerPath"
+    }
+    try {
+        return [DateTimeOffset]::Parse(
+            $startText,
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::AllowWhiteSpaces
+        ).ToUniversalTime()
+    } catch {
+        throw "Runtime ownership marker has an invalid process start time: $MarkerPath"
+    }
+}
+
 function Get-HsScriptRuntimeMarkers([string]$ScriptDirectory) {
     $root = Get-HsScriptCanonicalRuntimeRoot $ScriptDirectory
     $parent = Split-Path -Parent $root
@@ -217,7 +242,10 @@ function Get-HsScriptRuntimeMarkers([string]$ScriptDirectory) {
     foreach ($candidateRoot in $roots) {
         $markerPath = Join-Path $candidateRoot 'hs-script.pid.json'
         if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { continue }
-        try { $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json -ErrorAction Stop }
+        try {
+            $rawMarker = [System.IO.File]::ReadAllText($markerPath)
+            $marker = $rawMarker | ConvertFrom-Json -ErrorAction Stop
+        }
         catch { throw "Runtime ownership marker is unreadable; refusing to assume idle: $markerPath" }
         $channelConfigPath = Join-Path $candidateRoot 'release-channel.json'
         if (-not (Test-Path -LiteralPath $channelConfigPath -PathType Leaf)) {
@@ -228,20 +256,18 @@ function Get-HsScriptRuntimeMarkers([string]$ScriptDirectory) {
         $recordedRoot = [string]$marker.runtimeRoot
         $processId = 0
         if (-not [int]::TryParse([string]$marker.processId, [ref]$processId) -or $processId -le 0 -or
-            [string]::IsNullOrWhiteSpace([string]$marker.processStartTimeUtc) -or
             [string]::IsNullOrWhiteSpace([string]$marker.executablePath) -or
             [string]::IsNullOrWhiteSpace([string]$marker.releaseChannel) -or
             ([string]$marker.releaseChannel).ToLowerInvariant() -cne ([string]$runtimeChannelConfig.channel).ToLowerInvariant() -or
             [string]$marker.runtimeDirectoryName -cne [string]$runtimeChannelConfig.runtimeDirectoryName -or
             (Get-HsScriptCanonicalRuntimeRoot $recordedRoot) -ine (Get-HsScriptCanonicalRuntimeRoot $candidateRoot)
         ) { throw "Runtime ownership marker is incomplete or mismatched; refusing to assume idle: $markerPath" }
-        try { $null = [DateTimeOffset]::Parse([string]$marker.processStartTimeUtc) }
-        catch { throw "Runtime ownership marker has an invalid process start time: $markerPath" }
+        $processStartTimeUtc = Get-HsScriptMarkerProcessStartTimeUtc $rawMarker $markerPath
         $markers.Add([pscustomobject]@{
             RuntimeRoot = Get-HsScriptCanonicalRuntimeRoot $candidateRoot
             ReleaseChannel = ([string]$marker.releaseChannel).ToLowerInvariant()
             ProcessId = $processId
-            ProcessStartTimeUtc = [string]$marker.processStartTimeUtc
+            ProcessStartTimeUtc = $processStartTimeUtc.ToString('o')
             ExecutablePath = [System.IO.Path]::GetFullPath([string]$marker.executablePath)
         })
     }
