@@ -105,6 +105,13 @@ class DebugRunLeaseTest {
         assertEquals(DebugRunLease.State.DISABLED, afterRestart.state)
         assertEquals(0L, afterRestart.startEpochMillis)
         assertEquals(DebugRunLease.State.DISABLED, lease.snapshot().state)
+
+        // Recovery from a bad/expired persisted lease never auto-arms. The
+        // explicit user toggle is the only action that may create a new cap.
+        val explicitlyRearmed = lease.enable()
+        assertEquals(DebugRunLease.State.ACTIVE, explicitlyRearmed.state)
+        assertEquals(DebugRunLease.MAX_DURATION_MILLIS, explicitlyRearmed.remainingMillis)
+        assertEquals(200L + DebugRunLease.MAX_DURATION_MILLIS, explicitlyRearmed.endEpochMillis)
     }
 
     @Test

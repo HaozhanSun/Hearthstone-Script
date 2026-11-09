@@ -781,3 +781,17 @@ this deletion boundary.
   `BetaNeverSurrenderOverrideTest`, `MulliganRankPreflightTest`,
   `MulliganRankDispatchBarrierTest`, `DebugRunLeaseTest`, and
   `DebugRunHardCapSupervisorTest`.
+- An invalid or expired persisted Debug Run lease must remain refused on
+  process/script startup. A normal all-day schedule becoming active does not
+  prove a Debug Run deadline or an armed process watchdog. Only the explicit
+  `DEBUG_RUN_MODE` UI toggle may create a fresh 30-minute lease after refusal;
+  it must arm the Beta watchdog before it reports ACTIVE. Regress restart
+  refusal, explicit fresh rearm, the exact deadline, and refusal to auto-start
+  after an invalid lease.
+- After the startup Event Quest panel disappears, a trusted current frame that
+  positively shows the matchmaking queue or proves a current active game
+  session may release the stale modal action fence. This release sends no
+  input. Queue/game state without the matching fresh visual/session proof,
+  visible quest overlay, reconnect modal, terminal/result state, pause, or a
+  pending mandatory-rank guard must retain the fence. Cover both allowed
+  transitions and every retained safety fence.

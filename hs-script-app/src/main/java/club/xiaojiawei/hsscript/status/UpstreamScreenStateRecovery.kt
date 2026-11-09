@@ -3697,6 +3697,8 @@ object UpstreamScreenStateRecovery {
                     exactHubModeChooser = exactHubModeChooser,
                     deckReadyVisible = deckReadyVisible,
                     freshEmptySessionLoginTransition = emptySessionLoginTransition,
+                    activeQueueVisual = capture.visual.matchmakingSearchVisual,
+                    activeGameSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart(),
                     activeGame = activeGame,
                     activeQueue = activeQueue,
                     reconnectDialog = reconnectDialogVisual,

@@ -91,6 +91,8 @@ class DebugRunUiContractTest {
             "src", "main", "java", "club", "xiaojiawei", "hsscript", "controller", "javafx", "MainController.kt",
         )))
         assertTrue(mainControllerText.contains("enableDefaultAfterRestart()"))
+        assertTrue(mainControllerText.contains("DebugRunController.enable(\"ui-toggle-on\")"),
+            "a refused/invalid prior lease must be replaced only by an explicit user toggle")
         assertTrue(mainControllerText.contains("startupDebugRun.state == DebugRunLease.State.ACTIVE"))
         assertTrue(mainControllerText.contains("ACTIVE ·"))
 

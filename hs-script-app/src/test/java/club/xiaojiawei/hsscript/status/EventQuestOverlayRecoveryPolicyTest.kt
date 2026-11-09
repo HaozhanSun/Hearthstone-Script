@@ -265,6 +265,42 @@ class EventQuestOverlayRecoveryPolicyTest {
     }
 
     @Test
+    fun `fresh overlay-free active queue or current game session releases only the stale modal fence`() {
+        fun allows(
+            activeGame: Boolean = false,
+            activeQueue: Boolean = false,
+            activeQueueVisual: Boolean = false,
+            activeGameSessionReady: Boolean = false,
+            questOverlayVisible: Boolean = false,
+            terminalOrResult: Boolean = false,
+            mandatoryRankGuard: Boolean = false,
+        ) = EventQuestOverlayFenceReleasePolicy.allows(
+            captureTrusted = true,
+            questOverlayVisible = questOverlayVisible,
+            exactHubModeChooser = false,
+            deckReadyVisible = false,
+            freshEmptySessionLoginTransition = false,
+            activeQueueVisual = activeQueueVisual,
+            activeGameSessionReady = activeGameSessionReady,
+            activeGame = activeGame,
+            activeQueue = activeQueue,
+            reconnectDialog = false,
+            terminalOrResult = terminalOrResult,
+            mandatoryRankGuard = mandatoryRankGuard,
+            working = true,
+            paused = false,
+        )
+
+        assertTrue(allows(activeQueue = true, activeQueueVisual = true))
+        assertTrue(allows(activeGame = true, activeGameSessionReady = true))
+        assertFalse(allows(activeQueue = true), "queue state without a fresh queue visual is insufficient")
+        assertFalse(allows(activeGame = true), "game state without a current session proof is insufficient")
+        assertFalse(allows(activeQueue = true, activeQueueVisual = true, questOverlayVisible = true))
+        assertFalse(allows(activeQueue = true, activeQueueVisual = true, terminalOrResult = true))
+        assertFalse(allows(activeGame = true, activeGameSessionReady = true, mandatoryRankGuard = true))
+    }
+
+    @Test
     fun `exact Event Quest screenshot alone routes to three top left clicks then minute recheck`() {
         val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/event-quest-overlay-deck-selection-20261029.png",
