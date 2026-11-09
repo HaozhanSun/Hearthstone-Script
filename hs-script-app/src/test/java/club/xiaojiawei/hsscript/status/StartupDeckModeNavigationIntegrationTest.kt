@@ -1026,6 +1026,70 @@ class StartupDeckModeNavigationIntegrationTest {
     }
 
     @Test
+    fun `saved live post quest Wild frame reaches only fresh Start dispatch authorization`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/beta-live-wild-deck-selection-post-quest-20261108-152551.png",
+        )))
+        assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("二=", image))
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+        val observation = TournamentModeConfirmation.observeImage(image)
+        assertEquals("WILD", observation.observedMode.name, observation.evidence)
+
+        val pid = 54_740
+        val hwnd = "saved-live-post-quest-window"
+        StartupInputReadiness.resetForTest()
+        MulliganRankDispatchBarrier.resetForTest()
+        try {
+            // This represents the production mode-confirmation permit followed
+            // by the later fresh exact deck-selection capture for the same
+            // client. The fixture is already the observed post-transition
+            // frame; no click is used to infer its mode.
+            StartupInputReadiness.recordSelectedTournamentMode(pid, hwnd, RunModeEnum.WILD.name, now = 90_000L)
+            assertTrue(StartupInputReadiness.recordStartupOnlineScreen(
+                pid = pid,
+                hwnd = hwnd,
+                screen = "DECK_SELECTION",
+                confidence = 94,
+                evidence = "deck-selection-start-control-visual",
+                expectedRunMode = RunModeEnum.WILD.name,
+                observedRunMode = observation.observedMode.name,
+                enabledStartButtonVisible = true,
+                modalVisible = false,
+                now = 90_001L,
+            ))
+            MulliganRankDispatchBarrier.beginCurrentGame()
+            val ready = StartupInputReadiness.isDeckSelectionStartReady(pid, hwnd, 90_002L)
+            val modePermit = StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+                pid, hwnd, RunModeEnum.WILD.name, 90_002L,
+            )
+            var dispatches = 0
+            val accepted = TournamentModeStrategy.dispatchMatchmakingStartControlIfAuthorized(
+                isAuthorized = {
+                    ActionDispatchGate.allowForState(
+                        action = "matchmaking.start",
+                        paused = false,
+                        working = true,
+                        currentSessionReady = false,
+                        freshOnlineMenuReady = false,
+                        freshDeckSelectionStartReady = ready,
+                        selectedModeStartPermitValid = modePermit,
+                        rankBarrierState = MulliganRankDispatchBarrier.currentState(),
+                    )
+                },
+                dispatchStartControl = { dispatches++; true },
+            )
+            assertTrue(accepted)
+            assertEquals(1, dispatches)
+            // Accepted input proves only that the Start control callback ran;
+            // a fresh MATCHMAKING screen/Power.log CREATE_GAME is still needed
+            // to establish that the game actually began.
+        } finally {
+            MulliganRankDispatchBarrier.resetForTest()
+            StartupInputReadiness.resetForTest()
+        }
+    }
+
+    @Test
     fun `exact live Standard deck screenshot with rank nine cannot dispatch configured Wild queue start`() {
         val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/tournament-wild-deck-standard-mode-20261029.png",
@@ -1182,7 +1246,7 @@ class StartupDeckModeNavigationIntegrationTest {
         assertFalse(ScreenStateRecovery.wrongModeTooltipVisualForTest(image))
         val observed = TournamentModeConfirmation.observeImage(image)
         assertEquals("STANDARD", observed.observedMode.name)
-        assertEquals("title-visual-template-standard", observed.evidence)
+        assertTrue(observed.evidence.contains("standard-nearest"), observed.evidence)
 
         val decision = StartupDeckModeNavigationPolicy.decide(
             purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY.name,

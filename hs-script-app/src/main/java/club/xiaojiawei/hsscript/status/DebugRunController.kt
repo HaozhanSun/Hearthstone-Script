@@ -140,6 +140,56 @@ object DebugRunController {
                 return@synchronized snapshot
             }
 
+            val guardianStatePath = System.getProperty("hs.script.guardian-state.path")
+                ?.takeIf(String::isNotBlank)
+                ?.let(java.nio.file.Path::of)
+                ?.toAbsolutePath()
+                ?.normalize()
+            val deploymentId = System.getProperty("hs.script.deployment.id", "")
+            val restartDecision = DebugRunLeaseRestartPolicy.decide(
+                previous = DebugRunHardCapSupervisor.readPersistedLease(guardianStatePath),
+                currentDeploymentId = deploymentId,
+                nowEpochMillis = System.currentTimeMillis(),
+            )
+            if (restartDecision.action == DebugRunLeaseRestartPolicy.Action.RESTORE_EXISTING) {
+                val previous = requireNotNull(restartDecision.lease)
+                val recovered = lease.restoreAbsoluteWindow(previous.startEpochMillis, previous.endEpochMillis)
+                if (recovered.state != DebugRunLease.State.ACTIVE) {
+                    ConfigUtil.putBoolean(ConfigEnum.DEBUG_RUN_MODE, false)
+                    log.error {
+                        "DEBUG_OVERRIDE_STARTUP_REFUSED reason=previous-lease-expired-during-restore " +
+                            "runId=${previous.runId} deploymentId=$deploymentId deadlineEpochMs=${previous.endEpochMillis}"
+                    }
+                    return@synchronized recovered
+                }
+                activeRunId = previous.runId
+                hardCapRefusalReason = null
+                if (hardCapRequired()) {
+                    val armed = armHardCap(recovered, "process-restart-preserved-deadline")
+                    if (DebugRunHardCapSettingPolicy.mustRefuseUncappedRun(true, armed)) {
+                        return@synchronized refuseUncappedRun(recovered, "process-restart-preserved-deadline")
+                    }
+                }
+                ConfigUtil.putBoolean(ConfigEnum.DEBUG_RUN_MODE, true)
+                logSnapshot("DEBUG_OVERRIDE_RESTORED", recovered, "process-restart-preserved-deadline", activeRunId)
+                logRuntime("ACTIVE", recovered, activeRunId)
+                WorkTimeListener.checkWork()
+                WorkTimeListener.tryWork()
+                return@synchronized recovered
+            }
+            if (restartDecision.action == DebugRunLeaseRestartPolicy.Action.REFUSE_AUTO_START) {
+                val stopped = lease.resetForRestart()
+                activeRunId = null
+                hardCapArmedRunId = null
+                ConfigUtil.putBoolean(ConfigEnum.DEBUG_RUN_MODE, false)
+                log.error {
+                    "DEBUG_OVERRIDE_STARTUP_REFUSED reason=${restartDecision.reason} " +
+                        "deploymentId=$deploymentId runId=${restartDecision.lease?.runId ?: "n/a"} " +
+                        "deadlineEpochMs=${restartDecision.lease?.endEpochMillis ?: "n/a"} action=NO_AUTO_REARM"
+                }
+                return@synchronized stopped
+            }
+
             val snapshot = lease.resetForRestart(defaultEnabled = true)
             activeRunId = UUID.randomUUID().toString()
             hardCapRefusalReason = null

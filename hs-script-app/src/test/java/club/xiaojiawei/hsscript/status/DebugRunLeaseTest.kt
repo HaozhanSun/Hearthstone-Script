@@ -126,6 +126,44 @@ class DebugRunLeaseTest {
     }
 
     @Test
+    fun `restoring after process restart preserves original deadline instead of extending run`() {
+        var nowNanos = 25L * 60L * 1_000_000_000L
+        var nowMillis = 1_000L + 25L * 60L * 1_000L
+        val lease = DebugRunLease(
+            nanoTime = { nowNanos },
+            wallClockMillis = { nowMillis },
+        )
+        val originalStart = 1_000L
+        val originalEnd = originalStart + DebugRunLease.MAX_DURATION_MILLIS
+
+        val restored = lease.restoreAbsoluteWindow(originalStart, originalEnd)
+
+        assertEquals(DebugRunLease.State.ACTIVE, restored.state)
+        assertEquals(originalStart, restored.startEpochMillis)
+        assertEquals(originalEnd, restored.endEpochMillis)
+        assertEquals(5L * 60L * 1_000L, restored.remainingMillis)
+        nowNanos += 5L * 60L * 1_000_000_000L
+        nowMillis = originalEnd
+        assertEquals(DebugRunLease.State.EXPIRED, lease.snapshot().state)
+    }
+
+    @Test
+    fun `expired restored run remains expired and cannot be auto rearmed`() {
+        val originalStart = 1_000L
+        val originalEnd = originalStart + DebugRunLease.MAX_DURATION_MILLIS
+        val lease = DebugRunLease(
+            nanoTime = { 40L * 60L * 1_000_000_000L },
+            wallClockMillis = { originalEnd + 10L },
+        )
+
+        val restored = lease.restoreAbsoluteWindow(originalStart, originalEnd)
+
+        assertEquals(DebugRunLease.State.EXPIRED, restored.state)
+        assertEquals(0L, restored.remainingMillis)
+        assertEquals(DebugRunLease.State.EXPIRED, lease.snapshot().state)
+    }
+
+    @Test
     fun `concurrent enable requests share one deadline`() {
         var nowNanos = 0L
         val lease = DebugRunLease(nanoTime = { nowNanos })

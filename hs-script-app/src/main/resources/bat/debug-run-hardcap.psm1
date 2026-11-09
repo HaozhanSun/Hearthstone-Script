@@ -22,11 +22,13 @@ function New-DebugRunHardCapContext {
         [Parameter(Mandatory)][string]$RunId,
         [Parameter(Mandatory)][int]$ProcessId,
         [Parameter(Mandatory)][datetime]$ProcessStartUtc,
-        [Parameter(Mandatory)][datetime]$DeadlineUtc
+        [Parameter(Mandatory)][datetime]$DeadlineUtc,
+        [string]$DeploymentId = ''
     )
 
     [pscustomobject]@{
         RunId = $RunId
+        DeploymentId = $DeploymentId
         ProcessId = $ProcessId
         ProcessStartUtc = $ProcessStartUtc.ToUniversalTime()
         DeadlineUtc = $DeadlineUtc.ToUniversalTime()
@@ -97,6 +99,8 @@ function Test-DebugRunHardCapLeaseCurrent {
         $leaseProcessStart = ([datetime]$lease.processStartUtc).ToUniversalTime()
         $leaseDeadline = ([datetime]$lease.deadlineUtc).ToUniversalTime()
         return [string]$lease.runId -eq [string]$Context.RunId -and
+            ([string]::IsNullOrWhiteSpace([string]$Context.DeploymentId) -or
+                [string]$lease.deploymentId -eq [string]$Context.DeploymentId) -and
             [int]$lease.processId -eq [int]$Context.ProcessId -and
             (Test-DebugRunProcessStartMatches -ActualStartUtc $leaseProcessStart -ExpectedStartUtc $Context.ProcessStartUtc) -and
             $leaseDeadline.Ticks -eq $Context.DeadlineUtc.ToUniversalTime().Ticks
@@ -156,6 +160,8 @@ function Set-DebugRunHardCapGuardianStopIntent {
         if (-not (Test-Path -LiteralPath $GuardianStatePath -PathType Leaf)) { return $false }
         $state = Get-Content -LiteralPath $GuardianStatePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
         if ([int64]$state.pid -ne [int64]$Context.ProcessId -or
+            (-not [string]::IsNullOrWhiteSpace([string]$Context.DeploymentId) -and
+                [string]$state.deploymentId -ne [string]$Context.DeploymentId) -or
             -not (Test-DebugRunProcessStartMatches -ActualStartUtc ([datetime]$state.processStartTimeUtc) -ExpectedStartUtc $Context.ProcessStartUtc)) {
             return $false
         }
@@ -167,6 +173,7 @@ function Set-DebugRunHardCapGuardianStopIntent {
             @('pauseOrigin', 'DEBUG_RUN_HARD_CAP'),
             @('healthSnapshotKnown', $false),
             @('hardCapRunId', [string]$Context.RunId),
+            @('deploymentId', [string]$Context.DeploymentId),
             @('hardCapDeadlineUtc', $Context.DeadlineUtc.ToUniversalTime().ToString('o')),
             @('recordedAtUtc', $now),
             @('heartbeatAtUtc', $now),
@@ -197,6 +204,7 @@ function Set-DebugRunHardCapStopMarker {
         $marker = [ordered]@{
             schema = 1
             runId = [string]$Context.RunId
+            deploymentId = [string]$Context.DeploymentId
             processId = [int]$Context.ProcessId
             processStartUtc = $Context.ProcessStartUtc.ToUniversalTime().ToString('o')
             deadlineUtc = $Context.DeadlineUtc.ToUniversalTime().ToString('o')

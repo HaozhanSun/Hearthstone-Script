@@ -283,7 +283,7 @@ class TournamentModeConfirmationTest {
         )))
         val observation = TournamentModeConfirmation.observeImage(image)
         assertEquals(ObservedTournamentMode.WILD, observation.observedMode)
-        assertEquals("title-visual-template-wild", observation.evidence)
+        assertTrue(observation.evidence.contains("wild-nearest"), observation.evidence)
 
         val liveWild = javax.imageio.ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/wild-deck-selection-live-20261030-030308.png",
@@ -297,6 +297,74 @@ class TournamentModeConfirmationTest {
         )))
         val standardObservation = TournamentModeConfirmation.observeImage(standard)
         assertEquals(ObservedTournamentMode.STANDARD, standardObservation.observedMode)
+    }
+
+    @Test
+    fun `saved live post quest deck screen confirms visible Wild and records only fresh start proof`() {
+        val image = javax.imageio.ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/beta-live-wild-deck-selection-post-quest-20261108-152551.png",
+        )))
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+
+        val observation = TournamentModeConfirmation.observeImage(image)
+        assertEquals(ObservedTournamentMode.WILD, observation.observedMode, observation.evidence)
+        assertTrue(observation.evidence.contains("wild-nearest"))
+        assertEquals(
+            TournamentModeConfirmationState.CONFIRMED,
+            TournamentModeConfirmation.evaluate(
+                expectedMode = RunModeEnum.WILD,
+                observation = observation,
+                strategyId = "saved-live-wild-deck",
+                strategyName = "saved live Wild deck",
+                deckSlot = 1,
+            ).state,
+        )
+
+        try {
+            assertTrue(StartupInputReadiness.recordDeckSelectionStart(
+                pid = 54740,
+                hwnd = "saved-live-client-window",
+                confidence = 94,
+                evidence = "deck-selection-start-control-visual",
+                expectedRunMode = RunModeEnum.WILD.name,
+                observedRunMode = observation.observedMode.name,
+                enabledStartButtonVisible = true,
+                modalVisible = false,
+                now = 50_000L,
+            ))
+            assertTrue(StartupInputReadiness.isDeckSelectionStartReady(54740, "saved-live-client-window", 50_001L))
+            // The fixture proves that the post-recovery screen is the expected
+            // mode and that its Start control can be authorized. It does not
+            // claim that dispatching Start created a game.
+        } finally {
+            StartupInputReadiness.resetForTest()
+        }
+    }
+
+    @Test
+    fun `mode title classifier leaves an equally near synthetic title unknown`() {
+        val resourceBase = "/club/xiaojiawei/hsscript/status/"
+        val wild = javax.imageio.ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "${resourceBase}wild-mode-title-template.png",
+        )))
+        val standard = javax.imageio.ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "${resourceBase}standard-mode-title-template.png",
+        )))
+        val ambiguous = java.awt.image.BufferedImage(1920, 1080, java.awt.image.BufferedImage.TYPE_INT_RGB)
+        for (y in 0 until wild.height) {
+            for (x in 0 until wild.width) {
+                val wildPixel = wild.getRGB(x, y)
+                val standardPixel = standard.getRGB(x, y)
+                val red = (((wildPixel ushr 16) and 0xff) + ((standardPixel ushr 16) and 0xff)) / 2
+                val green = (((wildPixel ushr 8) and 0xff) + ((standardPixel ushr 8) and 0xff)) / 2
+                val blue = ((wildPixel and 0xff) + (standardPixel and 0xff)) / 2
+                ambiguous.setRGB(620 + x, 18 + y, (red shl 16) or (green shl 8) or blue)
+            }
+        }
+
+        val observation = TournamentModeConfirmation.observeImageVisualOnly(ambiguous)
+        assertEquals(ObservedTournamentMode.UNKNOWN, observation.observedMode)
+        assertTrue(observation.evidence.contains("ambiguous"), observation.evidence)
     }
 
     @Test
@@ -351,7 +419,7 @@ class TournamentModeConfirmationTest {
         assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
         val observed = TournamentModeConfirmation.observeImage(image)
         assertEquals(ObservedTournamentMode.STANDARD, observed.observedMode)
-        assertEquals("title-visual-template-standard", observed.evidence)
+        assertTrue(observed.evidence.contains("standard-nearest"), observed.evidence)
 
         try {
             assertFalse(StartupInputReadiness.recordDeckSelectionStart(

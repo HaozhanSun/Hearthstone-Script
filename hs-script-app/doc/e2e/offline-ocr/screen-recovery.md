@@ -26,6 +26,20 @@
   pause, or non-working state must retain the fence. Log the detected evidence
   and each release/block reason so a visible chooser cannot remain hidden
   behind stale internal LOGIN state.
+- Beta v4.16.752 live evidence (2026-11-08): Event Quest recovery's accepted
+  `(0,0)` top-left click was followed by a fresh capture with the overlay gone
+  and `hub-mode-chooser-visual`; the modal dismissal itself worked. Earlier
+  Tournament/FILL_DECK probes were correctly blocked because neither a verified
+  terminal outcome nor a verified empty current Power.log existed. After a
+  clean LOGIN/empty-log restart, the bounded first-stage minute elapsed before
+  dismissal. The final deck-selection frame visibly showed `狂野对战`, but its
+  Wild title-template mean RGB delta was 1.28 against a 1.0 exact-match limit
+  (Standard delta 12.84); OCR returned only five characters and UNKNOWN. Mode
+  confirmation must try a clearly separated nearest title-template match
+  before OCR. Regress the exact saved frame, confirm WILD and fresh same-window
+  Start readiness, and keep `SendInput accepted=true` distinct from a confirmed
+  game start. Do not attribute this incident to HIDE_TASK_RECT geometry: the
+  accepted Beta top-left click was followed by the observed safe transition.
 - Keep deck Start authority tied to a fresh exact deck capture and configured
   mode; do not relax its expiry to cover the automatic-deck-completion click
   sequence. A rejected final Start click is not evidence that queue entry
@@ -747,27 +761,17 @@ this deletion boundary.
   at every result-page destination callsite and regress that the cleanup
   callback is not invoked until a fresh clean destination appears. Keep the
   positive fresh DECK_SELECTION/MATCHMAKING confirmation path covered.
-- Temporary all-rank play is authorized only on the exact Beta channel when `NEVER_SURRENDER` is
-  enabled and the one-shot `DEBUG_RUN_MODE` lease is active. Fresh numeric rank
-  evidence uses the ordinary capture, mode/game state, provider,
-  confidence/repeated-read, and age checks. During that exact lease only,
-  unresolved OCR may authorize rankless gameplay without fabricating a rank;
-  it must pass the mulligan barrier and remain gated by the live lease.
-  Stale/conflicting evidence cannot grant a numeric rank. Lease expiry or
-  either setting/channel fence revokes rankless authorization and restores
-  the standard rank policy. Operational runs must arm the owned-process hard cap
-  so Beta and its owned game process stop at or before the 30-minute deadline;
-  the in-app lease by itself is not process termination when the normal
-  schedule is active. Regression coverage: `NeverSurrenderPolicyTest`,
-  `RankEligibilityPolicyTest`, `MulliganRankDispatchBarrierTest`,
-  `MulliganRankPreflightTest`, and `DebugRunLeaseTest`.
-- If rank inspection is unresolved while the active Beta override is valid,
-  the held preflight may pass the first-action barrier for gameplay. The live
-  lease must be rechecked at action dispatch; never surrender or fabricate
-  numeric rank evidence. If that authorization is unavailable, keep the barrier
-  pending and continue bounded fresh-capture retry cycles only while the lease
-  remains active. After expiry, return to the existing bounded fail-closed rank
-  policy. Regression coverage: active-lease authorization, no-rank-metadata,
-  and expiry reversion in
-  `MulliganRankPreflightTest`, plus lease fence tests in
-  `NeverSurrenderPolicyTest`.
+- Temporary all-rank play is authorized only on the exact Beta channel when
+  `NEVER_SURRENDER` is enabled and the one-shot `DEBUG_RUN_MODE` lease is
+  active. The 30-minute deadline starts at actual lease activation, not policy
+  class initialization. A non-target rank may pass only with fresh numeric
+  evidence meeting provider, confidence/agreement, mode/game state, and age
+  checks; unresolved OCR never authorizes rankless gameplay. While the lease is
+  active, unresolved rank preflight may wait and retry bounded fresh captures,
+  but does not pass the first-action barrier. At expiry, the standard rank
+  policy resumes and dispatch rechecks the same live lease identity. The
+  process-owned watchdog must stop Beta and its exact owned game process at or
+  before the 30-minute deadline. Regression coverage includes lease activation
+  and expiry, fresh numeric evidence, and dispatch revalidation in
+  `BetaNeverSurrenderOverrideTest`, `MulliganRankPreflightTest`,
+  `MulliganRankDispatchBarrierTest`, and `DebugRunLeaseTest`.

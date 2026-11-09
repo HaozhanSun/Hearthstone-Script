@@ -89,6 +89,35 @@ class DebugRunLease(
         }
     }
 
+    /** Restore the original absolute run window after a process relaunch. */
+    fun restoreAbsoluteWindow(startEpochMillis: Long, endEpochMillis: Long): Snapshot {
+        val nowWallClock = wallClockMillis()
+        val nowNanos = nanoTime()
+        val duration = endEpochMillis - startEpochMillis
+        require(startEpochMillis > 0L && duration == maxDurationMillis) {
+            "restored lease must retain its original full bounded duration"
+        }
+        val snapshot = synchronized(lock) {
+            generation += 1
+            expiryFuture?.cancel(false)
+            expiryFuture = null
+            this.startEpochMillis = startEpochMillis
+            this.endEpochMillis = endEpochMillis
+            val remainingMillis = endEpochMillis - nowWallClock
+            if (remainingMillis <= 0L) {
+                state = State.EXPIRED
+                deadlineNanos = nowNanos
+                snapshotLocked(nowNanos)
+            } else {
+                state = State.ACTIVE
+                deadlineNanos = nowNanos + remainingMillis * NANOS_PER_MILLI
+                scheduleExpiryLocked(generation, remainingMillis * NANOS_PER_MILLI)
+                snapshotLocked(nowNanos)
+            }
+        }
+        return snapshot
+    }
+
     fun snapshot(): Snapshot {
         var expired: Snapshot? = null
         val snapshot = synchronized(lock) {

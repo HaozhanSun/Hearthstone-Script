@@ -8,6 +8,9 @@ import java.nio.file.StandardCopyOption
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
 import java.time.Instant
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Bridges the in-process Debug Run lease to an independent PowerShell watchdog.
@@ -28,6 +31,7 @@ internal object DebugRunHardCapSupervisor {
 
     internal data class Plan(
         val runId: String,
+        val deploymentId: String,
         val processId: Long,
         val processStartUtc: Instant,
         val deadlineUtc: Instant,
@@ -45,6 +49,42 @@ internal object DebugRunHardCapSupervisor {
         val modulePath: Path get() = runtimeDirectory.resolve(MODULE_NAME)
     }
 
+    internal data class PersistedLease(
+        val state: String,
+        val runId: String,
+        val deploymentId: String,
+        val startEpochMillis: Long,
+        val endEpochMillis: Long,
+        val valid: Boolean,
+    )
+
+    /** Read only the durable absolute window needed to survive an app restart. */
+    internal fun readPersistedLease(guardianStatePath: Path?): PersistedLease? {
+        val guardian = guardianStatePath ?: return null
+        val path = guardian.toAbsolutePath().normalize().parent?.resolve(LEASE_FILE_NAME) ?: return null
+        if (!Files.isRegularFile(path)) return null
+        return runCatching {
+            val root = Json.parseToJsonElement(Files.readString(path)).jsonObject
+            val state = root["state"]?.jsonPrimitive?.content
+            val runId = root["runId"]?.jsonPrimitive?.content
+            val deploymentId = root["deploymentId"]?.jsonPrimitive?.content
+            val startEpochMillis = root["startEpochMillis"]?.jsonPrimitive?.content?.toLongOrNull()
+            val endEpochMillis = root["deadlineEpochMillis"]?.jsonPrimitive?.content?.toLongOrNull()
+            PersistedLease(
+                state = state.orEmpty(),
+                runId = runId.orEmpty(),
+                deploymentId = deploymentId.orEmpty(),
+                startEpochMillis = startEpochMillis ?: 0L,
+                endEpochMillis = endEpochMillis ?: 0L,
+                valid = !state.isNullOrBlank() && !runId.isNullOrBlank() && !deploymentId.isNullOrBlank() &&
+                    startEpochMillis != null && endEpochMillis != null &&
+                    endEpochMillis - startEpochMillis == DebugRunLease.MAX_DURATION_MILLIS,
+            )
+        }.getOrElse {
+            PersistedLease("INVALID", "", "", 0L, 0L, valid = false)
+        }
+    }
+
     /** Pure eligibility/ownership boundary, kept testable without spawning a process. */
     internal fun plan(
         snapshot: DebugRunLease.Snapshot,
@@ -55,9 +95,11 @@ internal object DebugRunHardCapSupervisor {
         processStartUtc: Instant?,
         runtimeDirectory: Path,
         guardianStatePath: Path?,
+        deploymentId: String = "test-deployment",
     ): Plan? {
         if (!betaChannel || !neverSurrenderEnabled || snapshot.state != DebugRunLease.State.ACTIVE) return null
-        if (runId.isNullOrBlank() || processId <= 0L || guardianStatePath == null ||
+        if (runId.isNullOrBlank() || deploymentId.isBlank() || deploymentId == "unknown" ||
+            processId <= 0L || guardianStatePath == null ||
             processStartUtc == null ||
             (processStartUtc.epochSecond == 0L && processStartUtc.nano == 0)
         ) return null
@@ -66,6 +108,7 @@ internal object DebugRunHardCapSupervisor {
         if (snapshot.endEpochMillis - snapshot.startEpochMillis != DebugRunLease.MAX_DURATION_MILLIS) return null
         return Plan(
             runId = runId,
+            deploymentId = deploymentId,
             processId = processId,
             processStartUtc = processStartUtc,
             deadlineUtc = Instant.ofEpochMilli(snapshot.endEpochMillis),
@@ -187,6 +230,8 @@ internal object DebugRunHardCapSupervisor {
         plan.watchdogPath.toString(),
         "-RunId",
         plan.runId,
+        "-DeploymentId",
+        plan.deploymentId,
         "-ProcessId",
         plan.processId.toString(),
         "-ProcessStartUtc",
@@ -213,7 +258,7 @@ internal object DebugRunHardCapSupervisor {
         Files.createDirectories(plan.leasePath.parent)
         writeAtomically(
             plan.leasePath,
-            """{"schema":1,"state":"$state","runId":"${safe(plan.runId)}","processId":${plan.processId},"processStartUtc":"${plan.processStartUtc}","deadlineUtc":"${plan.deadlineUtc}","reason":"${safe(reason)}"}""",
+            """{"schema":1,"state":"$state","runId":"${safe(plan.runId)}","deploymentId":"${safe(plan.deploymentId)}","startEpochMillis":${plan.deadlineUtc.toEpochMilli() - DebugRunLease.MAX_DURATION_MILLIS},"deadlineEpochMillis":${plan.deadlineUtc.toEpochMilli()},"processId":${plan.processId},"processStartUtc":"${plan.processStartUtc}","deadlineUtc":"${plan.deadlineUtc}","reason":"${safe(reason)}"}""",
         )
     }
 
@@ -242,6 +287,7 @@ internal object DebugRunHardCapSupervisor {
         ready.matchesJsonNumber("schema", 1L) &&
             ready.matchesJsonString("state", "READY") &&
             ready.matchesJsonString("runId", safe(plan.runId)) &&
+            ready.matchesJsonString("deploymentId", safe(plan.deploymentId)) &&
             ready.matchesJsonNumber("processId", plan.processId) &&
             ready.matchesJsonNumber("deadlineEpochMillis", plan.deadlineUtc.toEpochMilli())
 
@@ -286,4 +332,27 @@ internal object DebugRunHardCapSettingPolicy {
 
     fun mustRefuseUncappedRun(hardCapRequired: Boolean, watchdogArmed: Boolean): Boolean =
         hardCapRequired && !watchdogArmed
+}
+
+/** Prevents automatic process restarts from granting a new full debug-run window. */
+internal object DebugRunLeaseRestartPolicy {
+    enum class Action { START_NEW, RESTORE_EXISTING, REFUSE_AUTO_START }
+    data class Decision(val action: Action, val reason: String, val lease: DebugRunHardCapSupervisor.PersistedLease? = null)
+
+    fun decide(
+        previous: DebugRunHardCapSupervisor.PersistedLease?,
+        currentDeploymentId: String,
+        nowEpochMillis: Long,
+    ): Decision {
+        if (previous == null) return Decision(Action.START_NEW, "no-previous-hard-cap-lease")
+        if (!previous.valid) return Decision(Action.REFUSE_AUTO_START, "previous-lease-invalid")
+        if (previous.state != "ACTIVE") return Decision(Action.REFUSE_AUTO_START, "previous-lease-not-active")
+        if (currentDeploymentId.isBlank() || previous.deploymentId != currentDeploymentId) {
+            return Decision(Action.REFUSE_AUTO_START, "deployment-identity-mismatch")
+        }
+        if (nowEpochMillis >= previous.endEpochMillis) {
+            return Decision(Action.REFUSE_AUTO_START, "previous-lease-expired")
+        }
+        return Decision(Action.RESTORE_EXISTING, "preserve-original-deadline", previous)
+    }
 }

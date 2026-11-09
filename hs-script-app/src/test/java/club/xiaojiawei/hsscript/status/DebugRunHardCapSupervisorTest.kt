@@ -1,6 +1,7 @@
 package club.xiaojiawei.hsscript.status
 
 import java.nio.file.Path
+import java.nio.file.Files
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -44,6 +45,8 @@ class DebugRunHardCapSupervisorTest {
         assertTrue(DebugRunHardCapSupervisor.watchdogCommand(plan).contains("Hidden"))
         assertTrue(DebugRunHardCapSupervisor.watchdogCommand(plan).contains(plan.launcherPath.toString()))
         assertTrue(DebugRunHardCapSupervisor.watchdogCommand(plan).contains("-WatchdogPath"))
+        assertTrue(DebugRunHardCapSupervisor.watchdogCommand(plan).contains("-DeploymentId"))
+        assertTrue(DebugRunHardCapSupervisor.watchdogCommand(plan).contains(plan.deploymentId))
     }
 
     @Test
@@ -63,6 +66,7 @@ class DebugRunHardCapSupervisorTest {
               "schema": 1,
               "state": "READY",
               "runId": "gui-run",
+              "deploymentId": "test-deployment",
               "processId": 42,
               "deadlineEpochMillis": ${plan.deadlineUtc.toEpochMilli()},
               "readyAtUtc": "2026-11-02T16:00:01Z"
@@ -73,6 +77,7 @@ class DebugRunHardCapSupervisorTest {
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"schema\": 1", "\"schema\": 2")))
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"state\": \"READY\"", "\"state\": \"STALE\"")))
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"runId\": \"gui-run\"", "\"runId\": \"other-run\"")))
+        assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"deploymentId\": \"test-deployment\"", "\"deploymentId\": \"other-deployment\"")))
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"processId\": 42", "\"processId\": 43")))
         assertFalse(
             DebugRunHardCapSupervisor.readyRecordMatches(
@@ -83,6 +88,68 @@ class DebugRunHardCapSupervisorTest {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun `restart policy preserves an unexpired same deployment window and refuses expiry or identity changes`() {
+        val previous = DebugRunHardCapSupervisor.PersistedLease(
+            state = "ACTIVE",
+            runId = "same-run",
+            deploymentId = "beta-deployment-704",
+            startEpochMillis = 1_000L,
+            endEpochMillis = 1_000L + DebugRunLease.MAX_DURATION_MILLIS,
+            valid = true,
+        )
+
+        val resume = DebugRunLeaseRestartPolicy.decide(previous, "beta-deployment-704", 1_000L + 25L * 60_000L)
+        assertEquals(DebugRunLeaseRestartPolicy.Action.RESTORE_EXISTING, resume.action)
+        assertEquals(previous.endEpochMillis, resume.lease?.endEpochMillis)
+        assertEquals("same-run", resume.lease?.runId)
+
+        assertEquals(
+            DebugRunLeaseRestartPolicy.Action.REFUSE_AUTO_START,
+            DebugRunLeaseRestartPolicy.decide(previous, "beta-deployment-704", previous.endEpochMillis).action,
+        )
+        assertEquals(
+            "deployment-identity-mismatch",
+            DebugRunLeaseRestartPolicy.decide(previous, "beta-deployment-705", 1_001L).reason,
+        )
+        assertEquals(
+            "previous-lease-invalid",
+            DebugRunLeaseRestartPolicy.decide(previous.copy(valid = false), "beta-deployment-704", 1_001L).reason,
+        )
+        assertEquals(
+            DebugRunLeaseRestartPolicy.Action.START_NEW,
+            DebugRunLeaseRestartPolicy.decide(null, "beta-deployment-704", 1_001L).action,
+        )
+    }
+
+    @Test
+    fun `persisted restart lease reader retains deployment id and original absolute window`() {
+        val directory = Files.createTempDirectory("debug-run-hardcap-restart-test")
+        try {
+            val guardian = directory.resolve("guardian-state.json")
+            val lease = directory.resolve("debug-run-hardcap-lease.json")
+            Files.writeString(
+                lease,
+                """{"schema":1,"state":"ACTIVE","runId":"same-run","deploymentId":"beta-deployment-704","startEpochMillis":1000,"deadlineEpochMillis":${1_000L + DebugRunLease.MAX_DURATION_MILLIS}}""",
+            )
+            val persisted = requireNotNull(DebugRunHardCapSupervisor.readPersistedLease(guardian))
+            assertTrue(persisted.valid)
+            assertEquals("beta-deployment-704", persisted.deploymentId)
+            assertEquals(1_000L, persisted.startEpochMillis)
+            assertEquals(1_000L + DebugRunLease.MAX_DURATION_MILLIS, persisted.endEpochMillis)
+        } finally {
+            Files.deleteIfExists(directory.resolve("debug-run-hardcap-lease.json"))
+            Files.deleteIfExists(directory)
+        }
+    }
+
+    @Test
+    fun `watchdog launcher explicitly elevates and relies on ready handshake`() {
+        val launcher = Files.readString(Path.of("src/main/resources/bat/debug-run-hardcap-launcher.ps1"))
+        assertTrue(launcher.contains("-Verb RunAs"))
+        assertTrue(launcher.contains("READY is written only by the elevated watchdog"))
     }
 
     @Test

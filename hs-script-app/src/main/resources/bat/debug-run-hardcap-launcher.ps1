@@ -2,6 +2,7 @@
 param(
     [Parameter(Mandatory)][string]$WatchdogPath,
     [Parameter(Mandatory)][string]$RunId,
+    [Parameter(Mandatory)][string]$DeploymentId,
     [Parameter(Mandatory)][int]$ProcessId,
     [Parameter(Mandatory)][datetime]$ProcessStartUtc,
     [Parameter(Mandatory)][datetime]$DeadlineUtc,
@@ -23,6 +24,7 @@ $arguments = @(
     '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass',
     '-File', $WatchdogPath,
     '-RunId', $RunId,
+    '-DeploymentId', $DeploymentId,
     '-ProcessId', [string]$ProcessId,
     '-ProcessStartUtc', $ProcessStartUtc.ToUniversalTime().ToString('o'),
     '-DeadlineUtc', $DeadlineUtc.ToUniversalTime().ToString('o'),
@@ -40,5 +42,7 @@ $escapedArguments = ($arguments | ForEach-Object {
 
 $logDirectory = Split-Path -Parent $WatchdogLogPath
 if ($logDirectory) { New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null }
-Start-Process -FilePath 'powershell.exe' -ArgumentList $escapedArguments -WindowStyle Hidden `
+# READY is written only by the elevated watchdog. The application refuses
+# the run if elevation is denied or the handshake does not arrive.
+Start-Process -FilePath 'powershell.exe' -ArgumentList $escapedArguments -Verb RunAs -WindowStyle Hidden `
     -RedirectStandardOutput $WatchdogLogPath -RedirectStandardError ($WatchdogLogPath + '.err') | Out-Null

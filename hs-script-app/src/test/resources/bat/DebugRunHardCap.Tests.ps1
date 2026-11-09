@@ -32,6 +32,18 @@ $dimensionLease = [ordered]@{
 }
 $dimensionLease | ConvertTo-Json | Set-Content -LiteralPath $dimensionLeasePath -Encoding UTF8
 Assert-Equal $true (Test-DebugRunHardCapLeaseCurrent -Context $leaseContext -LeasePath $dimensionLeasePath) 'exact lease ownership must be accepted'
+$deploymentContext = New-DebugRunHardCapContext -RunId 'lease-dimensions' -ProcessId 44 `
+    -ProcessStartUtc $processStartUtc -DeadlineUtc $deadlineUtc -DeploymentId 'beta-test'
+$deploymentLease = [ordered]@{
+    schema = 1; state = 'ACTIVE'; runId = 'lease-dimensions'; deploymentId = 'beta-test'
+    processId = 44; processStartUtc = $processStartUtc.ToString('o')
+    deadlineUtc = $deadlineUtc.ToString('o')
+}
+$deploymentLease | ConvertTo-Json | Set-Content -LiteralPath $dimensionLeasePath -Encoding UTF8
+Assert-Equal $true (Test-DebugRunHardCapLeaseCurrent -Context $deploymentContext -LeasePath $dimensionLeasePath) 'matching deployment identity must be accepted'
+$deploymentLease.deploymentId = 'beta-other-deployment'
+$deploymentLease | ConvertTo-Json | Set-Content -LiteralPath $dimensionLeasePath -Encoding UTF8
+Assert-Equal $false (Test-DebugRunHardCapLeaseCurrent -Context $deploymentContext -LeasePath $dimensionLeasePath) 'different deployment must never inherit stop authority'
 foreach ($mutation in @(
     @{ name = 'state'; key = 'state'; value = 'CANCELLED' },
     @{ name = 'runId'; key = 'runId'; value = 'other-run' },
@@ -61,14 +73,15 @@ try {
     $watchdogStderrPath = Join-Path $watchdogDirectory 'watchdog.stderr.log'
     $watchdogDeadline = [datetime]::UtcNow.AddMinutes(5)
     $watchdogContext = New-DebugRunHardCapContext -RunId 'watchdog-ready' -ProcessId 424242 `
-        -ProcessStartUtc $processStartUtc -DeadlineUtc $watchdogDeadline
-    @{ schema = 1; state = 'ACTIVE'; runId = 'watchdog-ready'; processId = 424242
+        -ProcessStartUtc $processStartUtc -DeadlineUtc $watchdogDeadline -DeploymentId 'beta-test'
+    @{ schema = 1; state = 'ACTIVE'; runId = 'watchdog-ready'; deploymentId = 'beta-test'; processId = 424242
         processStartUtc = $processStartUtc.ToString('o'); deadlineUtc = $watchdogDeadline.ToString('o')
     } | ConvertTo-Json | Set-Content -LiteralPath $watchdogLeasePath -Encoding UTF8
     $watchdogScript = Join-Path $PSScriptRoot '..\..\..\main\resources\bat\debug-run-hardcap-watchdog.ps1'
     $watchdogArgs = @(
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $watchdogScript,
         '-RunId', $watchdogContext.RunId,
+        '-DeploymentId', $watchdogContext.DeploymentId,
         '-ProcessId', $watchdogContext.ProcessId,
         '-ProcessStartUtc', $watchdogContext.ProcessStartUtc.ToString('o'),
         '-DeadlineUtc', $watchdogContext.DeadlineUtc.ToString('o'),
@@ -93,6 +106,7 @@ try {
     }
     Assert-Equal 'READY' ([string]$ready.state) 'packaged watchdog must create a ready handshake record'
     Assert-Equal 'watchdog-ready' ([string]$ready.runId) 'ready record must bind the requested run id'
+    Assert-Equal 'beta-test' ([string]$ready.deploymentId) 'ready record must bind the exact deployment identity'
     Assert-Equal 424242 ([int]$ready.processId) 'ready record must bind the requested process id'
     Assert-Equal ([DateTimeOffset]$watchdogDeadline.ToUniversalTime()).ToUnixTimeMilliseconds() ([long]$ready.deadlineEpochMillis) 'ready record must bind the exact deadline'
 } finally {

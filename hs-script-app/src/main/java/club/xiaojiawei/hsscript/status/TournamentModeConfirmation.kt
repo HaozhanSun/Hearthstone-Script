@@ -249,19 +249,19 @@ object TournamentModeConfirmation {
 
     /** Classify only the visible title ROI from an authorized fresh client capture. */
     internal fun observeImage(image: BufferedImage): TournamentModeObservation {
-        if (classifyWildTitleVisual(image)) {
-            return TournamentModeObservation(
-                observedMode = ObservedTournamentMode.WILD,
-                ocrText = "",
-                evidence = "title-visual-template-wild",
-            )
+        // The checked-in title references are pixel-exact samples, while a
+        // live client capture can differ slightly from scaling/antialiasing.
+        // Use the nearest-template classifier when its best title is both
+        // close enough and clearly separated from the opposite mode before
+        // falling back to OCR. This keeps visible Wild proof usable without
+        // treating a successful click or UNKNOWN OCR as mode evidence.
+        val visualObservation = observeImageVisualOnly(image)
+        visualObservation.takeIf { it.observedMode != ObservedTournamentMode.UNKNOWN }?.let {
+            return it
         }
-        if (classifyStandardTitleVisual(image)) {
-            return TournamentModeObservation(
-                observedMode = ObservedTournamentMode.STANDARD,
-                ocrText = "",
-                evidence = "title-visual-template-standard",
-            )
+        log.info {
+            "TOURNAMENT_MODE_VISUAL_TITLE_UNRESOLVED width=${image.width} height=${image.height} " +
+                "evidence=${visualObservation.evidence} action=TRY_TITLE_OCR"
         }
         val titleText = runOCR(cropTitleRegion(image), "tournament-mode-title-frame")
         return TournamentModeObservation(

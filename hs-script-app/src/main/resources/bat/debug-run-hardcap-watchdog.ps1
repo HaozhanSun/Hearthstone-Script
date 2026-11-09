@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$RunId,
+    [Parameter(Mandatory)][string]$DeploymentId,
     [Parameter(Mandatory)][int]$ProcessId,
     [Parameter(Mandatory)][datetime]$ProcessStartUtc,
     [Parameter(Mandatory)][datetime]$DeadlineUtc,
@@ -17,6 +18,7 @@ Import-Module -Name $ModulePath -Force
 
 $context = New-DebugRunHardCapContext `
     -RunId $RunId `
+    -DeploymentId $DeploymentId `
     -ProcessId $ProcessId `
     -ProcessStartUtc $ProcessStartUtc `
     -DeadlineUtc $DeadlineUtc
@@ -28,6 +30,7 @@ try {
         schema = 1
         state = 'READY'
         runId = $RunId
+        deploymentId = $DeploymentId
         processId = $ProcessId
         deadlineEpochMillis = ([DateTimeOffset]$DeadlineUtc.ToUniversalTime()).ToUnixTimeMilliseconds()
         readyAtUtc = [datetime]::UtcNow.ToString('o')

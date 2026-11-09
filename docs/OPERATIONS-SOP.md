@@ -135,6 +135,20 @@ shortcut edit can substitute for it.
 3. Keep launch, game launch, strategy refresh, and deployment as separate
    observations. A visual-only check uses a passive launch mode when automation
    could otherwise begin gameplay.
+ 4. For a temporary Beta Never Surrender run, verify exact Beta channel and
+    deployment identity, fresh numeric rank evidence, and an active Debug Run
+    lease with an absolute start/deadline span of exactly 30 minutes. Require
+    elevated watchdog `READY` for the same run ID, deployment ID, and process
+    identity before admitting the exception. Across a JVM restart, restore only
+    that run ID and original absolute deadline when persisted state is valid,
+    unexpired, and bound to the current deployment; never renew from process
+    startup. If READY is absent/refused, deployment binding differs, or the
+    deadline expired, refuse `START_ON_OPEN` and do not auto-arm a replacement
+    lease. Before E2E, record that the watchdog actually stopped the exact
+    Beta-owned Hearthstone process at expiry; an armed watchdog or STOP request
+    alone is not proof. This supplements `AGENTS.md` and
+    `RELEASE-CHANNELS.md`; it does not replace their deployment, shortcut,
+    retention, or online gates.
 
 ### 2.6 Post-deploy UI, E2E, promotion, and rollback
 
@@ -186,11 +200,14 @@ shortcut edit can substitute for it.
   cannot broaden into generic gameplay, matchmaking, or surrender input.
 - Rank authorization is a separate safety gate. Matchmaking admission is not
   rank-gated: allow the constructed match to start. After the game begins, the
-  active-game pre-mulligan preflight permits ordinary input only for fresh exact
-  rank `5` or `10`; every other, missing, or unknown rank routes to mandatory
-  surrender. Keep this queue-versus-in-game split and its exact tests in sync
-  with `AGENTS.md`; ambiguous OCR, cache, mode, or phase evidence never
-  broadens ordinary-play authorization.
+   active-game pre-mulligan preflight permits ordinary input only for fresh exact
+   rank `5` or `10` unless the narrowly scoped temporary Beta exception below is
+   live; without it, every other, missing, or unknown rank routes to mandatory
+   surrender. Keep this queue-versus-in-game split and its exact tests in sync
+   with `AGENTS.md`; ambiguous OCR, cache, mode, or phase evidence never
+   broadens ordinary-play authorization.
+- Apply the temporary Beta Never Surrender deployment/restart checklist in
+  §2.5 together with the separate rank authorization boundaries above.
 - The monthly five-chest/season-reward flow is a user-owned exception: on a
   fresh recognized award, chest, or rewards frame, notify once and apply a
   manual pause. Do not click its chest or Continue-looking controls, restart
