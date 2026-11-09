@@ -28,6 +28,7 @@ class DebugRunHardCapSupervisorTest {
             processStartUtc = Instant.parse("2026-11-02T16:00:00Z"),
             runtimeDirectory = Path.of("C:/beta-runtime"),
             guardianStatePath = Path.of("C:/beta-runtime/log/guardian-state.json"),
+            deploymentId = "test-deployment",
         ) ?: error("expected Beta Never Surrender Debug Run to arm")
 
         assertEquals(Instant.ofEpochMilli(activeThirtyMinuteLease.endEpochMillis), plan.deadlineUtc)
@@ -60,6 +61,7 @@ class DebugRunHardCapSupervisorTest {
             processStartUtc = Instant.parse("2026-11-02T16:00:00Z"),
             runtimeDirectory = Path.of("C:/beta-runtime"),
             guardianStatePath = Path.of("C:/beta-runtime/log/guardian-state.json"),
+            deploymentId = "test-deployment",
         ))
         val ready = """
             {
@@ -88,6 +90,36 @@ class DebugRunHardCapSupervisorTest {
                 ),
             ),
         )
+    }
+
+    @Test
+    fun `production planning seam binds current manifest deployment and rejects missing identity`() {
+        val property = "hs.script.deployment.id"
+        val previous = System.getProperty(property)
+        fun currentRuntimePlan() = DebugRunHardCapSupervisor.planForCurrentRuntime(
+            snapshot = activeThirtyMinuteLease,
+            runId = "gui-run",
+            betaChannel = true,
+            neverSurrenderEnabled = true,
+            processId = 42L,
+            processStartUtc = Instant.parse("2026-11-02T16:00:00Z"),
+            runtimeDirectory = Path.of("C:/beta-runtime"),
+            guardianStatePath = Path.of("C:/beta-runtime/log/guardian-state.json"),
+        )
+
+        try {
+            System.setProperty(property, " beta-deployment-726 ")
+            val plan = requireNotNull(currentRuntimePlan())
+            assertEquals("beta-deployment-726", plan.deploymentId)
+            assertTrue(DebugRunHardCapSupervisor.watchdogCommand(plan).contains("beta-deployment-726"))
+
+            System.clearProperty(property)
+            assertNull(currentRuntimePlan(), "Missing deployment identity must not arm a production watchdog")
+            System.setProperty(property, "unknown")
+            assertNull(currentRuntimePlan(), "Unknown deployment identity must not arm a production watchdog")
+        } finally {
+            if (previous == null) System.clearProperty(property) else System.setProperty(property, previous)
+        }
     }
 
     @Test
@@ -167,6 +199,7 @@ class DebugRunHardCapSupervisorTest {
             processStartUtc = Instant.parse("2026-11-02T16:00:00Z"),
             runtimeDirectory = Path.of("C:/beta-runtime"),
             guardianStatePath = Path.of("C:/beta-runtime/log/guardian-state.json"),
+            deploymentId = "test-deployment",
         )
 
         assertNull(plan(beta = false))
@@ -182,6 +215,7 @@ class DebugRunHardCapSupervisorTest {
             processStartUtc = Instant.EPOCH,
             runtimeDirectory = Path.of("C:/beta-runtime"),
             guardianStatePath = Path.of("C:/beta-runtime/log/guardian-state.json"),
+            deploymentId = "test-deployment",
         ))
         assertNull(DebugRunHardCapSupervisor.plan(
             snapshot = activeThirtyMinuteLease,
@@ -192,6 +226,7 @@ class DebugRunHardCapSupervisorTest {
             processStartUtc = null,
             runtimeDirectory = Path.of("C:/beta-runtime"),
             guardianStatePath = Path.of("C:/beta-runtime/log/guardian-state.json"),
+            deploymentId = "test-deployment",
         ))
         assertNull(DebugRunHardCapSupervisor.plan(
             snapshot = activeThirtyMinuteLease,
@@ -202,6 +237,7 @@ class DebugRunHardCapSupervisorTest {
             processStartUtc = Instant.parse("2026-11-02T16:00:00Z"),
             runtimeDirectory = Path.of("C:/beta-runtime"),
             guardianStatePath = Path.of("C:/beta-runtime/log/guardian-state.json"),
+            deploymentId = "test-deployment",
         ))
     }
 

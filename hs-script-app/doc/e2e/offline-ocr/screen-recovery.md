@@ -771,7 +771,13 @@ this deletion boundary.
   but does not pass the first-action barrier. At expiry, the standard rank
   policy resumes and dispatch rechecks the same live lease identity. The
   process-owned watchdog must stop Beta and its exact owned game process at or
-  before the 30-minute deadline. Regression coverage includes lease activation
-  and expiry, fresh numeric evidence, and dispatch revalidation in
+  before the 30-minute deadline. Bind the watchdog plan, durable lease, and
+  `READY` handshake to the manifest `hs.script.deployment.id` actually supplied
+  by the canonical launcher; do not use a test fallback in production. If that
+  identity is missing or unknown, refuse to arm, and cover the production plan
+  construction seam so restart continuity compares the same deployment ID.
+  Regression coverage includes lease activation and expiry, fresh numeric
+  evidence, dispatch revalidation, and runtime deployment binding in
   `BetaNeverSurrenderOverrideTest`, `MulliganRankPreflightTest`,
-  `MulliganRankDispatchBarrierTest`, and `DebugRunLeaseTest`.
+  `MulliganRankDispatchBarrierTest`, `DebugRunLeaseTest`, and
+  `DebugRunHardCapSupervisorTest`.

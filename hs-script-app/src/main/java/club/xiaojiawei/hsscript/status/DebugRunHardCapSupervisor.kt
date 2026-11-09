@@ -95,10 +95,10 @@ internal object DebugRunHardCapSupervisor {
         processStartUtc: Instant?,
         runtimeDirectory: Path,
         guardianStatePath: Path?,
-        deploymentId: String = "test-deployment",
+        deploymentId: String,
     ): Plan? {
         if (!betaChannel || !neverSurrenderEnabled || snapshot.state != DebugRunLease.State.ACTIVE) return null
-        if (runId.isNullOrBlank() || deploymentId.isBlank() || deploymentId == "unknown" ||
+        if (runId.isNullOrBlank() || deploymentId.isBlank() || deploymentId.equals("unknown", ignoreCase = true) ||
             processId <= 0L || guardianStatePath == null ||
             processStartUtc == null ||
             (processStartUtc.epochSecond == 0L && processStartUtc.nano == 0)
@@ -117,6 +117,34 @@ internal object DebugRunHardCapSupervisor {
         )
     }
 
+    /** Production planning seam: bind the watchdog to the manifest ID supplied by the launcher. */
+    internal fun planForCurrentRuntime(
+        snapshot: DebugRunLease.Snapshot,
+        runId: String?,
+        betaChannel: Boolean,
+        neverSurrenderEnabled: Boolean,
+        processId: Long,
+        processStartUtc: Instant?,
+        runtimeDirectory: Path,
+        guardianStatePath: Path?,
+    ): Plan? {
+        val deploymentId = System.getProperty("hs.script.deployment.id")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && !it.equals("unknown", ignoreCase = true) }
+            ?: ""
+        return plan(
+            snapshot = snapshot,
+            runId = runId,
+            betaChannel = betaChannel,
+            neverSurrenderEnabled = neverSurrenderEnabled,
+            processId = processId,
+            processStartUtc = processStartUtc,
+            runtimeDirectory = runtimeDirectory,
+            guardianStatePath = guardianStatePath,
+            deploymentId = deploymentId,
+        )
+    }
+
     fun arm(
         snapshot: DebugRunLease.Snapshot,
         runId: String?,
@@ -130,7 +158,7 @@ internal object DebugRunHardCapSupervisor {
             ?.let(Path::of)
             ?.toAbsolutePath()
             ?.normalize()
-        val plan = plan(
+        val plan = planForCurrentRuntime(
             snapshot = snapshot,
             runId = runId,
             betaChannel = betaChannel,
