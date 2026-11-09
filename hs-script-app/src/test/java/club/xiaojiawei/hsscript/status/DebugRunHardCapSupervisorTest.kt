@@ -179,7 +179,9 @@ class DebugRunHardCapSupervisorTest {
 
     @Test
     fun `watchdog launcher explicitly elevates and relies on ready handshake`() {
-        val launcher = Files.readString(Path.of("src/main/resources/bat/debug-run-hardcap-launcher.ps1"))
+        val launcher = requireNotNull(javaClass.getResourceAsStream("/bat/debug-run-hardcap-launcher.ps1")) {
+            "packaged watchdog launcher resource is missing from the test classpath"
+        }.bufferedReader().use { it.readText() }
         assertTrue(launcher.contains("-Verb RunAs"))
         assertTrue(launcher.contains("READY is written only by the elevated watchdog"))
     }
