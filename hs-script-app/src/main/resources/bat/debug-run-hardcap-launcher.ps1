@@ -33,11 +33,14 @@ $arguments = @(
     '-StopMarkerPath', $StopMarkerPath,
     '-OwnershipLockPath', $OwnershipLockPath,
     '-ModulePath', $ModulePath,
-    '-ReadyPath', $ReadyPath
+    '-ReadyPath', $ReadyPath,
+    '-WatchdogLogPath', $WatchdogLogPath
 )
 $escapedArguments = ($arguments | ForEach-Object {
     $value = [string]$_
-    if ($value -match '\s|"') { '"' + $value.Replace('"', '\"') + '"' } else { $value }
+    # ArgumentList is parsed again by powershell.exe. Quote command-line
+    # metacharacters as well as whitespace: deployment IDs include jar|hash.
+    if ($value -match '[\s"|&;<>^()]') { '"' + $value.Replace('"', '\"') + '"' } else { $value }
 }) -join ' '
 
 $logDirectory = Split-Path -Parent $WatchdogLogPath

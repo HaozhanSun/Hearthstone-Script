@@ -45,6 +45,7 @@ try {
         runId = $RunId
         deploymentId = $DeploymentId
         processId = $ProcessId
+        watchdogPid = $PID
         deadlineEpochMillis = ([DateTimeOffset]$DeadlineUtc.ToUniversalTime()).ToUnixTimeMilliseconds()
         readyAtUtc = [datetime]::UtcNow.ToString('o')
     })

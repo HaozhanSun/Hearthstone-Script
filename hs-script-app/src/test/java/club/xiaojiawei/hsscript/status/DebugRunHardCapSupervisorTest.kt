@@ -71,6 +71,7 @@ class DebugRunHardCapSupervisorTest {
               "runId": "gui-run",
               "deploymentId": "test-deployment",
               "processId": 42,
+              "watchdogPid": 99,
               "deadlineEpochMillis": ${plan.deadlineUtc.toEpochMilli()},
               "readyAtUtc": "2026-11-02T16:00:01Z"
             }
@@ -89,6 +90,8 @@ class DebugRunHardCapSupervisorTest {
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"runId\": \"gui-run\"", "\"runId\": \"other-run\"")))
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"deploymentId\": \"test-deployment\"", "\"deploymentId\": \"other-deployment\"")))
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"processId\": 42", "\"processId\": 43")))
+        assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"watchdogPid\": 99", "\"watchdogPid\": 0")))
+        assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"watchdogPid\": 99,\n", "")))
         val mismatchedReady = ready.replace("\"deploymentId\": \"test-deployment\"", "\"deploymentId\": \"other-deployment\"")
         assertTrue(
             DebugRunHardCapSettingPolicy.mustRefuseUncappedRun(
@@ -206,6 +209,8 @@ class DebugRunHardCapSupervisorTest {
         assertTrue(launcher.contains("ELEVATED_WATCHDOG_LAUNCH_FAILED"))
         assertTrue(launcher.contains("action=LEASE_REFUSED"))
         assertTrue(launcher.contains("parent JVM confirms readiness from the exact READY file"))
+        assertTrue(launcher.contains("'-WatchdogLogPath', \$WatchdogLogPath"))
+        assertTrue(launcher.contains("|&;<>^()"))
 
         val watchdog = requireNotNull(javaClass.getResourceAsStream("/bat/debug-run-hardcap-watchdog.ps1")) {
             "packaged watchdog resource is missing from the test classpath"
@@ -213,6 +218,7 @@ class DebugRunHardCapSupervisorTest {
         assertTrue(watchdog.contains("[Parameter(Mandatory)][string]\$WatchdogLogPath"))
         assertTrue(watchdog.contains("WATCHDOG_READY"))
         assertTrue(watchdog.contains("WATCHDOG_FAILED"))
+        assertTrue(watchdog.contains("watchdogPid = \$PID"))
 
         val launcherHarness = requireNotNull(javaClass.getResourceAsStream("/bat/DebugRunHardCapLauncher.Tests.ps1")) {
             "launcher acceptance/refusal regression harness is missing from the test classpath"

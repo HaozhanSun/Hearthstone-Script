@@ -144,7 +144,13 @@ shortcut edit can substitute for it.
    deployment identity, fresh numeric rank evidence, and an active Debug Run
    lease with an absolute start/deadline span of exactly 30 minutes. Require
    elevated watchdog `READY` for the same run ID, deployment ID, and process
-   identity before admitting the exception. Across a JVM restart, restore only
+   identity and a positive PID for the actual elevated watchdog before admitting
+   the exception. The short-lived non-elevated launcher PID and elevated
+   watchdog PID are different identities and must be logged distinctly. When
+   launching through `Start-Process -Verb RunAs`, do not use stream redirection;
+   forward every mandatory watchdog parameter (including `WatchdogLogPath`) and
+   quote PowerShell command-line metacharacters, notably the `|` in a manifest
+   `jar|hash` deployment ID. Across a JVM restart, restore only
    that run ID and original absolute deadline when persisted state is valid,
    unexpired, and bound to the current deployment; never renew from process
    startup. If READY is absent/refused, deployment binding differs, or the

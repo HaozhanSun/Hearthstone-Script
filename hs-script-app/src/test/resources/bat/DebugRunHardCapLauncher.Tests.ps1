@@ -40,10 +40,16 @@ function Start-Process {
     $deployment = [regex]::Match($ArgumentList, '(?:^|\s)-DeploymentId\s+(?:"([^"]+)"|(\S+))')
     $process = [regex]::Match($ArgumentList, '(?:^|\s)-ProcessId\s+(?:"([^"]+)"|(\S+))')
     $deadline = [regex]::Match($ArgumentList, '(?:^|\s)-DeadlineUtc\s+(?:"([^"]+)"|(\S+))')
+    $watchdogLog = [regex]::Match($ArgumentList, '(?:^|\s)-WatchdogLogPath\s+(?:"([^"]+)"|(\S+))')
+    Assert-Equal $true $ArgumentList.Contains(('"' + $global:ExpectedDeploymentId + '"')) `
+        'deployment ID containing a pipeline character must be quoted for powershell.exe'
+    Assert-Equal $global:ExpectedWatchdogLogPath (Get-ArgumentValue $watchdogLog) `
+        'watchdog must receive the exact structured event log path'
     $value = [ordered]@{
         schema = 1; state = 'READY'; runId = Get-ArgumentValue $runId
         deploymentId = Get-ArgumentValue $deployment
         processId = [int](Get-ArgumentValue $process)
+        watchdogPid = 9876
         deadlineEpochMillis = ([DateTimeOffset]::Parse((Get-ArgumentValue $deadline))).ToUnixTimeMilliseconds()
         readyAtUtc = [datetime]::UtcNow.ToString('o')
     }
@@ -51,10 +57,10 @@ function Start-Process {
     return [pscustomobject]@{ Id = 9876 }
 }
 
-function Invoke-TestLauncher([string]$runId, [string]$readyPath, [string]$logPath) {
+function Invoke-TestLauncher([string]$runId, [string]$readyPath, [string]$logPath, [string]$deploymentId) {
     & $launcherPath `
         -WatchdogPath (Join-Path $testDirectory 'debug-run-hardcap-watchdog.ps1') `
-        -RunId $runId -DeploymentId 'beta-test-deployment' -ProcessId 4321 `
+        -RunId $runId -DeploymentId $deploymentId -ProcessId 4321 `
         -ProcessStartUtc ([datetime]'2026-11-02T16:00:00Z') `
         -DeadlineUtc ([datetime]'2026-11-02T16:30:00Z') `
         -LeasePath (Join-Path $testDirectory 'lease.json') `
@@ -68,18 +74,23 @@ function Invoke-TestLauncher([string]$runId, [string]$readyPath, [string]$logPat
 try {
     $readyPath = Join-Path $testDirectory 'accepted.ready.json'
     $logPath = Join-Path $testDirectory 'watchdog.log'
-    Invoke-TestLauncher 'accepted-run' $readyPath $logPath
+    $deploymentId = 'hs-script_v4.16.755-local-20261109-104430PST.jar|c431a629c9ac9e1e'
+    $global:ExpectedDeploymentId = $deploymentId
+    $global:ExpectedWatchdogLogPath = $logPath
+    Invoke-TestLauncher 'accepted-run' $readyPath $logPath $deploymentId
     $ready = Get-Content -LiteralPath $readyPath -Raw | ConvertFrom-Json
     Assert-Equal 'accepted-run' $ready.runId 'accepted launch writes readiness for the requested run'
-    Assert-Equal 'beta-test-deployment' $ready.deploymentId 'readiness binds deployment identity'
+    Assert-Equal $deploymentId $ready.deploymentId 'readiness binds deployment identity'
     Assert-Equal 4321 $ready.processId 'readiness binds the target process'
+    Assert-Equal 9876 $ready.watchdogPid 'readiness binds the accepted elevated watchdog process'
     Assert-Equal $true ((Get-Content -LiteralPath $logPath -Raw).Contains('event=ELEVATED_WATCHDOG_PROCESS_ACCEPTED')) `
         'successful elevated launch must be observable in the watchdog log'
 
     $global:MockStartFailure = $true
     $failedLog = Join-Path $testDirectory 'failed-watchdog.log'
+    $global:ExpectedWatchdogLogPath = $failedLog
     try {
-        Invoke-TestLauncher 'failed-run' (Join-Path $testDirectory 'failed.ready.json') $failedLog
+        Invoke-TestLauncher 'failed-run' (Join-Path $testDirectory 'failed.ready.json') $failedLog $deploymentId
         throw 'launcher unexpectedly accepted a denied elevation request'
     } catch {
         if ($_.Exception.Message -eq 'launcher unexpectedly accepted a denied elevation request') { throw }

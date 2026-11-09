@@ -213,10 +213,13 @@ internal object DebugRunHardCapSupervisor {
             }
             return false
         }
+        val elevatedWatchdogPid = runCatching { Files.readString(plan.readyPath).jsonNumber("watchdogPid") }
+            .getOrNull() ?: -1L
         log.info {
             "DEBUG_RUN_HARD_CAP_ARMED runId=${plan.runId} pid=${plan.processId} " +
                 "processStartUtc=${plan.processStartUtc} deadlineUtc=${plan.deadlineUtc} " +
-                "capMillis=${DebugRunLease.MAX_DURATION_MILLIS} watchdogPid=${watchdog.pid()} reason=$reason"
+                "capMillis=${DebugRunLease.MAX_DURATION_MILLIS} bootstrapPid=${watchdog.pid()} " +
+                "elevatedWatchdogPid=$elevatedWatchdogPid reason=$reason"
         }
         return true
     }
@@ -317,6 +320,7 @@ internal object DebugRunHardCapSupervisor {
             ready.matchesJsonString("runId", safe(plan.runId)) &&
             ready.matchesJsonString("deploymentId", safe(plan.deploymentId)) &&
             ready.matchesJsonNumber("processId", plan.processId) &&
+            (ready.jsonNumber("watchdogPid") ?: 0L) > 0L &&
             ready.matchesJsonNumber("deadlineEpochMillis", plan.deadlineUtc.toEpochMilli())
 
     private fun String.matchesJsonString(field: String, value: String): Boolean =
@@ -324,6 +328,13 @@ internal object DebugRunHardCapSupervisor {
 
     private fun String.matchesJsonNumber(field: String, value: Long): Boolean =
         Regex("\\\"${Regex.escape(field)}\\\"\\s*:\\s*${Regex.escape(value.toString())}(?![0-9])").containsMatchIn(this)
+
+    private fun String.jsonNumber(field: String): Long? =
+        Regex("\\\"${Regex.escape(field)}\\\"\\s*:\\s*(-?[0-9]+)")
+            .find(this)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toLongOrNull()
 
     /** Shared OS file lock serializes arm/cancel against the external watchdog's final stop transaction. */
     internal fun <T> withGuardianStateLock(guardianStatePath: Path, action: () -> T): T {
