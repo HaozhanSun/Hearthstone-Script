@@ -87,30 +87,92 @@ function Exit-HsScriptRuntimeGate($Mutex) {
     try { $Mutex.ReleaseMutex() } finally { $Mutex.Dispose() }
 }
 
+function Get-HsScriptNativeExecutablePath([int]$ProcessId) {
+    # PROCESS_QUERY_LIMITED_INFORMATION permits a read-only image-name lookup
+    # for an elevated peer when Process.MainModule and CIM hide the path from a
+    # medium-integrity launcher. The returned path remains only one component
+    # of the existing exact PID/start-time/path marker verification.
+    if ($null -eq ('HsScriptProcessImagePathNative' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class HsScriptProcessImagePathNative
+{
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, uint processId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryFullProcessImageName(
+        IntPtr process,
+        uint flags,
+        StringBuilder executablePath,
+        ref uint size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    public static string ReadImagePath(uint processId)
+    {
+        IntPtr handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+        if (handle == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        try
+        {
+            var path = new StringBuilder(32768);
+            uint length = (uint)path.Capacity;
+            if (!QueryFullProcessImageName(handle, 0, path, ref length))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            return path.ToString();
+        }
+        finally { CloseHandle(handle); }
+    }
+}
+'@
+    }
+    $path = [HsScriptProcessImagePathNative]::ReadImagePath([uint32]$ProcessId)
+    if ([string]::IsNullOrWhiteSpace($path)) {
+        throw "QueryFullProcessImageNameW returned an empty executable path for process $ProcessId"
+    }
+    return [System.IO.Path]::GetFullPath($path)
+}
+
 function Get-HsScriptExecutablePath(
     $Process,
     [int]$ProcessId,
-    [scriptblock]$CimLookup = { param($ClassName, $Filter) Get-CimInstance -ClassName $ClassName -Filter $Filter -ErrorAction Stop }
+    [scriptblock]$CimLookup = { param($ClassName, $Filter) Get-CimInstance -ClassName $ClassName -Filter $Filter -ErrorAction Stop },
+    [scriptblock]$NativeImagePathLookup = ${function:Get-HsScriptNativeExecutablePath}
 ) {
     # Process.Path is not consistently populated by the .NET provider on Windows.
-    # MainModule is authoritative when accessible; CIM is the narrow fallback for
-    # access/provider gaps. Never return an empty identity as if it were verified.
+    # MainModule is authoritative when accessible; CIM and then the read-only
+    # limited-information API are narrow fallbacks for access/provider gaps.
+    # Never return an empty identity as if it were verified.
     try {
         $path = [string]$Process.MainModule.FileName
         if (-not [string]::IsNullOrWhiteSpace($path)) { return [System.IO.Path]::GetFullPath($path) }
-    } catch [System.ComponentModel.Win32Exception] {
-        # Access denied or process module unavailable; try the OS process record.
-    } catch [System.InvalidOperationException] {
-        # Process exited while querying its module; CIM may still resolve or fail closed.
+    } catch {
+        # Access denied or a process exiting during the query can still allow a
+        # lower-rights image-name read. Any ultimate failure remains fail-closed.
     }
     try {
         $record = & $CimLookup 'Win32_Process' "ProcessId = $ProcessId"
         $path = [string]$record.ExecutablePath
         if (-not [string]::IsNullOrWhiteSpace($path)) { return [System.IO.Path]::GetFullPath($path) }
     } catch {
-        throw "Could not resolve executable path for process $ProcessId from MainModule or CIM: $($_.Exception.Message)"
     }
-    throw "Could not resolve executable path for process $ProcessId from MainModule or CIM"
+    try {
+        $path = [string](& $NativeImagePathLookup $ProcessId)
+        if (-not [string]::IsNullOrWhiteSpace($path)) { return [System.IO.Path]::GetFullPath($path) }
+    } catch {
+        $nativeFailure = $_.Exception.Message
+        throw "Could not resolve executable path for process $ProcessId from MainModule, CIM, or QueryFullProcessImageNameW: $nativeFailure"
+    }
+    throw "Could not resolve executable path for process $ProcessId from MainModule, CIM, or QueryFullProcessImageNameW"
 }
 
 function Get-HsScriptProcessIdentity([int]$ProcessId) {

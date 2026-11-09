@@ -37,11 +37,17 @@ $null = [DateTimeOffset]::Parse([string]$observedSelfStart)
 $processWithUnreadableModule = [pscustomobject]@{ MainModule = $null }
 $cimFallback = Get-HsScriptExecutablePath $processWithUnreadableModule 9902 { param($className, $filter) [pscustomobject]@{ ExecutablePath = 'C:\Java\bin\java.exe' } }
 Assert-Equal 'C:\Java\bin\java.exe' $cimFallback 'CIM ExecutablePath must resolve inaccessible MainModule'
+$nativeFallback = Get-HsScriptExecutablePath $processWithUnreadableModule 9903 `
+    { param($className, $filter) [pscustomobject]@{ ExecutablePath = '' } } `
+    { param($processId) 'C:\Java\bin\javaw.exe' }
+Assert-Equal 'C:\Java\bin\javaw.exe' $nativeFallback 'QueryFullProcessImageNameW fallback must resolve a path hidden from MainModule and CIM'
 $emptyCimFailedClosed = $false
 try {
-    $null = Get-HsScriptExecutablePath $processWithUnreadableModule 9903 { param($className, $filter) [pscustomobject]@{ ExecutablePath = '' } }
+    $null = Get-HsScriptExecutablePath $processWithUnreadableModule 9904 `
+        { param($className, $filter) [pscustomobject]@{ ExecutablePath = '' } } `
+        { param($processId) throw 'PROCESS_QUERY_LIMITED_INFORMATION denied' }
 } catch { $emptyCimFailedClosed = $true }
-Assert-Equal $true $emptyCimFailedClosed 'missing MainModule and CIM paths must fail closed'
+Assert-Equal $true $emptyCimFailedClosed 'MainModule/CIM/API path lookup failure must fail closed'
 
 $currentMarker = [pscustomobject]@{
     RuntimeRoot = $currentRoot; ReleaseChannel = 'release-candidate'; ProcessId = 1101
@@ -65,6 +71,30 @@ $foreignOnly = Resolve-HsScriptProcessAssessment $currentRoot @(
     [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 2202; CommandLine = '' }
 ) @($foreignMarker) $identityProvider
 Assert-Equal 'IDLE' $foreignOnly.Status 'verified Beta process must not block RC based on channel ownership'
+
+# The native image-path fallback is only evidence for the existing exact marker
+# match; it allows a foreign channel through only when both start time and path
+# agree, and never converts stale or current-channel evidence into IDLE.
+$foreignNativeIdentityProvider = {
+    param($processId)
+    if ($processId -eq 2202) {
+        return [pscustomobject]@{ ProcessId = 2202; ProcessStartTimeUtc = $foreignStart; ExecutablePath = 'C:\Java\bin\javaw.exe' }
+    }
+    return $null
+}.GetNewClosure()
+$foreignNativeOnly = Resolve-HsScriptProcessAssessment $currentRoot @(
+    [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 2202; CommandLine = '' }
+) @($foreignMarker) $foreignNativeIdentityProvider
+Assert-Equal 'IDLE' $foreignNativeOnly.Status 'exact foreign marker remains allowed when identity uses the native image-path fallback'
+
+$foreignPathMismatchProvider = {
+    param($processId)
+    [pscustomobject]@{ ProcessId = $processId; ProcessStartTimeUtc = $foreignStart; ExecutablePath = 'C:\OtherJava\bin\javaw.exe' }
+}.GetNewClosure()
+$foreignPathMismatch = Resolve-HsScriptProcessAssessment $currentRoot @(
+    [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 2202; CommandLine = '' }
+) @($foreignMarker) $foreignPathMismatchProvider
+Assert-Equal 'AMBIGUOUS' $foreignPathMismatch.Status 'native path mismatch must leave a blank-command JVM fail-closed'
 
 # Unknown JVMs with unavailable command lines fail closed.
 $unavailableLine = Resolve-HsScriptProcessAssessment $currentRoot @(

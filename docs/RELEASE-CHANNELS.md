@@ -28,7 +28,10 @@ manifests, single-instance identities, and shortcuts.
 - CI labels beta artifacts as beta and validates that the branch metadata and
   runtime identity are consistent.
 - The Beta deployment stop helper first uses the exact runtime JAR command line
-  or readable process image path. If elevation hides only the executable path,
+  or readable process image path. Image-path lookup tries `MainModule`, CIM,
+  then read-only `QueryFullProcessImageNameW` with
+  `PROCESS_QUERY_LIMITED_INFORMATION`; it never treats that API result alone as
+  channel ownership. If elevation still hides the executable path,
   its fallback requires the schema-1 Beta ownership marker, matching Java
   process name and exact process start time, the adjacent Beta channel config,
   and a successfully hash-validated current Beta manifest whose deployment ID
