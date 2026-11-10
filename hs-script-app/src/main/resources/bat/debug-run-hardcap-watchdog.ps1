@@ -28,6 +28,7 @@ trap {
 
 Write-DebugRunHardCapWatchdogEvent 'WATCHDOG_STARTED' "readyPath=$ReadyPath deadlineUtc=$($DeadlineUtc.ToUniversalTime().ToString('o'))"
 Import-Module -Name $ModulePath -Force
+Write-DebugRunHardCapWatchdogEvent 'WATCHDOG_MODULE_LOADED'
 
 $context = New-DebugRunHardCapContext `
     -RunId $RunId `
@@ -35,24 +36,29 @@ $context = New-DebugRunHardCapContext `
     -ProcessId $ProcessId `
     -ProcessStartUtc $ProcessStartUtc `
     -DeadlineUtc $DeadlineUtc
-$ownershipLock = Enter-DebugRunHardCapOwnershipLock -LockPath $OwnershipLockPath
-if ($null -eq $ownershipLock) { exit 31 }
-try {
-    if (-not (Test-DebugRunHardCapLeaseCurrent -Context $context -LeasePath $LeasePath)) { exit 32 }
-    Write-DebugRunHardCapJsonAtomically -Path $ReadyPath -Value ([ordered]@{
-        schema = 1
-        state = 'READY'
-        runId = $RunId
-        deploymentId = $DeploymentId
-        processId = $ProcessId
-        watchdogPid = $PID
-        deadlineEpochMillis = ([DateTimeOffset]$DeadlineUtc.ToUniversalTime()).ToUnixTimeMilliseconds()
-        readyAtUtc = [datetime]::UtcNow.ToString('o')
-    })
-    Write-DebugRunHardCapWatchdogEvent 'WATCHDOG_READY' "readyPath=$ReadyPath"
-} finally {
-    Exit-DebugRunHardCapOwnershipLock -LockStream $ownershipLock
+Write-DebugRunHardCapWatchdogEvent 'WATCHDOG_CONTEXT_READY'
+
+# READY binds only this run's immutable token and is written to a run-specific
+# file.  It must not wait on the shared final-stop lock: a previous hard-cap
+# transaction may legitimately hold that lock longer than Java's 10-second
+# handshake budget.  The later stop transaction still acquires the ownership
+# lock and revalidates the lease before it can terminate anything.
+if (-not (Test-DebugRunHardCapLeaseCurrent -Context $context -LeasePath $LeasePath)) {
+    Write-DebugRunHardCapWatchdogEvent 'WATCHDOG_LEASE_REJECTED' 'action=LEASE_REFUSED'
+    exit 32
 }
+Write-DebugRunHardCapWatchdogEvent 'WATCHDOG_LEASE_ACCEPTED'
+Write-DebugRunHardCapJsonAtomically -Path $ReadyPath -Value ([ordered]@{
+    schema = 1
+    state = 'READY'
+    runId = $RunId
+    deploymentId = $DeploymentId
+    processId = $ProcessId
+    watchdogPid = $PID
+    deadlineEpochMillis = ([DateTimeOffset]$DeadlineUtc.ToUniversalTime()).ToUnixTimeMilliseconds()
+    readyAtUtc = [datetime]::UtcNow.ToString('o')
+})
+Write-DebugRunHardCapWatchdogEvent 'WATCHDOG_READY' "readyPath=$ReadyPath"
 $remainingMilliseconds = Get-DebugRunHardCapDelayMilliseconds -DeadlineUtc $DeadlineUtc
 if ($remainingMilliseconds -gt 0) {
     Start-Sleep -Milliseconds $remainingMilliseconds

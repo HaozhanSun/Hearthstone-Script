@@ -92,6 +92,33 @@ class DebugRunHardCapSupervisorTest {
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"processId\": 42", "\"processId\": 43")))
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"watchdogPid\": 99", "\"watchdogPid\": 0")))
         assertFalse(DebugRunHardCapSupervisor.readyRecordMatches(plan, ready.replace("\"watchdogPid\": 99,\n", "")))
+        val acceptedLease = DebugRunHardCapSupervisor.PersistedLease(
+            state = "ACTIVE",
+            runId = plan.runId,
+            deploymentId = plan.deploymentId,
+            startEpochMillis = plan.deadlineUtc.toEpochMilli() - DebugRunLease.MAX_DURATION_MILLIS,
+            endEpochMillis = plan.deadlineUtc.toEpochMilli(),
+            valid = true,
+            processId = plan.processId,
+            processStartUtc = plan.processStartUtc,
+        )
+        assertTrue(DebugRunHardCapSupervisor.activeLeaseMatchesPlan(plan, acceptedLease))
+        assertFalse(
+            DebugRunHardCapSupervisor.activeLeaseMatchesPlan(plan, acceptedLease.copy(state = "CANCELLED")),
+            "READY must not arm a lease cancelled before Java observes it",
+        )
+        assertFalse(
+            DebugRunHardCapSupervisor.activeLeaseMatchesPlan(plan, acceptedLease.copy(runId = "replacement-run")),
+            "READY must not arm a replaced lease",
+        )
+        assertFalse(
+            DebugRunHardCapSupervisor.activeLeaseMatchesPlan(plan, acceptedLease.copy(processId = plan.processId + 1)),
+            "READY must not arm a lease for a different process ID",
+        )
+        assertFalse(
+            DebugRunHardCapSupervisor.activeLeaseMatchesPlan(plan, acceptedLease.copy(processStartUtc = plan.processStartUtc.plusSeconds(1))),
+            "READY must not arm a lease for a reused process ID with another start time",
+        )
         val mismatchedReady = ready.replace("\"deploymentId\": \"test-deployment\"", "\"deploymentId\": \"other-deployment\"")
         assertTrue(
             DebugRunHardCapSettingPolicy.mustRefuseUncappedRun(
@@ -183,12 +210,14 @@ class DebugRunHardCapSupervisorTest {
             val lease = directory.resolve("debug-run-hardcap-lease.json")
             Files.writeString(
                 lease,
-                """{"schema":1,"state":"ACTIVE","runId":"same-run","deploymentId":"beta-deployment-704","startEpochMillis":1000,"deadlineEpochMillis":${1_000L + DebugRunLease.MAX_DURATION_MILLIS}}""",
+                """{"schema":1,"state":"ACTIVE","runId":"same-run","deploymentId":"beta-deployment-704","startEpochMillis":1000,"deadlineEpochMillis":${1_000L + DebugRunLease.MAX_DURATION_MILLIS},"processId":42,"processStartUtc":"2026-11-02T16:00:00Z"}""",
             )
             val persisted = requireNotNull(DebugRunHardCapSupervisor.readPersistedLease(guardian))
             assertTrue(persisted.valid)
             assertEquals("beta-deployment-704", persisted.deploymentId)
             assertEquals(1_000L, persisted.startEpochMillis)
+            assertEquals(42L, persisted.processId)
+            assertEquals(Instant.parse("2026-11-02T16:00:00Z"), persisted.processStartUtc)
             assertEquals(1_000L + DebugRunLease.MAX_DURATION_MILLIS, persisted.endEpochMillis)
         } finally {
             Files.deleteIfExists(directory.resolve("debug-run-hardcap-lease.json"))

@@ -64,6 +64,7 @@ foreach ($mutation in @(
 # test PowerShell child.
 $watchdogDirectory = Join-Path ([IO.Path]::GetTempPath()) ("DebugRunHardCap_Ready_" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $watchdogDirectory | Out-Null
+$startupLock = $null
 try {
     $watchdogLeasePath = Join-Path $watchdogDirectory 'lease.json'
     $watchdogReadyPath = Join-Path $watchdogDirectory 'watchdog.ready.json'
@@ -97,6 +98,17 @@ try {
         $value = [string]$_
         if ($value -match '\s|"') { '"' + $value.Replace('"', '\"') + '"' } else { $value }
     }) -join ' '
+    # The final-stop ownership lock can be occupied during a previous hard-cap
+    # transaction. That must not delay this new watchdog's run-specific READY
+    # record beyond Java's ten-second handshake budget.
+    $startupLock = [System.IO.File]::Open(
+        $watchdogLockPath,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::ReadWrite
+    )
+    $startupLock.Lock(0, 1)
+    $startupLockHeldAt = [System.Diagnostics.Stopwatch]::StartNew()
     $watchdogProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $escapedWatchdogArgs `
         -WindowStyle Hidden -PassThru -RedirectStandardOutput $watchdogStdoutPath -RedirectStandardError $watchdogStderrPath
     $ready = $null
@@ -107,11 +119,21 @@ try {
         if ($null -eq $ready) { Start-Sleep -Milliseconds 100 }
     }
     Assert-Equal 'READY' ([string]$ready.state) 'packaged watchdog must create a ready handshake record'
+    Assert-Equal $true ($startupLockHeldAt.ElapsedMilliseconds -lt 10000) 'READY must arrive before Java handshake timeout while final-stop lock is contended'
     Assert-Equal 'watchdog-ready' ([string]$ready.runId) 'ready record must bind the requested run id'
     Assert-Equal 'beta-test' ([string]$ready.deploymentId) 'ready record must bind the exact deployment identity'
     Assert-Equal 424242 ([int]$ready.processId) 'ready record must bind the requested process id'
     Assert-Equal ([DateTimeOffset]$watchdogDeadline.ToUniversalTime()).ToUnixTimeMilliseconds() ([long]$ready.deadlineEpochMillis) 'ready record must bind the exact deadline'
+    $watchdogEvents = Get-Content -LiteralPath $watchdogLogPath -Raw
+    Assert-Equal $true $watchdogEvents.Contains('event=WATCHDOG_LEASE_ACCEPTED') 'watchdog must prove lease validation before READY'
+    Assert-Equal $true $watchdogEvents.Contains('event=WATCHDOG_READY') 'watchdog must log the lock-independent READY transition'
+    Start-Sleep -Milliseconds 10500
+    Assert-Equal $true ($startupLockHeldAt.ElapsedMilliseconds -ge 10000) 'test must keep the final-stop lock contended beyond the Java handshake budget'
 } finally {
+    if ($null -ne $startupLock) {
+        try { $startupLock.Unlock(0, 1) } catch { }
+        $startupLock.Dispose()
+    }
     if ($null -ne $watchdogProcess) {
         try { Stop-Process -Id $watchdogProcess.Id -Force -ErrorAction SilentlyContinue } catch { }
         try { [void]$watchdogProcess.WaitForExit(5000) } catch { }

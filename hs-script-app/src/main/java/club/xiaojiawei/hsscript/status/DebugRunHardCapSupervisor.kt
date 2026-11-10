@@ -56,6 +56,8 @@ internal object DebugRunHardCapSupervisor {
         val startEpochMillis: Long,
         val endEpochMillis: Long,
         val valid: Boolean,
+        val processId: Long? = null,
+        val processStartUtc: Instant? = null,
     )
 
     /** Read only the durable absolute window needed to survive an app restart. */
@@ -70,6 +72,9 @@ internal object DebugRunHardCapSupervisor {
             val deploymentId = root["deploymentId"]?.jsonPrimitive?.content
             val startEpochMillis = root["startEpochMillis"]?.jsonPrimitive?.content?.toLongOrNull()
             val endEpochMillis = root["deadlineEpochMillis"]?.jsonPrimitive?.content?.toLongOrNull()
+            val processId = root["processId"]?.jsonPrimitive?.content?.toLongOrNull()
+            val processStartUtc = root["processStartUtc"]?.jsonPrimitive?.content
+                ?.let { runCatching { Instant.parse(it) }.getOrNull() }
             PersistedLease(
                 state = state.orEmpty(),
                 runId = runId.orEmpty(),
@@ -79,6 +84,8 @@ internal object DebugRunHardCapSupervisor {
                 valid = !state.isNullOrBlank() && !runId.isNullOrBlank() && !deploymentId.isNullOrBlank() &&
                     startEpochMillis != null && endEpochMillis != null &&
                     endEpochMillis - startEpochMillis == DebugRunLease.MAX_DURATION_MILLIS,
+                processId = processId,
+                processStartUtc = processStartUtc,
             )
         }.getOrElse {
             PersistedLease("INVALID", "", "", 0L, 0L, valid = false)
@@ -297,7 +304,9 @@ internal object DebugRunHardCapSupervisor {
         val deadline = System.nanoTime() + WATCHDOG_READY_TIMEOUT_MS * 1_000_000L
         while (System.nanoTime() < deadline) {
             val ready = runCatching { Files.readString(plan.readyPath) }.getOrNull()
-            if (ready != null && readyRecordMatches(plan, ready)) return true
+            if (ready != null && readyRecordMatches(plan, ready) &&
+                activeLeaseMatchesPlan(plan, readPersistedLease(plan.guardianStatePath))
+            ) return true
             try {
                 Thread.sleep(WATCHDOG_READY_POLL_MS)
             } catch (_: InterruptedException) {
@@ -322,6 +331,19 @@ internal object DebugRunHardCapSupervisor {
             ready.matchesJsonNumber("processId", plan.processId) &&
             (ready.jsonNumber("watchdogPid") ?: 0L) > 0L &&
             ready.matchesJsonNumber("deadlineEpochMillis", plan.deadlineUtc.toEpochMilli())
+
+    /**
+     * READY proves the detached watchdog started, but lease ownership can
+     * change before Java observes it. Accept only while the exact ACTIVE lease
+     * still binds the same run, deployment, process identity, and immutable
+     * time window.
+     */
+    internal fun activeLeaseMatchesPlan(plan: Plan, lease: PersistedLease?): Boolean =
+        lease != null && lease.valid && lease.state == "ACTIVE" &&
+            lease.runId == plan.runId && lease.deploymentId == plan.deploymentId &&
+            lease.startEpochMillis == plan.deadlineUtc.toEpochMilli() - DebugRunLease.MAX_DURATION_MILLIS &&
+            lease.endEpochMillis == plan.deadlineUtc.toEpochMilli() &&
+            lease.processId == plan.processId && lease.processStartUtc == plan.processStartUtc
 
     private fun String.matchesJsonString(field: String, value: String): Boolean =
         Regex("\\\"${Regex.escape(field)}\\\"\\s*:\\s*\\\"${Regex.escape(value)}\\\"").containsMatchIn(this)
