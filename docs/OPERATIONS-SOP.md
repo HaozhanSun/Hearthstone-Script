@@ -91,9 +91,12 @@ shortcut edit can substitute for it.
    default `UNKNOWN` channel. Preserve focused test coverage for new guards.
 4. For Beta releases, `build-and-deploy.ps1` runs
    `hs-script-app/src/test/resources/bat/DebugRunHardCapLauncher.Tests.ps1`
-   before packaging whenever tests are enabled. This contract verifies the
-   elevated `RunAs` launch, READY publication, and launch-failure refusal; it is
-   automated by the release path and is not repeated in the manual list below.
+   and `hs-script-app/src/test/resources/bat/DebugRunDiagnosticRoot.Tests.ps1`
+   before packaging whenever tests are enabled. These contracts verify the
+   elevated `RunAs` launch, READY publication, launch-failure refusal, the
+   external Beta diagnostic roots, JVM property propagation, and fail-fast
+   storage refusal; they are automated by the release path and are not
+   repeated in the manual list below.
 5. Before runtime mutation, manually run the applicable PowerShell contract
    gates. `build-and-deploy.ps1` does **not** invoke Pester automatically:
    `pwsh -NoProfile -File tests/DiagnosticRetentionScheduler.Tests.ps1`;

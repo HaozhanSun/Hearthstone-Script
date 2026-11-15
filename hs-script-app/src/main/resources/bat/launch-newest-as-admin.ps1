@@ -7,18 +7,14 @@ $javaPath = 'C:\Program Files\Java\jdk-25.0.4\bin\javaw.exe'
 $logDirectory = Join-Path $scriptDirectory 'log'
 . (Join-Path $scriptDirectory 'deployment-contract.ps1')
 . (Join-Path $scriptDirectory 'launcher-guardian-policy.ps1')
-. (Join-Path $scriptDirectory 'beta-temp-policy.ps1')
+. (Join-Path $scriptDirectory 'debug-run-diagnostics.ps1')
 $deployment = Resolve-Deployment $scriptDirectory
 if (-not (Test-Path -LiteralPath $javaPath)) { throw "javaw.exe was not found: $javaPath" }
 
-$runtimeHasher = [System.Security.Cryptography.SHA256]::Create()
-$runtimeHashBytes = $runtimeHasher.ComputeHash(
-    [System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFullPath($scriptDirectory).ToLowerInvariant())
-)
-$runtimeKey = ([System.BitConverter]::ToString($runtimeHashBytes)).Replace('-', '').Substring(0, 24)
-$runtimeHasher.Dispose()
+$runtimeKey = Get-HsScriptRuntimeKey -RuntimeDirectory $scriptDirectory
 $channelToken = ([string]$deployment.Manifest.releaseChannel).Trim().ToLowerInvariant()
 $diagnosticLogRoot = Join-Path $scriptDirectory 'log'
+$diagnosticArchiveRoot = 'D:\HearthstoneScriptArchives'
 if ($channelToken -in @('stable', 'beta', 'release-candidate')) {
     $startupVolumes = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop |
         Select-Object DeviceID, FreeSpace, DriveType)
@@ -99,13 +95,16 @@ function Start-HsScriptChild([object]$ResolvedDeployment, [bool]$GuardianRestart
                 $logDirectory = $diagnosticLogRoot
                 $appLogDirectory = Join-Path $diagnosticLogRoot 'app'
                 $runtimeDiagnosticDirectory = Join-Path $diagnosticLogRoot 'runtime-log'
-                New-Item -ItemType Directory -Force -Path $appLogDirectory, $runtimeDiagnosticDirectory | Out-Null
+                $diagnosticDirectories = @($appLogDirectory, $runtimeDiagnosticDirectory)
+                if ($resolvedChannel -eq 'beta') { $diagnosticDirectories += $diagnosticArchiveRoot }
+                New-Item -ItemType Directory -Force -Path $diagnosticDirectories | Out-Null
                 $guardianStatePath = Join-Path $diagnosticLogRoot 'guardian-state.json'
                 $diagnosticLoggingArgument = '-Dhs.script.log.dir="' + [System.IO.Path]::GetFullPath($appLogDirectory) + '" ' +
                     '-Dhs.script.external-runtime-log-root="' + [System.IO.Path]::GetFullPath($runtimeDiagnosticDirectory) + '" ' +
                     '-Dhs.script.guardian-state.path="' + [System.IO.Path]::GetFullPath($guardianStatePath) + '" '
                 if ($resolvedChannel -eq 'beta') {
-                    $diagnosticLoggingArgument += '-Dhs.script.beta-runtime-log-root="' + [System.IO.Path]::GetFullPath($runtimeDiagnosticDirectory) + '" '
+                    $diagnosticLoggingArgument += '-Dhs.script.beta-runtime-log-root="' + [System.IO.Path]::GetFullPath($runtimeDiagnosticDirectory) + '" ' +
+                        '-Dhs.script.diagnostic-archive-root="' + [System.IO.Path]::GetFullPath($diagnosticArchiveRoot) + '" '
                 }
             }
         }

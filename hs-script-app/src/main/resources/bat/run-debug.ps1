@@ -2,6 +2,11 @@ $ErrorActionPreference = "Stop"
 
 $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $javaPath = "C:\Program Files\Java\jdk-25.0.4\bin\java.exe"
+$diagnosticPolicyPath = Join-Path $scriptDirectory 'debug-run-diagnostics.ps1'
+if (-not (Test-Path -LiteralPath $diagnosticPolicyPath -PathType Leaf)) {
+    throw "The Beta Debug Run diagnostic policy was not found: $diagnosticPolicyPath"
+}
+. $diagnosticPolicyPath
 $manifestPath = Join-Path $scriptDirectory "deployment-manifest.json"
 if (-not (Test-Path -LiteralPath $manifestPath)) {
     throw "The deployment manifest was not found: $manifestPath"
@@ -23,13 +28,30 @@ if (-not [string]::IsNullOrWhiteSpace($expectedJarHash)) {
     }
 }
 $deploymentId = [string]$manifest.deploymentId
-$logDirectory = Join-Path $scriptDirectory "log"
+$fixedVolumes = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop |
+    Select-Object DeviceID, FreeSpace, DriveType)
+# Resolve the external roots before the watchdog enters its retry loop.  A
+# deterministic storage refusal is a bootstrap failure, not a Java crash; it
+# must fail once with an actionable reason instead of restarting the same
+# process until the hard cap is exhausted.
+$diagnosticRoots = Resolve-HsScriptDebugRunDiagnosticRoots `
+    -Channel 'beta' `
+    -RuntimeDirectory $scriptDirectory `
+    -FixedVolumes $fixedVolumes
+$logDirectory = $diagnosticRoots.DiagnosticLogRoot
+$appLogDirectory = $diagnosticRoots.AppLogDirectory
+$runtimeDiagnosticDirectory = $diagnosticRoots.RuntimeLogDirectory
+$diagnosticArchiveRoot = $diagnosticRoots.DiagnosticArchiveRoot
+$artifactRoot = $diagnosticRoots.ArtifactRoot
 # Logback's active application file is always the unnumbered path.  Files
 # named hs_script-YYYY-MM-DD.N.log are completed rollover archives and must not
 # be selected as a liveness source just because their name or timestamp sorts
 # later than the active file.
-$scriptLog = Join-Path $logDirectory "hs_script.log"
+$scriptLog = Join-Path $appLogDirectory "hs_script.log"
 $consoleLog = Join-Path $logDirectory "java-console-debug.log"
+$jvmDiagnosticDirectory = Join-Path $logDirectory "jvm"
+$jvmHeapDumpDirectory = Join-Path $jvmDiagnosticDirectory "heapdumps"
+$jvmErrorFile = Join-Path $jvmDiagnosticDirectory "hs_err_pid%p.log"
 $powerLogRoot = "D:\Hearthstone\Logs"
 $e2ePlayerName = if ($env:HS_E2E_PLAYER) { $env:HS_E2E_PLAYER } else { "laz#12793" }
 $e2eStrategyId = if ($env:HS_E2E_STRATEGY_ID) { $env:HS_E2E_STRATEGY_ID } else { "e71234fa-8-pirate-warrior-mcts-9b1f-4d29-8f4f" }
@@ -53,7 +75,10 @@ if (-not (Test-Path -LiteralPath $hardCapModulePath -PathType Leaf)) {
 }
 Import-Module -Name $hardCapModulePath -Force -ErrorAction Stop
 
-New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
+New-Item -ItemType Directory -Force -Path $logDirectory, $appLogDirectory, $runtimeDiagnosticDirectory, $diagnosticArchiveRoot, $jvmDiagnosticDirectory, $jvmHeapDumpDirectory | Out-Null
+if ($artifactRoot) {
+    New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+}
 $hardCapLeasePath = Join-Path $logDirectory ("e2e-debug-run-hardcap-{0}.lease.json" -f $runId)
 $hardCapStopMarkerPath = Join-Path $logDirectory ("e2e-debug-run-hardcap-{0}.stop.json" -f $runId)
 $hardCapOwnershipLockPath = Join-Path $logDirectory ("e2e-debug-run-hardcap-{0}.ownership.lock" -f $runId)
@@ -78,7 +103,8 @@ Set-Content -Path $consoleLog -Value @(
     "E2E surrender-after-out-card=false",
     "E2E test-only skip-surrender-policy=$testOnlySkipSurrender",
     "E2E mulligan-screenshot=true",
-    "E2E mulligan-input=SendInput-absolute"
+    "E2E mulligan-input=SendInput-absolute",
+    "E2E diagnostic roots channel=beta diagnosticLogRoot=$logDirectory appLog=$appLogDirectory runtimeLog=$runtimeDiagnosticDirectory artifactRoot=$artifactRoot javaTemp=$($diagnosticRoots.JavaTempDirectory) archiveRoot=$diagnosticArchiveRoot"
 )
 
 function Write-Trace([string]$message) {
@@ -261,10 +287,12 @@ while ($true) {
             Write-Trace "E2E_POWERLOG_BASELINE_KEEP path=$powerLogPath offset=$powerLogBaselineOffset"
         }
     }
+    $diagnosticJvmArguments = @(Get-HsScriptDebugRunJvmDiagnosticArguments -DiagnosticRoots $diagnosticRoots)
     $arguments = @(
         "-XX:+HeapDumpOnOutOfMemoryError",
-        "-XX:HeapDumpPath=log",
-        "-XX:ErrorFile=log\hs_err_pid%p.log",
+        "-XX:HeapDumpPath=$jvmHeapDumpDirectory",
+        "-XX:ErrorFile=$jvmErrorFile"
+    ) + $diagnosticJvmArguments + @(
         "-Dhs.script.autostart=true",
         "-Dhs.script.debugrun.prearm=true",
         "-Dhs.script.e2e=true",
@@ -327,6 +355,7 @@ while ($true) {
         -OwnershipLockPath $hardCapOwnershipLockPath
     $hardCapDelayMilliseconds = Get-DebugRunHardCapDelayMilliseconds -DeadlineUtc $hardCapDeadlineUtc
     Write-Trace ("E2E_HARD_CAP_ARMED runId={0} attempt={1} targetPid={2} targetStartUtc={3:o} deadlineUtc={4:o} capSeconds={5} remainingMs={6}" -f $runId, $attempt, $processIdentity.ProcessId, $processIdentity.StartUtc, $hardCapDeadlineUtc, $hardCapSeconds, $hardCapDelayMilliseconds)
+    Write-Trace ("E2E_JAVA_STARTED runId={0} attempt={1} pid={2} appLog={3} runtimeLog={4} diagnosticLogRoot={5}" -f $runId, $attempt, $processIdentity.ProcessId, $appLogDirectory, $runtimeDiagnosticDirectory, $logDirectory)
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
     $roundsSeen = $false

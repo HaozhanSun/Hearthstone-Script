@@ -49,10 +49,12 @@ $cardPluginTarget = Join-Path $projectRoot 'hs-script-base-card-plugin\target\hs
 $cardSdkTarget = Join-Path $projectRoot 'hs-script-card-sdk\target\hs-script-card-sdk-1.3.0.jar'
 $debugRunnerSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\run-debug.ps1'
 $debugRunnerCmdSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\run-debug.cmd'
+$debugRunnerDiagnosticsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\debug-run-diagnostics.ps1'
 $debugRunnerHardCapSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\debug-run-hardcap.psm1'
 $debugRunnerHardCapWatchdogSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\debug-run-hardcap-watchdog.ps1'
 $debugRunnerHardCapLauncherSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\debug-run-hardcap-launcher.ps1'
 $debugRunnerHardCapLauncherTest = Join-Path $projectRoot 'hs-script-app\src\test\resources\bat\DebugRunHardCapLauncher.Tests.ps1'
+$debugRunnerDiagnosticsTest = Join-Path $projectRoot 'hs-script-app\src\test\resources\bat\DebugRunDiagnosticRoot.Tests.ps1'
 $launcherVbsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-as-admin.vbs'
 $launcherPsSource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launch-newest-as-admin.ps1'
 $launcherGuardianPolicySource = Join-Path $projectRoot 'hs-script-app\src\main\resources\bat\launcher-guardian-policy.ps1'
@@ -65,7 +67,7 @@ $manifestPath = Join-Path $runtimeRoot 'deployment-manifest.json'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 . (Join-Path $projectRoot 'build-version-utils.ps1')
 
-foreach ($requiredSource in @($deploymentContractSource, $launcherGuardianPolicySource, $betaTempPolicySource, $diagnosticRetentionSource, $paddleXConfigUtilsSource, $betaDeploymentProcessUtilsSource, $debugRunnerHardCapWatchdogSource, $debugRunnerHardCapLauncherSource)) {
+foreach ($requiredSource in @($deploymentContractSource, $launcherGuardianPolicySource, $betaTempPolicySource, $diagnosticRetentionSource, $paddleXConfigUtilsSource, $betaDeploymentProcessUtilsSource, $debugRunnerDiagnosticsSource, $debugRunnerHardCapWatchdogSource, $debugRunnerHardCapLauncherSource)) {
     if (-not (Test-Path -LiteralPath $requiredSource -PathType Leaf)) {
         throw "Required deployment source is missing: $requiredSource"
     }
@@ -77,12 +79,17 @@ if ($Channel -eq 'beta') {
     if (-not (Test-Path -LiteralPath $debugRunnerHardCapLauncherTest -PathType Leaf)) {
         throw "Required Beta hard-cap launch contract test is missing: $debugRunnerHardCapLauncherTest"
     }
+    if (-not (Test-Path -LiteralPath $debugRunnerDiagnosticsTest -PathType Leaf)) {
+        throw "Required Beta diagnostic-root contract test is missing: $debugRunnerDiagnosticsTest"
+    }
 }
 if ($Channel -eq 'beta' -and -not $SkipTests) {
     $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
     if ($null -eq $pwsh) { throw 'pwsh is required to run the hard-cap elevated-launch contract test before packaging' }
     & $pwsh.Source -NoProfile -NonInteractive -File $debugRunnerHardCapLauncherTest
     if ($LASTEXITCODE -ne 0) { throw "Hard-cap elevated-launch contract test failed with exit code $LASTEXITCODE" }
+    & $pwsh.Source -NoProfile -NonInteractive -File $debugRunnerDiagnosticsTest
+    if ($LASTEXITCODE -ne 0) { throw "Beta diagnostic-root contract test failed with exit code $LASTEXITCODE" }
 }
 $runtimeGate = $null
 trap {
@@ -171,7 +178,7 @@ if (-not (Test-Path -LiteralPath $pomPath -PathType Leaf)) { throw "pom.xml miss
 if (-not (Test-Path -LiteralPath $mavenWrapper -PathType Leaf)) { throw "Maven wrapper missing: $mavenWrapper" }
 if (-not (Test-Path -LiteralPath $runtimeRoot -PathType Container)) { throw "Runtime root missing: $runtimeRoot" }
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot 'hs-script-app\assembly.xml') -PathType Leaf)) { throw 'Full reactor assembly descriptor is missing' }
-foreach ($runner in @($debugRunnerSource, $debugRunnerCmdSource, $debugRunnerHardCapSource, $debugRunnerHardCapWatchdogSource, $debugRunnerHardCapLauncherSource)) {
+foreach ($runner in @($debugRunnerSource, $debugRunnerCmdSource, $debugRunnerDiagnosticsSource, $debugRunnerHardCapSource, $debugRunnerHardCapWatchdogSource, $debugRunnerHardCapLauncherSource)) {
     if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { throw "Debug runner source missing: $runner" }
 }
 
@@ -334,6 +341,7 @@ try {
     # source tree while the runtime keeps an older script.
     Copy-Item -LiteralPath $debugRunnerSource -Destination (Join-Path $runtimeRoot 'run-debug.ps1') -Force
     Copy-Item -LiteralPath $debugRunnerCmdSource -Destination (Join-Path $runtimeRoot 'run-debug.cmd') -Force
+    Copy-Item -LiteralPath $debugRunnerDiagnosticsSource -Destination (Join-Path $runtimeRoot 'debug-run-diagnostics.ps1') -Force
     Copy-Item -LiteralPath $debugRunnerHardCapSource -Destination (Join-Path $runtimeRoot 'debug-run-hardcap.psm1') -Force
     Copy-Item -LiteralPath $debugRunnerHardCapWatchdogSource -Destination (Join-Path $runtimeRoot 'debug-run-hardcap-watchdog.ps1') -Force
     Copy-Item -LiteralPath $debugRunnerHardCapLauncherSource -Destination (Join-Path $runtimeRoot 'debug-run-hardcap-launcher.ps1') -Force
