@@ -250,6 +250,11 @@ shortcut edit can substitute for it.
   volume. The historical `beta-temp-policy.ps1` filename is retained as the
   deployed compatibility contract, but its diagnostic-root functions are
   channel-neutral.
+- Preservation-only reclaim archives are an explicit exception: the cleaner
+  recognizes only timestamped `C-volume-reclaim-YYYYMMDD-HHMMSS` batches under
+  `D:\HearthstoneScriptArchives`, then only the matching channel folder and
+  known diagnostic categories. It never scans the archive root broadly and
+  never removes archive manifests/configuration or another channel's batch.
 - Rollout status (source-only, 2026-11-15): the release script installs and
   verifies the retention task for Stable, Beta, and Release Candidate, and the
   checked-in entrypoint now reconstructs all three channel roots. This change

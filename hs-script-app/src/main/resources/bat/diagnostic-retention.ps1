@@ -4,6 +4,7 @@ param(
     [string]$Channel,
     [string]$RuntimeRoot = (Split-Path -Parent $MyInvocation.MyCommand.Path),
     [string]$SharedGameLogRoot = 'D:\Hearthstone\Logs',
+    [string]$DiagnosticArchiveRoot = 'D:\HearthstoneScriptArchives',
     [string]$TaskNameOverride = '',
     [datetime]$NowUtc = [datetime]::UtcNow,
     [int]$MaxDeletes = 25000,
@@ -24,6 +25,7 @@ $RuntimeDiagnosticDirectories = @(
     'rank-ocr-preprocess', 'unknown-cards', 'unknown-states'
 )
 $ArtifactCategories = @($RuntimeDiagnosticDirectories | Where-Object { $_ -ne 'app' })
+$ArchiveBatchPattern = '^C-volume-reclaim-[0-9]{8}-[0-9]{6}$'
 
 function Get-CanonicalPath([string]$Path) {
     return [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
@@ -88,6 +90,7 @@ function Test-AllowedDiagnostic([string]$Path, [string]$Root, [string]$Scope) {
             return ($parts.Count -eq 2 -and $parts[0] -ieq 'app' -and $extension -eq '.log')
         }
         'artifact' { return $true }
+        'archive-artifact' { return $true }
         'shared-game-log' { return $extension -eq '.log' }
         default { return $false }
     }
@@ -99,6 +102,32 @@ function Test-ActiveFile([string]$Path, [string[]]$ActivePaths) {
         if ($full -ieq (Get-CanonicalPath $activePath)) { return $true }
     }
     return $false
+}
+
+function Get-DiagnosticArchiveRoots([string]$ArchiveRoot, [string]$ExpectedChannel) {
+    if ([string]::IsNullOrWhiteSpace($ArchiveRoot)) { return @() }
+    $channelDirectory = switch ($ExpectedChannel) {
+        'stable' { 'Stable' }
+        'beta' { 'Beta' }
+        'release-candidate' { 'ReleaseCandidate' }
+        default { return @() }
+    }
+    $normalizedRoot = Get-CanonicalPath $ArchiveRoot
+    if (-not (Test-Path -LiteralPath $normalizedRoot -PathType Container) -or (Test-ReparsePath $normalizedRoot)) { return @() }
+    try { $batches = [System.IO.Directory]::EnumerateDirectories($normalizedRoot) } catch { return @() }
+    $roots = [System.Collections.Generic.List[object]]::new()
+    foreach ($batch in $batches) {
+        if ([System.IO.Path]::GetFileName($batch) -notmatch $ArchiveBatchPattern -or (Test-ReparsePath $batch)) { continue }
+        $channelRoot = Join-Path $batch $channelDirectory
+        if (-not (Test-Path -LiteralPath $channelRoot -PathType Container) -or (Test-ReparsePath $channelRoot)) { continue }
+        foreach ($category in $ArtifactCategories) {
+            $categoryRoot = Join-Path $channelRoot $category
+            if ((Test-Path -LiteralPath $categoryRoot -PathType Container) -and (-not (Test-ReparsePath $categoryRoot))) {
+                $roots.Add([pscustomobject]@{ Name = "archive-$ExpectedChannel-$category"; Path = $categoryRoot; Scope = 'archive-artifact' })
+            }
+        }
+    }
+    return @($roots)
 }
 
 function Test-ExclusiveOpen([string]$Path) {
@@ -145,7 +174,7 @@ function Write-DurableSummary([string]$Path, [string]$Line) {
     [System.IO.File]::AppendAllText($Path, $normalized + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
 }
 
-function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [datetime]$Now, [int]$Limit, [string]$SharedRoot, [string]$TestOnlyDisappearPath, [string]$TestOnlyDisappearParentPath) {
+function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [datetime]$Now, [int]$Limit, [string]$SharedRoot, [string]$ArchiveRoot, [string]$TestOnlyDisappearPath, [string]$TestOnlyDisappearParentPath) {
     $Root = Get-CanonicalPath $Root
     Assert-DeploymentIdentity $Root $ExpectedChannel
     $runtimeLog = Join-Path $Root 'log'
@@ -157,6 +186,7 @@ function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [da
         [pscustomobject]@{ Name = 'debug-mouse'; Path = (Join-Path (Join-Path $Root 'debug') 'mouse'); Scope = 'debug-mouse' },
         [pscustomobject]@{ Name = 'shared-game-logs'; Path = (Get-CanonicalPath $SharedRoot); Scope = 'shared-game-log' }
     )
+    $roots += @(Get-DiagnosticArchiveRoots $ArchiveRoot $ExpectedChannel)
     $active = [System.Collections.Generic.List[string]]::new()
     $active.Add((Join-Path $runtimeLog 'hs_script.log'))
 
@@ -315,10 +345,10 @@ function Get-DailyTriggerHours([object[]]$Triggers) {
         Sort-Object -Unique)
 }
 
-function Get-TaskDefinition([string]$TaskChannel, [string]$Root, [string]$SharedRoot) {
+function Get-TaskDefinition([string]$TaskChannel, [string]$Root, [string]$SharedRoot, [string]$ArchiveRoot) {
     $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $script = Join-Path $Root 'diagnostic-retention.ps1'
-    $arguments = "-WindowStyle Hidden -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script`" -Channel $TaskChannel -RuntimeRoot `"$Root`" -SharedGameLogRoot `"$SharedRoot`""
+    $arguments = "-WindowStyle Hidden -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script`" -Channel $TaskChannel -RuntimeRoot `"$Root`" -SharedGameLogRoot `"$SharedRoot`" -DiagnosticArchiveRoot `"$ArchiveRoot`""
     $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $Root
     $triggers = @(
         (New-ScheduledTaskTrigger -Daily -At '00:00'),
@@ -363,7 +393,7 @@ if (-not [string]::IsNullOrWhiteSpace($TestOnlyDisappearParentBeforeMetadataPath
 } else { $testOnlyParentPath = '' }
 
 if ($DescribeTask) {
-    $definition = Get-TaskDefinition $Channel $RuntimeRoot $SharedGameLogRoot
+    $definition = Get-TaskDefinition $Channel $RuntimeRoot $SharedGameLogRoot $DiagnosticArchiveRoot
     [pscustomobject]@{
         Name = $taskName
         Execute = $definition.Actions[0].Execute
@@ -380,7 +410,7 @@ if ($DescribeTask) {
     exit 0
 }
 if ($InstallTask) {
-    $definition = Get-TaskDefinition $Channel $RuntimeRoot $SharedGameLogRoot
+    $definition = Get-TaskDefinition $Channel $RuntimeRoot $SharedGameLogRoot $DiagnosticArchiveRoot
     Register-ScheduledTask -TaskName $taskName -InputObject $definition -Force | Out-Null
 }
 if ($VerifyTask -or $InstallTask) {
@@ -418,4 +448,4 @@ if ($VerifyTask -or $InstallTask) {
     exit 0
 }
 
-Invoke-DiagnosticRetention $Channel $RuntimeRoot $NowUtc $MaxDeletes $SharedGameLogRoot $testOnlyPath $testOnlyParentPath
+Invoke-DiagnosticRetention $Channel $RuntimeRoot $NowUtc $MaxDeletes $SharedGameLogRoot $DiagnosticArchiveRoot $testOnlyPath $testOnlyParentPath

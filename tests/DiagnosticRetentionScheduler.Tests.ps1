@@ -63,6 +63,11 @@ try {
     $disappearingDirectory = Join-Path $sharedRoot 'rotated-directory'
     $parentDisappearing = Join-Path $disappearingDirectory 'parent-race.log'
     $sharedOutside = Join-Path $sharedSibling 'outside.log'
+    $archiveRoot = Join-Path $tempRoot 'HearthstoneScriptArchives'
+    $archiveOld = Join-Path $archiveRoot 'C-volume-reclaim-20260101-000000\Stable\mcts-replay\old.jsonl'
+    $archiveFresh = Join-Path $archiveRoot 'C-volume-reclaim-20260101-000000\Stable\unknown-states\fresh.png'
+    $archiveForbidden = Join-Path $archiveRoot 'C-volume-reclaim-20260101-000000\Stable\config\settings.json'
+    $archiveOtherChannel = Join-Path $archiveRoot 'C-volume-reclaim-20260101-000000\ReleaseCandidate\mcts-replay\old.jsonl'
     $logRoot = Join-Path $runtimeRoot 'log'
     New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
     $expired = Join-Path $logRoot 'hs_script-old.log'
@@ -133,6 +138,19 @@ try {
     Assert-True ($summaryText -match 'DIAGNOSTIC_RETENTION_ERROR count=1 key=evidence\|enumerate\|System\.UnauthorizedAccessException\|0x[0-9A-F]+ samplePaths=.*denied-fixture') ('inaccessible directory is grouped by root, stage, type, HRESULT, and path: ' + ((Get-Content -LiteralPath $summaryPath | Where-Object { $_ -like 'DIAGNOSTIC_RETENTION_ERROR*' }) -join ';'))
     Assert-True ((Get-Content -LiteralPath $summaryPath -Raw) -match 'DIAGNOSTIC_RETENTION_ROOT root=shared-game-logs .*locked=1') ('production invoker reports a locked file under its exact root: ' + ((Get-Content -LiteralPath $summaryPath | Where-Object { $_ -like 'DIAGNOSTIC_RETENTION_ROOT root=shared-game-logs*' -or $_ -like 'DIAGNOSTIC_RETENTION_ERROR*' }) -join ';'))
     Assert-True (([System.IO.Path]::GetFullPath($summaryPath)).StartsWith(([System.IO.Path]::GetFullPath($logRoot) + '\'), [System.StringComparison]::OrdinalIgnoreCase)) 'summary never writes outside its approved root'
+    foreach ($path in @($archiveOld, $archiveFresh, $archiveForbidden, $archiveOtherChannel)) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+        [System.IO.File]::WriteAllText($path, 'archive fixture')
+    }
+    [System.IO.File]::SetLastWriteTimeUtc($archiveOld, $now.AddDays(-31))
+    [System.IO.File]::SetLastWriteTimeUtc($archiveForbidden, $now.AddDays(-31))
+    [System.IO.File]::SetLastWriteTimeUtc($archiveOtherChannel, $now.AddDays(-31))
+    [System.IO.File]::SetLastWriteTimeUtc($archiveFresh, $now.AddDays(-1))
+    $archiveOutput = & $source -Channel stable -RuntimeRoot $runtimeRoot -NowUtc ($now.AddMinutes(1)) -DiagnosticArchiveRoot $archiveRoot
+    Assert-True (-not (Test-Path -LiteralPath $archiveOld)) 'timestamped Stable preservation archive diagnostics expire after 30 days'
+    Assert-True (Test-Path -LiteralPath $archiveFresh) 'fresh preservation archive diagnostics remain'
+    Assert-True (Test-Path -LiteralPath $archiveForbidden) 'preservation archive config data remains outside the allowlist'
+    Assert-True (Test-Path -LiteralPath $archiveOtherChannel) 'Stable cleanup does not scan Release Candidate archive roots'
     $longLines = [string[]]@(1..140 | ForEach-Object { 'X' * 2048 })
     [System.IO.File]::WriteAllLines($summaryPath, $longLines, [System.Text.UTF8Encoding]::new($false))
     $null = & $source -Channel stable -RuntimeRoot $runtimeRoot -NowUtc ($now.AddMinutes(1))

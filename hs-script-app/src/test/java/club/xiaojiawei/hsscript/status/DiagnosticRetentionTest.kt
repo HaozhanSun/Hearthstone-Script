@@ -305,6 +305,31 @@ class DiagnosticRetentionTest {
         assertTrue(Files.exists(outside))
     }
 
+    @Test
+    fun `timestamped preservation archives are channel and category allowlisted`() {
+        val archiveRoot = temp.resolve("HearthstoneScriptArchives")
+        val batch = archiveRoot.resolve("C-volume-reclaim-20260101-000000")
+        val stableOld = batch.resolve("Stable/mcts-replay/old.jsonl").also(::writeOld)
+        val stableFresh = batch.resolve("Stable/unknown-states/fresh.png")
+        val forbidden = batch.resolve("Stable/config/settings.json").also(::writeOld)
+        val otherChannel = batch.resolve("ReleaseCandidate/mcts-replay/old.jsonl").also(::writeOld)
+        Files.createDirectories(stableFresh.parent)
+        Files.write(stableFresh, byteArrayOf(1))
+        Files.setLastModifiedTime(stableFresh, FileTime.from(NOW.minus(1, ChronoUnit.DAYS)))
+
+        val roots = DiagnosticRetentionPolicy.archiveRootsForChannel("stable", archiveRoot)
+        assertTrue(roots.any { it.path == stableOld.parent && it.scope == DiagnosticRootScope.ARCHIVE_ARTIFACT_CATEGORY })
+        assertTrue(roots.none { it.path.startsWith(batch.resolve("ReleaseCandidate")) })
+        assertTrue(roots.none { it.path == batch.resolve("Stable/config") })
+
+        val report = DiagnosticRetentionCleaner(isOpenOrLocked = { false }).clean("stable", roots, NOW)
+        assertEquals(1, report.deleted)
+        assertFalse(Files.exists(stableOld))
+        assertTrue(Files.exists(stableFresh))
+        assertTrue(Files.exists(forbidden))
+        assertTrue(Files.exists(otherChannel))
+    }
+
     private fun writeOld(path: Path): Path {
         Files.createDirectories(path.parent)
         Files.write(path, byteArrayOf(1, 2, 3))

@@ -1,5 +1,7 @@
 package club.xiaojiawei.hsscript.status
 
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.time.Duration
 import java.time.Instant
@@ -14,6 +16,7 @@ internal enum class DiagnosticRootScope {
     RUNTIME_OCR_TREE,
     RUNTIME_DEBUG_MOUSE_TREE,
     SHARED_GAME_LOG_TREE,
+    ARCHIVE_ARTIFACT_CATEGORY,
 }
 
 internal data class DiagnosticRetentionRoot(val channel: String, val path: Path, val scope: DiagnosticRootScope)
@@ -93,6 +96,42 @@ internal object DiagnosticRetentionPolicy {
         }
     }
 
+    /**
+     * Enumerates only timestamped C-volume preservation batches and known
+     * channel/category descendants. The archive root itself is never scanned.
+     */
+    fun archiveRootsForChannel(channel: String, archiveRoot: Path?): List<DiagnosticRetentionRoot> {
+        val token = channelToken(channel)
+        if (token !in SUPPORTED_CHANNELS || archiveRoot == null) return emptyList()
+        val channelDirectory = when (token) {
+            "beta" -> "Beta"
+            "release-candidate" -> "ReleaseCandidate"
+            "stable" -> "Stable"
+            else -> return emptyList()
+        }
+        val normalizedArchiveRoot = archiveRoot.toAbsolutePath().normalize()
+        val batches = runCatching {
+            if (!Files.isDirectory(normalizedArchiveRoot, LinkOption.NOFOLLOW_LINKS)) return@runCatching emptyList<Path>()
+            Files.list(normalizedArchiveRoot).use { entries ->
+                entries.filter { path ->
+                    !Files.isSymbolicLink(path) &&
+                        Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) &&
+                        ARCHIVE_BATCH_PATTERN.matches(path.fileName.toString())
+                }.toList()
+            }
+        }.getOrDefault(emptyList())
+        return batches.flatMap { batch ->
+            val channelRoot = batch.resolve(channelDirectory)
+            artifactCategories.sorted().map { category ->
+                DiagnosticRetentionRoot(
+                    token,
+                    channelRoot.resolve(category),
+                    DiagnosticRootScope.ARCHIVE_ARTIFACT_CATEGORY,
+                )
+            }
+        }
+    }
+
     fun allowsFile(root: DiagnosticRetentionRoot, file: Path): Boolean {
         val normalizedRoot = root.path.toAbsolutePath().normalize()
         val normalizedFile = file.toAbsolutePath().normalize()
@@ -120,6 +159,7 @@ internal object DiagnosticRetentionPolicy {
             DiagnosticRootScope.RUNTIME_OCR_TREE -> extension == "png"
             DiagnosticRootScope.RUNTIME_DEBUG_MOUSE_TREE -> extension in setOf("csv", "png")
             DiagnosticRootScope.SHARED_GAME_LOG_TREE -> extension == "log"
+            DiagnosticRootScope.ARCHIVE_ARTIFACT_CATEGORY -> true
         }
     }
 
@@ -133,6 +173,7 @@ internal object DiagnosticRetentionPolicy {
     }
 
     private val SUPPORTED_CHANNELS = setOf("beta", "release-candidate", "stable")
+    private val ARCHIVE_BATCH_PATTERN = Regex("C-volume-reclaim-[0-9]{8}-[0-9]{6}")
 
     private fun samePath(left: Path, right: Path): Boolean =
         left.toAbsolutePath().normalize().toString().equals(

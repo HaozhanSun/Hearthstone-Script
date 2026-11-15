@@ -29,6 +29,9 @@ change:
   distinct runtime-keyed D: roots when headroom is available;
 - disables optional artifact writes when no safe artifact root is available,
   rather than silently writing more to a low-space runtime volume;
+- recognizes only timestamped, channel-matched preservation batches beneath
+  `D:\HearthstoneScriptArchives`, with known artifact categories as deletion
+  roots; arbitrary archive/configuration paths remain untouched;
 - generalizes path resolution, artifact reserve checks, MCTS replay backoff,
   and Java/PowerShell retention root discovery to all supported channels;
 - keeps retention restricted to the existing allowlisted diagnostic extensions,
@@ -46,7 +49,7 @@ Passed:
 - `pwsh -NoProfile -NonInteractive -File tests/BetaTempDirectoryPolicy.Tests.ps1`
 - `pwsh -NoProfile -NonInteractive -File tests/DiagnosticRetentionScheduler.Tests.ps1`
 - `./mvnw.cmd -pl hs-script-app,hs-script-card-sdk -am '-Dtest=BetaArtifactStorageTest,DiagnosticRetentionTest,BetaLogDirectoryPolicyTest' '-Dsurefire.failIfNoSpecifiedTests=false' test`
-  (`18` focused tests passed; reactor build succeeded)
+  (`19` focused tests passed; reactor build succeeded)
 - `git diff --check`
 
 Pending and intentionally not performed:
@@ -64,3 +67,6 @@ deployment payload, and require the release gate to verify each channel's
 manifest-bound task plus launcher-selected diagnostic roots. Any new diagnostic
 category must be added to both allowlists and covered by channel, headroom,
 active-file, lock, reparse, and 30-day-boundary tests before deployment.
+Preservation migrations must use a timestamped batch manifest under the
+canonical archive root; do not broaden the archive root or move files into a
+channel artifact root without recording source/destination lineage.
