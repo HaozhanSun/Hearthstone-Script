@@ -111,6 +111,8 @@ class DebugRunUiContractTest {
         assertTrue(controllerText.contains("refuseUncappedRun"))
         assertTrue(controllerText.contains("prearmBeforeScheduleChecks"))
         assertTrue(controllerText.contains("Hard-cap watchdog could not be armed"))
+        assertTrue(controllerText.contains("DEBUG_OVERRIDE_STARTUP_REFUSED"))
+        assertTrue(controllerText.contains("action=NO_AUTO_REARM"))
         assertTrue(mainControllerText.contains("REFUSED · \$it"))
         assertTrue(mainControllerText.contains("debugRunModeCheckBox.isSelected = snapshot.state == DebugRunLease.State.ACTIVE"))
 
@@ -180,6 +182,9 @@ class DebugRunUiContractTest {
         assertTrue(runnerText.contains("HS_E2E_DECK_POSITION"))
         assertTrue(runnerText.contains("-Dhs.script.e2e.strategy-id=\$e2eStrategyId"))
         assertTrue(runnerText.contains("-Dhs.script.e2e.deck-position=\$e2eDeckPosition"))
+        assertTrue(runnerText.contains("-Dhs.script.launch.source=debug-run"))
+        assertTrue(runnerText.contains("-Dhs.script.deployment.id=\$deploymentId"))
+        assertTrue(runnerText.contains("-Dhs.script.deployment.manifest=\$manifestPath"))
         assertTrue(runnerText.contains("Get-PowerLogTerminalLinesAfter"))
         assertTrue(runnerText.contains("E2E_ROUND_RESULT"))
         assertTrue(runnerText.contains("E2E_GAME_RESULT_LOSS"))

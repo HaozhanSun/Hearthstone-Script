@@ -203,6 +203,52 @@ class DebugRunHardCapSupervisorTest {
     }
 
     @Test
+    fun `fresh runner startup binds manifest identity after invalid prior lease`() {
+        val runner = requireNotNull(javaClass.getResourceAsStream("/bat/run-debug.ps1")) {
+            "packaged Debug Run runner resource is missing from the test classpath"
+        }.bufferedReader().use { it.readText() }
+        assertTrue(runner.contains("-Dhs.script.launch.source=debug-run"))
+        assertTrue(runner.contains("-Dhs.script.deployment.id=\$deploymentId"))
+        assertTrue(runner.contains("-Dhs.script.deployment.manifest=\$manifestPath"))
+
+        val invalidPrevious = DebugRunHardCapSupervisor.PersistedLease(
+            state = "ACTIVE",
+            runId = "old-run",
+            deploymentId = "beta-deployment-761",
+            startEpochMillis = 1_000L,
+            endEpochMillis = 1_000L + DebugRunLease.MAX_DURATION_MILLIS,
+            valid = false,
+        )
+        val refusal = DebugRunLeaseRestartPolicy.decide(
+            previous = invalidPrevious,
+            currentDeploymentId = "beta-deployment-762",
+            nowEpochMillis = 2_000L,
+        )
+        assertEquals(DebugRunLeaseRestartPolicy.Action.REFUSE_AUTO_START, refusal.action)
+        assertEquals("previous-lease-invalid", refusal.reason)
+
+        val freshPlan = requireNotNull(DebugRunHardCapSupervisor.plan(
+            snapshot = activeThirtyMinuteLease,
+            runId = "fresh-run",
+            betaChannel = true,
+            neverSurrenderEnabled = true,
+            processId = 42L,
+            processStartUtc = Instant.parse("2026-11-15T20:56:42Z"),
+            runtimeDirectory = Path.of("C:/beta-runtime"),
+            guardianStatePath = Path.of("C:/beta-runtime/log/guardian-state.json"),
+            deploymentId = "beta-deployment-762",
+        ))
+        assertEquals("beta-deployment-762", freshPlan.deploymentId)
+        assertFalse(
+            DebugRunHardCapSettingPolicy.mustRefuseUncappedRun(
+                hardCapRequired = true,
+                watchdogArmed = true,
+            ),
+            "a fresh runner with manifest identity has an armable hard-cap path",
+        )
+    }
+
+    @Test
     fun `persisted restart lease reader retains deployment id and original absolute window`() {
         val directory = Files.createTempDirectory("debug-run-hardcap-restart-test")
         try {
