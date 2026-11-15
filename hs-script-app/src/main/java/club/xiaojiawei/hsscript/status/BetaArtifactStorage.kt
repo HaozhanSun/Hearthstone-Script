@@ -5,10 +5,11 @@ import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import java.io.File
 import java.nio.file.Files
 
-/** Beta diagnostic artifacts stop before consuming the final 5 GiB of their volume. */
+/** Channel diagnostic artifacts stop before consuming the final 5 GiB of their volume. */
 internal object BetaArtifactStorage {
     const val MINIMUM_FREE_BYTES: Long = 5L * 1024L * 1024L * 1024L
     private const val ROOT_PROPERTY = "hs.script.artifact-root"
+    private val supportedChannels = setOf("stable", "beta", "release-candidate")
 
     /** Test seam for volume-reserve behavior; production leaves this null and uses FileStore. */
     @Volatile
@@ -24,13 +25,13 @@ internal object BetaArtifactStorage {
     }
 
     internal fun directoryForChannel(channel: String, artifactRoot: String?, category: String, legacy: File): File {
-        if (BuildChannel.identityToken(channel) != "beta") return legacy
+        if (BuildChannel.identityToken(channel) !in supportedChannels) return legacy
         val root = artifactRoot?.takeIf(String::isNotBlank) ?: return legacy
         return File(root, category)
     }
 
     fun canWrite(directory: File): Boolean {
-        if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) != "beta") return true
+        if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) !in supportedChannels) return true
         return canWriteForChannel(
             channel = BuildInfo.RELEASE_CHANNEL,
             disabled = System.getProperty("hs.script.artifact-storage.disabled") == "true",
@@ -45,7 +46,7 @@ internal object BetaArtifactStorage {
         artifactRootConfigured: Boolean,
         usableSpace: Long,
     ): Boolean {
-        if (BuildChannel.identityToken(channel) != "beta") return true
+        if (BuildChannel.identityToken(channel) !in supportedChannels) return true
         if (disabled || !artifactRootConfigured) return false
         return usableSpace >= MINIMUM_FREE_BYTES
     }

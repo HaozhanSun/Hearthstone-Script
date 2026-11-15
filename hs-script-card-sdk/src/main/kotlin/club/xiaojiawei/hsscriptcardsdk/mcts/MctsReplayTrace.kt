@@ -91,10 +91,11 @@ object MctsReplayTrace {
         rootDirectory: File? = null,
     ): Path? {
         return synchronized(lock) {
-            val beta = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
+            val channel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL)
+            val channelStorage = channel in setOf("stable", "beta", "release-candidate")
             val artifactRoot = System.getProperty("hs.script.artifact-root")
-            if (beta && System.getProperty("hs.script.artifact-storage.disabled") == "true") return@synchronized null
-            if (beta && !artifactRoot.isNullOrBlank() && !hasArtifactReserve(File(artifactRoot))) {
+            if (channelStorage && System.getProperty("hs.script.artifact-storage.disabled") == "true") return@synchronized null
+            if (channelStorage && !artifactRoot.isNullOrBlank() && !hasArtifactReserve(File(artifactRoot))) {
                 return@synchronized null
             }
             runCatching {
@@ -102,7 +103,7 @@ object MctsReplayTrace {
                 val key = directory.absolutePath
                 val now = System.nanoTime()
                 val retryAt = writeFailureBackoff[key]
-                if (beta && retryAt != null && now - retryAt < 0L) return@synchronized null
+                if (channelStorage && retryAt != null && now - retryAt < 0L) return@synchronized null
                 val sequence = (nextSequence[key] ?: 0L) + 1L
                 nextSequence[key] = sequence
                 val record = linkedMapOf<String, Any?>(
@@ -130,16 +131,16 @@ object MctsReplayTrace {
                     StandardOpenOption.WRITE,
                     StandardOpenOption.APPEND,
                 )
-                if (beta) writeFailureBackoff.remove(key)
+                if (channelStorage) writeFailureBackoff.remove(key)
                 file
             }.onFailure { error ->
-                if (beta) {
+                if (channelStorage) {
                     val key = runCatching { gameDirectory(war, rootDirectory).absolutePath }.getOrNull()
                     if (key != null) {
                         val retryAt = System.nanoTime() + betaFailureRetryNanos
                         val previous = writeFailureBackoff.put(key, retryAt)
                         if (previous == null || System.nanoTime() - previous >= 0L) {
-                            log.warn { "MCTS回放记录写入失败；Beta将暂停重试60秒 event=$event reason=$reason error=${error.javaClass.simpleName}" }
+                            log.warn { "MCTS回放记录写入失败；channel=${channel}将暂停重试60秒 event=$event reason=$reason error=${error.javaClass.simpleName}" }
                         }
                     }
                 } else {

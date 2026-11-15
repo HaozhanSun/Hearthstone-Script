@@ -241,11 +241,22 @@ shortcut edit can substitute for it.
   and rollback backups. Never broaden it without matching Pester coverage;
   live configuration, data, plugin backups, source-controlled fixtures, and
   rollback/deployment records remain protected.
-- Rollout status (2026-11-03): the audited Beta `4.16.746` and Release
-  Candidate `4.16.711` runtimes have the cleanup script/task; Stable `4.16.399`
-  has a manifest but lacks both. Treat Stable retention installation as an open
-  channel-owned deployment item, not as proof that all-channel retention is
-  complete. Do not cross-install a Beta/RC artifact or task into Stable.
+- New bulky diagnostics use the checked-in channel-safe storage policy: when a
+  non-runtime fixed volume has the required reserve, Stable, Beta, and Release
+  Candidate each receive distinct runtime-keyed roots under
+  `HearthstoneScriptLogs\<channel>` and `HearthstoneScriptArtifacts\<channel>`.
+  If no safe destination is available, optional artifact writes are disabled;
+  the launcher does not silently add more bulky evidence to a low-space runtime
+  volume. The historical `beta-temp-policy.ps1` filename is retained as the
+  deployed compatibility contract, but its diagnostic-root functions are
+  channel-neutral.
+- Rollout status (source-only, 2026-11-15): the release script installs and
+  verifies the retention task for Stable, Beta, and Release Candidate, and the
+  checked-in entrypoint now reconstructs all three channel roots. This change
+  has not been deployed or used to alter live files in this worktree. The
+  release owner must still verify the installed Stable task and selected D:
+  roots after the next authorized deployment; do not treat source tests as live
+  task/shortcut evidence or cross-install a Beta/RC artifact into Stable.
 - If retention removes historical runtime screenshots, state that precise
   limitation rather than treating a missing file as an application regression.
   Replace only with a new capture or a checked-in sanitized test fixture when

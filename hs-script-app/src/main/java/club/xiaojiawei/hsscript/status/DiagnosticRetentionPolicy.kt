@@ -7,6 +7,7 @@ import java.util.Locale
 
 internal enum class DiagnosticRootScope {
     RUNTIME_LOG_TREE,
+    /** Historical enum name; applies to any channel's external app-log root. */
     EXTERNAL_BETA_LOG_TREE,
     ARTIFACT_CATEGORY,
     RUNTIME_EVIDENCE_TREE,
@@ -62,17 +63,17 @@ internal object DiagnosticRetentionPolicy {
         if (sharedGameLogRoot != null) {
             roots += DiagnosticRetentionRoot(token, sharedGameLogRoot, DiagnosticRootScope.SHARED_GAME_LOG_TREE)
         }
-        if (token == "beta") {
+        if (token in SUPPORTED_CHANNELS) {
             if (betaRuntimeLogRoot != null &&
                 betaRuntimeLogRoot.toAbsolutePath().normalize() != runtimeLogRoot.toAbsolutePath().normalize()
             ) {
                 // Before migration, historical diagnostics remain on C:. After
                 // the compatibility junction exists this root is safely
-                // refused, while the explicit direct D: destination is cleaned.
+                // refused, while the explicit direct destination is cleaned.
                 roots += DiagnosticRetentionRoot(token, betaRuntimeLogRoot, DiagnosticRootScope.RUNTIME_LOG_TREE)
             }
             val externalLogRoot = applicationLogDirectory.parent
-            if (externalLogRoot != null) {
+            if (externalLogRoot != null && !samePath(externalLogRoot, runtimeRoot)) {
                 roots += DiagnosticRetentionRoot(token, externalLogRoot, DiagnosticRootScope.EXTERNAL_BETA_LOG_TREE)
             }
             if (artifactRoot != null) {
@@ -132,4 +133,10 @@ internal object DiagnosticRetentionPolicy {
     }
 
     private val SUPPORTED_CHANNELS = setOf("beta", "release-candidate", "stable")
+
+    private fun samePath(left: Path, right: Path): Boolean =
+        left.toAbsolutePath().normalize().toString().equals(
+            right.toAbsolutePath().normalize().toString(),
+            ignoreCase = true,
+        )
 }

@@ -1,7 +1,6 @@
 package club.xiaojiawei.hsscript.consts
 
 import club.xiaojiawei.hsscript.utils.SystemUtil
-import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import com.sun.jna.WString
 import java.nio.file.Path
@@ -19,11 +18,7 @@ val PROTECT_PATH = WString(ROOT_PATH)
 val TEMP_VERSION_PATH: String by lazy { Path.of(ROOT_PATH, "new_version_temp").toString() }
 
 val LOG_PATH: String by lazy {
-    if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta") {
-        System.getProperty("hs.script.log.dir") ?: Path.of(ROOT_PATH, "log").toString()
-    } else {
-        Path.of(ROOT_PATH, "log").toString()
-    }
+    System.getProperty("hs.script.log.dir") ?: Path.of(ROOT_PATH, "log").toString()
 }
 
 const val AOT_DIR = "aot"

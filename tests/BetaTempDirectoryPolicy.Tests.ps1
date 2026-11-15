@@ -70,12 +70,34 @@ Assert-Throws {
 } 'Beta launcher fails closed when no non-runtime volume has log reserve'
 Assert-Equal $null (Get-HsScriptBetaLogDirectory -Channel 'release-candidate' -RuntimeKey 'abc123' -RuntimeDirectory 'C:\BetaRuntime' -FixedVolumes @()) 'RC gets no Beta log override'
 
+foreach ($channelInfo in @(
+    [pscustomobject]@{ Channel = 'stable'; Directory = 'stable' },
+    [pscustomobject]@{ Channel = 'release-candidate'; Directory = 'release-candidate' }
+)) {
+    $diagnosticArtifact = Get-HsScriptDiagnosticArtifactRoot -Channel $channelInfo.Channel -RuntimeKey 'abc123' -RuntimeDirectory 'C:\Runtime' -FixedVolumes @(
+        [pscustomobject]@{ DeviceID = 'C:'; FreeSpace = 1GB; DriveType = 3 },
+        [pscustomobject]@{ DeviceID = 'D:'; FreeSpace = 700GB; DriveType = 3 }
+    )
+    Assert-Equal ("D:\HearthstoneScriptArtifacts\$($channelInfo.Directory)\abc123") $diagnosticArtifact "$($channelInfo.Channel) artifacts use the isolated non-runtime volume"
+    $diagnosticLog = Get-HsScriptDiagnosticLogDirectory -Channel $channelInfo.Channel -RuntimeKey 'abc123' -RuntimeDirectory 'C:\Runtime' -FixedVolumes @(
+        [pscustomobject]@{ DeviceID = 'C:'; FreeSpace = 1GB; DriveType = 3 },
+        [pscustomobject]@{ DeviceID = 'D:'; FreeSpace = 20GB; DriveType = 3 }
+    )
+    Assert-Equal ("D:\HearthstoneScriptLogs\$($channelInfo.Directory)\abc123") $diagnosticLog "$($channelInfo.Channel) logs use the isolated non-runtime volume"
+    Assert-Equal $null (Get-HsScriptDiagnosticArtifactRoot -Channel $channelInfo.Channel -RuntimeKey 'abc123' -RuntimeDirectory 'C:\Runtime' -FixedVolumes @(
+        [pscustomobject]@{ DeviceID = 'C:'; FreeSpace = 1GB; DriveType = 3 },
+        [pscustomobject]@{ DeviceID = 'D:'; FreeSpace = 4GB; DriveType = 3 }
+    )) "$($channelInfo.Channel) artifacts fail closed without a safe reserve"
+}
+
 $launcher = Get-Content (Join-Path $PSScriptRoot '..\hs-script-app\src\main\resources\bat\launch-newest-as-admin.ps1') -Raw
-if (-not $launcher.Contains('Get-HsScriptBetaLogDirectory') -or
+if (-not $launcher.Contains('Get-HsScriptDiagnosticLogDirectory') -or
+    -not $launcher.Contains('Get-HsScriptDiagnosticArtifactRoot') -or
     -not $launcher.Contains('-Dhs.script.log.dir=') -or
+    -not $launcher.Contains('-Dhs.script.external-runtime-log-root=') -or
     -not $launcher.Contains('-Dhs.script.guardian-state.path=')) {
-    throw 'Beta launcher does not wire the selected log, guardian, and selection root into the JVM'
+    throw 'Channel launcher does not wire the selected diagnostics, guardian, and selection root into the JVM'
 }
 Assert-Equal $true ((Get-Content (Join-Path $PSScriptRoot '..\hs-script-app\src\main\resources\logback.xml') -Raw).Contains('${hs.script.log.dir:-log}')) 'Logback emits to the selected Beta app log directory'
 
-Write-Output 'BetaTempDirectoryPolicy.Tests.ps1: 12 cases passed'
+Write-Output 'BetaTempDirectoryPolicy.Tests.ps1: channel-safe storage cases passed'

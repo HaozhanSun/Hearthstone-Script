@@ -17,20 +17,24 @@ $runtimeHashBytes = $runtimeHasher.ComputeHash(
 )
 $runtimeKey = ([System.BitConverter]::ToString($runtimeHashBytes)).Replace('-', '').Substring(0, 24)
 $runtimeHasher.Dispose()
-if (([string]$deployment.Manifest.releaseChannel).ToLowerInvariant() -eq 'beta') {
+$channelToken = ([string]$deployment.Manifest.releaseChannel).Trim().ToLowerInvariant()
+$diagnosticLogRoot = Join-Path $scriptDirectory 'log'
+if ($channelToken -in @('stable', 'beta', 'release-candidate')) {
     $startupVolumes = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop |
         Select-Object DeviceID, FreeSpace, DriveType)
-    $logDirectory = Get-HsScriptBetaLogDirectory `
-        -Channel ([string]$deployment.Manifest.releaseChannel) `
+    $selectedLogRoot = Get-HsScriptDiagnosticLogDirectory `
+        -Channel $channelToken `
         -RuntimeKey $runtimeKey `
         -RuntimeDirectory $scriptDirectory `
         -FixedVolumes $startupVolumes
+    if (-not [string]::IsNullOrWhiteSpace([string]$selectedLogRoot)) {
+        $diagnosticLogRoot = [System.IO.Path]::GetFullPath($selectedLogRoot)
+    }
 }
-$selectionLog = Join-Path $logDirectory 'launcher-selection.log'
-New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
-if (([string]$deployment.Manifest.releaseChannel).ToLowerInvariant() -eq 'beta') {
-    Add-Content -LiteralPath $selectionLog -Value ("{0} betaLogDirectory={1} minFreeBytes=5368709120" -f (Get-Date -Format o), $logDirectory)
-}
+$logDirectory = $diagnosticLogRoot
+$selectionLog = Join-Path $diagnosticLogRoot 'launcher-selection.log'
+New-Item -ItemType Directory -Force -Path $diagnosticLogRoot | Out-Null
+Add-Content -LiteralPath $selectionLog -Value ("{0} channel={1} diagnosticLogRoot={2} minFreeBytes=5368709120" -f (Get-Date -Format o), $channelToken, $diagnosticLogRoot)
 $guardianMutexState = Enter-HsScriptGuardianMutex -RuntimeKey $runtimeKey
 if (-not $guardianMutexState.Acquired) {
     Add-Content -LiteralPath $selectionLog -Value ("{0} guardianAlreadyRunning action=NO_DUPLICATE_LAUNCH" -f (Get-Date -Format o))
@@ -46,9 +50,10 @@ function Start-HsScriptChild([object]$ResolvedDeployment, [bool]$GuardianRestart
             $idle = Assert-HsScriptRuntimeIdle $scriptDirectory
         }
         $javaTempArgument = ''
-        $betaArtifactArgument = ''
-        $betaLoggingArgument = ''
-        if (([string]$ResolvedDeployment.Manifest.releaseChannel).ToLowerInvariant() -eq 'beta') {
+        $diagnosticArtifactArgument = ''
+        $diagnosticLoggingArgument = ''
+        $resolvedChannel = ([string]$ResolvedDeployment.Manifest.releaseChannel).Trim().ToLowerInvariant()
+        if ($resolvedChannel -eq 'beta') {
             $fixedVolumes = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop |
                 Select-Object DeviceID, FreeSpace, DriveType)
             $javaTempDirectory = Get-HsScriptBetaJavaTempDirectory `
@@ -62,7 +67,11 @@ function Start-HsScriptChild([object]$ResolvedDeployment, [bool]$GuardianRestart
                 -Directory $javaTempDirectory) + ' '
             Add-Content -LiteralPath $selectionLog -Value ("{0} betaJavaTempDirectory={1}" -f (Get-Date -Format o), $javaTempDirectory)
 
-            $artifactRoot = Get-HsScriptBetaArtifactRoot `
+        }
+        if ($resolvedChannel -in @('stable', 'beta', 'release-candidate')) {
+            $fixedVolumes = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop |
+                Select-Object DeviceID, FreeSpace, DriveType)
+            $artifactRoot = Get-HsScriptDiagnosticArtifactRoot `
                 -Channel ([string]$ResolvedDeployment.Manifest.releaseChannel) `
                 -RuntimeKey $runtimeKey `
                 -RuntimeDirectory $scriptDirectory `
@@ -70,26 +79,37 @@ function Start-HsScriptChild([object]$ResolvedDeployment, [bool]$GuardianRestart
             if (-not [string]::IsNullOrWhiteSpace([string]$artifactRoot)) {
                 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
                 $artifactRoot = [System.IO.Path]::GetFullPath($artifactRoot)
-                $betaArtifactArgument = '-Dhs.script.artifact-root="' + $artifactRoot + '" ' +
+                $diagnosticArtifactArgument = '-Dhs.script.artifact-root="' + $artifactRoot + '" ' +
                     '-Dhs.script.mcts-replay.dir="' + (Join-Path $artifactRoot 'mcts-replay') + '" ' +
                     '-Dhs.script.unknown-state.dir="' + (Join-Path $artifactRoot 'unknown-states') + '" ' +
                     '-Dhs.script.result-screenshot.dir="' + (Join-Path $artifactRoot 'game-results') + '" ' +
                     '-Dhs.script.mulligan-screenshot.dir="' + (Join-Path $artifactRoot 'mulligan') + '" '
-                Add-Content -LiteralPath $selectionLog -Value ("{0} betaArtifactRoot={1} minFreeBytes=5368709120" -f (Get-Date -Format o), $artifactRoot)
+                Add-Content -LiteralPath (Join-Path $diagnosticLogRoot 'launcher-selection.log') -Value ("{0} channel={1} diagnosticArtifactRoot={2} minFreeBytes=5368709120" -f (Get-Date -Format o), $resolvedChannel, $artifactRoot)
             } else {
-                $betaArtifactArgument = '-Dhs.script.artifact-storage.disabled=true '
-                Add-Content -LiteralPath $selectionLog -Value ("{0} betaArtifactRoot=DISABLED reason=no-non-runtime-volume-meets-capacity" -f (Get-Date -Format o))
+                $diagnosticArtifactArgument = '-Dhs.script.artifact-storage.disabled=true '
+                Add-Content -LiteralPath (Join-Path $diagnosticLogRoot 'launcher-selection.log') -Value ("{0} channel={1} diagnosticArtifactRoot=DISABLED reason=no-safe-volume-meets-capacity" -f (Get-Date -Format o), $resolvedChannel)
             }
-            $betaAppLogDirectory = Join-Path $logDirectory 'app'
-            $betaRuntimeDiagnosticDirectory = Join-Path $logDirectory 'runtime-log'
-            New-Item -ItemType Directory -Force -Path $betaAppLogDirectory | Out-Null
-            New-Item -ItemType Directory -Force -Path $betaRuntimeDiagnosticDirectory | Out-Null
-            $guardianStatePath = Join-Path $logDirectory 'guardian-state.json'
-            $betaLoggingArgument = '-Dhs.script.log.dir="' + [System.IO.Path]::GetFullPath($betaAppLogDirectory) + '" ' +
-                '-Dhs.script.beta-runtime-log-root="' + [System.IO.Path]::GetFullPath($betaRuntimeDiagnosticDirectory) + '" ' +
-                '-Dhs.script.guardian-state.path="' + [System.IO.Path]::GetFullPath($guardianStatePath) + '" '
+            $selectedLogRoot = Get-HsScriptDiagnosticLogDirectory `
+                -Channel $resolvedChannel `
+                -RuntimeKey $runtimeKey `
+                -RuntimeDirectory $scriptDirectory `
+                -FixedVolumes $fixedVolumes
+            if (-not [string]::IsNullOrWhiteSpace([string]$selectedLogRoot)) {
+                $diagnosticLogRoot = [System.IO.Path]::GetFullPath($selectedLogRoot)
+                $logDirectory = $diagnosticLogRoot
+                $appLogDirectory = Join-Path $diagnosticLogRoot 'app'
+                $runtimeDiagnosticDirectory = Join-Path $diagnosticLogRoot 'runtime-log'
+                New-Item -ItemType Directory -Force -Path $appLogDirectory, $runtimeDiagnosticDirectory | Out-Null
+                $guardianStatePath = Join-Path $diagnosticLogRoot 'guardian-state.json'
+                $diagnosticLoggingArgument = '-Dhs.script.log.dir="' + [System.IO.Path]::GetFullPath($appLogDirectory) + '" ' +
+                    '-Dhs.script.external-runtime-log-root="' + [System.IO.Path]::GetFullPath($runtimeDiagnosticDirectory) + '" ' +
+                    '-Dhs.script.guardian-state.path="' + [System.IO.Path]::GetFullPath($guardianStatePath) + '" '
+                if ($resolvedChannel -eq 'beta') {
+                    $diagnosticLoggingArgument += '-Dhs.script.beta-runtime-log-root="' + [System.IO.Path]::GetFullPath($runtimeDiagnosticDirectory) + '" '
+                }
+            }
         }
-        $arguments = $javaTempArgument + $betaArtifactArgument + $betaLoggingArgument + '-Dhs.script.launch.source=shortcut -Djna.library.path="' +
+        $arguments = $javaTempArgument + $diagnosticArtifactArgument + $diagnosticLoggingArgument + '-Dhs.script.launch.source=shortcut -Djna.library.path="' +
             $scriptDirectory + '" -Dhs.script.deployment.id="' + $ResolvedDeployment.DeploymentId +
             '" -Dhs.script.deployment.manifest="' + $ResolvedDeployment.ManifestPath + '" -jar "' +
             $ResolvedDeployment.AppJar + '"'

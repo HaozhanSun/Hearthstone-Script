@@ -33,6 +33,7 @@ try {
     Assert-True ($taskPlan.UserId -eq $userName) 'task runs only as the deploying user'
     Assert-True ($sourceText -match 'Resolve-TaskAccountSid' -and $sourceText -match 'Export-ScheduledTask') 'live verifier resolves normalized principal names and reads scoped logon identity from task XML'
     Assert-True ($taskPlan.RunLevel -eq 'Limited') 'task runs without elevation'
+    Assert-True ($sourceText -match 'Get-HsScriptDiagnosticLogDirectory' -and $sourceText -match 'Get-HsScriptDiagnosticArtifactRoot') 'retention entrypoint reconstructs channel-safe external roots for Stable, Beta, and RC'
 
     foreach ($channelInfo in @(
         [pscustomobject]@{ Channel = 'beta'; RuntimeName = 'Hearthstone Script Beta' },

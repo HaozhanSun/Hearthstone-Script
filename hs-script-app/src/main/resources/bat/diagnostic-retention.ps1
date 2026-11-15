@@ -160,29 +160,32 @@ function Invoke-DiagnosticRetention([string]$ExpectedChannel, [string]$Root, [da
     $active = [System.Collections.Generic.List[string]]::new()
     $active.Add((Join-Path $runtimeLog 'hs_script.log'))
 
-    if ($ExpectedChannel -eq 'beta') {
-        $runtimeKey = Get-RuntimeKey $Root
-        $betaLogs = Join-Path (Join-Path $env:USERPROFILE 'Documents') "HearthstoneScriptLogs\Beta\$runtimeKey"
-        $betaArtifacts = Join-Path (Join-Path $env:USERPROFILE 'Documents') "HearthstoneScriptArtifacts\Beta\$runtimeKey"
-        # The active deployment launcher may select a different fixed volume. Resolve it with the same checked-in policy.
-        $contract = Join-Path $Root 'beta-temp-policy.ps1'
-        if (Test-Path -LiteralPath $contract -PathType Leaf) {
-            . $contract
-            $volumes = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop | Select-Object DeviceID, FreeSpace, DriveType)
-            $betaLogs = Get-HsScriptBetaLogDirectory -Channel beta -RuntimeKey $runtimeKey -RuntimeDirectory $Root -FixedVolumes $volumes
-            $betaArtifacts = Get-HsScriptBetaArtifactRoot -Channel beta -RuntimeKey $runtimeKey -RuntimeDirectory $Root -FixedVolumes $volumes
-        }
-        $roots += [pscustomobject]@{ Name = 'beta-runtime-log'; Path = (Join-Path $betaLogs 'runtime-log'); Scope = 'runtime' }
-        $summaryDirectory = Join-Path $betaLogs 'runtime-log'
-        $roots += [pscustomobject]@{ Name = 'beta-external-log'; Path = $betaLogs; Scope = 'external-log' }
-        $active.Add((Join-Path $betaLogs 'runtime-log\hs_script.log'))
-        $active.Add((Join-Path $betaLogs 'app\hs_script.log'))
-        $active.Add((Join-Path $betaLogs 'guardian-state.json'))
-        $active.Add((Join-Path $betaLogs 'launcher-selection.log'))
-        if (-not [string]::IsNullOrWhiteSpace([string]$betaArtifacts)) {
-            foreach ($category in $ArtifactCategories) {
-                $roots += [pscustomobject]@{ Name = "beta-artifact-$category"; Path = (Join-Path $betaArtifacts $category); Scope = 'artifact' }
-            }
+    $runtimeKey = Get-RuntimeKey $Root
+    $diagnosticLogs = $null
+    $diagnosticArtifacts = $null
+    # The active deployment launcher may select a different fixed volume. Resolve
+    # it with the same checked-in policy for every channel. If an older runtime
+    # lacks the policy file, keep the C: roots covered and do not invent a D:
+    # path; new bulky writes are therefore still fail-closed.
+    $contract = Join-Path $Root 'beta-temp-policy.ps1'
+    if (Test-Path -LiteralPath $contract -PathType Leaf) {
+        . $contract
+        $volumes = @(Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop | Select-Object DeviceID, FreeSpace, DriveType)
+        $diagnosticLogs = Get-HsScriptDiagnosticLogDirectory -Channel $ExpectedChannel -RuntimeKey $runtimeKey -RuntimeDirectory $Root -FixedVolumes $volumes
+        $diagnosticArtifacts = Get-HsScriptDiagnosticArtifactRoot -Channel $ExpectedChannel -RuntimeKey $runtimeKey -RuntimeDirectory $Root -FixedVolumes $volumes
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$diagnosticLogs)) {
+        $roots += [pscustomobject]@{ Name = "$ExpectedChannel-runtime-log"; Path = (Join-Path $diagnosticLogs 'runtime-log'); Scope = 'runtime' }
+        $summaryDirectory = Join-Path $diagnosticLogs 'runtime-log'
+        $roots += [pscustomobject]@{ Name = "$ExpectedChannel-external-log"; Path = $diagnosticLogs; Scope = 'external-log' }
+        $active.Add((Join-Path $diagnosticLogs 'runtime-log\hs_script.log'))
+        $active.Add((Join-Path $diagnosticLogs 'app\hs_script.log'))
+        $active.Add((Join-Path $diagnosticLogs 'guardian-state.json'))
+        $active.Add((Join-Path $diagnosticLogs 'launcher-selection.log'))
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$diagnosticArtifacts)) {
+        foreach ($category in $ArtifactCategories) {
+            $roots += [pscustomobject]@{ Name = "$ExpectedChannel-artifact-$category"; Path = (Join-Path $diagnosticArtifacts $category); Scope = 'artifact' }
         }
     }
 

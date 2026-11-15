@@ -60,12 +60,17 @@ class DiagnosticRetentionTest {
         assertTrue(betaRoots.none { it.path == runtime.resolve("config") || it.path == runtime.resolve("data") })
 
         listOf("release-candidate", "stable").forEach { channel ->
-            val roots = DiagnosticRetentionPolicy.rootsForChannel(channel, runtime, appLogs, artifacts)
-            assertEquals(4, roots.size)
+            val roots = DiagnosticRetentionPolicy.rootsForChannel(channel, runtime, runtime.resolve("log"), artifacts)
+            assertTrue(roots.size > 4, "$channel retains its artifact category roots")
             assertTrue(roots.any { it.path == runtime.resolve("log") && it.scope == DiagnosticRootScope.RUNTIME_LOG_TREE })
             assertTrue(roots.any { it.path == runtime.resolve("evidence") && it.scope == DiagnosticRootScope.RUNTIME_EVIDENCE_TREE })
             assertTrue(roots.any { it.path == runtime.resolve("ocr_res") && it.scope == DiagnosticRootScope.RUNTIME_OCR_TREE })
             assertTrue(roots.any { it.path == runtime.resolve("debug/mouse") && it.scope == DiagnosticRootScope.RUNTIME_DEBUG_MOUSE_TREE })
+            assertTrue(roots.any { it.path == artifacts.resolve("unknown-states") && it.scope == DiagnosticRootScope.ARTIFACT_CATEGORY })
+        }
+        listOf("release-candidate", "stable").forEach { channel ->
+            val externalRoots = DiagnosticRetentionPolicy.rootsForChannel(channel, runtime, appLogs, artifacts)
+            assertTrue(externalRoots.any { it.path == appLogs.parent && it.scope == DiagnosticRootScope.EXTERNAL_BETA_LOG_TREE })
         }
         assertTrue(DiagnosticRetentionPolicy.rootsForChannel("unknown-channel", runtime, appLogs, artifacts).isEmpty())
         assertEquals("release-candidate", DiagnosticRetentionPolicy.channelToken("Release Candidate"))
