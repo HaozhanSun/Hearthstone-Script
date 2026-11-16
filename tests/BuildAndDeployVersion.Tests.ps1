@@ -83,7 +83,9 @@ Assert-Equal $buildTimestamp (Get-BuildInfoTimestampPacific "version=v4.16.504`n
 $deployScript = [System.IO.File]::ReadAllText((Join-Path $root 'build-and-deploy.ps1'))
 $requiredFocusedRegressionTests = @(
     'StartupModeEntryDispatchPolicyTest',
-    'BetaNeverSurrenderOverrideTest'
+    'BetaNeverSurrenderOverrideTest',
+    'MatchmakingSearchRecoveryTest',
+    'MatchmakingDialogRecoveryPolicyTest'
 )
 foreach ($requiredTest in $requiredFocusedRegressionTests) {
     if ($deployScript -notmatch "-Dtest=.*$requiredTest") {
