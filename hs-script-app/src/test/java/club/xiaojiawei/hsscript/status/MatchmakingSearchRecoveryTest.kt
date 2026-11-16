@@ -339,6 +339,68 @@ class MatchmakingSearchRecoveryTest {
     }
 
     @Test
+    fun `fresh start error modal outranks deck underlay and accepts only one confirm before transition`() {
+        val modal = loadFixture("start-game-error-dialog-over-deck-selection.png")
+        val exactErrorText = "发生错误 开始游戏时发生了错误。请等待几分钟然后再试。确定"
+
+        assertTrue(ScreenStateRecovery.hasCenteredModalPanel(modal))
+        assertEquals(
+            "START_GAME_ERROR_DIALOG",
+            UpstreamScreenStateRecovery.classifyImageForTest(exactErrorText, modal),
+        )
+        assertEquals(
+            "start-game-error-dialog-exact-ocr-and-modal",
+            UpstreamScreenStateRecovery.classificationEvidenceForImageTest(exactErrorText, modal),
+            "the fresh modal evidence must outrank the deck-selection title behind it",
+        )
+        assertNull(
+            UpstreamScreenStateRecovery.classifyImageForTest("选择套牌 狂野对战", modal),
+            "a centered modal without its exact error contract must not authorize the deck underlay",
+        )
+
+        val deck = loadFixture("deck-selection-screen.png")
+        assertEquals(
+            "DECK_SELECTION",
+            UpstreamScreenStateRecovery.classifyImageForTest("选择套牌 狂野对战 开始", deck),
+            "a fresh post-dismissal deck frame is the observable transition target",
+        )
+
+        val gate = StartupErrorDialogDismissalGate()
+        val first = gate.tryBegin(50204L, "native@0x1605ca")
+        assertTrue(first.allowed)
+        var dispatched = 0
+        assertTrue(gate.resolve(50204L, "native@0x1605ca", inputAccepted = true))
+        dispatched++
+        val second = gate.tryBegin(50204L, "native@0x1605ca")
+        assertFalse(second.allowed, "an accepted Confirm must not be sent again while the modal persists")
+        assertEquals(1, dispatched)
+        assertEquals(
+            "confirm-already-accepted-awaiting-transition",
+            second.reason,
+            "the recovery log contract must direct the caller to a fresh non-modal reprobe",
+        )
+        assertEquals(
+            MatchmakingDialogRecoveryPolicy.Action.CONFIRMED_DISMISSED,
+            MatchmakingDialogRecoveryPolicy.decide(
+                MatchmakingDialogRecoveryPolicy.Context(false, true, false),
+                MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG,
+                completedAttempts = 1,
+                priorClickSent = true,
+            ).action,
+        )
+        val unknown = MatchmakingDialogRecoveryPolicy.decide(
+            MatchmakingDialogRecoveryPolicy.Context(false, true, false),
+            MatchmakingDialogRecoveryPolicy.Probe.UNKNOWN,
+            completedAttempts = 0,
+            priorClickSent = false,
+        )
+        assertEquals(MatchmakingDialogRecoveryPolicy.Action.WAIT_AND_RETRY, unknown.action)
+        assertEquals(null, MatchmakingDialogRecoveryPolicy.dispatchConfirm(unknown) { dispatched++ ; true })
+        gate.reset()
+        assertTrue(gate.tryBegin(50204L, "native@0x1605ca").allowed, "a fresh incident may re-arm after reset")
+    }
+
+    @Test
     fun `saved Battle net launcher capture cannot classify as queue or grant startup menu proof`() {
         val path = "/offline-ocr/screen-recovery/battlenet-launcher-home-20261029-035301.png"
         val image = requireNotNull(javaClass.getResourceAsStream(path)) { "missing fixture $path" }
@@ -950,6 +1012,10 @@ class MatchmakingSearchRecoveryTest {
         assertTrue(MandatoryRankSurrenderGuard.confirmCompleted("POWERLOG_TERMINAL", capability))
         capability
     }
+
+    private fun loadFixture(name: String) = ImageIO.read(
+        requireNotNull(javaClass.getResourceAsStream("/offline-ocr/screen-recovery/$name")),
+    )
 
     private fun syntheticSearchScreen(): BufferedImage =
         BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB).apply {

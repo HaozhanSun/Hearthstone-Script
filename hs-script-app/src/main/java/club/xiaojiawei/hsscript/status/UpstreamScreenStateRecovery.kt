@@ -7,7 +7,9 @@ import club.xiaojiawei.hsscript.core.Core
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.ocr.OcrRuntime
+import club.xiaojiawei.hsscript.strategy.mode.MatchmakingDialogRecoveryPolicy
 import club.xiaojiawei.hsscript.strategy.mode.LoginModeStrategy
+import club.xiaojiawei.hsscript.strategy.mode.StartGameErrorDialogClassifier
 import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.MouseUtil
@@ -69,6 +71,7 @@ object UpstreamScreenStateRecovery {
     private val eventQuestOverlayRecoveryInFlight = AtomicBoolean(false)
     private val eventQuestOverlayRecoveryPolicy = EventQuestOverlayRecoveryPolicy()
     private val startupDeckModeNavigationAttempts = StartupDeckModeNavigationAttemptGate()
+    private val startupErrorDialogDismissalGate = StartupErrorDialogDismissalGate()
     private val seasonRankAwardRecoveryAttemptGate = SeasonRankAwardRecoveryAttemptGate()
     private val seasonRankAwardHumanInterventionPolicy = SeasonRankAwardHumanInterventionPolicy()
     private val stuckScreenUnblockRecheckGate = StuckScreenUnblockRecheckGate()
@@ -76,6 +79,7 @@ object UpstreamScreenStateRecovery {
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
+        START_GAME_ERROR_DIALOG("START_GAME_ERROR_DIALOG"),
         TOURNAMENT_MODE_SELECTOR(StartupDeckModeNavigationPolicy.MODE_SELECTOR_SCREEN),
         HOME("HOME"),
         TOURNAMENT("TOURNAMENT"),
@@ -382,6 +386,15 @@ object UpstreamScreenStateRecovery {
                 ResultScreenProbeTelemetry.elapsedMs(probeStartedAt), detection?.kind?.code,
                 detection?.confidence ?: 0, detection?.evidence, true,
             ) + " purpose=${authorizedCapture.purpose}"
+        }
+        val freshModalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image)
+        if (!freshModalVisible) startupErrorDialogDismissalGate.reset()
+        if (detection?.kind == ScreenKind.START_GAME_ERROR_DIALOG) {
+            return dismissFreshStartGameErrorDialog(
+                authorizedCapture = authorizedCapture,
+                detection = detection,
+                stateStillCurrent = stateStillCurrent,
+            )
         }
         val expectedDeckModeForUnblock = DeckStrategyManager.currentRunMode?.name
         val observedDeckModeForUnblock = if (detection?.kind == ScreenKind.DECK_SELECTION) {
@@ -1572,9 +1585,18 @@ object UpstreamScreenStateRecovery {
                 capture.image.width,
                 capture.image.height,
             )
+            // The startup error modal is intentionally absent from the
+            // normal ROI list because it is only meaningful with a fresh
+            // centered-modal visual. Probe that single bounded crop first so
+            // its text can preempt a deck title read from the underlay.
+            val startupErrorModalRois = if (!postResultProbe &&
+                ScreenStateRecovery.hasCenteredModalPanel(capture.image)
+            ) {
+                ScreenStateRoiSelector.selectStartGameError(capture.image.width, capture.image.height)
+            } else emptyList()
             val targetedRois = if (postResultProbe) {
                 orderPostResultTargetedRois(selectedTargetedRois)
-            } else selectedTargetedRois
+            } else startupErrorModalRois + selectedTargetedRois
             fun recognize(roi: ScreenStateRoiSelector.Roi, targeted: Boolean): String {
                 val roiStartedAt = System.nanoTime()
                 val crop = crop(capture.image, roi.bounds)
@@ -2181,6 +2203,23 @@ object UpstreamScreenStateRecovery {
         if (ScreenStateRecovery.looksLikeServerUnavailableText(text)) {
             return Detection(ScreenKind.SERVER_UNAVAILABLE, ModeEnum.STARTUP, 100, "yogg-message-roi-eng")
         }
+        // A start failure can leave the deck-selection title visible behind a
+        // centered Chinese error modal. Require the same-frame modal visual,
+        // complete message, and Confirm label before this can outrank the
+        // underlay screen.
+        if (modalVisible && StartGameErrorDialogClassifier.classifyModalText(
+                text = ocrText,
+                confidence = null,
+                modalVisible = true,
+            ) == MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE
+        ) {
+            return Detection(
+                ScreenKind.START_GAME_ERROR_DIALOG,
+                ModeEnum.TOURNAMENT,
+                100,
+                "start-game-error-dialog-exact-ocr-and-modal",
+            )
+        }
         // Modal text must outrank the menu visible behind it. A reconnect
         // overlay over deck selection or Home is never startup readiness.
         if (looksLikeReconnectFailureText(text)) {
@@ -2279,6 +2318,9 @@ object UpstreamScreenStateRecovery {
                 "mode-selector-centered-modal-with-standard-and-wild-target-label",
             )
         }
+        // Unknown centered modals must remain unresolved; never grant the
+        // deck-selection Start path from an underlay title alone.
+        if (modalVisible) return null
         if (text.contains("选择套牌") || has("套牌", "狂野对战")) {
             return Detection(ScreenKind.DECK_SELECTION, ModeEnum.TOURNAMENT, 100, "deck-selection-title")
         }
@@ -2570,6 +2612,8 @@ object UpstreamScreenStateRecovery {
     internal fun classificationEvidenceForImageTest(ocrText: String, image: BufferedImage): String? = detect(
         ocrText,
         visualSignature(image),
+        ScreenStateRecovery.hasCenteredModalPanel(image),
+        image,
     )?.evidence
 
     /** A fresh queue screen is authoritative proof that result cleanup reached its post-result destination. */
@@ -3850,6 +3894,67 @@ object UpstreamScreenStateRecovery {
         }, delayMs, TimeUnit.MILLISECONDS)
     }
 
+    /**
+     * Dismiss only the exact start-game error modal from the same fresh,
+     * foreground-verified capture. The deck title behind an unknown modal is
+     * never sufficient evidence, and one accepted Confirm dispatch is the
+     * maximum until a fresh non-modal frame resets the incident gate.
+     */
+    private fun dismissFreshStartGameErrorDialog(
+        authorizedCapture: AuthorizedCapture,
+        detection: Detection,
+        stateStillCurrent: () -> Boolean,
+    ): Boolean {
+        val capture = authorizedCapture.capture
+        val processId = capture.processId
+        val windowId = authorizedCapture.gameWindow.toString()
+        val currentProcessId = GameUtil.findGameProcessIdForDiagnostics()
+        val trustedFreshCapture = authorizedCapture.foregroundVerified &&
+            processId > 0L && currentProcessId == processId &&
+            GameUtil.isVerifiedCurrentGameWindow(authorizedCapture.gameWindow, processId) &&
+            stateStillCurrent() && WorkTimeListener.working && !PauseStatus.isPause &&
+            !WarEx.inWar && !GameUtil.isTerminalGameState()
+        if (!trustedFreshCapture) {
+            log.warn {
+                "SCREEN_RECOVERY_START_GAME_ERROR_DIALOG_BLOCKED " +
+                    "reason=fresh-capture-or-runtime-fence " +
+                    "confidence=${detection.confidence} evidence=${detection.evidence} " +
+                    "pid=$processId currentPid=${currentProcessId ?: "none"} hwnd=$windowId " +
+                    "foregroundVerified=${authorizedCapture.foregroundVerified} " +
+                    "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} " +
+                    "activeGame=${WarEx.inWar} terminal=${GameUtil.isTerminalGameState()} " +
+                    "action=NO_CONFIRM_CLICK"
+            }
+            return false
+        }
+        val attempt = startupErrorDialogDismissalGate.tryBegin(processId, windowId)
+        if (!attempt.allowed) {
+            log.warn {
+                "SCREEN_RECOVERY_START_GAME_ERROR_DIALOG_BLOCKED " +
+                    "reason=${attempt.reason} attempt=${attempt.attempt} " +
+                    "confidence=${detection.confidence} evidence=${detection.evidence} " +
+                    "pid=$processId hwnd=$windowId action=NO_SECOND_CONFIRM_CLICK " +
+                    "next=FRESH_NON_MODAL_REPROBE"
+            }
+            return false
+        }
+        val accepted = runCatching {
+            MouseUtil.leftButtonClickForRecovery(TournamentModeStrategy.ERROR_RECT.getCenterClickPos())
+        }.getOrDefault(false)
+        val committed = startupErrorDialogDismissalGate.resolve(processId, windowId, accepted)
+        log.warn {
+            "SCREEN_RECOVERY_START_GAME_ERROR_DIALOG_CLICK " +
+                "attempt=${attempt.attempt} inputAccepted=$accepted committed=$committed " +
+                "targetSystemConfirmed=false freshCapture=true " +
+                "confidence=${detection.confidence} evidence=${detection.evidence} " +
+                "pid=$processId hwnd=$windowId rect=ERROR_RECT " +
+                "action=${if (committed) "ONE_SHOT_CONFIRM_CLICK" else "NO_CONFIRM_CLICK"} " +
+                "next=${if (committed) "FRESH_POST_CLICK_PROBE" else "RETRY_ONLY_IF_DISPATCH_REJECTED"}"
+        }
+        if (committed) ScreenStateRecovery.scheduleFreshStartupScreenReprobe()
+        return committed
+    }
+
     private fun apply(detection: Detection, resultPageEvidenceVisible: Boolean): Boolean {
         val exactReconnectRecoveryEvidence = detection.kind == ScreenKind.RECONNECT ||
             detection.kind == ScreenKind.LOADING && detection.evidence == "reconnect-slow-loading-text"
@@ -4199,6 +4304,16 @@ object UpstreamScreenStateRecovery {
                         TournamentModeStrategy.startMatching()
                     }
                 }, 300, TimeUnit.MILLISECONDS)
+            }
+
+            ScreenKind.START_GAME_ERROR_DIALOG -> {
+                // The exact fresh-capture handler runs before apply(). Keep
+                // this branch input-free if a future callsite reaches here.
+                log.warn {
+                    "SCREEN_RECOVERY_START_GAME_ERROR_DIALOG_BLOCKED " +
+                        "reason=apply-fallback-requires-fresh-handler action=NO_CONFIRM_CLICK"
+                }
+                return false
             }
 
             ScreenKind.RESULT -> {

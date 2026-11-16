@@ -50,7 +50,11 @@ object MatchmakingDialogRecoveryPolicy {
         }
         if (completedAttempts >= MAX_ATTEMPTS) return Decision(Action.EXHAUSTED, "attempt-limit")
         return when (probe) {
-            Probe.ERROR_DIALOG_VISIBLE -> Decision(Action.CLICK_CONFIRM, "exact-error-dialog-visible")
+            Probe.ERROR_DIALOG_VISIBLE -> if (priorClickSent) {
+                Decision(Action.WAIT_AND_RETRY, "awaiting-fresh-post-click-transition")
+            } else {
+                Decision(Action.CLICK_CONFIRM, "exact-error-dialog-visible")
+            }
             Probe.WRONG_MODE_DECK_NOTICE_VISIBLE -> Decision(
                 Action.OPERATOR_ACTION_REQUIRED,
                 "configured-deck-mode-mismatch",

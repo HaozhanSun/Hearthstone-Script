@@ -356,9 +356,9 @@ class MatchmakingDialogRecoveryPolicyTest {
 
             val stillVisible = probeImage(screenshot, "fixture:dialog-still-visible", OPPONENT_DISCONNECT_TEXT)
             assertEquals(
-                MatchmakingDialogRecoveryPolicy.Action.CLICK_CONFIRM,
+                MatchmakingDialogRecoveryPolicy.Action.WAIT_AND_RETRY,
                 MatchmakingDialogRecoveryPolicy.decide(active, stillVisible.state, 1, priorClickSent = true).action,
-                "a click request without visible state transition is not dismissal confirmation",
+                "a click request without visible state transition must not dispatch a second Confirm",
             )
         }
         assertEquals(modalScreenshots.size, acceptedDispatches.get())
@@ -459,7 +459,7 @@ class MatchmakingDialogRecoveryPolicyTest {
             ).action,
         )
         assertEquals(
-            MatchmakingDialogRecoveryPolicy.Action.CLICK_CONFIRM,
+            MatchmakingDialogRecoveryPolicy.Action.WAIT_AND_RETRY,
             MatchmakingDialogRecoveryPolicy.decide(
                 active,
                 MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE,
@@ -510,10 +510,10 @@ class MatchmakingDialogRecoveryPolicyTest {
     }
 
     @Test
-    fun `visible dialog permits at most twenty clicks before exhaustion`() {
+    fun `visible dialog permits one click then waits for a fresh transition`() {
         val visible = MatchmakingDialogRecoveryPolicy.Probe.ERROR_DIALOG_VISIBLE
         assertEquals(
-            MatchmakingDialogRecoveryPolicy.Action.CLICK_CONFIRM,
+            MatchmakingDialogRecoveryPolicy.Action.WAIT_AND_RETRY,
             MatchmakingDialogRecoveryPolicy.decide(
                 active,
                 visible,
