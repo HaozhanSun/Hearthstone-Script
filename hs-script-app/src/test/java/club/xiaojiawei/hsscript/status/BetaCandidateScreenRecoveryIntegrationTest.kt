@@ -66,10 +66,9 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         )
         assertEquals(listOf("old-game-closed", "canonical-starter-chain"), events)
 
-        val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }
-            .first { Files.exists(it.resolve("src/main/java/club/xiaojiawei/hsscript/status/BetaScreenRecoveryService.kt")) }
+        val moduleRoot = sourceRootFrom(Path.of(""))
         val service = Files.readString(
-            root.resolve("src/main/java/club/xiaojiawei/hsscript/status/BetaScreenRecoveryService.kt"),
+            moduleRoot.resolve("src/main/java/club/xiaojiawei/hsscript/status/BetaScreenRecoveryService.kt"),
         )
         val restartDecision = service.indexOf("BetaCandidateScreenWatchdog.Action.RESTART")
         val safetyFence = service.indexOf("candidateRestartStillSafe", restartDecision)
@@ -78,6 +77,21 @@ class BetaCandidateScreenRecoveryIntegrationTest {
             restartDecision >= 0 && safetyFence > restartDecision && serializedRestart > safetyFence,
             "candidate recovery must pass the runtime fence before the serialized full restart",
         )
+
+        val reactorRoot = requireNotNull(moduleRoot.parent)
+        assertEquals(moduleRoot, sourceRootFrom(moduleRoot), "module-root cwd must resolve to the app module")
+        assertEquals(moduleRoot, sourceRootFrom(reactorRoot), "reactor-root cwd must resolve to the app module")
+    }
+
+    private fun sourceRootFrom(start: Path): Path {
+        val marker = Path.of("src/main/java/club/xiaojiawei/hsscript/status/BetaScreenRecoveryService.kt")
+        return generateSequence(start.toAbsolutePath().normalize()) { it.parent }
+            .flatMap { candidate ->
+                sequenceOf(candidate, candidate.resolve("hs-script-app"))
+            }
+            .distinct()
+            .firstOrNull { Files.isRegularFile(it.resolve(marker)) }
+            ?: error("Unable to locate BetaScreenRecoveryService.kt from ${start.toAbsolutePath()}")
     }
 
     @Test
