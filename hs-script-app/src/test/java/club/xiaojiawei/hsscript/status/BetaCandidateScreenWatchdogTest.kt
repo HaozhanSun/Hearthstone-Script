@@ -134,6 +134,62 @@ class BetaCandidateScreenWatchdogTest {
     }
 
     @Test
+    fun `terminal result screen reaches hard restart only after current session proof and two minutes`() {
+        val watchdog = BetaCandidateScreenWatchdog()
+        val result = candidate(
+            nowMs = 0L,
+            screen = "RANK_PROGRESS_CONTINUATION",
+            terminal = true,
+            currentSessionReady = true,
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(result).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            watchdog.observe(result.copy(nowMs = 119_999L)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(result.copy(nowMs = 120_000L)).action,
+            "a persistent result page must use the existing full close-and-starter-chain restart",
+        )
+
+        val unproven = BetaCandidateScreenWatchdog()
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_TERMINAL,
+            unproven.observe(result.copy(terminal = false)).action,
+            "a result-looking frame without current terminal proof must not restart",
+        )
+    }
+
+    @Test
+    fun `fresh active matchmaking evidence always fences even a repeated unknown modal`() {
+        val watchdog = BetaCandidateScreenWatchdog()
+        val queued = candidate(
+            nowMs = 0L,
+            screen = "UNKNOWN",
+            visualModalConfirmed = true,
+            visualModalFingerprint = 0xCAFE,
+            noActiveMatchmakingEvidence = false,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_MATCHMAKING,
+            watchdog.observe(queued).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_MATCHMAKING,
+            watchdog.observe(queued.copy(nowMs = 120_000L)).action,
+        )
+
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_MATCHMAKING,
+            BetaCandidateScreenWatchdog().observe(
+                candidate(nowMs = 0L, screen = "MATCHMAKING", noActiveMatchmakingEvidence = false),
+            ).action,
+            "the real SEARCHING/MATCHMAKING visual must override any stale-screen label",
+        )
+    }
+
+    @Test
     fun `manual pause live game mulligan and terminal guards reset without restart`() {
         val guarded = listOf(
             BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE to candidate(nowMs = 0L, paused = true),
@@ -181,6 +237,8 @@ class BetaCandidateScreenWatchdogTest {
         inWar: Boolean = false,
         mulligan: Boolean = false,
         terminal: Boolean = false,
+        currentSessionReady: Boolean = true,
+        noActiveMatchmakingEvidence: Boolean = true,
     ) = BetaCandidateScreenWatchdog.Snapshot(
         nowMs = nowMs,
         screen = screen,
@@ -198,5 +256,7 @@ class BetaCandidateScreenWatchdogTest {
         inWar = inWar,
         mulligan = mulligan,
         terminal = terminal,
+        currentSessionReady = currentSessionReady,
+        noActiveMatchmakingEvidence = noActiveMatchmakingEvidence,
     )
 }

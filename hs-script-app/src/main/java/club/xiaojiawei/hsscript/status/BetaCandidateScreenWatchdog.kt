@@ -20,6 +20,7 @@ internal class BetaCandidateScreenWatchdog(
         DEFER_ACTIVE_GAME,
         DEFER_MULLIGAN,
         DEFER_TERMINAL,
+        DEFER_ACTIVE_MATCHMAKING,
         DEFER_HEALTHY_SCREEN,
         RESTART,
         BACKOFF,
@@ -44,6 +45,10 @@ internal class BetaCandidateScreenWatchdog(
         val inWar: Boolean,
         val mulligan: Boolean,
         val terminal: Boolean,
+        /** Current Power.log/session proof is required before restarting a result page. */
+        val currentSessionReady: Boolean = false,
+        /** False when the fresh frame or lifecycle evidence says a queue is active. */
+        val noActiveMatchmakingEvidence: Boolean = false,
     )
 
     data class Decision(
@@ -86,10 +91,23 @@ internal class BetaCandidateScreenWatchdog(
         if (snapshot.paused) return deferWithoutEvidence(snapshot, Action.DEFER_MANUAL_PAUSE, "manual-pause")
         if (snapshot.inWar) return deferProgress(Action.DEFER_ACTIVE_GAME, "active-game")
         if (snapshot.mulligan) return deferProgress(Action.DEFER_MULLIGAN, "mulligan")
-        if (snapshot.terminal) return deferProgress(Action.DEFER_TERMINAL, "terminal-state")
 
         val screen = snapshot.screen?.takeIf { it.isNotBlank() }
         val dialog = snapshot.dialogScreen?.takeIf { it.isNotBlank() }
+        val terminalScreen = isTerminalScreen(screen)
+        if (!snapshot.noActiveMatchmakingEvidence) {
+            return deferProgress(Action.DEFER_ACTIVE_MATCHMAKING, "active-matchmaking-evidence")
+        }
+        if (terminalScreen) {
+            // A visible result page is a safe restart candidate only when the
+            // current process/session has authoritative terminal proof. This
+            // keeps a stale result-looking frame from interrupting a live game.
+            if (!snapshot.currentSessionReady || !snapshot.terminal) {
+                return deferProgress(Action.DEFER_TERMINAL, "terminal-proof-missing")
+            }
+        } else if (snapshot.terminal) {
+            return deferProgress(Action.DEFER_TERMINAL, "terminal-state")
+        }
         val modalFingerprint = snapshot.visualModalFingerprint
             ?.takeIf { snapshot.visualModalConfirmed }
             ?.let { java.lang.Long.toUnsignedString(it, 16) }
@@ -97,11 +115,6 @@ internal class BetaCandidateScreenWatchdog(
             if (screen?.equals("UNKNOWN", ignoreCase = true) == true) "VISUAL_MODAL:$fingerprint" else null
         }
         val positiveVisualModal = visualModal != null
-        if (screen?.equals("RESULT", ignoreCase = true) == true ||
-            screen?.equals("RANK_PROGRESS_CONTINUATION", ignoreCase = true) == true
-        ) {
-            return deferProgress(Action.DEFER_TERMINAL, "result-screen")
-        }
         if (!snapshot.captureConfirmed || !snapshot.foregroundConfirmed ||
             snapshot.pid == null || snapshot.pid <= 0L || snapshot.hwnd.isNullOrBlank() ||
             snapshot.foregroundIdentity.isNullOrBlank() ||
@@ -219,6 +232,8 @@ internal class BetaCandidateScreenWatchdog(
 
     private fun isHealthyScreen(screen: String): Boolean = screen.uppercase() in HEALTHY_SCREENS
 
+    private fun isTerminalScreen(screen: String?): Boolean = screen?.uppercase() in TERMINAL_SCREENS
+
     companion object {
         const val DEFAULT_STABLE_THRESHOLD_MS = 120_000L
         const val DEFAULT_REPEAT_BACKOFF_MS = 120_000L
@@ -235,6 +250,11 @@ internal class BetaCandidateScreenWatchdog(
             "COLLECTION",
             "GAME_MODE",
             "GAMEPLAY",
+        )
+
+        private val TERMINAL_SCREENS = setOf(
+            "RESULT",
+            "RANK_PROGRESS_CONTINUATION",
         )
     }
 }

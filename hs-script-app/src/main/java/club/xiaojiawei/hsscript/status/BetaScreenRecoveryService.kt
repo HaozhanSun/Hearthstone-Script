@@ -299,14 +299,21 @@ internal object BetaScreenRecoveryService {
             inWar = WarEx.inWar,
             mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
             terminal = GameUtil.isTerminalGameState() || WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER,
+            currentSessionReady = observation?.currentSessionReady == true,
+            noActiveMatchmakingEvidence = observation?.noActiveMatchmakingEvidence == true,
         )
     }
 
     private fun candidateRestartStillSafe(observation: ScreenStateRecovery.FreshScreenObservation?): Boolean {
         if (observation == null || !WorkTimeListener.working || PauseStatus.isPause ||
             WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD ||
-            GameUtil.isTerminalGameState() || WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER
+            !observation.noActiveMatchmakingEvidence
         ) return false
+        val terminalState = GameUtil.isTerminalGameState() || WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER
+        val terminalScreen = observation.screen.equals("RESULT", ignoreCase = true) ||
+            observation.screen.equals("RANK_PROGRESS_CONTINUATION", ignoreCase = true)
+        if (terminalState && !(terminalScreen && observation.currentSessionReady)) return false
+        if (terminalScreen && !(terminalState && observation.currentSessionReady)) return false
         val currentPid = GameUtil.findGameProcessIdForDiagnostics()
         val currentHwnd = ScriptStatus.gameHWND
         return currentPid == observation.pid && currentHwnd?.toString() == observation.hwnd &&

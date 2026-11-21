@@ -49,11 +49,51 @@ class BetaCandidateScreenRecoveryIntegrationTest {
             screen = requireNotNull(classification.screen),
             dialogScreen = classification.screen,
             confidence = classification.confidence,
+            currentSessionReady = false,
+            noActiveMatchmakingEvidence = true,
         )
         assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(first).action)
         assertEquals(
             BetaCandidateScreenWatchdog.Action.RESTART,
             watchdog.observe(first.copy(nowMs = BetaCandidateScreenWatchdog.DEFAULT_STABLE_THRESHOLD_MS)).action,
+        )
+    }
+
+    @Test
+    fun `start game error modal restarts only without queue game or pause evidence`() {
+        val fixture = requireNotNull(
+            javaClass.getResourceAsStream("/offline-ocr/screen-recovery/start-game-error-dialog-over-deck-selection.png"),
+        ).use(ImageIO::read)
+        val classification = UpstreamScreenStateRecovery.classifyFreshScreenForWatchdog(
+            "发生错误 由于你的对手无法连接，游戏无法继续。请再试一次。确定",
+            fixture,
+        )
+        val base = candidate(
+            nowMs = 0L,
+            screen = requireNotNull(classification.screen),
+            dialogScreen = classification.screen,
+            confidence = classification.confidence,
+            currentSessionReady = false,
+            noActiveMatchmakingEvidence = true,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            BetaCandidateScreenWatchdog().run {
+                observe(base)
+                observe(base.copy(nowMs = 120_000L)).action
+            },
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_MATCHMAKING,
+            BetaCandidateScreenWatchdog().observe(base.copy(noActiveMatchmakingEvidence = false)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_GAME,
+            BetaCandidateScreenWatchdog().observe(base.copy(inWar = true)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
+            BetaCandidateScreenWatchdog().observe(base.copy(paused = true)).action,
         )
     }
 
@@ -81,6 +121,68 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         val reactorRoot = requireNotNull(moduleRoot.parent)
         assertEquals(moduleRoot, sourceRootFrom(moduleRoot), "module-root cwd must resolve to the app module")
         assertEquals(moduleRoot, sourceRootFrom(reactorRoot), "reactor-root cwd must resolve to the app module")
+    }
+
+    @Test
+    fun `two minute terminal fallback keeps queue safety and uses the full Beta restart chain`() {
+        val watchdog = BetaCandidateScreenWatchdog()
+        val result = BetaCandidateScreenWatchdog.Snapshot(
+            nowMs = 0L,
+            screen = "RANK_PROGRESS_CONTINUATION",
+            confidence = 100,
+            captureConfirmed = true,
+            foregroundConfirmed = true,
+            pid = 42L,
+            hwnd = "hwnd-42",
+            foregroundIdentity = "hwnd-42",
+            working = true,
+            paused = false,
+            inWar = false,
+            mulligan = false,
+            terminal = true,
+            currentSessionReady = true,
+            noActiveMatchmakingEvidence = true,
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(result).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(result.copy(nowMs = 120_000L)).action,
+        )
+
+        val queued = result.copy(
+            screen = "MATCHMAKING",
+            terminal = false,
+            noActiveMatchmakingEvidence = false,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_MATCHMAKING,
+            BetaCandidateScreenWatchdog().observe(queued).action,
+        )
+
+        val events = mutableListOf<String>()
+        IdleWatchdogRestartSequence.dispatch(
+            forceCloseClient = { events += "hearthstone-process-shutdown" },
+            startStarterChain = { events += "beta-canonical-startup-and-matchmaking" },
+        )
+        assertEquals(
+            listOf("hearthstone-process-shutdown", "beta-canonical-startup-and-matchmaking"),
+            events,
+            "the threshold decision must enter the existing serialized full restart path",
+        )
+
+        val service = Files.readString(
+            sourceRootFrom(Path.of("")).resolve(
+                "src/main/java/club/xiaojiawei/hsscript/status/BetaScreenRecoveryService.kt",
+            ),
+        )
+        val safety = service.indexOf("!observation.noActiveMatchmakingEvidence")
+        val restartDecision = service.indexOf("BetaCandidateScreenWatchdog.Action.RESTART")
+        val restart = service.indexOf("Core.restartFromIdleWatchdog()", restartDecision)
+        assertTrue(safety >= 0, "Beta restart safety must reject active matchmaking evidence")
+        assertTrue(
+            restartDecision >= 0 && restart > restartDecision,
+            "Beta restart must dispatch only after the watchdog threshold decision",
+        )
     }
 
     private fun sourceRootFrom(start: Path): Path {
@@ -223,6 +325,8 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         visualModalFingerprint: Long? = null,
         pid: Long = 42L,
         hwnd: String = "hwnd-1",
+        currentSessionReady: Boolean = true,
+        noActiveMatchmakingEvidence: Boolean = true,
     ) = BetaCandidateScreenWatchdog.Snapshot(
         nowMs = nowMs,
         screen = screen,
@@ -240,6 +344,8 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         inWar = false,
         mulligan = false,
         terminal = false,
+        currentSessionReady = currentSessionReady,
+        noActiveMatchmakingEvidence = noActiveMatchmakingEvidence,
     )
 
     private fun modalFixture(background: Color, modalVariant: Int): BufferedImage =
