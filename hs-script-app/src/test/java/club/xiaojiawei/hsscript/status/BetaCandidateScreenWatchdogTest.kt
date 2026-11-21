@@ -134,6 +134,27 @@ class BetaCandidateScreenWatchdogTest {
     }
 
     @Test
+    fun `empty-session constructed deck screen is restartable only as an explicitly authorized stalled candidate`() {
+        val watchdog = BetaCandidateScreenWatchdog()
+        val stuckDeck = candidate(
+            nowMs = 0L,
+            screen = "DECK_SELECTION",
+            currentSessionReady = false,
+            allowHealthyScreenRecovery = true,
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(stuckDeck).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(stuckDeck.copy(nowMs = BetaCandidateScreenWatchdog.DEFAULT_STABLE_THRESHOLD_MS)).action,
+            "a fresh no-session deck frame may restart only after the full two-minute unchanged-screen threshold",
+        )
+
+        val currentSession = BetaCandidateScreenWatchdog()
+        val currentDeck = stuckDeck.copy(currentSessionReady = true)
+        assertEquals(BetaCandidateScreenWatchdog.Action.DEFER_HEALTHY_SCREEN, currentSession.observe(currentDeck).action)
+    }
+
+    @Test
     fun `terminal result screen reaches hard restart only after current session proof and two minutes`() {
         val watchdog = BetaCandidateScreenWatchdog()
         val result = candidate(
@@ -239,6 +260,7 @@ class BetaCandidateScreenWatchdogTest {
         terminal: Boolean = false,
         currentSessionReady: Boolean = true,
         noActiveMatchmakingEvidence: Boolean = true,
+        allowHealthyScreenRecovery: Boolean = false,
     ) = BetaCandidateScreenWatchdog.Snapshot(
         nowMs = nowMs,
         screen = screen,
@@ -258,5 +280,6 @@ class BetaCandidateScreenWatchdogTest {
         terminal = terminal,
         currentSessionReady = currentSessionReady,
         noActiveMatchmakingEvidence = noActiveMatchmakingEvidence,
+        allowHealthyScreenRecovery = allowHealthyScreenRecovery,
     )
 }

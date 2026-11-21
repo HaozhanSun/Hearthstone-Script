@@ -251,7 +251,11 @@ object ScreenStateRecovery {
     /** Read-only, fresh screenshot observation for Beta's always-on candidate-screen guard. */
     internal fun observeFreshScreenForBetaCandidateWatchdog(): FreshScreenObservation? =
         observeFreshScreenForWatchdogInternal(
-            stuckForMs = 0L,
+            // This monitor is deliberately read-only, but it must use the
+            // pre-session idle-probe authority while a new/empty Power.log is
+            // still settling. The watchdog itself owns the 120-second action
+            // threshold; this value only permits an authorized capture.
+            stuckForMs = BetaCandidateScreenWatchdog.DEFAULT_STABLE_THRESHOLD_MS,
             requireRecoveryRuntime = false,
             useUpstreamClassifier = true,
         )
@@ -312,9 +316,14 @@ object ScreenStateRecovery {
         }
         val currentSessionReady = capture.evidence.currentSessionReady
         val queueVisible = capture.visual.matchmakingSearchVisual || looksLikeMatchmakingText(ocrEvidence.text)
-        val queueLifecycleActive = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
-            LifecycleTrace.hasRecentMatchmakingInputIntent()
-        val noActiveMatchmakingEvidence = !queueVisible && !queueLifecycleActive
+        val queueLifecycleActive = hasCurrentCandidateMatchmakingEvidence(
+            currentSessionReady = currentSessionReady,
+            queueVisible = queueVisible,
+            recentActiveScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
+            shortEntryGuard = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+            recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
+        )
+        val noActiveMatchmakingEvidence = !queueLifecycleActive
         val observation = FreshScreenObservation(
             screen = classification.screen ?: "UNKNOWN",
             mode = classification.mode,
@@ -343,6 +352,21 @@ object ScreenStateRecovery {
         }
         return observation
     }
+
+    /**
+     * Candidate-watchdog queue authority: a long-lived input intent is only
+     * meaningful once the current session is readable. Visual SEARCHING, a
+     * fresh active-screen observation, and the short entry race remain
+     * authoritative even while Power.log is empty.
+     */
+    internal fun hasCurrentCandidateMatchmakingEvidence(
+        currentSessionReady: Boolean,
+        queueVisible: Boolean,
+        recentActiveScreen: Boolean,
+        shortEntryGuard: Boolean,
+        recentInputIntent: Boolean,
+    ): Boolean = queueVisible || recentActiveScreen || shortEntryGuard ||
+        currentSessionReady && recentInputIntent
 
     private fun perceptualFingerprint(image: BufferedImage): Long {
         var fingerprint = 0L

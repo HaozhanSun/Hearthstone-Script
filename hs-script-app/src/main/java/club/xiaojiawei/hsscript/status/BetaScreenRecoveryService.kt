@@ -280,6 +280,10 @@ internal object BetaScreenRecoveryService {
         now: Long,
         observation: ScreenStateRecovery.FreshScreenObservation?,
     ): BetaCandidateScreenWatchdog.Snapshot {
+        val preSessionHealthyRecoveryCandidate = observation != null &&
+            !observation.currentSessionReady &&
+            observation.noActiveMatchmakingEvidence &&
+            observation.screen.uppercase() in setOf("HOME", "TOURNAMENT", "DECK_SELECTION")
         return BetaCandidateScreenWatchdog.Snapshot(
             nowMs = now,
             screen = observation?.screen,
@@ -301,11 +305,14 @@ internal object BetaScreenRecoveryService {
             terminal = GameUtil.isTerminalGameState() || WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER,
             currentSessionReady = observation?.currentSessionReady == true,
             noActiveMatchmakingEvidence = observation?.noActiveMatchmakingEvidence == true,
+            allowHealthyScreenRecovery = preSessionHealthyRecoveryCandidate,
         )
     }
 
     private fun candidateRestartStillSafe(observation: ScreenStateRecovery.FreshScreenObservation?): Boolean {
-        if (observation == null || !WorkTimeListener.working || PauseStatus.isPause ||
+        if (!BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL) ||
+            observation == null || !WorkTimeListener.working || PauseStatus.isPause ||
+            observation.currentSessionReady ||
             WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD ||
             !observation.noActiveMatchmakingEvidence
         ) return false

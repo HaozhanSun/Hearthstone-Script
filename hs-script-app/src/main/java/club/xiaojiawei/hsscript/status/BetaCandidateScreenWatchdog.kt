@@ -49,6 +49,8 @@ internal class BetaCandidateScreenWatchdog(
         val currentSessionReady: Boolean = false,
         /** False when the fresh frame or lifecycle evidence says a queue is active. */
         val noActiveMatchmakingEvidence: Boolean = false,
+        /** A no-session constructed hub/deck frame may be the stalled startup candidate. */
+        val allowHealthyScreenRecovery: Boolean = false,
     )
 
     data class Decision(
@@ -130,7 +132,9 @@ internal class BetaCandidateScreenWatchdog(
         val candidateScreen = dialog?.let { dialogName ->
             "DIALOG:$dialogName${modalFingerprint?.let { fingerprint -> ":$fingerprint" }.orEmpty()}"
         } ?: visualModal ?: screen!!
-        if (dialog == null && visualModal == null && isHealthyScreen(screen)) {
+        if (dialog == null && visualModal == null && isHealthyScreen(screen) &&
+            !(snapshot.allowHealthyScreenRecovery && !snapshot.currentSessionReady)
+        ) {
             return deferProgress(Action.DEFER_HEALTHY_SCREEN, "healthy-screen")
         }
 

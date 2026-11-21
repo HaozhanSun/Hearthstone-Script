@@ -8,6 +8,7 @@ import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -98,6 +99,66 @@ class BetaCandidateScreenRecoveryIntegrationTest {
     }
 
     @Test
+    fun `empty-session stale input intent does not defer exact deck recovery while current queue evidence still fences`() {
+        assertFalse(
+            ScreenStateRecovery.hasCurrentCandidateMatchmakingEvidence(
+                currentSessionReady = false,
+                queueVisible = false,
+                recentActiveScreen = false,
+                shortEntryGuard = false,
+                recentInputIntent = true,
+            ),
+            "a historical 15-minute input intent is not active queue proof when the current Power.log is empty",
+        )
+        assertTrue(
+            ScreenStateRecovery.hasCurrentCandidateMatchmakingEvidence(
+                currentSessionReady = false,
+                queueVisible = true,
+                recentActiveScreen = false,
+                shortEntryGuard = false,
+                recentInputIntent = true,
+            ),
+            "the current SEARCHING visual remains authoritative despite an empty Power.log",
+        )
+        assertTrue(
+            ScreenStateRecovery.hasCurrentCandidateMatchmakingEvidence(
+                currentSessionReady = false,
+                queueVisible = false,
+                recentActiveScreen = false,
+                shortEntryGuard = true,
+                recentInputIntent = true,
+            ),
+            "the short queue-entry race guard remains authoritative without a current session",
+        )
+
+        val watchdog = BetaCandidateScreenWatchdog()
+        val candidate = BetaCandidateScreenWatchdog.Snapshot(
+            nowMs = 0L,
+            screen = "DECK_SELECTION",
+            confidence = 100,
+            captureConfirmed = true,
+            foregroundConfirmed = true,
+            pid = 42L,
+            hwnd = "hwnd-42",
+            foregroundIdentity = "hwnd-42",
+            working = true,
+            paused = false,
+            inWar = false,
+            mulligan = false,
+            terminal = false,
+            currentSessionReady = false,
+            noActiveMatchmakingEvidence = true,
+            allowHealthyScreenRecovery = true,
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(candidate).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(candidate.copy(nowMs = BetaCandidateScreenWatchdog.DEFAULT_STABLE_THRESHOLD_MS)).action,
+            "the observable no-session deck flow reaches the existing serialized restart chain after two minutes",
+        )
+    }
+
+    @Test
     fun `candidate restart is wired to the serialized close and canonical starter chain`() {
         val events = mutableListOf<String>()
         IdleWatchdogRestartSequence.dispatch(
@@ -174,6 +235,29 @@ class BetaCandidateScreenRecoveryIntegrationTest {
             sourceRootFrom(Path.of("")).resolve(
                 "src/main/java/club/xiaojiawei/hsscript/status/BetaScreenRecoveryService.kt",
             ),
+        )
+        assertTrue(
+            service.contains("BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL)"),
+            "candidate restart monitoring must be Beta-channel scoped",
+        )
+        val recovery = Files.readString(
+            sourceRootFrom(Path.of("")).resolve(
+                "src/main/java/club/xiaojiawei/hsscript/status/ScreenStateRecovery.kt",
+            ),
+        )
+        assertTrue(
+            recovery.contains("stuckForMs = BetaCandidateScreenWatchdog.DEFAULT_STABLE_THRESHOLD_MS"),
+            "the always-on candidate capture must use pre-session idle authority while Power.log is empty",
+        )
+        assertTrue(
+            service.contains("observation.currentSessionReady"),
+            "candidate restart must reject an active current session",
+        )
+        assertTrue(
+            service.contains("currentPid == observation.pid") &&
+                service.contains("currentHwnd?.toString() == observation.hwnd") &&
+                service.contains("GameUtil.isVerifiedCurrentGameWindow(currentHwnd, observation.pid)"),
+            "candidate restart must bind the exact current Beta Hearthstone PID/HWND before close",
         )
         val safety = service.indexOf("!observation.noActiveMatchmakingEvidence")
         val restartDecision = service.indexOf("BetaCandidateScreenWatchdog.Action.RESTART")
