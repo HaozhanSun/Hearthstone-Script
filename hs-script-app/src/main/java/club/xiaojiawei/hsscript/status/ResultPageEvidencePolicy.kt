@@ -189,10 +189,20 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.155..0.170 &&
             centerDarkRatio in 0.170..0.190 &&
             bannerWarmRatio in 0.320..0.350
+        // v4.16.765's live loss frames rendered Platinum 9 and Platinum 10
+        // progress pages with the same centered medal layout but slightly
+        // different board backdrops. The Continue band and all three
+        // central-panel signals are still required; keep this family narrow
+        // so a gameplay Continue label cannot authorize the post-result path.
+        val livePlatinumProgressFamily = continueGrayLightRatio in 0.038..0.050 &&
+            bannerLowSaturationRatio in 0.25..0.32 &&
+            centerDarkRatio in 0.19..0.24 &&
+            bannerWarmRatio in 0.30..0.40
         return capturedRankProgressSignature || establishedRankProgressSignature ||
             coolBoardGoldRewardSignature || largeGoldMedalRewardSignature ||
             incidentCoolBoardRewardSignature || incidentWarmBannerRewardSignature ||
-            liveRankNineRewardSignature || liveRankNineCoolBoardSignature || liveRankTenCoolBoardSignature
+            liveRankNineRewardSignature || liveRankNineCoolBoardSignature ||
+            liveRankTenCoolBoardSignature || livePlatinumProgressFamily
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */

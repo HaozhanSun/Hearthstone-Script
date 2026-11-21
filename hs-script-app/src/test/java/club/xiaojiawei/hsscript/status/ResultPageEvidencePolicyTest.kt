@@ -90,6 +90,27 @@ class ResultPageEvidencePolicyTest {
     }
 
     @Test
+    fun `v4 16 765 platinum nine and ten loss rank pages are recognized despite unknown OCR`() {
+        listOf(
+            // Platinum 10 screenshot: unknown-state-20261120-221302-677.
+            doubleArrayOf(0.04183, 0.28479, 0.21924, 0.34319),
+            // Platinum 9 screenshot: debug-20261120-225202-308.
+            doubleArrayOf(0.04563, 0.26138, 0.20212, 0.36981),
+        ).forEach { (continueBand, banner, centerDark, bannerWarm) ->
+            val observation = requireNotNull(ResultPageEvidencePolicy.fastVisualObservation(
+                continueGrayLightRatio = continueBand,
+                bannerLowSaturationRatio = banner,
+                centerDarkRatio = centerDark,
+                bannerWarmRatio = bannerWarm,
+            ))
+
+            assertTrue(observation.rankProgressVisible)
+            assertTrue(observation.resultVisible == true)
+            assertTrue(observation.continueControlVisible)
+        }
+    }
+
+    @Test
     fun `v705 gold victory metrics stay unknown but preserve the visible continue control`() {
         val fixture = requireNotNull(
             javaClass.getResourceAsStream("/offline-ocr/result-flow/rc-v705-terminal-recovery/incident-evidence.txt"),
