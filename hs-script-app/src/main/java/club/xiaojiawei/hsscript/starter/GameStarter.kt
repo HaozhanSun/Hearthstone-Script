@@ -526,8 +526,17 @@ class GameStarter : AbstractStarter() {
                         "working=${WorkTimeListener.working} paused=${PauseStatus.isPause} " +
                         "currentSessionReady=$readyAtExit maxDurationMs=${StartupScreenProbeRetryPolicy.MAX_DURATION_MS}"
                 }
-                if (!readyAtExit && !recoveryApplied && attempt > 0 &&
-                    WorkTimeListener.working && !PauseStatus.isPause
+                val activeMatchmakingScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen()
+                val activeMatchmakingInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent()
+                if (StartupScreenProbeCloseoutPolicy.shouldAlertOperator(
+                        currentSessionReady = readyAtExit,
+                        recoveryApplied = recoveryApplied,
+                        attempts = attempt,
+                        working = WorkTimeListener.working,
+                        paused = PauseStatus.isPause,
+                        activeMatchmakingScreen = activeMatchmakingScreen,
+                        activeMatchmakingInputIntent = activeMatchmakingInputIntent,
+                    )
                 ) {
                     log.error {
                         "GAME_SESSION_NOT_READY_AFTER_STARTUP_PROBE attempts=$attempt " +
@@ -537,6 +546,17 @@ class GameStarter : AbstractStarter() {
                         "Hearthstone is running but no readable current-game Power.log session was found. " +
                             "Check for the offline/reconnect dialog; click Start to retry. The script did not report the game as healthy.",
                     )
+                } else if (!readyAtExit && !recoveryApplied && attempt > 0 &&
+                    WorkTimeListener.working && !PauseStatus.isPause &&
+                    (activeMatchmakingScreen || activeMatchmakingInputIntent)
+                ) {
+                    log.info {
+                        "GAME_SESSION_NOT_READY_AFTER_STARTUP_PROBE_SUPPRESSED " +
+                            "reason=active-matchmaking-evidence " +
+                            "activeMatchmakingScreen=$activeMatchmakingScreen " +
+                            "activeMatchmakingInputIntent=$activeMatchmakingInputIntent " +
+                            "action=KEEP_QUEUE_RECOVERY_ARMED"
+                    }
                 }
             }
         }

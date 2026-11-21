@@ -14,6 +14,49 @@ class GameStarterReadinessTest {
     }
 
     @Test
+    fun `startup closeout keeps an accepted queue alive while Power log is still empty`() {
+        assertFalse(
+            StartupScreenProbeCloseoutPolicy.shouldAlertOperator(
+                currentSessionReady = false,
+                recoveryApplied = false,
+                attempts = 11,
+                working = true,
+                paused = false,
+                activeMatchmakingScreen = true,
+                activeMatchmakingInputIntent = true,
+            ),
+            "fresh visible search must not be reported as a missing-session failure",
+        )
+        assertFalse(
+            StartupScreenProbeCloseoutPolicy.shouldAlertOperator(
+                currentSessionReady = false,
+                recoveryApplied = false,
+                attempts = 11,
+                working = true,
+                paused = false,
+                activeMatchmakingScreen = false,
+                activeMatchmakingInputIntent = true,
+            ),
+            "an accepted Start remains a bounded pre-session handoff until CREATE_GAME arrives",
+        )
+    }
+
+    @Test
+    fun `startup closeout still alerts when no session and no queue evidence exist`() {
+        assertTrue(
+            StartupScreenProbeCloseoutPolicy.shouldAlertOperator(
+                currentSessionReady = false,
+                recoveryApplied = false,
+                attempts = 11,
+                working = true,
+                paused = false,
+                activeMatchmakingScreen = false,
+                activeMatchmakingInputIntent = false,
+            ),
+        )
+    }
+
+    @Test
     fun `platform is not closed while the game is dead`() {
         assertFalse(PlatformCloseReadiness.shouldClose(true, false, true, 60_000L, 20_000L))
         assertFalse(PlatformCloseReadiness.shouldClose(false, true, true, 60_000L, 20_000L))
