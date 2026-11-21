@@ -34,6 +34,7 @@ class MandatoryRankSurrenderGuardTest {
     fun `only complete current game local outcome is terminal overlay authority`() {
         val wasReplaying = PowerLogListener.replayingExistingLog
         val oldLocalGameId = WarEx.war.me.gameId
+        val oldRivalGameId = WarEx.war.rival.gameId
         try {
             PowerLogListener.replayingExistingLog = false
             WarEx.war.me.gameId = "self#1"
@@ -62,8 +63,18 @@ class MandatoryRankSurrenderGuardTest {
                 "TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE",
             )
             assertTrue(PowerLogListener.hasVerifiedCurrentGameTerminalOutcome())
+            // GameOver/WarEx reset can clear both IDs before the Event Quest
+            // watchdog rechecks the exact post-game overlay. The production
+            // proof must use the current CREATE_GAME-scoped local latch.
+            WarEx.war.me.gameId = "0"
+            WarEx.war.rival.gameId = "0"
+            assertTrue(
+                PowerLogListener.hasVerifiedCurrentGameTerminalOutcome(),
+                "phase-reset placeholder IDs must not erase same-game terminal ownership",
+            )
         } finally {
             WarEx.war.me.gameId = oldLocalGameId
+            WarEx.war.rival.gameId = oldRivalGameId
             PowerLogListener.replayingExistingLog = wasReplaying
         }
     }

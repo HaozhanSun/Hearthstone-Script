@@ -497,6 +497,40 @@ class EventQuestOverlayRecoveryPolicyTest {
     }
 
     @Test
+    fun `same-session terminal proof reaches restart only at the full 120 second ladder`() {
+        val policy = EventQuestOverlayRecoveryPolicy()
+        fun terminalEvidence(nowMs: Long, stableForMs: Long) = evidence(
+            nowMs = nowMs,
+            stableForMs = stableForMs,
+            terminal = true,
+            postGameTerminal = true,
+        )
+
+        assertEquals(
+            EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT,
+            policy.observe(terminalEvidence(60_000L, 60_000L)).action,
+        )
+        assertEquals(
+            EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT,
+            policy.observe(terminalEvidence(60_001L, 60_001L)).action,
+        )
+        assertEquals(
+            EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT,
+            policy.observe(terminalEvidence(60_002L, 60_002L)).action,
+        )
+        assertEquals(
+            EventQuestOverlayRecoveryPolicy.Action.WAIT_AND_REPROBE,
+            policy.observe(terminalEvidence(120_001L, 120_001L)).action,
+            "the three-click ladder must not restart before the second minute completes",
+        )
+        assertEquals(
+            EventQuestOverlayRecoveryPolicy.Action.RESTART_CLIENT,
+            policy.observe(terminalEvidence(120_002L, 120_002L)).action,
+            "same-session complete WON evidence permits the bounded second-stage restart after 120s",
+        )
+    }
+
+    @Test
     fun `exact quest overlay waits until one minute stuck before first click`() {
         val policy = EventQuestOverlayRecoveryPolicy()
         assertEquals(EventQuestOverlayRecoveryPolicy.Action.WAIT_AND_REPROBE,

@@ -1,0 +1,15 @@
+# Problem-resolution closeout
+
+Issue: Beta post-game Event Quest overlay loses same-session terminal authority after phase reset
+Date: 2026-11-21
+Status: OPEN — source fix is verified offline, but secretary-owned deployment and online E2E evidence remain pending
+
+Investigation and cause: PASS — The live v4.16.769 evidence showed a same-session WON/COMPLETE game followed by an exact Event Quest overlay over deck selection, while `EVENT_QUEST_RECOVERY_BLOCKED` reported `verifiedTerminalOutcome=false`. `PowerLogListener` re-derived local ownership from `WarEx.war.me.gameId` and `WarEx.war.rival.gameId`; `WarEx.reset()` returned the phase to `FILL_DECK` and cleared those IDs, so the current-game proof disappeared. The historical review ruled out 194e4f8b as the cause of the observed queue because that commit only tightened fresh deck proof at dispatch; no deterministic historical rollback/bisect has established a first-bad commit for the original user-visible freeze, so this record does not claim the issue was bisected.
+
+Fix: PASS — Added a CREATE_GAME-scoped local-entity and terminal-outcome latch, opened only by a verified current-game local bind, with placeholder-ID handling and clearing on the next CREATE_GAME. `PowerLogListener` now prefers that stable proof for Event Quest terminal authority and emits structured bind/proof logs. Existing bounded Event Quest click/restart fences remain unchanged.
+
+Verification: PARTIAL — Focused reactor verification is recorded in `event-quest-latch-focused-20261121-rerun.log`; after the timing assertion correction it must pass `CurrentGamePowerLogTerminalTrackerTest`, `MandatoryRankSurrenderGuardTest`, `EventQuestOverlayRecoveryPolicyTest`, and `MatchmakingSearchRecoveryTest`, including the 120-second ladder and both fresh-authorized matchmaking callsites. `git diff --check` and the closeout validator are required before handoff. No deployment, process restart, screenshot capture, or online E2E was performed by this worker.
+
+Future prevention: PASS — Treat local terminal ownership as CREATE_GAME-scoped state rather than re-deriving it from phase-reset `WarEx` IDs; clear it at every new CREATE_GAME, reject placeholder identities, and keep terminal proof separate from click/restart authorization. Keep queue lifecycle reconciliation behind fresh capture authority at both ScreenStateRecovery and Upstream MATCHMAKING callsites.
+
+Prevention enforcement: PASS — test: `CurrentGamePowerLogTerminalTrackerTest.CREATE_GAME scoped local outcome latch survives phase reset placeholders and clears on next game`, `CurrentGamePowerLogTerminalTrackerTest.terminal outcome latch cannot be created without current game local binding`, `EventQuestOverlayRecoveryPolicyTest.same-session terminal proof reaches restart only at the full 120 second ladder`, and `MatchmakingSearchRecoveryTest.fresh authorized search evidence is reconciled at both recovery callsites` reject proof loss, premature restart, stale queue authority, and unverified MATCHMAKING propagation.

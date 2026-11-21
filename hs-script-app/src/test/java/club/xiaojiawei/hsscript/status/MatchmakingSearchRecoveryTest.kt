@@ -88,6 +88,85 @@ class MatchmakingSearchRecoveryTest {
     }
 
     @Test
+    fun `fresh authorized search evidence is reconciled at both recovery callsites`() {
+        val source = listOf(
+            java.io.File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt"),
+            java.io.File("hs-script-app/src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt"),
+        ).first(java.io.File::isFile).readText()
+        val screenStateSource = listOf(
+            java.io.File("src/main/java/club/xiaojiawei/hsscript/status/ScreenStateRecovery.kt"),
+            java.io.File("hs-script-app/src/main/java/club/xiaojiawei/hsscript/status/ScreenStateRecovery.kt"),
+        ).first(java.io.File::isFile).readText()
+        assertTrue(
+            source.contains("MatchmakingQueueLifecycleEvidencePolicy.propagateClassifiedSearchScreenIfAuthorized"),
+            "the Upstream ScreenKind.MATCHMAKING callsite must use the authorized lifecycle adapter",
+        )
+        assertTrue(
+            source.substringAfter("MatchmakingQueueLifecycleEvidencePolicy.propagateClassifiedSearchScreenIfAuthorized")
+                .take(220).contains("captureAuthorized = true"),
+            "the Upstream MATCHMAKING adapter is reached only after foreground authority is revalidated",
+        )
+        assertTrue(
+            screenStateSource.contains("captureAuthorized = captureResult.foregroundConfirmed"),
+            "the ScreenStateRecovery probe must pass its fresh foreground-authority result",
+        )
+
+        LifecycleTrace.resetMatchmakingEvidenceForTest()
+        try {
+            val observedAt = 210_000L
+            val searchProbe = ScreenStateRecovery.StartGameErrorDialogProbe(
+                state = MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG,
+                provider = "VISUAL_SIGNATURE",
+                reason = "matchmaking-search-screen-visible",
+            )
+            assertFalse(
+                MatchmakingQueueLifecycleEvidencePolicy.propagateIfAuthoritative(
+                    probe = searchProbe,
+                    captureAuthorized = false,
+                    powerLogLength = 0L,
+                    observedAt = observedAt,
+                ),
+                "ScreenStateRecovery must reject an untrusted queue frame",
+            )
+            assertTrue(
+                MatchmakingQueueLifecycleEvidencePolicy.propagateIfAuthoritative(
+                    probe = searchProbe,
+                    captureAuthorized = true,
+                    powerLogLength = 0L,
+                    observedAt = observedAt,
+                ),
+                "ScreenStateRecovery must accept a fresh authorized visual queue frame even with an empty Power.log",
+            )
+            assertTrue(LifecycleTrace.hasRecentActiveMatchmakingScreen(observedAt + 1))
+            assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(observedAt + 1))
+
+            LifecycleTrace.resetMatchmakingEvidenceForTest()
+            val classified = UpstreamScreenStateRecovery.classifyImageForTest("", syntheticSearchScreen())
+            assertEquals("MATCHMAKING", classified)
+            assertFalse(
+                MatchmakingQueueLifecycleEvidencePolicy.propagateClassifiedSearchScreenIfAuthorized(
+                    screenKind = classified ?: "UNKNOWN",
+                    captureAuthorized = false,
+                    observedAt = observedAt + 1_000L,
+                ),
+                "Upstream MATCHMAKING must reject a stale/unverified capture",
+            )
+            assertTrue(
+                MatchmakingQueueLifecycleEvidencePolicy.propagateClassifiedSearchScreenIfAuthorized(
+                    screenKind = classified ?: "UNKNOWN",
+                    captureAuthorized = true,
+                    observedAt = observedAt + 1_000L,
+                ),
+                "Upstream MATCHMAKING must reconcile only a fresh authorized classified screen",
+            )
+            assertTrue(LifecycleTrace.hasRecentActiveMatchmakingScreen(observedAt + 1_001L))
+            assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(observedAt + 1_001L))
+        } finally {
+            LifecycleTrace.resetMatchmakingEvidenceForTest()
+        }
+    }
+
+    @Test
     fun `mode changing recovery guard is limited to one minute after matchmaking dispatch`() {
         LifecycleTrace.clearActiveMatchmakingScreenObserved("entry-guard-test-reset")
         try {

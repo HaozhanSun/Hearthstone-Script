@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import javax.imageio.ImageIO
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -22,6 +23,45 @@ class CurrentGamePowerLogTerminalTrackerTest {
     fun cleanup() {
         MandatoryRankSurrenderGuard.resetForTest()
         MulliganRankDispatchBarrier.resetForTest()
+    }
+
+    @Test
+    fun `CREATE_GAME scoped local outcome latch survives phase reset placeholders and clears on next game`() {
+        val tracker = CurrentGamePowerLogTerminalTracker()
+        tracker.observeLine("CREATE_GAME gameId=event-quest-win")
+        assertNotNull(tracker.bindVerifiedLocalEntity("laz#12793"))
+        tracker.observeLine("TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=WON")
+        tracker.observeLine("TAG_CHANGE Entity=opponent#1 tag=PLAYSTATE value=CONCEDED")
+        tracker.observeLine("TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER")
+        tracker.observeLine("TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE")
+
+        val latched = tracker.currentGameTerminalForStableLocalPlayer()
+        assertEquals("laz#12793", latched?.ownEntityId)
+        assertEquals("WON", latched?.ownPlayState)
+        assertTrue(latched?.complete == true)
+        assertEquals(
+            "laz#12793",
+            tracker.currentGameSurrenderEvidence("0", "0")?.ownEntityId,
+            "WarEx reset placeholders must not override the current CREATE_GAME local latch",
+        )
+
+        tracker.observeLine("CREATE_GAME gameId=next-game")
+        assertNull(tracker.currentGameTerminalForStableLocalPlayer())
+        assertNull(
+            tracker.currentGameSurrenderEvidence("0", "0"),
+            "a later CREATE_GAME must clear the prior outcome and local entity authority",
+        )
+    }
+
+    @Test
+    fun `terminal outcome latch cannot be created without current game local binding`() {
+        val tracker = CurrentGamePowerLogTerminalTracker()
+        tracker.observeLine("CREATE_GAME gameId=unbound")
+        tracker.observeLine("TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=WON")
+        tracker.observeLine("TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER")
+        tracker.observeLine("TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE")
+
+        assertNull(tracker.currentGameTerminalForStableLocalPlayer())
     }
 
     @Test

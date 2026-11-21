@@ -17,6 +17,12 @@ internal class CurrentGamePowerLogTerminalTracker {
     private var currentGameGeneration: Long? = null
     @Volatile
     private var currentCreateGameTimestamp: String? = null
+    /** Local entity proved by the current game's own mulligan/input boundary. */
+    @Volatile
+    private var stableLocalEntityId: String? = null
+    /** Terminal outcome latched to the same CREATE_GAME/local entity. */
+    @Volatile
+    private var stableLocalTerminalPlayState: String? = null
     /**
      * Account identity explicitly correlated with WAR's local player in an
      * earlier game from this same Power.log session. PlayerID is game-local;
@@ -70,6 +76,7 @@ internal class CurrentGamePowerLogTerminalTracker {
         }
         if (line.contains("tag=STEP value=FINAL_GAMEOVER")) finalGameOverObserved = true
         if (line.contains("tag=STATE value=COMPLETE")) completeStateObserved = true
+        latchStableLocalTerminalOutcome()
     }
 
     fun hasCompleteTerminalEvidence(): Boolean =
@@ -85,8 +92,39 @@ internal class CurrentGamePowerLogTerminalTracker {
 
     /** Caller must have independently classified this entity as the local player. */
     @Synchronized
-    fun bindVerifiedLocalEntity(entityId: String): String? =
-        entityId.takeIf(String::isNotBlank)?.let(::currentGameIdentity)
+    fun bindVerifiedLocalEntity(entityId: String): String? {
+        val localEntity = entityId.takeIf(::isUsableEntityId) ?: return null
+        val identity = currentGameIdentity(localEntity) ?: return null
+        stableLocalEntityId = localEntity
+        latchStableLocalTerminalOutcome()
+        return identity
+    }
+
+    /**
+     * Stable current-game proof that remains available after WarEx.reset()
+     * returns the phase model to FILL_DECK and clears its player IDs.
+     * The latch is scoped to the latest CREATE_GAME and is cleared by the
+     * next game boundary.
+     */
+    @Synchronized
+    fun currentGameTerminalForStableLocalPlayer(): CurrentGameSurrenderTerminalEvidence? {
+        if (!hasCompleteTerminalEvidence()) return null
+        latchStableLocalTerminalOutcome()
+        val localEntity = stableLocalEntityId ?: return null
+        val outcome = stableLocalTerminalPlayState ?: return null
+        val generation = currentGameGeneration ?: return null
+        if (!gameStarted) return null
+        return CurrentGameSurrenderTerminalEvidence(
+            gameIdentity = "$generation:$localEntity",
+            ownEntityId = localEntity,
+            opponentEntityId = null,
+            ownPlayState = outcome,
+            opponentPlayState = null,
+            ownConceded = localEntity in concededPlayers,
+            finalGameOver = finalGameOverObserved,
+            complete = completeStateObserved,
+        )
+    }
 
     @Synchronized
     fun currentGameSurrenderEvidence(
@@ -110,8 +148,8 @@ internal class CurrentGamePowerLogTerminalTracker {
     }
 
     private fun resolveOwnEntityId(ownEntityId: String): String? {
-        val suppliedOwnId = ownEntityId.takeIf { it.isNotBlank() }
-        val accountBoundOwnId = resolveTrustedLocalEntityId()
+        val suppliedOwnId = ownEntityId.takeIf(::isUsableEntityId)
+        val accountBoundOwnId = stableLocalEntityId ?: resolveTrustedLocalEntityId()
         if (suppliedOwnId != null) {
             // A live WAR mapping is authoritative, but it must not contradict
             // an account binding already established for this Power.log
@@ -121,6 +159,19 @@ internal class CurrentGamePowerLogTerminalTracker {
             return suppliedOwnId
         }
         return accountBoundOwnId
+    }
+
+    private fun latchStableLocalTerminalOutcome() {
+        if (!hasCompleteTerminalEvidence()) return
+        // Account binding can help legacy terminal queries, but it must not
+        // create a new Event Quest recovery authority by itself. The stable
+        // latch is opened only by the current game's verified local input.
+        val localEntity = stableLocalEntityId ?: return
+        val outcome = playStates[localEntity]
+        if (outcome in TERMINAL_PLAYSTATES) {
+            stableLocalEntityId = localEntity
+            stableLocalTerminalPlayState = outcome
+        }
     }
 
     private fun rememberTrustedLocalAccount(ownEntityId: String) {
@@ -153,6 +204,12 @@ internal class CurrentGamePowerLogTerminalTracker {
             !name.contains("UNKNOWN", ignoreCase = true) &&
             !name.contains("HUMAN PLAYER", ignoreCase = true)
 
+    private fun isUsableEntityId(entityId: String): Boolean =
+        entityId.isNotBlank() &&
+            entityId != "0" &&
+            !entityId.equals("UNKNOWN", ignoreCase = true) &&
+            !entityId.contains("UNKNOWN HUMAN PLAYER", ignoreCase = true)
+
     @Synchronized
     fun reset() {
         resetCurrentGame()
@@ -166,6 +223,8 @@ internal class CurrentGamePowerLogTerminalTracker {
         completeStateObserved = false
         currentGameGeneration = null
         currentCreateGameTimestamp = null
+        stableLocalEntityId = null
+        stableLocalTerminalPlayState = null
         playerAccountIds.clear()
         playerNames.clear()
         playStates.clear()

@@ -186,10 +186,24 @@ object PowerLogListener :
 
     fun currentGameTerminalForVerifiedLocalPlayer(): E2ETrace.PowerLogTerminal? {
         if (!currentGamePowerLogTerminalTracker.hasCompleteTerminalEvidence()) return null
-        val evidence = currentGamePowerLogTerminalTracker.currentGameSurrenderEvidence(
-            WarEx.war.me.gameId,
-            WarEx.war.rival.gameId,
-        ) ?: return null
+        // WarEx.reset() intentionally clears the player IDs while the result
+        // overlay is still visible. Prefer the CREATE_GAME-scoped local
+        // entity/outcome latch opened by the verified mulligan boundary; the
+        // dynamic WAR IDs are only a fallback while the phase model is live.
+        val latchedEvidence = currentGamePowerLogTerminalTracker.currentGameTerminalForStableLocalPlayer()
+        val evidence = latchedEvidence
+            ?: currentGamePowerLogTerminalTracker.currentGameSurrenderEvidence(
+                WarEx.war.me.gameId,
+                WarEx.war.rival.gameId,
+            )
+            ?: return null
+        if (latchedEvidence != null) {
+            log.debug {
+                "POWER_LOG_TERMINAL_PROOF source=CREATE_GAME_SCOPED_LOCAL_LATCH " +
+                    "gameIdentity=${evidence.gameIdentity} ownEntity=${evidence.ownEntityId} " +
+                    "ownPlayState=${evidence.ownPlayState} complete=${evidence.complete}"
+            }
+        }
         return when (evidence.ownPlayState) {
             "WON" -> E2ETrace.PowerLogTerminal.WON
             "LOST" -> E2ETrace.PowerLogTerminal.LOST
@@ -240,8 +254,16 @@ object PowerLogListener :
      * terminal proof a stable local account bridge when WAR's player id is
      * blank after a fast concession.
      */
-    fun bindVerifiedLocalMulliganEntity(entityId: String): String? =
-        currentGamePowerLogTerminalTracker.bindVerifiedLocalEntity(entityId)
+    fun bindVerifiedLocalMulliganEntity(entityId: String): String? {
+        val identity = currentGamePowerLogTerminalTracker.bindVerifiedLocalEntity(entityId)
+        if (identity != null) {
+            log.info {
+                "POWER_LOG_LOCAL_ENTITY_LATCH_BOUND source=verified-current-game-mulligan-input " +
+                    "gameIdentity=$identity ownEntity=$entityId"
+            }
+        }
+        return identity
+    }
 
     fun currentGameSurrenderTerminalEvidence(
         ownEntityId: String,
