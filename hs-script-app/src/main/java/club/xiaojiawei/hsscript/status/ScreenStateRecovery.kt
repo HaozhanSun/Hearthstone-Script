@@ -260,6 +260,101 @@ object ScreenStateRecovery {
             useUpstreamClassifier = true,
         )
 
+    /**
+     * Refresh the short-lived Start proof immediately before the final queue
+     * click.  The completion-dialog sequence can legitimately take longer
+     * than the eight-second proof window, so the final click must use a new,
+     * exact foreground capture rather than extending an old proof.  This is
+     * deliberately visual-only: no OCR, no input, and no historical queue
+     * intent is treated as proof that the client is still on the deck screen.
+     */
+    internal fun refreshFreshDeckSelectionStartProofForMatchmaking(): Boolean {
+        if (PauseStatus.isPause || WarEx.inWar ||
+            PowerLogListener.isCurrentGameTerminalCleanupPending() ||
+            DeckStrategyManager.currentDeckStrategy == null ||
+            DeckStrategyManager.currentRunMode == null
+        ) {
+            log.warn {
+                "MATCHMAKING_START_PROOF_REFRESH decision=BLOCKED reason=runtime-fence " +
+                    "pause=${PauseStatus.isPause} inWar=${WarEx.inWar} " +
+                    "terminalCleanup=${PowerLogListener.isCurrentGameTerminalCleanupPending()}"
+            }
+            return false
+        }
+        val expectedPid = GameUtil.findGameProcessIdForDiagnostics() ?: return false
+        val expectedPidInt = expectedPid.toInt()
+        val expectedHwnd = resolveLiveGameWindow() ?: return false
+        val captureResult = MouseUtil.withRecoveryForeground(expectedHwnd) {
+            val currentHwnd = resolveLiveGameWindow()
+            val currentPid = GameUtil.findGameProcessIdForDiagnostics()
+            if (currentHwnd == null || currentHwnd.toString() != expectedHwnd.toString() ||
+                currentPid != expectedPid
+            ) {
+                null
+            } else {
+                captureScreen(
+                    expectedHwnd,
+                    purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+                    staleForMs = 0L,
+                )
+            }
+        }
+        val capture = captureResult.value ?: run {
+            log.warn {
+                "MATCHMAKING_START_PROOF_REFRESH decision=BLOCKED reason=capture-null " +
+                    "pid=$expectedPid hwnd=$expectedHwnd foregroundConfirmed=${captureResult.foregroundConfirmed}"
+            }
+            return false
+        }
+        val authorized = captureResult.foregroundConfirmed &&
+            capture.evidence.target?.processId == expectedPidInt &&
+            GameUtil.findGameProcessIdForDiagnostics() == expectedPid &&
+            GameUtil.isVerifiedCurrentGameWindow(expectedHwnd)
+        if (!authorized) {
+            log.warn {
+                "MATCHMAKING_START_PROOF_REFRESH decision=BLOCKED reason=capture-unauthorized " +
+                    "pid=$expectedPid hwnd=$expectedHwnd foregroundConfirmed=${captureResult.foregroundConfirmed}"
+            }
+            return false
+        }
+        val visual = capture.visual
+        val startVisible = ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image)
+        val queueVisible = visual.matchmakingSearchVisual
+        val modalVisible = visual.centeredModalPanelVisual || hasCenteredModalPanel(capture.image)
+        if (visual.startupQuestOverlayVisual || queueVisible || modalVisible || !startVisible) {
+            StartupInputReadiness.invalidate(expectedPidInt, expectedHwnd.toString())
+            log.warn {
+                "MATCHMAKING_START_PROOF_REFRESH decision=BLOCKED reason=visual-fence " +
+                    "questOverlay=${visual.startupQuestOverlayVisual} queueVisible=$queueVisible " +
+                    "modalVisible=$modalVisible startVisible=$startVisible " +
+                    "screenshot=${capture.file?.absolutePath ?: "not-saved"}"
+            }
+            return false
+        }
+        // Keep this refresh bounded: the independent selector permit already
+        // authorizes UNKNOWN title OCR, so never fall back to the expensive
+        // title OCR path while deciding whether to click Start.
+        val observedMode = TournamentModeConfirmation.observeImageVisualOnly(capture.image).observedMode.name
+        val expectedMode = DeckStrategyManager.currentRunMode?.name
+        val recorded = StartupInputReadiness.recordDeckSelectionStart(
+            pid = expectedPidInt,
+            hwnd = expectedHwnd.toString(),
+            confidence = 94,
+            evidence = "deck-selection-start-control-visual",
+            expectedRunMode = expectedMode,
+            observedRunMode = observedMode,
+            enabledStartButtonVisible = startVisible,
+            modalVisible = false,
+        )
+        log.info {
+            "MATCHMAKING_START_PROOF_REFRESH decision=${if (recorded) "RECORDED" else "BLOCKED"} " +
+                "reason=${if (recorded) "fresh-authorized-deck-selection" else "mode-proof-missing"} " +
+                "expectedMode=${expectedMode ?: "UNKNOWN"} observedMode=${observedMode ?: "UNKNOWN"} " +
+                "pid=$expectedPid hwnd=$expectedHwnd screenshot=${capture.file?.absolutePath ?: "not-saved"}"
+        }
+        return recorded
+    }
+
     private fun observeFreshScreenForWatchdogInternal(
         stuckForMs: Long,
         requireRecoveryRuntime: Boolean,
@@ -296,8 +391,29 @@ object ScreenStateRecovery {
         if (GameUtil.findGameProcessIdForDiagnostics() != initialPid ||
             !GameUtil.isVerifiedCurrentGameWindow(gameWindow)
         ) return null
-        val ocrEvidence = runOCR(capture)
-        val classification = if (useUpstreamClassifier) {
+        val visualDeckSelectionCandidate = capture.purpose in setOf(
+            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+        ) && DeckStrategyManager.currentDeckStrategy != null &&
+            DeckStrategyManager.currentRunMode != null &&
+            !capture.visual.startupQuestOverlayVisual &&
+            !capture.visual.matchmakingSearchVisual &&
+            !capture.visual.centeredModalPanelVisual &&
+            ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image)
+        val visualClassification = if (visualDeckSelectionCandidate) {
+            UpstreamScreenStateRecovery.FreshScreenClassification(
+                screen = "DECK_SELECTION",
+                mode = ModeEnum.TOURNAMENT.name,
+                confidence = 94,
+                evidence = "deck-selection-start-control-visual",
+            )
+        } else null
+        // A fresh structural deck-screen proof is authoritative and avoids a
+        // 20+ second OCR probe.  OCR remains the fallback for all other
+        // screens and is still required for text-only classifications.
+        val ocrEvidence = if (visualClassification == null) runOCR(capture) else OcrEvidence("", emptyMap())
+        val classification = visualClassification ?: if (useUpstreamClassifier) {
             UpstreamScreenStateRecovery.classifyFreshScreenForWatchdog(ocrEvidence.text, capture.image)
         } else {
             detect(ocrEvidence, capture.visual)?.let { detection ->

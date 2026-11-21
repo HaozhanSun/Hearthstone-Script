@@ -178,10 +178,28 @@ object PowerLogListener :
         terminalInputFenceSupersededByNewQueue = false
         currentGameResultHandled = false
         latestObservedCreateGameTimestamp = null
+        terminalQueueEvidenceCleared.set(false)
     }
 
     fun markCurrentGameResultHandled() {
         currentGameResultHandled = true
+        // Result handling is the authoritative end of the previous queue
+        // attempt. A stale SEARCHING observation or click intent must not
+        // suppress the idle watchdog on the newly visible deck screen.
+        // Preserve a genuinely fresh SEARCHING capture: terminal-result
+        // bookkeeping must not veto an already active new queue. Only clear
+        // the historical click intent when no current queue screen has been
+        // observed in the bounded lifecycle window.
+        if (!LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+            terminalQueueEvidenceCleared.compareAndSet(false, true)
+        ) {
+            LifecycleTrace.clearActiveMatchmakingScreenObserved("current-game-result-handled")
+        } else if (LifecycleTrace.hasRecentActiveMatchmakingScreen()) {
+            log.info {
+                "MATCHMAKING_EVIDENCE_PRESERVED reason=current-search-screen-observed " +
+                    "terminal-result-handled=true"
+            }
+        }
     }
 
     fun currentGameTerminalForVerifiedLocalPlayer(): E2ETrace.PowerLogTerminal? {
@@ -281,6 +299,7 @@ object PowerLogListener :
                 terminalInputFenceSupersededByNewQueue = false
                 terminalResultRecoveryAttempted.set(false)
                 terminalQueueEvidenceCleared.set(false)
+                LifecycleTrace.clearActiveMatchmakingScreenObserved("new-create-game")
             }
         }
         currentGamePowerLogTerminalTracker.observeLine(

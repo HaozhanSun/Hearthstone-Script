@@ -137,6 +137,40 @@ class StartupInputReadinessTest {
     }
 
     @Test
+    fun `fresh deck proof can be reminted after the post-result completion chain`() {
+        StartupInputReadiness.recordSelectedTournamentMode(101, "hwnd-a", "WILD", now = 10_000L)
+        assertTrue(StartupInputReadiness.recordDeckSelectionStart(
+            pid = 101,
+            hwnd = "hwnd-a",
+            confidence = 94,
+            evidence = "deck-selection-start-control-visual",
+            expectedRunMode = "WILD",
+            observedRunMode = "UNKNOWN",
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            now = 10_001L,
+        ))
+        assertFalse(
+            StartupInputReadiness.isDeckSelectionStartReady(
+                101, "hwnd-a", 10_001L + StartupInputReadiness.DECK_SELECTION_START_PROOF_MAX_AGE_MS + 1,
+            ),
+            "the original proof must expire instead of being stretched across completion clicks",
+        )
+        assertTrue(StartupInputReadiness.recordDeckSelectionStart(
+            pid = 101,
+            hwnd = "hwnd-a",
+            confidence = 94,
+            evidence = "deck-selection-start-control-visual",
+            expectedRunMode = "WILD",
+            observedRunMode = "UNKNOWN",
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            now = 20_000L,
+        ))
+        assertTrue(StartupInputReadiness.isDeckSelectionStartReady(101, "hwnd-a", 20_001L))
+    }
+
+    @Test
     fun `deck start proof survives stale game phase and is independent of pre-match rank`() {
         assertTrue(
             StartupInputReadiness.recordDeckSelectionStart(

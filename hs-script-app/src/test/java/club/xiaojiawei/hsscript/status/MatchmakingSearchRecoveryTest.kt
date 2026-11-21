@@ -1,5 +1,6 @@
 package club.xiaojiawei.hsscript.status
 
+import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.listener.WorkTimeListener
 import club.xiaojiawei.hsscript.starter.StartupScreenProbeRetryPolicy
 import club.xiaojiawei.hsscript.utils.RobotInputDispatchBoundary
@@ -120,6 +121,22 @@ class MatchmakingSearchRecoveryTest {
                 .contains("captureAuthorized = captureResult.foregroundConfirmed"),
             "ScreenStateRecovery must not reconcile queue intent from an unverified probe",
         )
+        val tournamentSource = listOf(
+            java.io.File("src/main/java/club/xiaojiawei/hsscript/strategy/mode/TournamentModeStrategy.kt"),
+            java.io.File("hs-script-app/src/main/java/club/xiaojiawei/hsscript/strategy/mode/TournamentModeStrategy.kt"),
+        ).first(java.io.File::isFile).readText()
+        assertTrue(
+            tournamentSource.contains("ScreenStateRecovery.refreshFreshDeckSelectionStartProofForMatchmaking()"),
+            "final Start must refresh an exact deck-screen proof after the completion sequence",
+        )
+        assertTrue(
+            screenStateSource.contains("MATCHMAKING_START_PROOF_REFRESH decision="),
+            "the fresh-proof callsite must emit a structured decision reason",
+        )
+        assertTrue(
+            screenStateSource.contains("TournamentModeConfirmation.observeImageVisualOnly"),
+            "the final Start refresh must remain bounded and avoid a second expensive OCR probe",
+        )
 
         LifecycleTrace.resetMatchmakingEvidenceForTest()
         try {
@@ -173,6 +190,29 @@ class MatchmakingSearchRecoveryTest {
             assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(observedAt + 1_001L))
         } finally {
             LifecycleTrace.resetMatchmakingEvidenceForTest()
+        }
+    }
+
+    @Test
+    fun `create game and terminal completion clear stale queue evidence but fresh queue remains authoritative`() {
+        LifecycleTrace.resetMatchmakingEvidenceForTest()
+        PowerLogListener.resetTerminalInputFenceForTest()
+        try {
+            LifecycleTrace.markActiveMatchmakingScreenObserved(now = 1_000L)
+            assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(now = 1_001L))
+            PowerLogListener.observeCurrentGameTerminalEvidenceLine("D 01:00:00.000 CREATE_GAME")
+            assertFalse(LifecycleTrace.hasRecentMatchmakingInputIntent(now = 1_001L))
+
+            LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = true, now = 2_000L)
+            PowerLogListener.markCurrentGameResultHandled()
+            assertFalse(LifecycleTrace.hasRecentMatchmakingInputIntent(now = 2_001L))
+
+            LifecycleTrace.markActiveMatchmakingScreenObserved(now = 3_000L)
+            PowerLogListener.markCurrentGameResultHandled()
+            assertTrue(LifecycleTrace.hasRecentActiveMatchmakingScreen(now = 3_001L))
+        } finally {
+            LifecycleTrace.resetMatchmakingEvidenceForTest()
+            PowerLogListener.resetTerminalInputFenceForTest()
         }
     }
 

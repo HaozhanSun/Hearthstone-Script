@@ -636,10 +636,22 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         return dispatchStartControl()
     }
 
-    private fun clickMatchmakingStartControl(): Boolean = dispatchMatchmakingStartControlIfAuthorized(
-        isAuthorized = { ActionDispatchGate.isStartupScreenConfirmedForAction("matchmaking.start") },
-        dispatchStartControl = { clickMatchmakingControl(START_RECT) },
-    )
+    private fun clickMatchmakingStartControl(): Boolean {
+        // The completion-dialog sequence can take longer than the short-lived
+        // startup proof. Re-capture the exact deck-selection screen before
+        // the final Start click; never extend an old proof or infer readiness
+        // from the queue intent created by the first click.
+        val proofWasReady = ActionDispatchGate.isStartupScreenConfirmedForAction("matchmaking.start")
+        val freshProofRecorded = !proofWasReady &&
+            ScreenStateRecovery.refreshFreshDeckSelectionStartProofForMatchmaking()
+        return dispatchMatchmakingStartControlIfAuthorized(
+            isAuthorized = {
+                (proofWasReady || freshProofRecorded) &&
+                    ActionDispatchGate.isStartupScreenConfirmedForAction("matchmaking.start")
+            },
+            dispatchStartControl = { clickMatchmakingControl(START_RECT) },
+        )
+    }
 
     private fun captureMatchmakingCheckpoint(traceId: Long, stage: String) {
         if (System.getProperty("hs.script.e2e") != "true") return
