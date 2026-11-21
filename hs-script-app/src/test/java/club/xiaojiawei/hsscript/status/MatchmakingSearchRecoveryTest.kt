@@ -110,6 +110,16 @@ class MatchmakingSearchRecoveryTest {
             screenStateSource.contains("captureAuthorized = captureResult.foregroundConfirmed"),
             "the ScreenStateRecovery probe must pass its fresh foreground-authority result",
         )
+        assertTrue(
+            screenStateSource.contains("MatchmakingQueueLifecycleEvidencePolicy.propagateIfAuthoritative("),
+            "the ScreenStateRecovery error-dialog policy callsite must use the lifecycle authority adapter",
+        )
+        assertTrue(
+            screenStateSource.substringAfter("MatchmakingQueueLifecycleEvidencePolicy.propagateIfAuthoritative(")
+                .take(420)
+                .contains("captureAuthorized = captureResult.foregroundConfirmed"),
+            "ScreenStateRecovery must not reconcile queue intent from an unverified probe",
+        )
 
         LifecycleTrace.resetMatchmakingEvidenceForTest()
         try {
