@@ -39,6 +39,26 @@ function Test-HsScriptForeignReleaseCandidateWindow(
     return [string]$title -ceq 'HS Script Release Candidate'
 }
 
+function Get-HsScriptRuntimeChannelFromCommandLine(
+    [string]$CommandLine,
+    [string]$BetaRuntimeRoot
+) {
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $null }
+    $root = Get-HsScriptCanonicalRuntimeRoot $BetaRuntimeRoot
+    $parent = Split-Path -Parent $root
+    $channelRoots = [ordered]@{
+        stable = Join-Path $parent 'Hearthstone Script'
+        beta = $root
+        'release-candidate' = Join-Path $parent 'Hearthstone Script Release Candidate'
+    }
+    foreach ($channel in $channelRoots.Keys) {
+        $channelRoot = Get-HsScriptCanonicalRuntimeRoot ([string]$channelRoots[$channel])
+        $jarPattern = '(?i)' + [regex]::Escape($channelRoot) + '[\\/]+hs-script_[^\\/\s"]+\.jar'
+        if ($CommandLine -match $jarPattern) { return $channel }
+    }
+    return $null
+}
+
 function Start-HsScriptBetaRuntimeAfterDeploy(
     [string]$RuntimeRoot,
     [string]$DeploymentId,
@@ -165,6 +185,7 @@ function Stop-ManagedHsScriptProcesses(
     [scriptblock]$GetProcessRecords = { @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop) },
     [scriptblock]$GetIdentity = ${function:Get-HsScriptProcessIdentity},
     [scriptblock]$GetProcessStartTime = ${function:Get-HsScriptProcessStartTimeUtc},
+    [scriptblock]$GetCommandLine = ${function:Get-HsScriptNativeCommandLine},
     [scriptblock]$GetWindowTitle = ${function:Get-HsScriptProcessWindowTitle},
     [scriptblock]$StopProcess = { param($ProcessId) Stop-Process -Id ([int]$ProcessId) -Force -ErrorAction Stop }
 ) {
@@ -183,14 +204,54 @@ function Stop-ManagedHsScriptProcesses(
     }
 
     $ownedProcessIds = [System.Collections.Generic.HashSet[int]]::new()
+    $foreignChannelProcessIds = [System.Collections.Generic.HashSet[int]]::new()
     $foreignReleaseCandidateProcessIds = [System.Collections.Generic.HashSet[int]]::new()
     $jarPattern = '(?i)' + [regex]::Escape($root) + '[\\/]+hs-script_[^\\/\s"]+\.jar'
+    $resolvedCommandLines = @{}
+
+    # A verified marker can identify a live Stable/RC process even when both
+    # CIM.CommandLine and the limited-information command-line probe are
+    # unavailable. It is foreign-channel evidence only; it never grants Beta
+    # ownership or permits a foreign process to be stopped.
+    $knownChannelMarkers = @(Get-HsScriptRuntimeMarkers $root)
+    foreach ($marker in $knownChannelMarkers | Where-Object { [string]$_.RuntimeRoot -ine $root }) {
+        $markerPid = [int]$marker.ProcessId
+        $record = $processes | Where-Object { [int]$_.ProcessId -eq $markerPid } | Select-Object -First 1
+        if ($null -eq $record -or [string]$record.Name -notin @('java.exe', 'javaw.exe')) { continue }
+        $identity = $null
+        try { $identity = & $GetIdentity $markerPid } catch { }
+        if ($null -eq $identity) { continue }
+        $startMatches = $false
+        try {
+            $markerStart = [DateTimeOffset]::Parse([string]$marker.ProcessStartTimeUtc).ToUniversalTime()
+            $processStart = [DateTimeOffset]::Parse([string]$identity.ProcessStartTimeUtc).ToUniversalTime()
+            $startMatches = [Math]::Abs(($markerStart - $processStart).TotalMilliseconds) -le 1000
+        } catch { }
+        $expectedName = [System.IO.Path]::GetFileName([string]$marker.ExecutablePath)
+        $pathMatches = [string]$identity.ExecutablePath -and
+            ([System.IO.Path]::GetFullPath([string]$identity.ExecutablePath) -ieq [string]$marker.ExecutablePath)
+        $nameMatches = [string]$record.Name -ieq $expectedName -and
+            $expectedName -in @('java.exe', 'javaw.exe')
+        if ($startMatches -and $pathMatches -and $nameMatches) {
+            [void]$foreignChannelProcessIds.Add($markerPid)
+        }
+    }
+
     foreach ($record in $processes) {
         if ([string]$record.Name -notin @('java.exe', 'javaw.exe')) { continue }
         $processId = [int]$record.ProcessId
-        if ([string]$record.CommandLine -match $jarPattern) {
+        $commandLine = [string]$record.CommandLine
+        if ([string]::IsNullOrWhiteSpace($commandLine)) {
+            try { $commandLine = [string](& $GetCommandLine $processId) } catch { }
+        }
+        $resolvedCommandLines[$processId] = $commandLine
+        $channel = Get-HsScriptRuntimeChannelFromCommandLine $commandLine $root
+        if ($channel -eq 'beta' -and $commandLine -match $jarPattern) {
             [void]$ownedProcessIds.Add($processId)
-        } elseif ([string]::IsNullOrWhiteSpace([string]$record.CommandLine)) {
+        } elseif ($channel -in @('stable', 'release-candidate') -or
+            $foreignChannelProcessIds.Contains($processId)) {
+            continue
+        } elseif ([string]::IsNullOrWhiteSpace($commandLine)) {
             if (Test-HsScriptForeignReleaseCandidateWindow -Record $record -GetWindowTitle $GetWindowTitle) {
                 [void]$foreignReleaseCandidateProcessIds.Add($processId)
                 continue
@@ -198,6 +259,8 @@ function Stop-ManagedHsScriptProcesses(
             if (-not (Test-Path -LiteralPath (Join-Path $root 'hs-script.pid.json') -PathType Leaf)) {
                 throw "Unidentified Java PID $processId with no command line and no Beta ownership marker; refusing to assume idle"
             }
+        } else {
+            throw "Unidentified Java PID $processId has a command line outside the Stable, Beta, or Release Candidate runtime roots; refusing to assume idle"
         }
     }
 
@@ -292,9 +355,10 @@ function Stop-ManagedHsScriptProcesses(
 
     foreach ($record in $processes) {
         if ([string]$record.Name -in @('java.exe', 'javaw.exe') -and
-            [string]::IsNullOrWhiteSpace([string]$record.CommandLine) -and
+            [string]::IsNullOrWhiteSpace([string]$resolvedCommandLines[[int]$record.ProcessId]) -and
             -not $ownedProcessIds.Contains([int]$record.ProcessId)
         ) {
+            if ($foreignChannelProcessIds.Contains([int]$record.ProcessId)) { continue }
             if ($foreignReleaseCandidateProcessIds.Contains([int]$record.ProcessId)) { continue }
             throw "Unidentified Java PID $($record.ProcessId) has no visible command line or exact Beta marker identity; refusing to assume idle"
         }

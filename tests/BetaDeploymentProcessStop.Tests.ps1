@@ -12,6 +12,8 @@ $runtimeRoot = Join-Path $tempRoot 'Hearthstone Script Beta'
 $otherRoot = Join-Path $tempRoot 'Hearthstone Script Release Candidate'
 $javaPath = 'C:\Program Files\Java\jdk-25.0.4\bin\javaw.exe'
 $betaJar = Join-Path $runtimeRoot 'hs-script_v4.16.700.jar'
+$stableRuntimeRoot = Join-Path (Split-Path -Parent $runtimeRoot) 'Hearthstone Script'
+$stableJar = Join-Path $stableRuntimeRoot 'hs-script_v4.16.417-local-20261114-133256PST.jar'
 $rcJar = Join-Path $otherRoot 'hs-script_v4.16.701.jar'
 $stopped = [System.Collections.Generic.List[int]]::new()
 function Write-TestBetaManifest([string]$RuntimeRoot, [string]$DeploymentId) {
@@ -54,13 +56,35 @@ try {
     $records = @(
         [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 101; CommandLine = "javaw.exe -jar `"$betaJar`"" },
         [pscustomobject]@{ Name = 'java.exe'; ProcessId = 102; CommandLine = "java.exe -jar `"$rcJar`"" },
-        [pscustomobject]@{ Name = 'java.exe'; ProcessId = 103; CommandLine = 'java.exe -jar C:\tools\unrelated.jar' },
+        [pscustomobject]@{ Name = 'java.exe'; ProcessId = 103; CommandLine = "java.exe -jar `"$stableJar`"" },
         [pscustomobject]@{ Name = 'Hearthstone.exe'; ProcessId = 104; CommandLine = $null }
     )
     $stoppedIds = @(Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot -GetProcessRecords { $records } -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) })
     Assert-Equal 1 $stoppedIds.Count 'only exact Beta runtime Java PID is selected'
     Assert-Equal 101 $stoppedIds[0] 'Beta PID selected'
     Assert-Equal 101 $stopped[0] 'termination callback receives Beta PID only'
+
+    # A Stable JVM can have a blank CIM CommandLine when the deployment gate
+    # runs at lower integrity. The limited-information command-line probe
+    # identifies it by its canonical Stable runtime root; Beta proceeds and
+    # never sends that foreign PID to the stop callback.
+    $stableRecord = @([pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 111; CommandLine = '' })
+    $stableCommandLine = "`"$javaPath`" -jar `"$stableJar`""
+    $stoppedBeforeStable = $stopped.Count
+    $stableIgnored = @(Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot `
+        -GetProcessRecords { $stableRecord } `
+        -GetCommandLine { param($ProcessId) $stableCommandLine } `
+        -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) })
+    Assert-Equal 0 $stableIgnored.Count 'positively identified Stable JVM is ignored during Beta deployment'
+    Assert-Equal $stoppedBeforeStable $stopped.Count 'Stable JVM is never sent to the Beta stop callback'
+
+    $unknownCommandLineRefused = $false
+    try {
+        Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot `
+            -GetProcessRecords { @([pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 112; CommandLine = '' }) } `
+            -GetCommandLine { param($ProcessId) 'javaw.exe -jar C:\tools\unrelated.jar' } | Out-Null
+    } catch { $unknownCommandLineRefused = $_.Exception.Message -match 'outside the Stable, Beta, or Release Candidate runtime roots' }
+    Assert-Equal $true $unknownCommandLineRefused 'unknown recovered JVM command line remains fail-closed'
 
     $config = @{ channel = 'beta'; runtimeDirectoryName = 'Hearthstone Script Beta' } | ConvertTo-Json
     [System.IO.File]::WriteAllText((Join-Path $runtimeRoot 'release-channel.json'), $config)
@@ -315,10 +339,13 @@ try {
     } catch { $missingMarkerRefused = $_.Exception.Message -match 'no Beta ownership marker' }
     Assert-Equal $true $missingMarkerRefused 'missing marker with an unidentified JVM does not assume idle'
 
-    $unrelatedJava = @(Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot `
-        -GetProcessRecords { @([pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 109; CommandLine = 'javaw.exe -jar C:\tools\unrelated.jar' }) } `
-        -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) })
-    Assert-Equal 0 $unrelatedJava.Count 'visible unrelated Java process is not stopped'
+    $unrelatedJavaRefused = $false
+    try {
+        Stop-ManagedHsScriptProcesses -RuntimeRoot $runtimeRoot `
+            -GetProcessRecords { @([pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 109; CommandLine = 'javaw.exe -jar C:\tools\unrelated.jar' }) } `
+            -StopProcess { param($ProcessId) $stopped.Add([int]$ProcessId) } | Out-Null
+    } catch { $unrelatedJavaRefused = $_.Exception.Message -match 'outside the Stable, Beta, or Release Candidate runtime roots' }
+    Assert-Equal $true $unrelatedJavaRefused 'visible unrelated Java process remains fail-closed'
 
     $absentMarker = @{
         schema = 1

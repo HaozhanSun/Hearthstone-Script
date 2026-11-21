@@ -31,6 +31,8 @@ Assert-Equal 'C:\Java\bin\javaw.exe' $resolvedExecutable 'MainModule must resolv
 $observedSelfStart = Get-HsScriptProcessStartTimeUtc $PID
 if ([string]::IsNullOrWhiteSpace([string]$observedSelfStart)) { throw 'Process start-time-only resolver must return an independently readable timestamp' }
 $null = [DateTimeOffset]::Parse([string]$observedSelfStart)
+$observedSelfCommandLine = Get-HsScriptNativeCommandLine $PID
+if ([string]::IsNullOrWhiteSpace([string]$observedSelfCommandLine)) { throw 'Limited-information command-line resolver must return a command line for the current test process' }
 
 # If MainModule is inaccessible, CIM ExecutablePath is the fallback; an empty
 # result must throw instead of becoming an unverified process identity.

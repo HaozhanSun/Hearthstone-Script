@@ -142,6 +142,80 @@ public static class HsScriptProcessImagePathNative
     return [System.IO.Path]::GetFullPath($path)
 }
 
+function Get-HsScriptNativeCommandLine([int]$ProcessId) {
+    # Win32_Process.CommandLine can be blank for an elevated peer even when
+    # PROCESS_QUERY_LIMITED_INFORMATION can still read its command line. Keep
+    # this probe read-only and use the result only for channel classification;
+    # it never grants ownership by itself.
+    if ($null -eq ('HsScriptProcessCommandLineNative' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class HsScriptProcessCommandLineNative
+{
+    private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    private const int ProcessCommandLineInformation = 60;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct UnicodeString
+    {
+        public ushort Length;
+        public ushort MaximumLength;
+        public IntPtr Buffer;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(
+        IntPtr process,
+        int processInformationClass,
+        IntPtr processInformation,
+        int processInformationLength,
+        out int returnLength);
+
+    public static string ReadCommandLine(uint processId)
+    {
+        IntPtr handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+        if (handle == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+        IntPtr buffer = IntPtr.Zero;
+        try
+        {
+            buffer = Marshal.AllocHGlobal(32768);
+            int returnLength;
+            int status = NtQueryInformationProcess(
+                handle,
+                ProcessCommandLineInformation,
+                buffer,
+                32768,
+                out returnLength);
+            if (status != 0)
+            {
+                throw new Win32Exception(status, "NtQueryInformationProcess(ProcessCommandLineInformation) failed");
+            }
+            var commandLine = Marshal.PtrToStructure<UnicodeString>(buffer);
+            if (commandLine.Length == 0 || commandLine.Buffer == IntPtr.Zero) return string.Empty;
+            return Marshal.PtrToStringUni(commandLine.Buffer, commandLine.Length / 2) ?? string.Empty;
+        }
+        finally
+        {
+            if (buffer != IntPtr.Zero) Marshal.FreeHGlobal(buffer);
+            CloseHandle(handle);
+        }
+    }
+}
+'@
+    }
+    return [string][HsScriptProcessCommandLineNative]::ReadCommandLine([uint32]$ProcessId)
+}
+
 function Get-HsScriptExecutablePath(
     $Process,
     [int]$ProcessId,
