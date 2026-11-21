@@ -1,0 +1,124 @@
+package club.xiaojiawei.hsscript.status
+
+import club.xiaojiawei.hsscript.core.IdleWatchdogRestartSequence
+import java.nio.file.Files
+import java.nio.file.Path
+import java.awt.Color
+import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
+
+class BetaCandidateScreenRecoveryIntegrationTest {
+
+    @Test
+    fun `centered modal fingerprint ignores animated underlay but changes with modal content`() {
+        val first = modalFixture(background = Color(18, 42, 78), modalVariant = 0)
+        val animatedUnderlay = modalFixture(background = Color(118, 28, 36), modalVariant = 0)
+        val changedModal = modalFixture(background = Color(18, 42, 78), modalVariant = 1)
+
+        assertEquals(
+            ScreenStateRecovery.centeredModalPanelFingerprintForTest(first),
+            ScreenStateRecovery.centeredModalPanelFingerprintForTest(animatedUnderlay),
+            "candidate identity must ignore animation outside the centered modal ROI",
+        )
+        assertNotEquals(
+            ScreenStateRecovery.centeredModalPanelFingerprintForTest(first),
+            ScreenStateRecovery.centeredModalPanelFingerprintForTest(changedModal),
+            "a changed dialog must start a new candidate episode",
+        )
+    }
+
+    @Test
+    fun `known start game error fixture classifies and reaches restart at exactly two minutes`() {
+        val fixture = requireNotNull(
+            javaClass.getResourceAsStream("/offline-ocr/screen-recovery/start-game-error-dialog-over-deck-selection.png"),
+        ).use(ImageIO::read)
+        val classification = UpstreamScreenStateRecovery.classifyFreshScreenForWatchdog(
+            "发生错误 由于你的对手无法连接，游戏无法继续。请再试一次。确定",
+            fixture,
+        )
+        assertEquals("START_GAME_ERROR_DIALOG", classification.screen)
+        assertTrue(classification.confidence >= BetaCandidateScreenWatchdog.MIN_POSITIVE_CONFIDENCE)
+
+        val watchdog = BetaCandidateScreenWatchdog()
+        val first = candidate(
+            nowMs = 0L,
+            screen = requireNotNull(classification.screen),
+            dialogScreen = classification.screen,
+            confidence = classification.confidence,
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(first).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(first.copy(nowMs = BetaCandidateScreenWatchdog.DEFAULT_STABLE_THRESHOLD_MS)).action,
+        )
+    }
+
+    @Test
+    fun `candidate restart is wired to the serialized close and canonical starter chain`() {
+        val events = mutableListOf<String>()
+        IdleWatchdogRestartSequence.dispatch(
+            forceCloseClient = { events += "old-game-closed" },
+            startStarterChain = { events += "canonical-starter-chain" },
+        )
+        assertEquals(listOf("old-game-closed", "canonical-starter-chain"), events)
+
+        val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }
+            .first { Files.exists(it.resolve("src/main/java/club/xiaojiawei/hsscript/status/BetaScreenRecoveryService.kt")) }
+        val service = Files.readString(
+            root.resolve("src/main/java/club/xiaojiawei/hsscript/status/BetaScreenRecoveryService.kt"),
+        )
+        val restartDecision = service.indexOf("BetaCandidateScreenWatchdog.Action.RESTART")
+        val safetyFence = service.indexOf("candidateRestartStillSafe", restartDecision)
+        val serializedRestart = service.indexOf("Core.restartFromIdleWatchdog()", safetyFence)
+        assertTrue(
+            restartDecision >= 0 && safetyFence > restartDecision && serializedRestart > safetyFence,
+            "candidate recovery must pass the runtime fence before the serialized full restart",
+        )
+    }
+
+    private fun candidate(
+        nowMs: Long,
+        screen: String,
+        dialogScreen: String?,
+        confidence: Int,
+    ) = BetaCandidateScreenWatchdog.Snapshot(
+        nowMs = nowMs,
+        screen = screen,
+        dialogScreen = dialogScreen,
+        confidence = confidence,
+        captureConfirmed = true,
+        foregroundConfirmed = true,
+        pid = 42L,
+        hwnd = "hwnd-1",
+        foregroundIdentity = "hwnd-1",
+        working = true,
+        paused = false,
+        inWar = false,
+        mulligan = false,
+        terminal = false,
+    )
+
+    private fun modalFixture(background: Color, modalVariant: Int): BufferedImage =
+        BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB).also { image ->
+            image.createGraphics().also { graphics ->
+                graphics.color = background
+                graphics.fillRect(0, 0, image.width, image.height)
+                val left = (image.width * 0.32).toInt()
+                val top = (image.height * 0.39).toInt()
+                val width = (image.width * 0.36).toInt()
+                val height = (image.height * 0.23).toInt()
+                graphics.color = Color(42, 42, 42)
+                graphics.fillRect(left, top, width, height)
+                for (column in 0 until 9) {
+                    val stripeColor = if ((column + modalVariant) % 2 == 0) Color(224, 224, 224) else Color(62, 62, 62)
+                    graphics.color = stripeColor
+                    graphics.fillRect(left + 45 + column * 70, top + 55, 35, height - 110)
+                }
+                graphics.dispose()
+            }
+        }
+}

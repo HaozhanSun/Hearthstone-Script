@@ -2616,6 +2616,31 @@ object UpstreamScreenStateRecovery {
         image,
     )?.evidence
 
+    internal data class FreshScreenClassification(
+        val screen: String?,
+        val mode: String?,
+        val confidence: Int,
+        val evidence: String?,
+    )
+
+    /** Production seam for the read-only Beta candidate-screen probe. */
+    internal fun classifyFreshScreenForWatchdog(
+        ocrText: String,
+        image: BufferedImage,
+    ): FreshScreenClassification = detect(
+        ocrText,
+        visualSignature(image),
+        ScreenStateRecovery.hasCenteredModalPanel(image),
+        image,
+    ).let { detection ->
+        FreshScreenClassification(
+            screen = detection?.kind?.code,
+            mode = detection?.mode?.name,
+            confidence = detection?.confidence ?: 0,
+            evidence = detection?.evidence,
+        )
+    }
+
     /** A fresh queue screen is authoritative proof that result cleanup reached its post-result destination. */
     internal fun confirmPendingTerminalCleanupAtMatchmaking(
         screenKind: String,

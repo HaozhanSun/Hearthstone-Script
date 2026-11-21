@@ -42,6 +42,7 @@ internal object BetaScreenRecoveryService {
     private const val STARTUP_RECOVERY_GRACE_MS = 3_000L
     private const val STARTUP_HANDSHAKE_TIMEOUT_MS = 60_000L
     private val noProgressWatchdog = NoProgressWatchdog()
+    private val candidateScreenWatchdog = BetaCandidateScreenWatchdog()
     private val startupHandoffActivity = StartupHandoffActivityTracker()
     private val startupFailurePolicy = BetaStartupFailureRecoveryPolicy()
     private val missingGameRecoveryDispatchInFlight = AtomicBoolean(false)
@@ -52,6 +53,7 @@ internal object BetaScreenRecoveryService {
     @Volatile private var noProgressBoundPowerLogPath: String? = null
     @Volatile private var lifecycleStarted = false
     @Volatile private var monitor: ScheduledFuture<*>? = null
+    @Volatile private var candidateScreenMonitor: ScheduledFuture<*>? = null
     @Volatile private var startupFailureMonitor: ScheduledFuture<*>? = null
     @Volatile private var startupFailureSinceMs = 0L
     @Volatile private var lastObservedGamePid: Long? = null
@@ -156,6 +158,7 @@ internal object BetaScreenRecoveryService {
         if (!lifecycleStarted) startupFailureGeneration.incrementAndGet()
         lifecycleStarted = true
         startOptionalMonitor()
+        startCandidateScreenMonitor()
         startStartupFailureMonitor()
     }
 
@@ -165,6 +168,9 @@ internal object BetaScreenRecoveryService {
         monitor?.cancel(true)
         monitor?.let(ScreenRecoveryRuntime::forget)
         monitor = null
+        candidateScreenMonitor?.cancel(true)
+        candidateScreenMonitor = null
+        candidateScreenWatchdog.reset()
         startupFailureMonitor?.cancel(true)
         startupFailureMonitor?.let(ScreenRecoveryRuntime::forget)
         startupFailureMonitor = null
@@ -198,6 +204,121 @@ internal object BetaScreenRecoveryService {
         }, 10, 10, TimeUnit.SECONDS)
         if (ScreenRecoveryRuntime.track(token, task)) monitor = task
     }
+
+    /** Beta-only fresh-capture monitor for a repeated blocked candidate screen. */
+    private fun startCandidateScreenMonitor() {
+        if (!lifecycleStarted || !BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL) ||
+            candidateScreenMonitor?.isDone == false
+        ) return
+        val task = EXTRA_THREAD_POOL.scheduleWithFixedDelay({
+            if (lifecycleStarted && BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL)) {
+                runCatching { detectCandidateScreen() }
+                    .onFailure { error ->
+                        log.error(error) { "BETA_CANDIDATE_SCREEN_OBSERVATION_FAILED watchdog=RETAINED" }
+                    }
+            }
+        }, 10, 10, TimeUnit.SECONDS)
+        candidateScreenMonitor = task
+        log.info { "BETA_CANDIDATE_SCREEN_MONITOR_STARTED intervalMs=10000 thresholdMs=${BetaCandidateScreenWatchdog.DEFAULT_STABLE_THRESHOLD_MS}" }
+    }
+
+    internal fun candidateScreenMonitorScheduledForTest(): Boolean =
+        candidateScreenMonitor?.let { !it.isDone && !it.isCancelled } == true
+
+    private fun detectCandidateScreen() {
+        val now = System.currentTimeMillis()
+        val observation = if (
+            WorkTimeListener.working && !PauseStatus.isPause && !PowerLogListener.replayingExistingLog
+        ) {
+            runCatching { ScreenStateRecovery.observeFreshScreenForBetaCandidateWatchdog() }
+                .onFailure { error ->
+                    log.warn(error) { "BETA_CANDIDATE_SCREEN_CAPTURE_FAILED action=WAIT_UNCERTAIN" }
+                }
+                .getOrNull()
+        } else null
+        val snapshot = candidateSnapshot(now, observation)
+        val decision = candidateScreenWatchdog.observe(snapshot)
+        if (decision.action != BetaCandidateScreenWatchdog.Action.WAIT &&
+            decision.action != BetaCandidateScreenWatchdog.Action.DEFER_HEALTHY_SCREEN
+        ) {
+            log.warn {
+                "BETA_CANDIDATE_SCREEN_OBSERVATION screen=${snapshot.screen ?: "UNKNOWN"} " +
+                    "dialog=${snapshot.dialogScreen ?: "none"} confidence=${snapshot.confidence} " +
+                    "pid=${snapshot.pid ?: "none"} hwnd=${snapshot.hwnd ?: "none"} " +
+                    "foreground=${snapshot.foregroundIdentity ?: "none"} action=${decision.action} " +
+                    "reason=${decision.reason} stableForMs=${decision.stableForMs} " +
+                    "positiveObservations=${decision.positiveObservations} restartCount=${decision.restartCount}"
+            }
+        }
+        if (decision.action != BetaCandidateScreenWatchdog.Action.RESTART) return
+        if (!candidateRestartStillSafe(observation)) {
+            candidateScreenWatchdog.reset()
+            log.warn {
+                "BETA_CANDIDATE_SCREEN_RESTART_DEFERRED reason=runtime-fence-changed " +
+                    "action=NO_RESTART pid=${observation?.pid ?: "none"} hwnd=${observation?.hwnd ?: "none"}"
+            }
+            return
+        }
+        log.error {
+            "BETA_CANDIDATE_SCREEN_RESTART_AUTHORIZED " +
+                "screen=${snapshot.screen ?: "UNKNOWN"} dialog=${snapshot.dialogScreen ?: "none"} " +
+                "stableForMs=${decision.stableForMs} positiveObservations=${decision.positiveObservations} " +
+                "restartCount=${decision.restartCount} action=CORE_IDLE_WATCHDOG_RESTART_NO_INPUT_NO_PAUSE"
+        }
+        Core.restartFromIdleWatchdog()
+    }
+
+    private fun candidateSnapshot(
+        now: Long,
+        observation: ScreenStateRecovery.FreshScreenObservation?,
+    ): BetaCandidateScreenWatchdog.Snapshot {
+        val visualModalCandidate = observation?.let {
+            it.modalVisible && it.screen.equals("UNKNOWN", ignoreCase = true)
+        } == true
+        return BetaCandidateScreenWatchdog.Snapshot(
+            nowMs = now,
+            screen = observation?.screen,
+            dialogScreen = observation?.takeIf { it.modalVisible && !it.screen.equals("UNKNOWN", ignoreCase = true) }
+                ?.screen
+                ?.takeUnless { it in HEALTHY_CANDIDATE_SCREENS },
+            visualModalConfirmed = visualModalCandidate,
+            visualModalFingerprint = observation?.centeredModalFingerprint
+                ?.takeIf { visualModalCandidate },
+            confidence = observation?.confidence ?: 0,
+            captureConfirmed = observation != null,
+            foregroundConfirmed = observation != null,
+            pid = observation?.pid,
+            hwnd = observation?.hwnd,
+            foregroundIdentity = observation?.hwnd,
+            working = WorkTimeListener.working,
+            paused = PauseStatus.isPause,
+            inWar = WarEx.inWar,
+            mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+            terminal = GameUtil.isTerminalGameState() || WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER,
+        )
+    }
+
+    private fun candidateRestartStillSafe(observation: ScreenStateRecovery.FreshScreenObservation?): Boolean {
+        if (observation == null || !WorkTimeListener.working || PauseStatus.isPause ||
+            WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD ||
+            GameUtil.isTerminalGameState() || WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER
+        ) return false
+        val currentPid = GameUtil.findGameProcessIdForDiagnostics()
+        val currentHwnd = ScriptStatus.gameHWND
+        return currentPid == observation.pid && currentHwnd?.toString() == observation.hwnd &&
+            GameUtil.isVerifiedCurrentGameWindow(currentHwnd, observation.pid)
+    }
+
+    private val HEALTHY_CANDIDATE_SCREENS = setOf(
+        "HOME",
+        "HOME_TASK_OVERLAY",
+        "TOURNAMENT",
+        "DECK_SELECTION",
+        "MATCHMAKING",
+        "COLLECTION",
+        "GAME_MODE",
+        "GAMEPLAY",
+    )
 
     /** Beta-only, always-on guard for failed startup handoffs and native crash dialogs. */
     private fun startStartupFailureMonitor() {

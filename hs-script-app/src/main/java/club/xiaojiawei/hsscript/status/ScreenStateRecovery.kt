@@ -67,6 +67,7 @@ object ScreenStateRecovery {
         val noActiveMatchmakingEvidence: Boolean,
         val hubModeChooserVisible: Boolean,
         val modalVisible: Boolean,
+        val centeredModalFingerprint: Long? = null,
     )
 
     /** Use the configured PaddleX deadline so cold pipeline initialization isn't cut off at 4 seconds. */
@@ -239,9 +240,29 @@ object ScreenStateRecovery {
             InspectionResult.APPLIED
     }
 
-    /** Read-only, fresh screenshot observation for the Beta no-progress guard. */
-    internal fun observeFreshScreenForWatchdog(stuckForMs: Long = 0L): FreshScreenObservation? {
-        val recoveryToken = ScreenRecoveryRuntime.tokenOrNull() ?: return null
+    /** Read-only, fresh screenshot observation for the optional Beta no-progress guard. */
+    internal fun observeFreshScreenForWatchdog(stuckForMs: Long = 0L): FreshScreenObservation? =
+        observeFreshScreenForWatchdogInternal(
+            stuckForMs = stuckForMs,
+            requireRecoveryRuntime = true,
+            useUpstreamClassifier = false,
+        )
+
+    /** Read-only, fresh screenshot observation for Beta's always-on candidate-screen guard. */
+    internal fun observeFreshScreenForBetaCandidateWatchdog(): FreshScreenObservation? =
+        observeFreshScreenForWatchdogInternal(
+            stuckForMs = 0L,
+            requireRecoveryRuntime = false,
+            useUpstreamClassifier = true,
+        )
+
+    private fun observeFreshScreenForWatchdogInternal(
+        stuckForMs: Long,
+        requireRecoveryRuntime: Boolean,
+        useUpstreamClassifier: Boolean,
+    ): FreshScreenObservation? {
+        val recoveryToken = ScreenRecoveryRuntime.tokenOrNull()
+        if (requireRecoveryRuntime && recoveryToken == null) return null
         val initialPid = GameUtil.findGameProcessIdForDiagnostics() ?: return null
         val gameWindow = resolveLiveGameWindow() ?: return null
         val captureResult = MouseUtil.withRecoveryForeground(gameWindow) {
@@ -264,23 +285,41 @@ object ScreenStateRecovery {
                 captureScreen(currentWindow, purpose = purpose, staleForMs = stuckForMs)
             }
         }
-        if (!ScreenRecoveryRuntime.isCurrent(recoveryToken) || !captureResult.foregroundConfirmed) return null
+        if ((recoveryToken != null && !ScreenRecoveryRuntime.isCurrent(recoveryToken)) ||
+            !captureResult.foregroundConfirmed
+        ) return null
         val capture = captureResult.value ?: return null
         if (GameUtil.findGameProcessIdForDiagnostics() != initialPid ||
             !GameUtil.isVerifiedCurrentGameWindow(gameWindow)
         ) return null
         val ocrEvidence = runOCR(capture)
-        val detection = detect(ocrEvidence, capture.visual)?.takeIf { it.confidence >= 85 }
+        val classification = if (useUpstreamClassifier) {
+            UpstreamScreenStateRecovery.classifyFreshScreenForWatchdog(ocrEvidence.text, capture.image)
+        } else {
+            detect(ocrEvidence, capture.visual)?.let { detection ->
+                UpstreamScreenStateRecovery.FreshScreenClassification(
+                    screen = detection.kind.code,
+                    mode = detection.mode.name,
+                    confidence = detection.confidence,
+                    evidence = detection.evidence,
+                )
+            } ?: UpstreamScreenStateRecovery.FreshScreenClassification(
+                screen = null,
+                mode = null,
+                confidence = 0,
+                evidence = null,
+            )
+        }
         val currentSessionReady = capture.evidence.currentSessionReady
         val queueVisible = capture.visual.matchmakingSearchVisual || looksLikeMatchmakingText(ocrEvidence.text)
         val queueLifecycleActive = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
             LifecycleTrace.hasRecentMatchmakingInputIntent()
         val noActiveMatchmakingEvidence = !queueVisible && !queueLifecycleActive
         val observation = FreshScreenObservation(
-            screen = detection?.kind?.code ?: "UNKNOWN",
-            mode = detection?.mode?.name,
-            confidence = detection?.confidence ?: 0,
-            evidence = detection?.evidence,
+            screen = classification.screen ?: "UNKNOWN",
+            mode = classification.mode,
+            confidence = classification.confidence,
+            evidence = classification.evidence,
             pid = initialPid,
             hwnd = gameWindow.toString(),
             screenshot = capture.file?.absolutePath,
@@ -289,6 +328,8 @@ object ScreenStateRecovery {
             noActiveMatchmakingEvidence = noActiveMatchmakingEvidence,
             hubModeChooserVisible = HubModeChooserVisualPolicy.isVisible(capture.image),
             modalVisible = hasCenteredModalPanel(capture.image),
+            centeredModalFingerprint = capture.visual.centeredModalPanelVisual
+                .let { if (it) centeredModalPanelFingerprint(capture.image) else null },
         )
         log.info {
             "SCREEN_RECOVERY_FRESH_OBSERVATION detected=${observation.screen} " +
@@ -321,6 +362,24 @@ object ScreenStateRecovery {
         }
         return fingerprint
     }
+
+    /**
+     * Identity for the OCR-unknown modal fallback.  The full-frame hash is
+     * intentionally not used here because the Hearthstone underlay can
+     * animate while a centered dialog remains unchanged.
+     */
+    private fun centeredModalPanelFingerprint(image: BufferedImage): Long {
+        val bounds = Rectangle(
+            (image.width * 0.32).toInt(),
+            (image.height * 0.39).toInt(),
+            (image.width * 0.36).toInt().coerceAtLeast(1),
+            (image.height * 0.23).toInt().coerceAtLeast(1),
+        )
+        return perceptualFingerprint(crop(image, bounds))
+    }
+
+    internal fun centeredModalPanelFingerprintForTest(image: BufferedImage): Long =
+        centeredModalPanelFingerprint(image)
 
     /** Read-only process/log boundary used to distinguish an explicit rearm from a healthy heartbeat. */
     internal fun isCurrentGameSessionReadyForStart(): Boolean = currentSessionModelReady()
