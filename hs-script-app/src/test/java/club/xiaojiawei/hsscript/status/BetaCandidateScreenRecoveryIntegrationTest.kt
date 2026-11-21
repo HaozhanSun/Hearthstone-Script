@@ -80,21 +80,147 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         )
     }
 
+    @Test
+    fun `same modal fingerprint survives a new client identity but remains bounded until healthy progress`() {
+        val watchdog = BetaCandidateScreenWatchdog()
+        val firstClient = candidate(
+            nowMs = 0L,
+            screen = "UNKNOWN",
+            dialogScreen = null,
+            confidence = 0,
+            visualModalConfirmed = true,
+            visualModalFingerprint = 0xCAFE,
+            pid = 100L,
+            hwnd = "hwnd-100",
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(firstClient).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(firstClient.copy(nowMs = 120_000L)).action,
+        )
+
+        val replacementClient = firstClient.copy(
+            nowMs = 120_001L,
+            pid = 101L,
+            hwnd = "hwnd-101",
+            foregroundIdentity = "hwnd-101",
+        )
+        val replacementBaseline = watchdog.observe(replacementClient)
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, replacementBaseline.action)
+        assertEquals(1, replacementBaseline.restartCount, "PID replacement must preserve the semantic restart budget")
+
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.REARM,
+            watchdog.observe(replacementClient.copy(nowMs = 240_002L)).action,
+            "the two-minute timer must restart from the new client's fresh baseline",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(replacementClient.copy(nowMs = 360_002L)).action,
+        )
+
+        val thirdClient = replacementClient.copy(
+            nowMs = 360_003L,
+            pid = 102L,
+            hwnd = "hwnd-102",
+            foregroundIdentity = "hwnd-102",
+        )
+        assertEquals(2, watchdog.observe(thirdClient).restartCount)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.REARM,
+            watchdog.observe(thirdClient.copy(nowMs = 480_004L)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.EXHAUSTED,
+            watchdog.observe(thirdClient.copy(nowMs = 600_004L)).action,
+            "same semantic modal must stop at the restart budget even after PID changes",
+        )
+
+        val healthy = thirdClient.copy(
+            nowMs = 600_005L,
+            screen = "MATCHMAKING",
+            visualModalConfirmed = false,
+            visualModalFingerprint = null,
+            confidence = 100,
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.DEFER_HEALTHY_SCREEN, watchdog.observe(healthy).action)
+        val rearmedAfterHealthy = healthy.copy(
+            nowMs = 720_005L,
+            screen = "UNKNOWN",
+            confidence = 0,
+            visualModalConfirmed = true,
+            visualModalFingerprint = 0xCAFE,
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(rearmedAfterHealthy).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(rearmedAfterHealthy.copy(nowMs = 840_005L)).action,
+            "healthy progress must clear the previous exhaustion budget",
+        )
+    }
+
+    @Test
+    fun `alternating blocked modal fingerprints share one restart budget until healthy progress`() {
+        val watchdog = BetaCandidateScreenWatchdog()
+        val modalA = candidate(
+            nowMs = 0L,
+            screen = "UNKNOWN",
+            dialogScreen = null,
+            confidence = 0,
+            visualModalConfirmed = true,
+            visualModalFingerprint = 0xA0A0,
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(modalA).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(modalA.copy(nowMs = 120_000L)).action,
+        )
+
+        val modalB = modalA.copy(nowMs = 120_001L, visualModalFingerprint = 0xB0B0)
+        assertEquals(1, watchdog.observe(modalB).restartCount)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.REARM,
+            watchdog.observe(modalB.copy(nowMs = 240_002L)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(modalB.copy(nowMs = 360_002L)).action,
+        )
+
+        val modalAAgain = modalA.copy(nowMs = 360_003L)
+        assertEquals(2, watchdog.observe(modalAAgain).restartCount)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.REARM,
+            watchdog.observe(modalAAgain.copy(nowMs = 480_004L)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.EXHAUSTED,
+            watchdog.observe(modalAAgain.copy(nowMs = 600_004L)).action,
+            "blocked-candidate alternation must not evade the total restart cap",
+        )
+    }
+
     private fun candidate(
         nowMs: Long,
         screen: String,
         dialogScreen: String?,
         confidence: Int,
+        visualModalConfirmed: Boolean = false,
+        visualModalFingerprint: Long? = null,
+        pid: Long = 42L,
+        hwnd: String = "hwnd-1",
     ) = BetaCandidateScreenWatchdog.Snapshot(
         nowMs = nowMs,
         screen = screen,
         dialogScreen = dialogScreen,
+        visualModalConfirmed = visualModalConfirmed,
+        visualModalFingerprint = visualModalFingerprint,
         confidence = confidence,
         captureConfirmed = true,
         foregroundConfirmed = true,
-        pid = 42L,
-        hwnd = "hwnd-1",
-        foregroundIdentity = "hwnd-1",
+        pid = pid,
+        hwnd = hwnd,
+        foregroundIdentity = hwnd,
         working = true,
         paused = false,
         inWar = false,

@@ -34,6 +34,14 @@ screen episode. The established Power.log no-progress branch still uses
 - Candidate restarts recheck the live runtime fence immediately before calling
   `Core.restartFromIdleWatchdog`, then use a bounded repeat backoff and restart
   budget for the same identity.
+- The semantic screen/modal identity and centered-modal ROI fingerprint survive
+  PID/HWND replacement after a restart. The two-minute stability timer starts
+  fresh for the replacement client, while the restart budget and cooldown remain
+  active. Only a positively confirmed healthy/usable screen or actual flow
+  progress clears the budget; exhaustion logs an explicit manual-attention state.
+- Alternating blocked modal fingerprints also preserve the same total restart
+  budget; changing from blocked candidate A to B and back to A cannot evade the
+  cap without confirmed healthy/usable progress.
 - Existing exact start-game-error modal precedence is reused through a production
   classifier seam; the deck-selection underlay cannot hide the modal.
 - The checked-in Beta release test selector and its selector regression test now

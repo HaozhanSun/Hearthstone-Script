@@ -68,6 +68,7 @@ internal class BetaCandidateScreenWatchdog(
     private var restartCount = 0
     private var lastRestartAtMs: Long? = null
     private var exhausted = false
+    private var requireFreshBaseline = false
 
     fun reset() {
         identity = null
@@ -77,27 +78,29 @@ internal class BetaCandidateScreenWatchdog(
         restartCount = 0
         lastRestartAtMs = null
         exhausted = false
+        requireFreshBaseline = false
     }
 
     fun observe(snapshot: Snapshot): Decision {
-        if (!snapshot.working) return defer(Action.DEFER_NOT_WORKING, "worker-not-working")
-        if (snapshot.paused) return defer(Action.DEFER_MANUAL_PAUSE, "manual-pause")
-        if (snapshot.inWar) return defer(Action.DEFER_ACTIVE_GAME, "active-game")
-        if (snapshot.mulligan) return defer(Action.DEFER_MULLIGAN, "mulligan")
-        if (snapshot.terminal) return defer(Action.DEFER_TERMINAL, "terminal-state")
+        if (!snapshot.working) return deferWithoutEvidence(snapshot, Action.DEFER_NOT_WORKING, "worker-not-working")
+        if (snapshot.paused) return deferWithoutEvidence(snapshot, Action.DEFER_MANUAL_PAUSE, "manual-pause")
+        if (snapshot.inWar) return deferProgress(Action.DEFER_ACTIVE_GAME, "active-game")
+        if (snapshot.mulligan) return deferProgress(Action.DEFER_MULLIGAN, "mulligan")
+        if (snapshot.terminal) return deferProgress(Action.DEFER_TERMINAL, "terminal-state")
 
         val screen = snapshot.screen?.takeIf { it.isNotBlank() }
         val dialog = snapshot.dialogScreen?.takeIf { it.isNotBlank() }
-        val visualModal = snapshot.visualModalFingerprint?.let { fingerprint ->
-            if (snapshot.visualModalConfirmed && screen?.equals("UNKNOWN", ignoreCase = true) == true) {
-                "VISUAL_MODAL:${java.lang.Long.toUnsignedString(fingerprint, 16)}"
-            } else null
+        val modalFingerprint = snapshot.visualModalFingerprint
+            ?.takeIf { snapshot.visualModalConfirmed }
+            ?.let { java.lang.Long.toUnsignedString(it, 16) }
+        val visualModal = modalFingerprint?.let { fingerprint ->
+            if (screen?.equals("UNKNOWN", ignoreCase = true) == true) "VISUAL_MODAL:$fingerprint" else null
         }
         val positiveVisualModal = visualModal != null
         if (screen?.equals("RESULT", ignoreCase = true) == true ||
             screen?.equals("RANK_PROGRESS_CONTINUATION", ignoreCase = true) == true
         ) {
-            return defer(Action.DEFER_TERMINAL, "result-screen")
+            return deferProgress(Action.DEFER_TERMINAL, "result-screen")
         }
         if (!snapshot.captureConfirmed || !snapshot.foregroundConfirmed ||
             snapshot.pid == null || snapshot.pid <= 0L || snapshot.hwnd.isNullOrBlank() ||
@@ -106,14 +109,16 @@ internal class BetaCandidateScreenWatchdog(
             screen == null || (screen.equals("UNKNOWN", ignoreCase = true) && visualModal == null) ||
             dialog?.equals("UNKNOWN", ignoreCase = true) == true
         ) {
-            return defer(Action.WAIT_UNCERTAIN, "capture-or-ocr-uncertain")
+            return deferWithoutEvidence(snapshot, Action.WAIT_UNCERTAIN, "capture-or-ocr-uncertain")
         }
 
         // A recognized dialog is the topmost candidate. Never allow an
         // actionable underlay such as DECK_SELECTION to hide it.
-        val candidateScreen = dialog?.let { "DIALOG:$it" } ?: visualModal ?: screen!!
+        val candidateScreen = dialog?.let { dialogName ->
+            "DIALOG:$dialogName${modalFingerprint?.let { fingerprint -> ":$fingerprint" }.orEmpty()}"
+        } ?: visualModal ?: screen!!
         if (dialog == null && visualModal == null && isHealthyScreen(screen)) {
-            return defer(Action.DEFER_HEALTHY_SCREEN, "healthy-screen")
+            return deferProgress(Action.DEFER_HEALTHY_SCREEN, "healthy-screen")
         }
 
         val currentIdentity = Identity(
@@ -123,17 +128,37 @@ internal class BetaCandidateScreenWatchdog(
             foregroundIdentity = snapshot.foregroundIdentity,
         )
         val previousIdentity = identity
-        if (previousIdentity != currentIdentity ||
-            lastObservationAtMs != null && snapshot.nowMs < lastObservationAtMs!!
-        ) {
+        val semanticIdentityChanged = previousIdentity?.screen != currentIdentity.screen
+        val timeWentBackwards = lastObservationAtMs != null && snapshot.nowMs < lastObservationAtMs!!
+        if (semanticIdentityChanged || timeWentBackwards) {
             identity = currentIdentity
             stableSinceMs = snapshot.nowMs
             lastObservationAtMs = snapshot.nowMs
             positiveObservations = 1
-            restartCount = 0
-            lastRestartAtMs = null
-            exhausted = false
-            return decision(Action.RESET_IDENTITY, "candidate-identity-baseline", 0L)
+            if (previousIdentity == null) {
+                restartCount = 0
+                lastRestartAtMs = null
+                exhausted = false
+            }
+            requireFreshBaseline = false
+            return decision(
+                Action.RESET_IDENTITY,
+                if (previousIdentity == null) {
+                    "candidate-identity-baseline"
+                } else {
+                    "candidate-blocked-baseline-preserving-budget"
+                },
+                0L,
+            )
+        }
+
+        if (previousIdentity != currentIdentity || requireFreshBaseline) {
+            identity = currentIdentity
+            stableSinceMs = snapshot.nowMs
+            lastObservationAtMs = snapshot.nowMs
+            positiveObservations = 1
+            requireFreshBaseline = false
+            return decision(Action.RESET_IDENTITY, "candidate-runtime-baseline-preserving-budget", 0L)
         }
 
         positiveObservations++
@@ -151,7 +176,7 @@ internal class BetaCandidateScreenWatchdog(
         }
         if (exhausted || restartCount >= maxRestartsPerIdentity.coerceAtLeast(1)) {
             exhausted = true
-            return decision(Action.EXHAUSTED, "restart-budget-exhausted", stableForMs)
+            return decision(Action.EXHAUSTED, "restart-budget-exhausted-manual-attention-required", stableForMs)
         }
         if (positiveObservations < MIN_POSITIVE_OBSERVATIONS || stableForMs < stableThresholdMs) {
             return decision(Action.WAIT, "candidate-stable-below-threshold", stableForMs)
@@ -162,9 +187,26 @@ internal class BetaCandidateScreenWatchdog(
         return decision(Action.RESTART, "candidate-stable-threshold-reached", stableForMs)
     }
 
-    private fun defer(action: Action, reason: String): Decision {
+    private fun deferProgress(action: Action, reason: String): Decision {
         reset()
         return Decision(action, reason, stableForMs = 0L, positiveObservations = 0, restartCount = 0)
+    }
+
+    /** Preserve the semantic restart budget, but require a fresh positive baseline before aging again. */
+    private fun deferWithoutEvidence(snapshot: Snapshot, action: Action, reason: String): Decision {
+        if (identity != null) {
+            stableSinceMs = snapshot.nowMs
+            lastObservationAtMs = snapshot.nowMs
+            positiveObservations = 0
+            requireFreshBaseline = true
+        }
+        return Decision(
+            action = action,
+            reason = reason,
+            stableForMs = 0L,
+            positiveObservations = positiveObservations,
+            restartCount = restartCount,
+        )
     }
 
     private fun decision(action: Action, reason: String, nowMs: Long): Decision = Decision(

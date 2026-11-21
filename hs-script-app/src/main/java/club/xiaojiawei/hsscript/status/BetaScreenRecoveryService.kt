@@ -250,6 +250,14 @@ internal object BetaScreenRecoveryService {
                     "positiveObservations=${decision.positiveObservations} restartCount=${decision.restartCount}"
             }
         }
+        if (decision.action == BetaCandidateScreenWatchdog.Action.EXHAUSTED) {
+            log.error {
+                "BETA_CANDIDATE_SCREEN_MANUAL_ATTENTION_REQUIRED " +
+                    "screen=${snapshot.screen ?: "UNKNOWN"} dialog=${snapshot.dialogScreen ?: "none"} " +
+                    "restartCount=${decision.restartCount} action=NO_FURTHER_RESTARTS"
+            }
+            return
+        }
         if (decision.action != BetaCandidateScreenWatchdog.Action.RESTART) return
         if (!candidateRestartStillSafe(observation)) {
             candidateScreenWatchdog.reset()
@@ -272,18 +280,14 @@ internal object BetaScreenRecoveryService {
         now: Long,
         observation: ScreenStateRecovery.FreshScreenObservation?,
     ): BetaCandidateScreenWatchdog.Snapshot {
-        val visualModalCandidate = observation?.let {
-            it.modalVisible && it.screen.equals("UNKNOWN", ignoreCase = true)
-        } == true
         return BetaCandidateScreenWatchdog.Snapshot(
             nowMs = now,
             screen = observation?.screen,
             dialogScreen = observation?.takeIf { it.modalVisible && !it.screen.equals("UNKNOWN", ignoreCase = true) }
                 ?.screen
                 ?.takeUnless { it in HEALTHY_CANDIDATE_SCREENS },
-            visualModalConfirmed = visualModalCandidate,
-            visualModalFingerprint = observation?.centeredModalFingerprint
-                ?.takeIf { visualModalCandidate },
+            visualModalConfirmed = observation?.modalVisible == true,
+            visualModalFingerprint = observation?.centeredModalFingerprint,
             confidence = observation?.confidence ?: 0,
             captureConfirmed = observation != null,
             foregroundConfirmed = observation != null,
