@@ -345,7 +345,7 @@ class BetaCandidateScreenWatchdogTest {
         assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(reward).action)
         assertEquals(
             BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
-            watchdog.observe(reward.copy(nowMs = 60_000L, paused = true)).action,
+            watchdog.observe(reward.copy(nowMs = 60_000L, paused = true, working = false)).action,
         )
         assertEquals(
             BetaCandidateScreenWatchdog.Action.WAIT,
@@ -358,14 +358,39 @@ class BetaCandidateScreenWatchdogTest {
             "a manual pause cannot permanently suppress the bounded restart once the operator resumes",
         )
 
+        val boundaryPaused = BetaCandidateScreenWatchdog()
+        boundaryPaused.observe(reward)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
+            boundaryPaused.observe(reward.copy(nowMs = 120_000L, paused = true, working = false)).action,
+            "the exact threshold remains fenced while F2 pause is active",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            boundaryPaused.observe(reward.copy(nowMs = 120_000L)).action,
+            "after explicit resume, the already-earned threshold is dispatched exactly once",
+        )
+
         val changed = BetaCandidateScreenWatchdog()
         changed.observe(reward)
         assertEquals(BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
-            changed.observe(reward.copy(nowMs = 60_000L, paused = true)).action)
+            changed.observe(reward.copy(nowMs = 60_000L, paused = true, working = false)).action)
         assertEquals(
             BetaCandidateScreenWatchdog.Action.RESET_IDENTITY,
             changed.observe(reward.copy(nowMs = 120_000L, pid = 43L, hwnd = "hwnd-2", foregroundIdentity = "hwnd-2")).action,
             "a changed client identity after pause must restart from a fresh baseline",
+        )
+
+        val stopped = BetaCandidateScreenWatchdog()
+        stopped.observe(reward)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_NOT_WORKING,
+            stopped.observe(reward.copy(nowMs = 60_000L, working = false, paused = false)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESET_IDENTITY,
+            stopped.observe(reward.copy(nowMs = 120_000L)).action,
+            "a stopped worker without an explicit pause must not retain a recovery episode",
         )
     }
 

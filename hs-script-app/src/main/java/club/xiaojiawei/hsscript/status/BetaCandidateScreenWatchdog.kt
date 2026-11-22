@@ -93,12 +93,12 @@ internal class BetaCandidateScreenWatchdog(
     }
 
     fun observe(snapshot: Snapshot): Decision {
-        if (!snapshot.working) return deferWithoutEvidence(snapshot, Action.DEFER_NOT_WORKING, "worker-not-working")
         // Manual pause is a hard dispatch fence, but it must not erase a
         // positively identified episode.  Preserve its identity/timer so a
         // later explicit resume can finish the already-earned bounded wait;
         // contradictory screen/PID/HWND/queue evidence still resets below.
         if (snapshot.paused) return deferManualPause(snapshot)
+        if (!snapshot.working) return deferWithoutEvidence(snapshot, Action.DEFER_NOT_WORKING, "worker-not-working")
         if (snapshot.inWar) return deferProgress(Action.DEFER_ACTIVE_GAME, "active-game")
         if (snapshot.mulligan) return deferProgress(Action.DEFER_MULLIGAN, "mulligan")
         if (snapshot.observationMissing) {

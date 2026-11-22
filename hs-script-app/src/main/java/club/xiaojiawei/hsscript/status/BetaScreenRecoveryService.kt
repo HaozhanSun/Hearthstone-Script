@@ -315,7 +315,10 @@ internal object BetaScreenRecoveryService {
     internal fun candidateSnapshotForTest(
         now: Long,
         observation: ScreenStateRecovery.FreshScreenObservation?,
-    ): BetaCandidateScreenWatchdog.Snapshot = candidateSnapshot(now, observation)
+        terminalOverride: Boolean? = null,
+    ): BetaCandidateScreenWatchdog.Snapshot = candidateSnapshot(now, observation).let { snapshot ->
+        terminalOverride?.let { snapshot.copy(terminal = it) } ?: snapshot
+    }
 
     private fun candidateRestartStillSafe(observation: ScreenStateRecovery.FreshScreenObservation?): Boolean =
         candidateRestartFenceReason(observation) == null

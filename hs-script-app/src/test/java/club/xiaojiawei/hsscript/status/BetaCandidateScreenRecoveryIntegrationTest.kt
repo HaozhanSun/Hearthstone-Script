@@ -70,26 +70,32 @@ class BetaCandidateScreenRecoveryIntegrationTest {
 
         // This is the production handoff shape from the incident: stale
         // lifecycle phase FILL_DECK/current-session remains true while the
-        // current Power.log has no new bytes. Terminal visual classification
-        // is independent; the existing candidate fence still requires the
-        // current session and no active queue before the full Beta restart.
-        val reward = BetaCandidateScreenWatchdog.Snapshot(
-            nowMs = 0L,
+        // current Power.log has no new bytes. Drive the actual classifier
+        // result through BetaScreenRecoveryService.candidateSnapshotForTest;
+        // only authoritative terminal proof is supplied by the test seam.
+        val observation = ScreenStateRecovery.FreshScreenObservation(
             screen = "RANK_PROGRESS_CONTINUATION",
+            mode = "GAMEPLAY",
             confidence = 93,
-            captureConfirmed = true,
-            foregroundConfirmed = true,
+            evidence = "post-result-rank-progress-visual",
             pid = 29_000L,
             hwnd = "0x27010",
-            foregroundIdentity = "0x27010",
-            working = true,
-            paused = false,
-            inWar = false,
-            mulligan = false,
-            terminal = true,
+            screenshot = "beta-live-platinum9-rank-reward-20261121.png",
+            perceptualFingerprint = 0x39690b06L,
             currentSessionReady = true,
             noActiveMatchmakingEvidence = true,
+            hubModeChooserVisible = false,
+            modalVisible = true,
         )
+        val reward = BetaScreenRecoveryService.candidateSnapshotForTest(
+            now = 0L,
+            observation = observation,
+            terminalOverride = true,
+        ).copy(working = true, paused = false)
+        assertEquals("RANK_PROGRESS_CONTINUATION", reward.screen)
+        assertTrue(reward.currentSessionReady)
+        assertTrue(reward.terminal)
+        assertTrue(reward.noActiveMatchmakingEvidence)
         val watchdog = BetaCandidateScreenWatchdog()
         assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(reward).action)
         assertEquals(BetaCandidateScreenWatchdog.Action.WAIT,
