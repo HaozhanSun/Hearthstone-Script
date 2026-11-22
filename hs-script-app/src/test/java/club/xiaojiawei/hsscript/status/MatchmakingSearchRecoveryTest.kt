@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.awt.Color
 import java.awt.image.BufferedImage
+import java.nio.file.Files
+import java.nio.file.Path
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingDialogRecoveryPolicy
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingInputGuardPolicy
 import javax.imageio.ImageIO
@@ -1066,6 +1068,60 @@ class MatchmakingSearchRecoveryTest {
         assertTrue(MatchmakingSearchVisualPolicy.isVisible(redOrnamentFrame))
         assertFalse(HubModeChooserVisualPolicy.isVisible(redOrnamentFrame))
         assertNull(UpstreamScreenStateRecovery.classifyImageForTest("OCR噪声 传统对战", redOrnamentFrame))
+    }
+
+    @Test
+    fun `fresh search visual short circuits upstream OCR and preserves queue classification`() {
+        val search = syntheticSearchScreen()
+        assertTrue(MatchmakingSearchVisualPolicy.isVisible(search))
+        assertTrue(
+            UpstreamScreenStateRecovery.shouldSkipOcrForMatchmakingVisualForTest(
+                matchmakingSearchVisual = true,
+                hubModeChooserVisual = false,
+                modalVisible = false,
+            ),
+            "an exact search visual must not enter the slow OCR path",
+        )
+        assertFalse(
+            UpstreamScreenStateRecovery.shouldSkipOcrForMatchmakingVisualForTest(
+                matchmakingSearchVisual = true,
+                hubModeChooserVisual = true,
+                modalVisible = false,
+            ),
+            "HUB chooser geometry must remain on the normal classifier path",
+        )
+        assertFalse(
+            UpstreamScreenStateRecovery.shouldSkipOcrForMatchmakingVisualForTest(
+                matchmakingSearchVisual = true,
+                hubModeChooserVisual = false,
+                modalVisible = true,
+            ),
+            "centered dialogs must not be hidden by the queue fast path",
+        )
+        assertEquals("MATCHMAKING", UpstreamScreenStateRecovery.classifyImageForTest("", search))
+
+        val liveSearch = requireNotNull(
+            javaClass.getResourceAsStream(
+                "/offline-ocr/screen-recovery/matchmaking-search-live-20261122-080159.png",
+            ),
+        ).use(ImageIO::read)
+        assertTrue(MatchmakingSearchVisualPolicy.isVisible(liveSearch))
+        assertFalse(
+            ScreenStateRecovery.hasCenteredModalPanel(liveSearch),
+            "the live 08:01:59 queue frame has no centered dialog and is eligible for the visual fast path",
+        )
+        assertEquals("MATCHMAKING", UpstreamScreenStateRecovery.classifyImageForTest("", liveSearch))
+
+        val source = listOf(
+            Path.of("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt"),
+            Path.of("hs-script-app/src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt"),
+        ).first { Files.isRegularFile(it) }
+        val text = Files.readString(source)
+        val branch = text.indexOf("val queueVisualOcrSkip = shouldSkipOcrForMatchmakingVisual(")
+        val ocr = text.indexOf("else -> runOCR(capture, File(TESS_DATA_PATH))", branch.coerceAtLeast(0))
+        assertTrue(branch >= 0 && ocr > branch,
+            "the production upstream callsite must classify an authorized search visual before OCR")
+        assertTrue(text.contains("reason=exact-matchmaking-search-visual"))
     }
 
     @Test

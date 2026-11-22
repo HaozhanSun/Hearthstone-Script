@@ -14,10 +14,13 @@ internal object BetaCandidateRestartFencePolicy {
         val inWar: Boolean,
         val mulligan: Boolean,
         val noActiveMatchmakingEvidence: Boolean,
+        val terminalInputFence: Boolean = false,
         val currentSessionReady: Boolean,
         val screen: String,
         val lifecycleTerminalLatch: Boolean,
         val authorizedTerminalVisualProof: Boolean,
+        /** Fail closed for synthetic/forged snapshots; production callsites pass capture authority explicitly. */
+        val foregroundConfirmed: Boolean = false,
         val pidMatches: Boolean,
         val hwndMatches: Boolean,
         val currentWindowVerified: Boolean,
@@ -30,7 +33,9 @@ internal object BetaCandidateRestartFencePolicy {
         if (snapshot.paused) return "manual-pause"
         if (snapshot.inWar) return "active-game"
         if (snapshot.mulligan) return "mulligan"
+        if (snapshot.terminalInputFence) return "terminal-input-fence"
         if (!snapshot.noActiveMatchmakingEvidence) return "active-matchmaking-evidence"
+        if (!snapshot.foregroundConfirmed) return "foreground-unverified"
 
         val screen = snapshot.screen.uppercase()
         val terminalState = snapshot.currentSessionReady &&

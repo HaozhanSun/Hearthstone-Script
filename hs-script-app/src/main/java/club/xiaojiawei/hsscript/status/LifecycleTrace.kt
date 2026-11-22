@@ -393,6 +393,12 @@ object LifecycleTrace {
         mark("active-matchmaking-evidence-cleared reason=$reason")
     }
 
+    /** Clear only the stale SEARCHING-screen latch; retain click/entry intent fences. */
+    internal fun clearActiveMatchmakingScreenOnly(reason: String) {
+        activeMatchmakingScreenObservedAt = 0L
+        mark("active-matchmaking-screen-cleared reason=$reason staleInputIntentRetained=${hasRecentMatchmakingInputIntent()}")
+    }
+
     /** A current exact reconnect screen supersedes only the previous queue-screen observation. */
     fun supersedeActiveMatchmakingScreenForReconnect(
         reason: String = "exact-reconnect-screen",

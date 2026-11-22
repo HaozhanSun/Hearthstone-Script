@@ -19,6 +19,7 @@ class BetaCandidateRestartFencePolicyTest {
             screen = "STARTUP_LAUNCHER",
             lifecycleTerminalLatch = true,
             authorizedTerminalVisualProof = false,
+            foregroundConfirmed = true,
             pidMatches = true,
             hwndMatches = true,
             currentWindowVerified = true,
@@ -49,6 +50,14 @@ class BetaCandidateRestartFencePolicyTest {
             BetaCandidateRestartFencePolicy.rejectionReason(base.copy(currentWindowVerified = false)),
         )
         assertEquals(
+            "foreground-unverified",
+            BetaCandidateRestartFencePolicy.rejectionReason(base.copy(foregroundConfirmed = false)),
+        )
+        assertEquals(
+            "terminal-input-fence",
+            BetaCandidateRestartFencePolicy.rejectionReason(base.copy(terminalInputFence = true)),
+        )
+        assertEquals(
             "current-session-ready",
             BetaCandidateRestartFencePolicy.rejectionReason(
                 base.copy(currentSessionReady = true, lifecycleTerminalLatch = false),
@@ -70,6 +79,7 @@ class BetaCandidateRestartFencePolicyTest {
             screen = "RANK_PROGRESS_CONTINUATION",
             lifecycleTerminalLatch = false,
             authorizedTerminalVisualProof = false,
+            foregroundConfirmed = true,
             pidMatches = true,
             hwndMatches = true,
             currentWindowVerified = true,

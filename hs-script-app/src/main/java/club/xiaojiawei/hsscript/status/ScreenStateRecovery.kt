@@ -70,6 +70,8 @@ object ScreenStateRecovery {
         val hubModeChooserVisible: Boolean,
         val modalVisible: Boolean,
         val centeredModalFingerprint: Long? = null,
+        /** Capture and foreground were verified atomically before classification. */
+        val foregroundConfirmed: Boolean = false,
     )
 
     /** Use the configured PaddleX deadline so cold pipeline initialization isn't cut off at 4 seconds. */
@@ -195,6 +197,7 @@ object ScreenStateRecovery {
         val darkRatio: Double,
         val warmRatio: Double,
         val blueRatio: Double = 0.0,
+        val brightRatio: Double = 0.0,
     )
 
     private data class Detection(
@@ -550,6 +553,7 @@ object ScreenStateRecovery {
             modalVisible = hasCenteredModalPanel(capture.image),
             centeredModalFingerprint = capture.visual.centeredModalPanelVisual
                 .let { if (it) centeredModalPanelFingerprint(capture.image) else null },
+            foregroundConfirmed = captureResult.foregroundConfirmed,
         )
         log.info {
             "SCREEN_RECOVERY_FRESH_OBSERVATION detected=${observation.screen} " +
@@ -673,13 +677,25 @@ object ScreenStateRecovery {
     internal fun classifyBetaCandidateVisualForTest(
         image: BufferedImage,
         currentSessionReady: Boolean = false,
+        configuredDeckStrategy: Boolean = DeckStrategyManager.currentDeckStrategy != null,
+        configuredRunMode: Boolean = DeckStrategyManager.currentRunMode != null,
     ): UpstreamScreenStateRecovery.FreshScreenClassification? {
         return classifyBetaCandidateVisual(
             currentSessionReady = currentSessionReady,
             purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
             image = image,
             visual = visualSignature(image),
+            configuredDeckStrategy = configuredDeckStrategy,
+            configuredRunMode = configuredRunMode,
         )
+    }
+
+    internal fun startupLoadingVisualDiagnosticsForTest(image: BufferedImage): String {
+        val visual = visualSignature(image)
+        val emblem = sampleRegion(image, 0.43, 0.57, 0.35, 0.65)
+        val label = sampleRegion(image, 0.40, 0.60, 0.78, 0.88)
+        return "visual=$visual emblemWarm=${emblem.warmRatio} emblemBright=${emblem.brightRatio} " +
+            "labelGray=${label.grayLightRatio} labelDark=${label.darkRatio}"
     }
 
     /** Pure visual branch shared by the production watchdog and fixture tests. */
@@ -688,13 +704,14 @@ object ScreenStateRecovery {
         purpose: ScreenRecoveryCapturePurpose,
         image: BufferedImage,
         visual: VisualSignature,
+        configuredDeckStrategy: Boolean = DeckStrategyManager.currentDeckStrategy != null,
+        configuredRunMode: Boolean = DeckStrategyManager.currentRunMode != null,
     ): UpstreamScreenStateRecovery.FreshScreenClassification? {
         val visualDeckSelectionCandidate = purpose in setOf(
             ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
             ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
             ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
-        ) && DeckStrategyManager.currentDeckStrategy != null &&
-            DeckStrategyManager.currentRunMode != null &&
+        ) && configuredDeckStrategy && configuredRunMode &&
             !visual.startupQuestOverlayVisual &&
             !visual.matchmakingSearchVisual &&
             !visual.centeredModalPanelVisual &&
@@ -707,6 +724,13 @@ object ScreenStateRecovery {
             !visual.matchmakingSearchVisual &&
             !visual.centeredModalPanelVisual &&
             HubModeChooserVisualPolicy.isVisible(image)
+        val visualStartupLoadingCandidate = !currentSessionReady && purpose in setOf(
+            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+        ) && !visual.startupQuestOverlayVisual &&
+            !visual.matchmakingSearchVisual &&
+            looksLikeStartupLoadingVisual(image, visual)
         return when {
             // A freshly launched client can legitimately show the Battle.net
             // handoff while its new Power.log is still empty. This is a
@@ -720,6 +744,13 @@ object ScreenStateRecovery {
                     mode = ModeEnum.LOGIN.name,
                     confidence = 96,
                     evidence = "battlenet-launcher-empty-session-visual",
+                )
+            visualStartupLoadingCandidate ->
+                UpstreamScreenStateRecovery.FreshScreenClassification(
+                    screen = "LOADING",
+                    mode = ModeEnum.STARTUP.name,
+                    confidence = 92,
+                    evidence = "startup-loading-visual",
                 )
             visualHubChooserCandidate ->
                 UpstreamScreenStateRecovery.FreshScreenClassification(
@@ -737,6 +768,28 @@ object ScreenStateRecovery {
                 )
             else -> null
         }
+    }
+
+    /**
+     * Narrow OCR-free signature for the Hearthstone client loading transition.
+     * It requires the warm Hearthstone loading palette, the blue center emblem,
+     * and the small bright lower-center loading label; generic dark/warm shop
+     * or reward panels do not satisfy all three independent regions.
+     */
+    private fun looksLikeStartupLoadingVisual(
+        image: BufferedImage,
+        visual: VisualSignature,
+    ): Boolean {
+        if (image.width < 800 || image.height < 450) return false
+        val emblem = sampleRegion(image, 0.43, 0.57, 0.35, 0.65)
+        val label = sampleRegion(image, 0.40, 0.60, 0.78, 0.88)
+        return visual.loadingCentralDarkRatio >= 0.72 &&
+            // The production 07:09 frame measured warmRatio=0.159; keep the
+            // lower bound below that frame while retaining the independent
+            // emblem/label regions as the structural safety checks.
+            visual.warmRatio >= 0.14 && visual.blueRatio <= 0.03 &&
+            emblem.warmRatio >= 0.05 && emblem.brightRatio >= 0.025 &&
+            label.grayLightRatio >= 0.018 && label.darkRatio >= 0.75
     }
 
     private fun perceptualFingerprint(image: BufferedImage): Long {
@@ -1774,6 +1827,7 @@ object ScreenStateRecovery {
         var dark = 0
         var warm = 0
         var blue = 0
+        var bright = 0
         var y = y0
         while (y < y1) {
             var x = x0
@@ -1788,6 +1842,7 @@ object ScreenStateRecovery {
                 if (maximum - minimum <= 35) lowSaturation++
                 if (maximum - minimum <= 35 && average >= 180) grayLight++
                 if (average < 70) dark++
+                if (maximum >= 90) bright++
                 if (r > 70 && r > g * 1.12 && r > b * 1.12) warm++
                 if (b > 80 && b > r * 1.18 && b > g * 1.05) blue++
                 samples++
@@ -1802,6 +1857,7 @@ object ScreenStateRecovery {
             darkRatio = dark.toDouble() / samples,
             blueRatio = blue.toDouble() / samples,
             warmRatio = warm.toDouble() / samples,
+            brightRatio = bright.toDouble() / samples,
         )
     }
 

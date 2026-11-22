@@ -865,3 +865,39 @@ this deletion boundary.
   candidate threshold; a changed identity, contradictory screen, active queue
   or game, pause, or a gap beyond that bound requires a fresh baseline and
   never permits an input action from UNKNOWN.
+- Beta candidate queue evidence must be reconciled when a newer exact
+  `DECK_SELECTION` frame (enabled Start control, trusted foreground PID/HWND,
+  no current session, no modal) proves the client returned from a rejected or
+  expired start attempt. Clear the old screen, short-entry, and input-intent
+  latches together and retain that exact deck identity across bounded null
+  captures; do not let a 15-minute intent history veto the resulting 120-second
+  startup restart. A fresh `MATCHMAKING` visual, current session, active game,
+  pause, changed PID/HWND, unverified foreground, or contradictory frame must
+  remain a hard final-dispatch fence. Regression coverage must exercise the
+  production candidate snapshot/service/final fence, not only the pure fence
+  policy.
+- Beta pre-session Hearthstone loading transitions must not spend a 12-second
+  native OCR slot when the frame itself proves the bounded loading state. The
+  structural shortcut requires the warm Hearthstone palette (warmRatio >= 0.14
+  to cover the darker 07:09 production frame), a bright/warm center-emblem
+  region corresponding to the blue spiral, and the bright lower-center loading
+  label from the exact foreground PID/HWND capture. This narrow signature may
+  outrank the generic centered-panel heuristic only when all three regions
+  match; it is read-only and never authorizes a click. Current session/game,
+  queue, pause, unknown, or contradictory evidence must continue through their
+  existing fences, and ordinary dialogs without the emblem/label signature
+  remain on the OCR/modal path. A loading candidate may only reach the
+  serialized restart path after the normal 120-second watchdog threshold. Keep
+  an exact-PNG production-callsite regression so OCR timeout on a startup
+  loading frame cannot recur unnoticed.
+- A fresh authorized `matchmakingSearchVisual` is an upstream classification
+  authority, not an input opportunity. When the exact queue visual is present
+  and neither HUB chooser geometry nor a centered dialog is visible, classify
+  the same capture as `MATCHMAKING` before the generic OCR fallback. This keeps
+  animated search frames from becoming transient UNKNOWN/stuck screenshots and
+  emits a structured `SCREEN_RECOVERY_OCR_SKIPPED`
+  `reason=exact-matchmaking-search-visual` record. The branch must perform no
+  click, cancel, mode change, or restart; HUB chooser, modal, non-queue, paused,
+  and unverified captures remain on their existing fail-closed paths. Regress
+  the exact 2026-11-22 queue PNG through the production classifier and assert
+  that its no-OCR branch is not selected for HUB/modal controls.

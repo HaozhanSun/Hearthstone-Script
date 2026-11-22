@@ -334,8 +334,20 @@ object UpstreamScreenStateRecovery {
             !ScreenStateRecovery.hasCenteredModalPanel(capture.image) &&
             DeckStrategyManager.currentDeckStrategy != null && DeckStrategyManager.currentRunMode != null &&
             ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image)
+        val queueVisualOcrSkip = shouldSkipOcrForMatchmakingVisual(
+            matchmakingSearchVisual = capture.visual.matchmakingSearchVisual,
+            hubModeChooserVisual = capture.visual.hubModeChooserVisual,
+            modalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image),
+        )
         val ocrText = when {
             questOverlayVisual -> ""
+            queueVisualOcrSkip -> {
+                log.info {
+                    "SCREEN_RECOVERY_OCR_SKIPPED reason=exact-matchmaking-search-visual " +
+                        "action=CLASSIFY_CURRENT_CAPTURE_NO_INPUT_NO_RESTART"
+                }
+                ""
+            }
             startupPreOcrAction == StartupHandoffProgressPolicy.PreOcrAction.CLASSIFY_HUB_CHOOSER_VISUALLY -> {
                 log.info {
                     "SCREEN_RECOVERY_OCR_SKIPPED reason=exact-startup-hub-mode-chooser-visual " +
@@ -1547,6 +1559,30 @@ object UpstreamScreenStateRecovery {
             betaChannel = true,
         )?.kind?.code
     }
+
+    /**
+     * A verified search visual is sufficient to classify the current frame as
+     * MATCHMAKING.  Do not run the slow OCR fallback on that frame: animated
+     * queue overlays can otherwise produce transient UNKNOWN text and create
+     * misleading stuck-screen artifacts.  Centered dialogs and the HUB chooser
+     * remain on the normal OCR/dialog path so this is not a generic modal or
+     * color-only bypass.
+     */
+    private fun shouldSkipOcrForMatchmakingVisual(
+        matchmakingSearchVisual: Boolean,
+        hubModeChooserVisual: Boolean,
+        modalVisible: Boolean,
+    ): Boolean = matchmakingSearchVisual && !hubModeChooserVisual && !modalVisible
+
+    internal fun shouldSkipOcrForMatchmakingVisualForTest(
+        matchmakingSearchVisual: Boolean,
+        hubModeChooserVisual: Boolean,
+        modalVisible: Boolean,
+    ): Boolean = shouldSkipOcrForMatchmakingVisual(
+        matchmakingSearchVisual,
+        hubModeChooserVisual,
+        modalVisible,
+    )
 
     private fun windowProcessId(hwnd: WinDef.HWND): Long {
         val pid = IntByReference()

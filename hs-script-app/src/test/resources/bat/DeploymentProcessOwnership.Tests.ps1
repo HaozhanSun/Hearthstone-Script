@@ -125,6 +125,18 @@ $blankLine = Resolve-HsScriptProcessAssessment $currentRoot @(
 Assert-Equal 'RUNTIME_ACTIVE' $blankLine.Status 'current channel marker must identify JVM when CommandLine is blank'
 Assert-Equal 1101 $blankLine.ProcessIds[0] 'current channel PID should be reported'
 
+# A live marker PID whose exact start-time/image identity cannot be read is not
+# safely distinguishable from a stale launcher/PID reuse.  Keep deployment
+# fail-closed and report the capability boundary rather than stopping a
+# possibly-owned Beta/Stable process or silently replacing its runtime.
+$launcherIdentityUnavailable = Resolve-HsScriptProcessAssessment $currentRoot @(
+    [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 1101; CommandLine = $null }
+) @($currentMarker) { param($processId) return $null }
+Assert-Equal 'AMBIGUOUS' $launcherIdentityUnavailable.Status `
+    'unavailable launcher identity must remain an explicit deployment blocker'
+Assert-Equal 'launcher PID exists but process identity is unavailable' $launcherIdentityUnavailable.Reason `
+    'unavailable launcher identity must explain why safe stale reconciliation is impossible'
+
 # A verified foreign channel PID is not attributed to this runtime.
 $foreignOnly = Resolve-HsScriptProcessAssessment $currentRoot @(
     [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 2202; CommandLine = '' }
