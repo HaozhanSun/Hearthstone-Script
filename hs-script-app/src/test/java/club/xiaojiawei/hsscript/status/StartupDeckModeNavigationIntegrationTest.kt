@@ -874,6 +874,75 @@ class StartupDeckModeNavigationIntegrationTest {
     }
 
     @Test
+    fun `unknown configured Wild deck frame may open selector only after exact visual and runtime fences`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/deck-selection-screen.png",
+        )))
+        val wild = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/club/xiaojiawei/hsscript/status/wild-mode-title-template.png",
+        )))
+        val standard = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/club/xiaojiawei/hsscript/status/standard-mode-title-template.png",
+        )))
+        // Keep the exact deck/Start frame while making the title ROI genuinely
+        // ambiguous, matching the live OCR-UNKNOWN incident without inventing
+        // a mode identity.
+        for (y in 0 until wild.height) {
+            for (x in 0 until wild.width) {
+                val wildPixel = wild.getRGB(x, y)
+                val standardPixel = standard.getRGB(x, y)
+                val red = (((wildPixel ushr 16) and 0xff) + ((standardPixel ushr 16) and 0xff)) / 2
+                val green = (((wildPixel ushr 8) and 0xff) + ((standardPixel ushr 8) and 0xff)) / 2
+                val blue = ((wildPixel and 0xff) + (standardPixel and 0xff)) / 2
+                image.setRGB(620 + x, 18 + y, (red shl 16) or (green shl 8) or blue)
+            }
+        }
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+        assertEquals(ObservedTournamentMode.UNKNOWN,
+            TournamentModeConfirmation.observeImageVisualOnly(image).observedMode)
+        val decision = StartupDeckModeNavigationPolicy.decide(
+            purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE.name,
+            screenKind = "DECK_SELECTION",
+            confidence = 96,
+            evidence = "deck-selection-start-control-visual",
+            expectedRunMode = "WILD",
+            observedRunMode = "UNKNOWN",
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            currentSessionReady = false,
+            activeGame = false,
+            activeMatchmaking = false,
+            terminal = false,
+            trustedCurrentWindow = true,
+        )
+        assertTrue(decision.allowed)
+        var selectorOpens = 0
+        var freshProbes = 0
+        assertTrue(StartupDeckModeNavigationPolicy.dispatchOpenSelectorForUnknownConfiguredMode(
+            image = image,
+            expectedMode = "WILD",
+            observedMode = "UNKNOWN",
+            decision = decision,
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            dispatchOpenSelector = { selectorOpens++; true },
+            requestFreshSelectorProbe = { freshProbes++ },
+        ))
+        assertEquals(1, selectorOpens)
+        assertEquals(1, freshProbes)
+        assertFalse(StartupDeckModeNavigationPolicy.dispatchOpenSelectorForUnknownConfiguredMode(
+            image = image,
+            expectedMode = "WILD",
+            observedMode = "UNKNOWN",
+            decision = decision.copy(allowed = false, denial = StartupDeckModeNavigationPolicy.Denial.ACTIVE_QUEUE),
+            enabledStartButtonVisible = true,
+            modalVisible = false,
+            dispatchOpenSelector = { error("active queue must not dispatch") },
+            requestFreshSelectorProbe = { error("active queue must not reprobe") },
+        ))
+    }
+
+    @Test
     fun `fresh exact deck selection with visually confirmed Wild title dispatches without mode OCR dependency`() {
         val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/deck-selection-screen.png",
@@ -1540,12 +1609,13 @@ class StartupDeckModeNavigationIntegrationTest {
             Regex("wrongModeDeckTooltipVisible = wrongModeDeckTooltip").findAll(upstream).count(),
             "the production decision and same-window proof must both receive the fresh exact wrong-mode tooltip",
         )
-        assertTrue(upstream.contains("openModeSelectorAfterVerifiedDeckMismatch()"))
+        assertTrue(upstream.contains("openModeSelectorAfterVerifiedDeckMismatch("))
         assertTrue(upstream.contains("next=FRESH_SELECTOR_CAPTURE"))
         assertTrue(upstream.contains("hasFreshWildSelectorEvidence("))
         assertTrue(upstream.contains("recordWildModeSelectorControl("))
         assertTrue(upstream.contains("selectWildFromVerifiedModeSelector()"))
         assertTrue(upstream.contains("FRESH_MODE_REPROBE_NO_START"))
+        assertTrue(upstream.contains("FRESH_DECK_SELECTION_START_CONTROL_UNKNOWN_MODE"))
         val strategy = File("src/main/java/club/xiaojiawei/hsscript/strategy/mode/TournamentModeStrategy.kt").readText()
         assertTrue(strategy.contains("CHANGE_MODE_RECT.lClick(isCancel = false"))
         assertTrue(strategy.contains("WILD_MODE_RECT.lClick("))

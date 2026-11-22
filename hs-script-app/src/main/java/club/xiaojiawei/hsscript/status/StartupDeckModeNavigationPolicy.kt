@@ -139,6 +139,33 @@ internal object StartupDeckModeNavigationPolicy {
         return accepted
     }
 
+    /**
+     * A narrow recovery for a visually exact deck/Start frame whose configured
+     * Wild title remains genuinely UNKNOWN. This may open the mode selector,
+     * but never selects a mode or starts matchmaking from the unknown frame.
+     * The caller must still supply the fresh foreground-window and runtime
+     * fences through [decision].
+     */
+    fun dispatchOpenSelectorForUnknownConfiguredMode(
+        image: java.awt.image.BufferedImage,
+        expectedMode: String?,
+        observedMode: String?,
+        decision: Decision,
+        enabledStartButtonVisible: Boolean,
+        modalVisible: Boolean,
+        dispatchOpenSelector: () -> Boolean,
+        requestFreshSelectorProbe: () -> Unit,
+    ): Boolean {
+        val visuallyUnknown = TournamentModeConfirmation.observeImageVisualOnly(image).observedMode ==
+            ObservedTournamentMode.UNKNOWN
+        val exactUnknownDeck = expectedMode == "WILD" && observedMode == "UNKNOWN" &&
+            decision.allowed && enabledStartButtonVisible && !modalVisible && visuallyUnknown
+        if (!exactUnknownDeck) return false
+        val accepted = dispatchOpenSelector()
+        if (accepted) requestFreshSelectorProbe()
+        return accepted
+    }
+
     /** Mode option text is actionable only on the freshly captured centered selector modal. */
     fun hasFreshWildSelectorEvidence(
         screenKind: String?,

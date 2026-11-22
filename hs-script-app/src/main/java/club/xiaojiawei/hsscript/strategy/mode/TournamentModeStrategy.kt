@@ -381,8 +381,10 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         CASUAL_MODE_RECT.lClick(isCancel = false)
     }
 
-    /** Open the mode selector only after exact Standard deck-screen proof; selection needs a fresh next frame. */
-    internal fun openModeSelectorAfterVerifiedDeckMismatch(): Boolean {
+    /** Open the mode selector only after an exact deck-screen proof; selection needs a fresh next frame. */
+    internal fun openModeSelectorAfterVerifiedDeckMismatch(
+        proofContext: String = "FRESH_STANDARD_DECK_SCREEN",
+    ): Boolean {
         val opened = CHANGE_MODE_RECT.lClick(
             isCancel = false,
             dispatchAction = StartupDeckModeNavigationPolicy.OPEN_SELECTOR_ACTION,
@@ -393,7 +395,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         }
         log.warn {
             "STARTUP_MODE_CORRECTION action=OPEN_SELECTOR accepted=true target=WILD " +
-                "proof=FRESH_STANDARD_DECK_SCREEN next=FRESH_SELECTOR_CAPTURE action=NO_MODE_SELECTION_NO_START"
+                "proof=$proofContext next=FRESH_SELECTOR_CAPTURE action=NO_MODE_SELECTION_NO_START"
         }
         return true
     }

@@ -834,22 +834,43 @@ object UpstreamScreenStateRecovery {
                             !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() &&
                             !GameUtil.isTerminalGameState()
                         ) {
-                            StartupDeckModeNavigationPolicy.dispatchOpenSelectorForVerifiedDeckMismatch(
-                                image = capture.image,
-                                expectedMode = expectedMode,
-                                decision = navigationDecision,
-                                dispatchOpenSelector = {
-                                    TournamentModeStrategy.openModeSelectorAfterVerifiedDeckMismatch()
-                                },
-                                requestFreshSelectorProbe = {
-                                    log.warn {
-                                        "STARTUP_DECK_MODE_NAVIGATION_POSTCHECK scheduled=true pid=$pid hwnd=$hwnd " +
-                                            "next=FRESH_SELECTOR_CAPTURE expectedMode=${expectedMode ?: "UNKNOWN"} " +
-                                            "action=NO_MODE_SELECTION_NO_START"
-                                    }
-                                    ScreenStateRecovery.scheduleStartupMenuReprobeAfterModeSelection()
-                                },
-                            )
+                            val requestFreshSelectorProbe = {
+                                log.warn {
+                                    "STARTUP_DECK_MODE_NAVIGATION_POSTCHECK scheduled=true pid=$pid hwnd=$hwnd " +
+                                        "next=FRESH_SELECTOR_CAPTURE expectedMode=${expectedMode ?: "UNKNOWN"} " +
+                                        "action=NO_MODE_SELECTION_NO_START"
+                                }
+                                ScreenStateRecovery.scheduleStartupMenuReprobeAfterModeSelection()
+                            }
+                            val dispatchOpenSelector = {
+                                TournamentModeStrategy.openModeSelectorAfterVerifiedDeckMismatch(
+                                    proofContext = if (observedMode == "UNKNOWN") {
+                                        "FRESH_DECK_SELECTION_START_CONTROL_UNKNOWN_MODE"
+                                    } else {
+                                        "FRESH_STANDARD_DECK_SCREEN"
+                                    },
+                                )
+                            }
+                            if (observedMode == "UNKNOWN") {
+                                StartupDeckModeNavigationPolicy.dispatchOpenSelectorForUnknownConfiguredMode(
+                                    image = capture.image,
+                                    expectedMode = expectedMode,
+                                    observedMode = observedMode,
+                                    decision = navigationDecision,
+                                    enabledStartButtonVisible = startVisible,
+                                    modalVisible = blockingModalVisible,
+                                    dispatchOpenSelector = dispatchOpenSelector,
+                                    requestFreshSelectorProbe = requestFreshSelectorProbe,
+                                )
+                            } else {
+                                StartupDeckModeNavigationPolicy.dispatchOpenSelectorForVerifiedDeckMismatch(
+                                    image = capture.image,
+                                    expectedMode = expectedMode,
+                                    decision = navigationDecision,
+                                    dispatchOpenSelector = dispatchOpenSelector,
+                                    requestFreshSelectorProbe = requestFreshSelectorProbe,
+                                )
+                            }
                         } else false
                         val attemptCommitted = if (attempt.allowed) {
                             startupDeckModeNavigationAttempts.resolve(pid, hwnd, accepted)
@@ -857,7 +878,7 @@ object UpstreamScreenStateRecovery {
                         modeNavigationAttempted = accepted
                         log.warn {
                             "STARTUP_DECK_MODE_NAVIGATION decision=${if (accepted) "MODE_CORRECTION_DISPATCHED" else "BLOCKED"} " +
-                                "reason=${if (accepted) "fresh-opposite-mode-deck-proof" else if (!attempt.allowed) attempt.reason else if (!proofRecorded) "proof-not-recorded" else if (!stateStillCurrent()) "state-changed-before-dispatch" else if (WarEx.inWar) "active-game-before-dispatch" else if (LifecycleTrace.hasRecentActiveMatchmakingScreen() || LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()) "active-queue-before-dispatch" else if (GameUtil.isTerminalGameState()) "terminal-before-dispatch" else "input-dispatch-rejected"} " +
+                                "reason=${if (accepted) if (observedMode == "UNKNOWN") "fresh-unknown-mode-deck-proof-selector-only" else "fresh-opposite-mode-deck-proof" else if (!attempt.allowed) attempt.reason else if (!proofRecorded) "proof-not-recorded" else if (!stateStillCurrent()) "state-changed-before-dispatch" else if (WarEx.inWar) "active-game-before-dispatch" else if (LifecycleTrace.hasRecentActiveMatchmakingScreen() || LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()) "active-queue-before-dispatch" else if (GameUtil.isTerminalGameState()) "terminal-before-dispatch" else "input-dispatch-rejected"} " +
                                 "attempt=${attempt.attempt} expectedMode=${expectedMode ?: "UNKNOWN"} " +
                                 "observedMode=${observedMode ?: "UNKNOWN"} pid=$pid hwnd=$hwnd " +
                                 "confidence=${currentDetection.confidence} evidence=${currentDetection.evidence} " +
