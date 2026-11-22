@@ -158,8 +158,10 @@ internal object StartupDeckModeNavigationPolicy {
     ): Boolean {
         val visuallyUnknown = TournamentModeConfirmation.observeImageVisualOnly(image).observedMode ==
             ObservedTournamentMode.UNKNOWN
+        val exactStartControl = enabledStartButtonVisible &&
+            ScreenWatchdog.hasEnabledDeckSelectionStartButton(image)
         val exactUnknownDeck = expectedMode == "WILD" && observedMode == "UNKNOWN" &&
-            decision.allowed && enabledStartButtonVisible && !modalVisible && visuallyUnknown
+            decision.allowed && exactStartControl && !modalVisible && visuallyUnknown
         if (!exactUnknownDeck) return false
         val accepted = dispatchOpenSelector()
         if (accepted) requestFreshSelectorProbe()
