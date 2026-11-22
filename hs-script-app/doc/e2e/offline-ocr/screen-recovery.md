@@ -891,14 +891,16 @@ this deletion boundary.
   serialized restart path after the normal 120-second watchdog threshold. Keep
   an exact-PNG production-callsite regression so OCR timeout on a startup
   loading frame cannot recur unnoticed.
-- A fresh authorized `matchmakingSearchVisual` is an upstream classification
-  authority, not an input opportunity. When the exact queue visual is present
-  and neither HUB chooser geometry nor a centered dialog is visible, classify
-  the same capture as `MATCHMAKING` before the generic OCR fallback. This keeps
-  animated search frames from becoming transient UNKNOWN/stuck screenshots and
-  emits a structured `SCREEN_RECOVERY_OCR_SKIPPED`
-  `reason=exact-matchmaking-search-visual` record. The branch must perform no
-  click, cancel, mode change, or restart; HUB chooser, modal, non-queue, paused,
-  and unverified captures remain on their existing fail-closed paths. Regress
-  the exact 2026-11-22 queue PNG through the production classifier and assert
-  that its no-OCR branch is not selected for HUB/modal controls.
+- A fresh authorized `matchmakingSearchVisual` is a screen-classification
+  authority for both the upstream and generic `ScreenStateRecovery` watchdogs,
+  not an input opportunity. When the exact queue visual is present and neither
+  HUB chooser geometry nor a centered dialog is visible, classify the same
+  capture as `MATCHMAKING` before the generic OCR fallback. This keeps animated
+  search frames from becoming transient UNKNOWN/stuck screenshots or allowing
+  post-Start deck-completion clicks, and emits a structured
+  `SCREEN_RECOVERY_OCR_SKIPPED` `reason=exact-matchmaking-search-visual`
+  record. The branch must perform no click, cancel, mode change, or restart;
+  HUB chooser, modal, non-queue, paused, and unverified captures remain on their
+  existing fail-closed paths. Regress the exact 2026-11-22 queue PNG through
+  the production classifier and assert that its no-OCR branch is not selected
+  for HUB/modal controls.

@@ -1145,6 +1145,17 @@ class MatchmakingSearchRecoveryTest {
                 recoverySource.indexOf("runOCR(capture)"),
             "the generic watchdog must classify the exact queue visual before OCR",
         )
+        val recoveryDoc = listOf(
+            Path.of("hs-script-app/doc/e2e/offline-ocr/screen-recovery.md"),
+            Path.of("doc/e2e/offline-ocr/screen-recovery.md"),
+        ).first { Files.isRegularFile(it) }.let(Files::readString)
+        assertTrue(
+            recoveryDoc.contains("both the upstream and generic `ScreenStateRecovery` watchdogs") &&
+                recoveryDoc.contains("post-Start deck-completion clicks") &&
+                recoveryDoc.contains("SCREEN_RECOVERY_OCR_SKIPPED") &&
+                recoveryDoc.contains("no click, cancel, mode change, or restart"),
+            "the canonical screen-recovery SOP must preserve the queue fastpath prevention rule",
+        )
     }
 
     @Test
