@@ -17,8 +17,7 @@ import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
 
 class StartupDeckModeNavigationIntegrationTest {
-    private fun upstreamScreenStateRecoverySource(): String {
-        val relativePath = "src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt"
+    private fun sourceText(relativePath: String): String {
         val sourceFile = listOf(
             File(relativePath),
             File("hs-script-app/$relativePath"),
@@ -26,6 +25,10 @@ class StartupDeckModeNavigationIntegrationTest {
             ?: error("Unable to locate $relativePath from module or repository-root working directory")
         return sourceFile.readText()
     }
+
+    private fun upstreamScreenStateRecoverySource(): String = sourceText(
+        "src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt",
+    )
 
     @Test
     fun `captured three choice selector authorizes only fresh configured Wild control proof`() {
@@ -1685,7 +1688,7 @@ class StartupDeckModeNavigationIntegrationTest {
         assertTrue(upstream.contains("selectWildFromVerifiedModeSelector()"))
         assertTrue(upstream.contains("FRESH_MODE_REPROBE_NO_START"))
         assertTrue(upstream.contains("FRESH_DECK_SELECTION_START_CONTROL_UNKNOWN_MODE"))
-        val strategy = File("src/main/java/club/xiaojiawei/hsscript/strategy/mode/TournamentModeStrategy.kt").readText()
+        val strategy = sourceText("src/main/java/club/xiaojiawei/hsscript/strategy/mode/TournamentModeStrategy.kt")
         assertTrue(strategy.contains("CHANGE_MODE_RECT.lClick(isCancel = false"))
         assertTrue(strategy.contains("WILD_MODE_RECT.lClick("))
         assertTrue(strategy.contains("dispatchAction = StartupDeckModeNavigationPolicy.SELECT_WILD_ACTION"))
