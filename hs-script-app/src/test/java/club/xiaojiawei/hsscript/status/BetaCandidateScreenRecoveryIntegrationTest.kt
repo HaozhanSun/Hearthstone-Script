@@ -550,14 +550,23 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         assertEquals("CONCEDED", PowerLogListener.currentGameTerminalForVerifiedLocalPlayer()?.name)
         assertFalse(MandatoryRankSurrenderGuard.isPending())
         assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
-        assertTrue(
+        assertFalse(
             PowerLogListener.confirmCurrentGameTerminalDestination(
                 screenKind = "RANK_PROGRESS_CONTINUATION",
                 confidence = 96,
                 freshCaptureAuthorized = true,
                 resultPageEvidenceVisible = true,
             ),
-            "fresh result proof releases only the terminal input fence; it does not create a win",
+            "a rank-continuation frame is not a post-result destination proof",
+        )
+        assertTrue(
+            PowerLogListener.confirmCurrentGameTerminalDestination(
+                screenKind = "DECK_SELECTION",
+                confidence = 96,
+                freshCaptureAuthorized = true,
+                resultPageEvidenceVisible = false,
+            ),
+            "fresh deck destination proof releases only the terminal input fence; it does not create a win",
         )
 
         val observation = ScreenStateRecovery.FreshScreenObservation(
