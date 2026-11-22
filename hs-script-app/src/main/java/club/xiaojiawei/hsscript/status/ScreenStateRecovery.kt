@@ -70,6 +70,8 @@ object ScreenStateRecovery {
         val hubModeChooserVisible: Boolean,
         val modalVisible: Boolean,
         val centeredModalFingerprint: Long? = null,
+        /** Capture and foreground were verified atomically before classification. */
+        val foregroundConfirmed: Boolean = true,
     )
 
     /** Use the configured PaddleX deadline so cold pipeline initialization isn't cut off at 4 seconds. */
@@ -673,12 +675,16 @@ object ScreenStateRecovery {
     internal fun classifyBetaCandidateVisualForTest(
         image: BufferedImage,
         currentSessionReady: Boolean = false,
+        configuredDeckStrategy: Boolean = DeckStrategyManager.currentDeckStrategy != null,
+        configuredRunMode: Boolean = DeckStrategyManager.currentRunMode != null,
     ): UpstreamScreenStateRecovery.FreshScreenClassification? {
         return classifyBetaCandidateVisual(
             currentSessionReady = currentSessionReady,
             purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
             image = image,
             visual = visualSignature(image),
+            configuredDeckStrategy = configuredDeckStrategy,
+            configuredRunMode = configuredRunMode,
         )
     }
 
@@ -688,13 +694,14 @@ object ScreenStateRecovery {
         purpose: ScreenRecoveryCapturePurpose,
         image: BufferedImage,
         visual: VisualSignature,
+        configuredDeckStrategy: Boolean = DeckStrategyManager.currentDeckStrategy != null,
+        configuredRunMode: Boolean = DeckStrategyManager.currentRunMode != null,
     ): UpstreamScreenStateRecovery.FreshScreenClassification? {
         val visualDeckSelectionCandidate = purpose in setOf(
             ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
             ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
             ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
-        ) && DeckStrategyManager.currentDeckStrategy != null &&
-            DeckStrategyManager.currentRunMode != null &&
+        ) && configuredDeckStrategy && configuredRunMode &&
             !visual.startupQuestOverlayVisual &&
             !visual.matchmakingSearchVisual &&
             !visual.centeredModalPanelVisual &&
@@ -707,6 +714,14 @@ object ScreenStateRecovery {
             !visual.matchmakingSearchVisual &&
             !visual.centeredModalPanelVisual &&
             HubModeChooserVisualPolicy.isVisible(image)
+        val visualStartupLoadingCandidate = !currentSessionReady && purpose in setOf(
+            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+        ) && !visual.startupQuestOverlayVisual &&
+            !visual.matchmakingSearchVisual &&
+            !visual.centeredModalPanelVisual &&
+            looksLikeStartupLoadingVisual(image, visual)
         return when {
             // A freshly launched client can legitimately show the Battle.net
             // handoff while its new Power.log is still empty. This is a
@@ -720,6 +735,13 @@ object ScreenStateRecovery {
                     mode = ModeEnum.LOGIN.name,
                     confidence = 96,
                     evidence = "battlenet-launcher-empty-session-visual",
+                )
+            visualStartupLoadingCandidate ->
+                UpstreamScreenStateRecovery.FreshScreenClassification(
+                    screen = "LOADING",
+                    mode = ModeEnum.STARTUP.name,
+                    confidence = 92,
+                    evidence = "startup-loading-visual",
                 )
             visualHubChooserCandidate ->
                 UpstreamScreenStateRecovery.FreshScreenClassification(
@@ -737,6 +759,25 @@ object ScreenStateRecovery {
                 )
             else -> null
         }
+    }
+
+    /**
+     * Narrow OCR-free signature for the Hearthstone client loading transition.
+     * It requires the warm Hearthstone loading palette, the blue center emblem,
+     * and the small bright lower-center loading label; generic dark/warm shop
+     * or reward panels do not satisfy all three independent regions.
+     */
+    private fun looksLikeStartupLoadingVisual(
+        image: BufferedImage,
+        visual: VisualSignature,
+    ): Boolean {
+        if (image.width < 800 || image.height < 450) return false
+        val emblem = sampleRegion(image, 0.43, 0.57, 0.35, 0.65)
+        val label = sampleRegion(image, 0.40, 0.60, 0.78, 0.88)
+        return visual.loadingCentralDarkRatio >= 0.72 &&
+            visual.warmRatio >= 0.18 && visual.blueRatio <= 0.03 &&
+            emblem.warmRatio >= 0.45 && emblem.blueRatio >= 0.015 &&
+            label.grayLightRatio >= 0.018 && label.darkRatio >= 0.75
     }
 
     private fun perceptualFingerprint(image: BufferedImage): Long {

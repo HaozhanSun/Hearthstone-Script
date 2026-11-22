@@ -237,7 +237,7 @@ internal object BetaScreenRecoveryService {
 
     private fun detectCandidateScreen() {
         val now = System.currentTimeMillis()
-        val observation = if (
+        val rawObservation = if (
             WorkTimeListener.working && !PauseStatus.isPause && !PowerLogListener.replayingExistingLog
         ) {
             runCatching { ScreenStateRecovery.observeFreshScreenForBetaCandidateWatchdog() }
@@ -246,6 +246,7 @@ internal object BetaScreenRecoveryService {
                 }
                 .getOrNull()
         } else null
+        val observation = rawObservation?.let { reconcileFreshCandidateObservation(it, now) }
         if (observation != null) {
             val queueOrGame = observation.currentSessionReady ||
                 observation.screen.equals("MATCHMAKING", ignoreCase = true) ||
@@ -308,6 +309,41 @@ internal object BetaScreenRecoveryService {
         }
         Core.restartFromIdleWatchdog()
     }
+
+    /**
+     * Reconcile stale queue latches only after a fresh, structurally authorized
+     * pre-session deck-selection frame.  The watchdog is read-only here: a
+     * real SEARCHING frame, current session, modal, pause, or unverified frame
+     * never clears queue evidence.  This closes the pre-match deadlock where a
+     * rejected/expired start intent left the old MATCHMAKING latch in place
+     * while the client visibly returned to the exact deck Start screen.
+     */
+    private fun reconcileFreshCandidateObservation(
+        observation: ScreenStateRecovery.FreshScreenObservation,
+        now: Long,
+    ): ScreenStateRecovery.FreshScreenObservation {
+        if (!isFreshAuthorizedDeckSelection(observation)) return observation
+        val staleQueueEvidence = LifecycleTrace.hasRecentActiveMatchmakingScreen(now) ||
+            LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(now) ||
+            LifecycleTrace.hasRecentMatchmakingInputIntent(now)
+        if (!staleQueueEvidence) return observation
+        LifecycleTrace.clearActiveMatchmakingScreenObserved("fresh-authorized-deck-selection")
+        log.info {
+            "BETA_CANDIDATE_SCREEN_QUEUE_EVIDENCE_CLEARED " +
+                "reason=fresh-authorized-deck-selection pid=${observation.pid} hwnd=${observation.hwnd} " +
+                "previousNoActiveMatchmakingEvidence=${observation.noActiveMatchmakingEvidence}"
+        }
+        return observation.copy(noActiveMatchmakingEvidence = true)
+    }
+
+    private fun isFreshAuthorizedDeckSelection(
+        observation: ScreenStateRecovery.FreshScreenObservation,
+    ): Boolean = observation.screen.equals("DECK_SELECTION", ignoreCase = true) &&
+        observation.evidence == "deck-selection-start-control-visual" &&
+        observation.pid > 0L && observation.hwnd.isNotBlank() &&
+        observation.confidence >= 85 &&
+        observation.foregroundConfirmed &&
+        !observation.currentSessionReady && !observation.modalVisible
 
     private fun candidateSnapshot(
         now: Long,
@@ -375,11 +411,54 @@ internal object BetaScreenRecoveryService {
         observation: ScreenStateRecovery.FreshScreenObservation?,
         rememberAuthorizedObservation: Boolean = false,
     ): BetaCandidateScreenWatchdog.Snapshot {
-        if (rememberAuthorizedObservation && observation?.captureIdentityIsUsableForCandidate() == true) {
-            lastCandidateAuthorizedObservation = observation
+        val reconciledObservation = observation?.let { reconcileFreshCandidateObservation(it, now) }
+        if (rememberAuthorizedObservation && reconciledObservation?.captureIdentityIsUsableForCandidate() == true) {
+            lastCandidateAuthorizedObservation = reconciledObservation
             lastCandidateAuthorizedObservationAtMs = now
         }
-        return candidateSnapshot(now, observation)
+        return candidateSnapshot(now, reconciledObservation)
+    }
+
+    internal fun reconcileCandidateObservationForTest(
+        now: Long,
+        observation: ScreenStateRecovery.FreshScreenObservation,
+    ): ScreenStateRecovery.FreshScreenObservation =
+        reconcileFreshCandidateObservation(observation, now)
+
+    /** Production final-fence seam used by the stale-queue regression. */
+    internal fun candidateRestartFenceReasonForTest(
+        observation: ScreenStateRecovery.FreshScreenObservation,
+        pidMatches: Boolean,
+        hwndMatches: Boolean,
+        currentWindowVerified: Boolean,
+        activeQueueEvidence: Boolean = false,
+        betaChannel: Boolean = BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL),
+        working: Boolean = true,
+        paused: Boolean = false,
+        inWar: Boolean = false,
+    ): String? {
+        val reconciled = reconcileFreshCandidateObservation(observation, System.currentTimeMillis())
+        val lifecycleQueueEvidence = hasCurrentCandidateQueueEvidence()
+        return BetaCandidateRestartFencePolicy.rejectionReason(
+            BetaCandidateRestartFencePolicy.Snapshot(
+                betaChannel = betaChannel,
+                observationPresent = true,
+                working = working,
+                paused = paused,
+                inWar = inWar,
+                mulligan = inWar && WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+                noActiveMatchmakingEvidence = reconciled.noActiveMatchmakingEvidence &&
+                    !activeQueueEvidence && !lifecycleQueueEvidence,
+                currentSessionReady = reconciled.currentSessionReady,
+                screen = reconciled.screen,
+                lifecycleTerminalLatch = GameUtil.isTerminalGameState() ||
+                    WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER,
+                authorizedTerminalVisualProof = hasAuthorizedTerminalVisualProof(reconciled),
+                pidMatches = pidMatches,
+                hwndMatches = hwndMatches,
+                currentWindowVerified = currentWindowVerified,
+            ),
+        )
     }
 
     private fun hasAuthorizedTerminalVisualProof(
@@ -417,9 +496,7 @@ internal object BetaScreenRecoveryService {
                 currentSessionPowerLogPath = latestPowerLog?.absolutePath,
                 powerLogLength = PowerLogListener.logFile?.length() ?: 0L,
             )
-        val activeQueueEvidence = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
-            LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() ||
-            LifecycleTrace.hasRecentMatchmakingInputIntent()
+        val activeQueueEvidence = hasCurrentCandidateQueueEvidence()
         return BetaCandidateRestartFencePolicy.rejectionReason(
             BetaCandidateRestartFencePolicy.Snapshot(
                 betaChannel = BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL),
@@ -451,6 +528,12 @@ internal object BetaScreenRecoveryService {
         "GAME_MODE",
         "GAMEPLAY",
     )
+
+    /** Final-dispatch queue evidence is shared by live and test seams. */
+    private fun hasCurrentCandidateQueueEvidence(): Boolean =
+        LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+            LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() ||
+            LifecycleTrace.hasRecentMatchmakingInputIntent()
 
     /** Beta-only, always-on guard for failed startup handoffs and native crash dialogs. */
     private fun startStartupFailureMonitor() {

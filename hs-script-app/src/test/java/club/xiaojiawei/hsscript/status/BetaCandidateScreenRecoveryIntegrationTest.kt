@@ -19,7 +19,10 @@ import kotlin.test.assertTrue
 class BetaCandidateScreenRecoveryIntegrationTest {
 
     @AfterEach
-    fun resetCandidateObservation() = BetaScreenRecoveryService.resetCandidateObservationForTest()
+    fun resetCandidateObservation() {
+        BetaScreenRecoveryService.resetCandidateObservationForTest()
+        LifecycleTrace.resetMatchmakingEvidenceForTest()
+    }
 
     @Test
     fun `empty-session Battle net handoff enters the bounded candidate chain without OCR`() {
@@ -231,6 +234,25 @@ class BetaCandidateScreenRecoveryIntegrationTest {
             ).action,
             "a current queue fence must override a visually healthy HUB chooser",
         )
+
+        val loading = startupLoadingVisualFixture()
+        val loadingClassification = requireNotNull(
+            ScreenStateRecovery.classifyBetaCandidateVisualForTest(
+                loading,
+                currentSessionReady = false,
+            ),
+        )
+        assertEquals("LOADING", loadingClassification.screen)
+        assertEquals("STARTUP", loadingClassification.mode)
+        assertEquals("startup-loading-visual", loadingClassification.evidence)
+        assertNull(
+            ScreenStateRecovery.classifyBetaCandidateVisualForTest(loading, currentSessionReady = true),
+            "a loading palette is not a pre-session proof once a current game session is authoritative",
+        )
+        assertTrue(
+            sourceContainsStartupLoadingVisualBranch(),
+            "the exact startup loading visual must be classified before candidate OCR",
+        )
     }
 
     @Test
@@ -397,6 +419,36 @@ class BetaCandidateScreenRecoveryIntegrationTest {
                 ),
             ).action,
         )
+
+    }
+
+    private fun sourceContainsStartupLoadingVisualBranch(): Boolean {
+        val source = Files.readString(sourceRootFrom(Path.of("")).resolve(
+            "src/main/java/club/xiaojiawei/hsscript/status/ScreenStateRecovery.kt",
+        ))
+        val visual = source.indexOf("val visualClassification = if (useUpstreamClassifier)")
+        val ocr = source.indexOf("runCandidateOcrBounded(capture)", visual.coerceAtLeast(0))
+        return source.contains("evidence = \"startup-loading-visual\"") &&
+            visual >= 0 && ocr > visual
+    }
+
+    private fun startupLoadingVisualFixture(): BufferedImage {
+        val image = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
+        val graphics = image.createGraphics()
+        try {
+            graphics.color = Color(90, 35, 15)
+            graphics.fillRect(0, 0, image.width, image.height)
+            graphics.color = Color(190, 104, 22)
+            graphics.fillOval(650, 100, 620, 550)
+            graphics.color = Color(48, 138, 224)
+            graphics.fillOval(850, 220, 220, 220)
+            graphics.color = Color.WHITE
+            graphics.font = graphics.font.deriveFont(42f)
+            graphics.drawString("正在进入旅店", 790, 900)
+        } finally {
+            graphics.dispose()
+        }
+        return image
     }
 
     @Test
@@ -527,6 +579,145 @@ class BetaCandidateScreenRecoveryIntegrationTest {
             ).action,
             "the production candidate snapshot keeps arbitrary UNKNOWN fail-closed",
         )
+    }
+
+    @Test
+    fun `fresh exact deck clears stale queue latch and retained episode reaches one restart`() {
+        val liveDeckFixture = requireNotNull(
+            javaClass.getResourceAsStream(
+                "/offline-ocr/screen-recovery/deck-selection-screen.png",
+            ),
+        ).use(ImageIO::read)
+        val liveDeckClassification = requireNotNull(
+            ScreenStateRecovery.classifyBetaCandidateVisualForTest(
+                liveDeckFixture,
+                currentSessionReady = false,
+                configuredDeckStrategy = true,
+                configuredRunMode = true,
+            ),
+        )
+        assertEquals("DECK_SELECTION", liveDeckClassification.screen)
+        assertEquals("deck-selection-start-control-visual", liveDeckClassification.evidence)
+        val frame = ScreenStateRecovery.FreshScreenObservation(
+            screen = "DECK_SELECTION",
+            mode = "TOURNAMENT",
+            confidence = 94,
+            evidence = "deck-selection-start-control-visual",
+            pid = 31468L,
+            hwnd = "0x27010",
+            screenshot = "deck-selection-screen.png",
+            perceptualFingerprint = java.lang.Long.parseUnsignedLong("86ca24794d2550c9", 16),
+            currentSessionReady = false,
+            noActiveMatchmakingEvidence = false,
+            hubModeChooserVisible = false,
+            modalVisible = false,
+        )
+        LifecycleTrace.markActiveMatchmakingScreenObserved(1L)
+        assertTrue(LifecycleTrace.hasRecentActiveMatchmakingScreen(2L))
+
+        val reconciled = BetaScreenRecoveryService.reconcileCandidateObservationForTest(1L, frame)
+        assertTrue(reconciled.noActiveMatchmakingEvidence)
+        val episode = BetaCandidateScreenWatchdog()
+        val first = BetaScreenRecoveryService.candidateSnapshotForTest(
+            now = 0L,
+            observation = reconciled,
+            rememberAuthorizedObservation = true,
+        ).copy(working = true, paused = false)
+        assertTrue(first.noActiveMatchmakingEvidence)
+        assertFalse(LifecycleTrace.hasRecentActiveMatchmakingScreen(1L))
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, episode.observe(first).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            episode.observe(
+                BetaScreenRecoveryService.candidateSnapshotForTest(1L, reconciled)
+                    .copy(working = true, paused = false),
+            ).action,
+        )
+
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN,
+            episode.observe(
+                BetaScreenRecoveryService.candidateSnapshotForTest(60_000L, null)
+                    .copy(working = true, paused = false),
+            ).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN,
+            episode.observe(
+                BetaScreenRecoveryService.candidateSnapshotForTest(119_999L, null)
+                    .copy(working = true, paused = false),
+            ).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            episode.observe(
+                BetaScreenRecoveryService.candidateSnapshotForTest(120_000L, null)
+                    .copy(working = true, paused = false),
+            ).action,
+            "the retained exact deck identity must cross 120s despite intermittent missing captures",
+        )
+        assertNotEquals(
+            "active-matchmaking-evidence",
+            BetaScreenRecoveryService.candidateRestartFenceReasonForTest(
+                reconciled,
+                pidMatches = true,
+                hwndMatches = true,
+                currentWindowVerified = true,
+                betaChannel = true,
+            ),
+            "the production final fence must not inherit the stale queue latch after deck reconciliation",
+        )
+        assertEquals(
+            "active-matchmaking-evidence",
+            BetaScreenRecoveryService.candidateRestartFenceReasonForTest(
+                frame.copy(noActiveMatchmakingEvidence = true),
+                pidMatches = true,
+                hwndMatches = true,
+                currentWindowVerified = true,
+                activeQueueEvidence = true,
+                betaChannel = true,
+            ),
+            "a newly observed queue race remains a hard final-dispatch veto",
+        )
+
+        LifecycleTrace.markActiveMatchmakingScreenObserved(System.currentTimeMillis())
+        val liveQueueFrame = frame.copy(
+            screen = "MATCHMAKING",
+            evidence = "matchmaking-search-visual",
+            noActiveMatchmakingEvidence = false,
+        )
+        assertEquals(
+            "active-matchmaking-evidence",
+            BetaScreenRecoveryService.candidateRestartFenceReasonForTest(
+                liveQueueFrame,
+                pidMatches = true,
+                hwndMatches = true,
+                currentWindowVerified = true,
+                betaChannel = true,
+            ),
+            "a fresh MATCHMAKING visual remains a final-dispatch veto",
+        )
+        assertEquals(
+            "active-matchmaking-evidence",
+            BetaScreenRecoveryService.candidateRestartFenceReasonForTest(
+                frame.copy(foregroundConfirmed = false),
+                pidMatches = true,
+                hwndMatches = true,
+                currentWindowVerified = true,
+                betaChannel = true,
+            ),
+            "an unverified foreground capture cannot clear queue evidence",
+        )
+
+        LifecycleTrace.resetMatchmakingEvidenceForTest()
+        val changedIdentity = reconciled.copy(pid = 31469L)
+        val changedEpisode = BetaCandidateScreenWatchdog()
+        changedEpisode.observe(first)
+        val changed = changedEpisode.observe(
+            BetaScreenRecoveryService.candidateSnapshotForTest(120_000L, changedIdentity)
+                .copy(working = true, paused = false),
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, changed.action)
     }
 
     @Test

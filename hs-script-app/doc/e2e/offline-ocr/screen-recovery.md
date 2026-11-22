@@ -865,3 +865,24 @@ this deletion boundary.
   candidate threshold; a changed identity, contradictory screen, active queue
   or game, pause, or a gap beyond that bound requires a fresh baseline and
   never permits an input action from UNKNOWN.
+- Beta candidate queue evidence must be reconciled when a newer exact
+  `DECK_SELECTION` frame (enabled Start control, trusted foreground PID/HWND,
+  no current session, no modal) proves the client returned from a rejected or
+  expired start attempt. Clear the old screen, short-entry, and input-intent
+  latches together and retain that exact deck identity across bounded null
+  captures; do not let a 15-minute intent history veto the resulting 120-second
+  startup restart. A fresh `MATCHMAKING` visual, current session, active game,
+  pause, changed PID/HWND, unverified foreground, or contradictory frame must
+  remain a hard final-dispatch fence. Regression coverage must exercise the
+  production candidate snapshot/service/final fence, not only the pure fence
+  policy.
+- Beta pre-session Hearthstone loading transitions must not spend a 12-second
+  native OCR slot when the frame itself proves the bounded loading state. The
+  structural shortcut requires the warm Hearthstone palette, blue center
+  emblem, and bright lower-center loading label from the exact foreground
+  PID/HWND capture; it is read-only and never authorizes a click. Current
+  session/game, queue, pause, modal, unknown, or contradictory evidence must
+  continue through their existing fences, and a loading candidate may only
+  reach the serialized restart path after the normal 120-second watchdog
+  threshold. Keep a fixture-backed production-callsite regression so OCR
+  timeout on a startup loading frame cannot recur unnoticed.
