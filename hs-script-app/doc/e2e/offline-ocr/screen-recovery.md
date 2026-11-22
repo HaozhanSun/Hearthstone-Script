@@ -827,8 +827,9 @@ this deletion boundary.
   reward can be structurally mistaken for Event Quest when the stale lifecycle
   phase remains `FILL_DECK` and the current Power.log has no new bytes. Check
   the calibrated Continue/ribbon/center/warm signature before the broad Event
-  Quest classifier so the production path reaches `RANK_PROGRESS_CONTINUATION`
-  and its existing terminal-cleanup capability. The signature is only a
+  Quest classifier and before the Beta candidate current-session OCR shortcut,
+  so the production path reaches `RANK_PROGRESS_CONTINUATION` and its existing
+  terminal-cleanup capability. The signature is only a
   classification; current-session, exact PID/HWND/foreground, active-game,
   active-queue, terminal, and manual-pause fences still govern any click or
   restart. A manual pause must defer without erasing a proven same-identity

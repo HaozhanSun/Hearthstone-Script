@@ -407,12 +407,19 @@ object ScreenStateRecovery {
         val queueVisible = capture.visual.matchmakingSearchVisual
         val recentActiveScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen()
         val shortEntryGuard = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
-        val skipCandidateOcr = betaCandidateOcrShouldSkip(
+        // A completed result page can leave the lifecycle/session latch stale
+        // until the Continue transition is observed.  Let the exact visual
+        // rank-result proof reach the candidate classifier before the generic
+        // current-session OCR skip; the terminal Power.log and final fences
+        // still decide whether any restart is allowed.
+        val skipCandidateOcr = shouldSkipBetaCandidateOcrForCapture(
             currentSessionReady = currentSessionReady,
             inWar = WarEx.inWar,
             queueVisible = queueVisible,
             recentActiveScreen = recentActiveScreen,
             shortEntryGuard = shortEntryGuard,
+            image = capture.image,
+            useUpstreamClassifier = useUpstreamClassifier,
         )
         if (useUpstreamClassifier && skipCandidateOcr) {
             // A current Power.log/session, active in-war state, fresh SEARCHING
@@ -640,6 +647,24 @@ object ScreenStateRecovery {
         shortEntryGuard,
     )
 
+    /** Exact production skip decision, including terminal result visual escape. */
+    internal fun betaCandidateOcrSkippedForCapturedFrameForTest(
+        image: BufferedImage,
+        currentSessionReady: Boolean,
+        inWar: Boolean = false,
+        queueVisible: Boolean = false,
+        recentActiveScreen: Boolean = false,
+        shortEntryGuard: Boolean = false,
+    ): Boolean = shouldSkipBetaCandidateOcrForCapture(
+        currentSessionReady = currentSessionReady,
+        inWar = inWar,
+        queueVisible = queueVisible,
+        recentActiveScreen = recentActiveScreen,
+        shortEntryGuard = shortEntryGuard,
+        image = image,
+        useUpstreamClassifier = true,
+    )
+
     private fun betaCandidateOcrShouldSkip(
         currentSessionReady: Boolean,
         inWar: Boolean,
@@ -647,6 +672,29 @@ object ScreenStateRecovery {
         recentActiveScreen: Boolean,
         shortEntryGuard: Boolean,
     ): Boolean = currentSessionReady || inWar || queueVisible || recentActiveScreen || shortEntryGuard
+
+    private fun shouldSkipBetaCandidateOcrForCapture(
+        currentSessionReady: Boolean,
+        inWar: Boolean,
+        queueVisible: Boolean,
+        recentActiveScreen: Boolean,
+        shortEntryGuard: Boolean,
+        image: BufferedImage,
+        useUpstreamClassifier: Boolean,
+    ): Boolean {
+        val exactRankResultVisual = useUpstreamClassifier && currentSessionReady &&
+            !inWar && !recentActiveScreen && !shortEntryGuard &&
+            !queueVisible &&
+            UpstreamScreenStateRecovery.classifyImageForResultFixture(image) ==
+                "RANK_PROGRESS_CONTINUATION"
+        return betaCandidateOcrShouldSkip(
+            currentSessionReady,
+            inWar,
+            queueVisible,
+            recentActiveScreen,
+            shortEntryGuard,
+        ) && !exactRankResultVisual
+    }
 
     /** Deterministic timeout seam; production still supplies the native OCR probe. */
     internal fun runCandidateOcrBoundedForTest(timeoutMs: Long, probe: () -> Unit): String =
@@ -731,6 +779,12 @@ object ScreenStateRecovery {
         ) && !visual.startupQuestOverlayVisual &&
             !visual.matchmakingSearchVisual &&
             looksLikeStartupLoadingVisual(image, visual)
+        val visualRankProgressCandidate = currentSessionReady && purpose in setOf(
+            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+        ) && !visual.matchmakingSearchVisual &&
+            UpstreamScreenStateRecovery.classifyImageForResultFixture(image) == "RANK_PROGRESS_CONTINUATION"
         return when {
             // A freshly launched client can legitimately show the Battle.net
             // handoff while its new Power.log is still empty. This is a
@@ -751,6 +805,13 @@ object ScreenStateRecovery {
                     mode = ModeEnum.STARTUP.name,
                     confidence = 92,
                     evidence = "startup-loading-visual",
+                )
+            visualRankProgressCandidate ->
+                UpstreamScreenStateRecovery.FreshScreenClassification(
+                    screen = "RANK_PROGRESS_CONTINUATION",
+                    mode = ModeEnum.GAMEPLAY.name,
+                    confidence = 96,
+                    evidence = "rank-progress-continue-visual",
                 )
             visualHubChooserCandidate ->
                 UpstreamScreenStateRecovery.FreshScreenClassification(

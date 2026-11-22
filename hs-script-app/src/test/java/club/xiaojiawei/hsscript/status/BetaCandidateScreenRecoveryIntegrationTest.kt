@@ -134,7 +134,7 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         val source = Files.readString(sourceRootFrom(Path.of("")).resolve(
             "src/main/java/club/xiaojiawei/hsscript/status/ScreenStateRecovery.kt",
         ))
-        val skip = source.indexOf("val skipCandidateOcr = betaCandidateOcrShouldSkip(")
+        val skip = source.indexOf("val skipCandidateOcr = shouldSkipBetaCandidateOcrForCapture(")
         val boundedOcr = source.indexOf("runCandidateOcrBounded(capture)")
         assertTrue(skip >= 0 && boundedOcr > skip,
             "current-session/active-game/queue short-circuit must precede candidate OCR")
@@ -200,6 +200,13 @@ class BetaCandidateScreenRecoveryIntegrationTest {
 
         val unknown = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
         assertNull(ScreenStateRecovery.classifyBetaCandidateVisualForTest(unknown))
+        assertTrue(
+            ScreenStateRecovery.betaCandidateOcrSkippedForCapturedFrameForTest(
+                unknown,
+                currentSessionReady = true,
+            ),
+            "an unknown current-session frame must remain fail-closed behind the active-session fence",
+        )
         val modal = requireNotNull(
             javaClass.getResourceAsStream("/offline-ocr/screen-recovery/start-game-error-dialog-over-deck-selection.png"),
         ).use(ImageIO::read)
@@ -360,6 +367,41 @@ class BetaCandidateScreenRecoveryIntegrationTest {
             javaClass.getResourceAsStream("/offline-ocr/screen-recovery/beta-live-platinum9-rank-reward-20261121.png"),
         ).use(ImageIO::read)
         assertEquals("RANK_PROGRESS_CONTINUATION", UpstreamScreenStateRecovery.classifyImageForResultFixture(fixture))
+        assertFalse(
+            ScreenStateRecovery.betaCandidateOcrSkippedForCapturedFrameForTest(
+                fixture,
+                currentSessionReady = true,
+            ),
+            "the exact result visual must bypass the generic current-session OCR skip",
+        )
+        assertTrue(
+            ScreenStateRecovery.betaCandidateOcrSkippedForCapturedFrameForTest(
+                fixture,
+                currentSessionReady = true,
+                inWar = true,
+            ),
+            "an active game remains an OCR-skip/fence even when the frame resembles a result",
+        )
+        assertTrue(
+            ScreenStateRecovery.betaCandidateOcrSkippedForCapturedFrameForTest(
+                fixture,
+                currentSessionReady = true,
+                queueVisible = true,
+            ),
+            "fresh queue evidence must retain the matchmaking fence",
+        )
+        assertTrue(
+            ScreenStateRecovery.betaCandidateOcrSkippedForCapturedFrameForTest(
+                fixture,
+                currentSessionReady = true,
+                recentActiveScreen = true,
+            ) && ScreenStateRecovery.betaCandidateOcrSkippedForCapturedFrameForTest(
+                fixture,
+                currentSessionReady = true,
+                shortEntryGuard = true,
+            ),
+            "recent queue and short-entry evidence must retain their fences",
+        )
 
         val currentIncidentFixture = requireNotNull(
             javaClass.getResourceAsStream("/offline-ocr/screen-recovery/beta-live-platinum9-rank-reward-20261122-082555.png"),
@@ -453,6 +495,17 @@ class BetaCandidateScreenRecoveryIntegrationTest {
             javaClass.getResourceAsStream("/offline-ocr/screen-recovery/beta-live-platinum9-rank-reward-20261122-082555.png"),
         ).use(ImageIO::read)
         assertEquals("RANK_PROGRESS_CONTINUATION", UpstreamScreenStateRecovery.classifyImageForResultFixture(fixture))
+        val betaClassification = requireNotNull(
+            ScreenStateRecovery.classifyBetaCandidateVisualForTest(
+                fixture,
+                currentSessionReady = true,
+                configuredDeckStrategy = false,
+                configuredRunMode = false,
+            ),
+            { "the exact live result frame must reach the production Beta candidate classifier before OCR" },
+        )
+        assertEquals("RANK_PROGRESS_CONTINUATION", betaClassification.screen)
+        assertEquals("rank-progress-continue-visual", betaClassification.evidence)
 
         // Reconstruct the same CREATE_GAME-scoped terminal proof used by the
         // live listener.  The outcome is CONCEDED (not a win), and only the
@@ -477,10 +530,10 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         )
 
         val observation = ScreenStateRecovery.FreshScreenObservation(
-            screen = "RANK_PROGRESS_CONTINUATION",
-            mode = "GAMEPLAY",
-            confidence = 96,
-            evidence = "post-result-rank-progress-visual",
+            screen = requireNotNull(betaClassification.screen),
+            mode = betaClassification.mode,
+            confidence = betaClassification.confidence,
+            evidence = betaClassification.evidence,
             pid = 31_000L,
             hwnd = "0x27010",
             screenshot = "beta-live-platinum9-rank-reward-20261122-082555.png",
