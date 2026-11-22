@@ -94,4 +94,44 @@ class BetaCandidateRestartFencePolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `pending mandatory mulligan permits only no-session identity-fenced restart`() {
+        val pendingMulligan = BetaCandidateRestartFencePolicy.Snapshot(
+            betaChannel = true,
+            observationPresent = true,
+            working = true,
+            paused = false,
+            inWar = false,
+            mulligan = true,
+            mandatoryRankSurrenderPending = true,
+            noActiveMatchmakingEvidence = true,
+            currentSessionReady = false,
+            screen = "MULLIGAN",
+            lifecycleTerminalLatch = false,
+            authorizedTerminalVisualProof = false,
+            foregroundConfirmed = true,
+            pidMatches = true,
+            hwndMatches = true,
+            currentWindowVerified = true,
+        )
+        assertNull(BetaCandidateRestartFencePolicy.rejectionReason(pendingMulligan))
+        assertNull(BetaCandidateRestartFencePolicy.rejectionReason(pendingMulligan.copy(inWar = true)))
+        assertEquals(
+            "active-game",
+            BetaCandidateRestartFencePolicy.rejectionReason(
+                pendingMulligan.copy(inWar = true, mandatoryRankSurrenderPending = false),
+            ),
+        )
+        assertEquals(
+            "manual-pause",
+            BetaCandidateRestartFencePolicy.rejectionReason(pendingMulligan.copy(paused = true)),
+        )
+        assertEquals(
+            "active-matchmaking-evidence",
+            BetaCandidateRestartFencePolicy.rejectionReason(
+                pendingMulligan.copy(noActiveMatchmakingEvidence = false),
+            ),
+        )
+    }
 }

@@ -930,3 +930,17 @@ this deletion boundary.
   authoritative mandatory-surrender completion or terminal proof may release
   the fence. Keep regressions for capture-failed recovery, manual pause, and
   ordinary gameplay dispatch while the barrier is unresolved.
+- For Beta only, the same fence has one explicit second-stage recovery: if a
+  fresh, foreground-authorized PID/HWND capture repeatedly proves the exact
+  Mulligan screen while `SURRENDER_REQUIRED` remains pending, no queue visual
+  is present, and the worker is not manually paused, the existing candidate
+  watchdog may force the canonical Beta/game restart at exactly 120000 ms
+  (119999 ms remains WAIT). This intentionally abandons the invalid rank-test
+  game; ordinary live gameplay, a different phase, unknown/capture-failed
+  frames, queue evidence, changed identity, or pause remain hard vetoes. When
+  the live game is authoritative but no exact authorized frame is available,
+  the surrender worker resets its finite retry batch and keeps ordinary input
+  blocked rather than clicking blindly; it logs
+  `RANK_SURRENDER_RECOVERY_RETRY_BUDGET_RESET` and delegates any restart to
+  the identity-fenced Beta watchdog. Regress both the 119999/120000 boundary
+  and the post-restart startup/mode/queue handoff.

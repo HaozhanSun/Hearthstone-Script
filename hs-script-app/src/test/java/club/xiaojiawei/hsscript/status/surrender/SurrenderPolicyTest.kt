@@ -59,6 +59,39 @@ class SurrenderPolicyTest {
     }
 
     @Test
+    fun `turn-start consumer keeps NeverSurrender pending barrier ahead of ordinary actions`() {
+        val source = sequenceOf(
+            Path.of("src/main/java/club/xiaojiawei/hsscript/strategy/phase/GameTurnPhaseStrategy.kt"),
+            Path.of("hs-script-app/src/main/java/club/xiaojiawei/hsscript/strategy/phase/GameTurnPhaseStrategy.kt"),
+        ).map { it.toFile() }.firstOrNull { it.isFile }?.readText()
+            ?: error("GameTurnPhaseStrategy source unavailable")
+        val pendingGuard = source.indexOf("SurrenderPolicy.mandatoryRankSurrenderPending()")
+        val outCard = source.indexOf("OutCardThread", pendingGuard)
+        assertTrue(pendingGuard >= 0, "turn-start must consult the mandatory rank barrier")
+        assertTrue(outCard > pendingGuard, "ordinary turn actions must follow the pending-rank guard")
+
+        // The NeverSurrender setting is intentionally irrelevant while the
+        // mandatory barrier is pending: policy evaluation must still defer.
+        MulliganRankDispatchBarrier.resetForTest()
+        MandatoryRankSurrenderGuard.resetForTest()
+        val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+        assertTrue(MulliganRankDispatchBarrier.requireSurrender(ticket) != null)
+        assertTrue(NeverSurrenderPolicy.shouldBlock(enabled = true, mandatoryRank = false))
+        assertNull(SurrenderPolicy.evaluateTurnStart(warWithRivalHero("星界雪怒")))
+        assertFalse(
+            ActionDispatchGate.allowForState(
+                action = "strategy.turn-start",
+                paused = false,
+                working = true,
+                mandatoryRankSurrenderPending = true,
+                recoveryCapabilityValid = false,
+            ),
+        )
+        MandatoryRankSurrenderGuard.resetForTest()
+        MulliganRankDispatchBarrier.resetForTest()
+    }
+
+    @Test
     fun `persistent streaks are reconstructed in end time order after restart`() {
         val base = LocalDateTime.of(2026, 8, 28, 12, 0)
         val records = listOf(

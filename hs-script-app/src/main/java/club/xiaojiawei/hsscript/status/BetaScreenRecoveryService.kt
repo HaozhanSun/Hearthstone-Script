@@ -322,6 +322,7 @@ internal object BetaScreenRecoveryService {
         currentHwnd: String,
         currentWindowVerified: Boolean,
         restartAction: () -> Unit,
+        inWarOverride: Boolean = false,
     ): Boolean {
         if (decision.action != BetaCandidateScreenWatchdog.Action.RESTART) return false
         if (!candidateRestartStillSafe(
@@ -332,7 +333,7 @@ internal object BetaScreenRecoveryService {
                 betaChannelOverride = true,
                 workingOverride = true,
                 pausedOverride = false,
-                inWarOverride = false,
+                inWarOverride = inWarOverride,
             )) return false
         restartAction()
         return true
@@ -426,6 +427,7 @@ internal object BetaScreenRecoveryService {
             paused = PauseStatus.isPause,
             inWar = WarEx.inWar,
             mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+            mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending(),
             // A stale FILL_DECK/GAMEPLAY lifecycle can survive the result
             // event.  The exact rank-progress visual is an independently
             // authorized terminal proof only when this current session has no
@@ -496,6 +498,7 @@ internal object BetaScreenRecoveryService {
                 paused = paused,
                 inWar = inWar,
                 mulligan = inWar && WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+                mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending(),
                 noActiveMatchmakingEvidence = reconciled.noActiveMatchmakingEvidence &&
                     !activeQueueEvidence && !lifecycleQueueEvidence,
                 currentSessionReady = reconciled.currentSessionReady,
@@ -582,6 +585,7 @@ internal object BetaScreenRecoveryService {
                 paused = pausedOverride ?: PauseStatus.isPause,
                 inWar = inWarOverride ?: WarEx.inWar,
                 mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+                mandatoryRankSurrenderPending = MandatoryRankSurrenderGuard.isPending(),
                 noActiveMatchmakingEvidence = observation?.noActiveMatchmakingEvidence == true && !activeQueueEvidence,
                 currentSessionReady = currentSessionReady,
                 terminalInputFence = PowerLogListener.hasCurrentGameTerminalInputFence(),

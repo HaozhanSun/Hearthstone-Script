@@ -5,6 +5,7 @@ import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
+import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import java.nio.file.Files
 import java.nio.file.Path
 import java.awt.Color
@@ -41,6 +42,7 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         MandatoryRankSurrenderGuard.resetForTest()
         MulliganRankDispatchBarrier.resetForTest()
         WarEx.inWar = false
+        WarEx.war.currentPhase = WarPhaseEnum.FILL_DECK
     }
 
     @Test
@@ -1003,6 +1005,77 @@ class BetaCandidateScreenRecoveryIntegrationTest {
                 .copy(working = true, paused = false),
         )
         assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, changed.action)
+    }
+
+    @Test
+    fun `pending mandatory mulligan uses production candidate restart seam at exact boundary`() {
+        MulliganRankDispatchBarrier.beginCurrentGame()
+        assertNotNull(MulliganRankDispatchBarrier.requireSurrender(1L))
+        MandatoryRankSurrenderGuard.begin("beta-test-game")
+        WarEx.inWar = true
+        WarEx.war.currentPhase = WarPhaseEnum.REPLACE_CARD
+        val frame = ScreenStateRecovery.FreshScreenObservation(
+            screen = "MULLIGAN",
+            mode = "TOURNAMENT",
+            confidence = 96,
+            evidence = "mandatory-rank-mulligan-visual",
+            pid = 2524L,
+            hwnd = "native@0x14e08cc",
+            screenshot = "mandatory-rank-mulligan.png",
+            perceptualFingerprint = 0xdeadbeefL,
+            currentSessionReady = true,
+            noActiveMatchmakingEvidence = true,
+            hubModeChooserVisible = false,
+            modalVisible = false,
+            foregroundConfirmed = true,
+        )
+        val snapshot = BetaScreenRecoveryService.candidateSnapshotForTest(0L, frame)
+            .copy(working = true, paused = false)
+        assertTrue(snapshot.mandatoryRankSurrenderPending)
+        val watchdog = BetaCandidateScreenWatchdog()
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(snapshot).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            watchdog.observe(snapshot.copy(nowMs = 119_999L)).action,
+        )
+        val decision = watchdog.observe(snapshot.copy(nowMs = 120_000L))
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESTART, decision.action)
+        var restarts = 0
+        assertTrue(
+            BetaScreenRecoveryService.dispatchCandidateRestartForTest(
+                decision = decision,
+                observation = frame,
+                currentPid = 2524L,
+                currentHwnd = "native@0x14e08cc",
+                currentWindowVerified = true,
+                restartAction = { restarts++ },
+                inWarOverride = true,
+            ),
+        )
+        assertEquals(1, restarts)
+        assertEquals(
+            "active-matchmaking-evidence",
+            BetaScreenRecoveryService.candidateRestartFenceReasonForTest(
+                frame.copy(noActiveMatchmakingEvidence = false),
+                pidMatches = true,
+                hwndMatches = true,
+                currentWindowVerified = true,
+                betaChannel = true,
+                inWar = true,
+            ),
+        )
+        assertEquals(
+            "manual-pause",
+            BetaScreenRecoveryService.candidateRestartFenceReasonForTest(
+                frame,
+                pidMatches = true,
+                hwndMatches = true,
+                currentWindowVerified = true,
+                betaChannel = true,
+                paused = true,
+                inWar = true,
+            ),
+        )
     }
 
     @Test

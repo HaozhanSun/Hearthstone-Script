@@ -5,6 +5,14 @@ import club.xiaojiawei.hsscript.status.ScreenWatchdogKind
 /** Controls when a mandatory rank surrender may leave its recovery-only state. */
 internal object MandatoryRankSurrenderRecoveryPolicy {
     const val MAX_RETRY_ATTEMPTS = 30
+    /**
+     * A failed-capture retry episode is allowed to span the same bounded
+     * window as the Beta stale-screen watchdog.  This is not permission to
+     * click blindly or restart a live game; it only prevents the recovery
+     * worker from abandoning its mandatory fence while the game is still
+     * authoritative and a fresh surrender frame is being retried.
+     */
+    const val STALLED_RECOVERY_WINDOW_MS = 120_000L
 
     enum class ConfirmationTarget { ACCEPT_NOW }
 
@@ -34,6 +42,21 @@ internal object MandatoryRankSurrenderRecoveryPolicy {
 
     internal fun hasRetryBudget(attemptsAlreadyStarted: Int): Boolean =
         attemptsAlreadyStarted < MAX_RETRY_ATTEMPTS
+
+    /**
+     * Once the finite click/inspection batch is exhausted, an active game
+     * must remain fenced and keep retrying capture.  A non-live/no-session
+     * Beta client is deliberately not admitted here: its exact PID/HWND
+     * visual candidate is handled by BetaCandidateScreenWatchdog instead.
+     */
+    internal fun shouldContinueAfterRetryBudget(
+        mandatoryRank: Boolean,
+        betaChannel: Boolean,
+        elapsedMs: Long,
+        paused: Boolean,
+        activeGame: Boolean,
+    ): Boolean = mandatoryRank && betaChannel && !paused &&
+        (elapsedMs < STALLED_RECOVERY_WINDOW_MS || activeGame)
 
     /** Cooldown/in-flight scheduler ticks do not consume an inspection retry. */
     internal fun attemptsAfterInspectionStart(attemptsAlreadyStarted: Int, inspectionStarted: Boolean): Int =

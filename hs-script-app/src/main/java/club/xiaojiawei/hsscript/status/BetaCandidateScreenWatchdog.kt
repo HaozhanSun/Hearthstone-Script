@@ -44,6 +44,9 @@ internal class BetaCandidateScreenWatchdog(
         val paused: Boolean,
         val inWar: Boolean,
         val mulligan: Boolean,
+        /** A rank-9/5 mandatory surrender is pending; this permits only the
+         *  no-live-game mulligan recovery path.  It never overrides inWar. */
+        val mandatoryRankSurrenderPending: Boolean = false,
         val terminal: Boolean,
         /** Current Power.log/session proof is required before restarting a result page. */
         val currentSessionReady: Boolean = false,
@@ -101,8 +104,17 @@ internal class BetaCandidateScreenWatchdog(
         // contradictory screen/PID/HWND/queue evidence still resets below.
         if (snapshot.paused) return deferManualPause(snapshot)
         if (!snapshot.working) return deferWithoutEvidence(snapshot, Action.DEFER_NOT_WORKING, "worker-not-working")
-        if (snapshot.inWar) return deferProgress(Action.DEFER_ACTIVE_GAME, "active-game")
-        if (snapshot.mulligan) return deferProgress(Action.DEFER_MULLIGAN, "mulligan")
+        // A mandatory rank surrender is the one bounded exception to the
+        // ordinary live-game fence: if the exact current frame is Mulligan,
+        // the surrender barrier is pending, and queue evidence is absent, the
+        // user-authorized two-minute Beta restart may abandon this invalid
+        // test game. Normal gameplay remains fenced.
+        if (snapshot.inWar && !(snapshot.mandatoryRankSurrenderPending && snapshot.mulligan)) {
+            return deferProgress(Action.DEFER_ACTIVE_GAME, "active-game")
+        }
+        if (snapshot.mulligan && !snapshot.mandatoryRankSurrenderPending) {
+            return deferProgress(Action.DEFER_MULLIGAN, "mulligan")
+        }
         if (snapshot.observationMissing) {
             return deferMissingObservation(snapshot)
         }

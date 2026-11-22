@@ -72,6 +72,69 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
     }
 
     @Test
+    fun `failed capture keeps mandatory fence retryable through bounded window and live game fence`() {
+        assertTrue(
+            MandatoryRankSurrenderRecoveryPolicy.shouldContinueAfterRetryBudget(
+                mandatoryRank = true,
+                betaChannel = true,
+                elapsedMs = MandatoryRankSurrenderRecoveryPolicy.STALLED_RECOVERY_WINDOW_MS - 1,
+                paused = false,
+                activeGame = false,
+            ),
+            "a no-session client may continue bounded capture retries before the second-stage boundary",
+        )
+        assertFalse(
+            MandatoryRankSurrenderRecoveryPolicy.shouldContinueAfterRetryBudget(
+                mandatoryRank = true,
+                betaChannel = true,
+                elapsedMs = MandatoryRankSurrenderRecoveryPolicy.STALLED_RECOVERY_WINDOW_MS,
+                paused = false,
+                activeGame = false,
+            ),
+            "at the second-stage boundary a no-session client is delegated to the identity-fenced Beta watchdog",
+        )
+        assertTrue(
+            MandatoryRankSurrenderRecoveryPolicy.shouldContinueAfterRetryBudget(
+                mandatoryRank = true,
+                betaChannel = true,
+                elapsedMs = MandatoryRankSurrenderRecoveryPolicy.STALLED_RECOVERY_WINDOW_MS,
+                paused = false,
+                activeGame = true,
+            ),
+            "an authoritative live game must keep retrying capture rather than release the surrender fence",
+        )
+        assertFalse(
+            MandatoryRankSurrenderRecoveryPolicy.shouldContinueAfterRetryBudget(
+                mandatoryRank = true,
+                betaChannel = true,
+                elapsedMs = MandatoryRankSurrenderRecoveryPolicy.STALLED_RECOVERY_WINDOW_MS,
+                paused = true,
+                activeGame = true,
+            ),
+            "manual pause is a hard retry/restart fence",
+        )
+        assertFalse(
+            MandatoryRankSurrenderRecoveryPolicy.shouldContinueAfterRetryBudget(
+                mandatoryRank = false,
+                betaChannel = true,
+                elapsedMs = 0L,
+                paused = false,
+                activeGame = true,
+            ),
+        )
+        assertFalse(
+            MandatoryRankSurrenderRecoveryPolicy.shouldContinueAfterRetryBudget(
+                mandatoryRank = true,
+                betaChannel = false,
+                elapsedMs = MandatoryRankSurrenderRecoveryPolicy.STALLED_RECOVERY_WINDOW_MS,
+                paused = false,
+                activeGame = true,
+            ),
+            "the retry-budget extension must remain Beta-only",
+        )
+    }
+
+    @Test
     fun `settings overlay at surrender target permits only the settings surrender step`() {
         val screen = ScreenWatchdog.classifyForTest("设置 选项 投降 退出游戏")
 
@@ -83,16 +146,16 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
     }
 
     @Test
-    fun `five second settings settle never bypasses fresh exact settings confirmation`() {
+    fun `three second Beta settings settle never bypasses fresh exact settings confirmation`() {
         val settings = readFixture("rank6-live-mulligan-settings-overlay.png")
         val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
         val probe = ScreenWatchdog.MandatorySurrenderPostClickProbe()
         val gearClickAt = 200_000L
         probe.markSettingsClickDispatched(gearClickAt)
 
-        assertFalse(probe.settingsOverlayProbeTiming(gearClickAt + 4_999L)!!.shouldInspect)
-        assertEquals(5_000L, ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_SETTLE_MS)
-        val due = probe.settingsOverlayProbeTiming(gearClickAt + 5_000L)
+        assertFalse(probe.settingsOverlayProbeTiming(gearClickAt + 2_999L)!!.shouldInspect)
+        assertEquals(3_000L, ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_SETTLE_MS)
+        val due = probe.settingsOverlayProbeTiming(gearClickAt + 3_000L)
         assertTrue(due!!.shouldInspect)
 
         val freshScreen = ScreenWatchdog.classifyForSurrenderForTest(
@@ -105,8 +168,8 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SURRENDER,
             MandatoryRankSurrenderRecoveryPolicy.decide(freshScreen).action,
         )
-        probe.finishSettingsOverlayProbe(settingsConfirmed = true, now = gearClickAt + 5_000L)
-        assertEquals(null, probe.settingsOverlayProbeTiming(gearClickAt + 5_001L))
+        probe.finishSettingsOverlayProbe(settingsConfirmed = true, now = gearClickAt + 3_000L)
+        assertEquals(null, probe.settingsOverlayProbeTiming(gearClickAt + 3_001L))
     }
 
     @Test

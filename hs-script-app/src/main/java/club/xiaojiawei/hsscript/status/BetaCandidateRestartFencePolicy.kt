@@ -13,6 +13,7 @@ internal object BetaCandidateRestartFencePolicy {
         val paused: Boolean,
         val inWar: Boolean,
         val mulligan: Boolean,
+        val mandatoryRankSurrenderPending: Boolean = false,
         val noActiveMatchmakingEvidence: Boolean,
         val terminalInputFence: Boolean = false,
         val currentSessionReady: Boolean,
@@ -31,8 +32,10 @@ internal object BetaCandidateRestartFencePolicy {
         if (!snapshot.observationPresent) return "observation-missing"
         if (!snapshot.working) return "worker-not-working"
         if (snapshot.paused) return "manual-pause"
-        if (snapshot.inWar) return "active-game"
-        if (snapshot.mulligan) return "mulligan"
+        val mandatoryMulliganRestart = snapshot.inWar &&
+            snapshot.mulligan && snapshot.mandatoryRankSurrenderPending
+        if (snapshot.inWar && !mandatoryMulliganRestart) return "active-game"
+        if (snapshot.mulligan && !snapshot.mandatoryRankSurrenderPending) return "mulligan"
         if (snapshot.terminalInputFence) return "terminal-input-fence"
         if (!snapshot.noActiveMatchmakingEvidence) return "active-matchmaking-evidence"
         if (!snapshot.foregroundConfirmed) return "foreground-unverified"
@@ -60,7 +63,7 @@ internal object BetaCandidateRestartFencePolicy {
         if (opponentDisconnectDialog && snapshot.currentSessionReady) {
             return "opponent-disconnect-current-session-not-empty"
         }
-        if (!terminalScreen && !opponentDisconnectDialog && snapshot.currentSessionReady) {
+        if (!terminalScreen && !opponentDisconnectDialog && snapshot.currentSessionReady && !mandatoryMulliganRestart) {
             return "current-session-ready"
         }
         if (!terminalScreen && !opponentDisconnectDialog && terminalState) {

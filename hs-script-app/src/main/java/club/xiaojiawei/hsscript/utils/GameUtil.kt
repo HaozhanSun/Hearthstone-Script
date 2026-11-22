@@ -1018,11 +1018,37 @@ object GameUtil {
                         stopSurrenderTask()
                     } else if (mandatoryRank) {
                         if (!MandatoryRankSurrenderRecoveryPolicy.hasRetryBudget(surrenderAttempts)) {
+                            val activeGameForRetry = isSurrenderStateConfirmed(Mode.currMode, WarEx.inWar)
+                            val elapsedMs = (System.currentTimeMillis() - surrenderStartedAt).coerceAtLeast(0L)
+                            if (MandatoryRankSurrenderRecoveryPolicy.shouldContinueAfterRetryBudget(
+                                    mandatoryRank = mandatoryRank,
+                                    betaChannel = BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL),
+                                    elapsedMs = elapsedMs,
+                                    paused = PauseStatus.isPause,
+                                    activeGame = activeGameForRetry,
+                                )
+                            ) {
+                                // A capture-failed mandatory surrender must not
+                                // release the ordinary-input fence merely
+                                // because one finite batch of probes expired.
+                                // Reset the inspection batch and obtain a fresh
+                                // visual proof; never synthesize a click here.
+                                surrenderAttempts = 0
+                                MandatoryRankSurrenderGuard.markRecoveryUncertain()
+                                log.warn {
+                                    "RANK_SURRENDER_RECOVERY_RETRY_BUDGET_RESET " +
+                                        "reason=${if (elapsedMs >= MandatoryRankSurrenderRecoveryPolicy.STALLED_RECOVERY_WINDOW_MS) "active-game-fence" else "bounded-capture-retry"} " +
+                                        "elapsedMs=$elapsedMs maxAttempts=${MandatoryRankSurrenderRecoveryPolicy.MAX_RETRY_ATTEMPTS} " +
+                                        "activeGame=$activeGameForRetry retry=true ordinaryInput=false requeue=false pause=${PauseStatus.isPause}"
+                                }
+                                return@scheduleWithFixedDelay
+                            }
                             MandatoryRankSurrenderGuard.markRecoveryUncertain()
                             log.error {
                                 "RANK_SURRENDER_RECOVERY_STOP reason=retry-budget-exhausted " +
                                     "attempts=$surrenderAttempts maxAttempts=${MandatoryRankSurrenderRecoveryPolicy.MAX_RETRY_ATTEMPTS} " +
-                                    "retry=false ordinaryInput=false requeue=false pause=false"
+                                    "elapsedMs=$elapsedMs retry=false ordinaryInput=false requeue=false pause=${PauseStatus.isPause} " +
+                                    "restart=delegated-to-beta-identity-fenced-watchdog"
                             }
                             stopSurrenderTask()
                             return@scheduleWithFixedDelay

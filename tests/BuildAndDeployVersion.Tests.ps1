@@ -84,6 +84,7 @@ $deployScript = [System.IO.File]::ReadAllText((Join-Path $root 'build-and-deploy
 $requiredFocusedRegressionTests = @(
     'StartupModeEntryDispatchPolicyTest',
     'BetaNeverSurrenderOverrideTest',
+    'MandatoryRankSurrenderRecoveryPolicyTest',
     'MatchmakingSearchRecoveryTest',
     'MatchmakingDialogRecoveryPolicyTest',
     'TerminalResultSequenceControllerTest',

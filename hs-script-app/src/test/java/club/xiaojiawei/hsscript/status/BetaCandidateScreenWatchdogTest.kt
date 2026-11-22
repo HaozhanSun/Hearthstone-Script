@@ -254,6 +254,57 @@ class BetaCandidateScreenWatchdogTest {
     }
 
     @Test
+    fun `pending mandatory mulligan restarts only after exact identity threshold when no live game remains`() {
+        val pending = candidate(
+            nowMs = 0L,
+            screen = "MULLIGAN",
+            mulligan = true,
+            mandatoryRankSurrenderPending = true,
+            inWar = false,
+            currentSessionReady = false,
+            noActiveMatchmakingEvidence = true,
+        )
+        val watchdog = BetaCandidateScreenWatchdog()
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(pending).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            watchdog.observe(pending.copy(nowMs = 119_999L)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(pending.copy(nowMs = 120_000L)).action,
+            "the identity-fenced Beta fallback reaches restart only at the exact boundary",
+        )
+
+        val activeGame = BetaCandidateScreenWatchdog()
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESET_IDENTITY,
+            activeGame.observe(pending.copy(inWar = true)).action,
+            "the exact pending Mulligan exception is eligible for the user-authorized Beta restart",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            activeGame.observe(pending.copy(inWar = true, nowMs = 120_000L)).action,
+            "the exact pending Mulligan exception reaches the second-stage threshold",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_GAME,
+            BetaCandidateScreenWatchdog().observe(pending.copy(inWar = true, mandatoryRankSurrenderPending = false)).action,
+            "ordinary live gameplay remains fenced",
+        )
+        val paused = BetaCandidateScreenWatchdog()
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
+            paused.observe(pending.copy(paused = true)).action,
+        )
+        val queue = BetaCandidateScreenWatchdog()
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_MATCHMAKING,
+            queue.observe(pending.copy(noActiveMatchmakingEvidence = false)).action,
+        )
+    }
+
+    @Test
     fun `transient missing capture is uncertain and restarts the same-screen timer from a fresh baseline`() {
         val deck = candidate(
             nowMs = 0L,
@@ -524,6 +575,7 @@ class BetaCandidateScreenWatchdogTest {
         paused: Boolean = false,
         inWar: Boolean = false,
         mulligan: Boolean = false,
+        mandatoryRankSurrenderPending: Boolean = false,
         terminal: Boolean = false,
         currentSessionReady: Boolean = true,
         noActiveMatchmakingEvidence: Boolean = true,
@@ -545,6 +597,7 @@ class BetaCandidateScreenWatchdogTest {
         paused = paused,
         inWar = inWar,
         mulligan = mulligan,
+        mandatoryRankSurrenderPending = mandatoryRankSurrenderPending,
         terminal = terminal,
         currentSessionReady = currentSessionReady,
         noActiveMatchmakingEvidence = noActiveMatchmakingEvidence,
