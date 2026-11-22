@@ -352,7 +352,8 @@ function Resolve-HsScriptProcessAssessment(
     [string]$ScriptDirectory,
     [object[]]$ProcessRecords,
     [object[]]$Markers,
-    [scriptblock]$GetIdentity = ${function:Get-HsScriptProcessIdentity}
+    [scriptblock]$GetIdentity = ${function:Get-HsScriptProcessIdentity},
+    [scriptblock]$GetCommandLine = ${function:Get-HsScriptNativeCommandLine}
 ) {
     $root = Get-HsScriptCanonicalRuntimeRoot $ScriptDirectory
     $verifiedMarkers = @{}
@@ -397,6 +398,13 @@ function Resolve-HsScriptProcessAssessment(
         }
         if ($name -notin @('java.exe', 'javaw.exe')) { continue }
         $commandLine = [string]$process.CommandLine
+        if ([string]::IsNullOrWhiteSpace($commandLine)) {
+            # Elevated peer JVMs can expose a blank CIM CommandLine even when
+            # the exact native query is readable. Enrich only this read-only
+            # classification input; unknown/failed native reads remain blank
+            # and therefore continue to fail closed below.
+            try { $commandLine = [string](& $GetCommandLine $targetPid) } catch { }
+        }
         if ($ambiguousMarkerPids.Contains($targetPid)) {
             return [pscustomobject]@{ Status = 'AMBIGUOUS'; ProcessIds = @($targetPid); Reason = 'launcher PID exists but process identity is unavailable' }
         }

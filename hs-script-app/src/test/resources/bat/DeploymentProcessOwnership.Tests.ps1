@@ -196,4 +196,31 @@ $foreignCommandLine = Resolve-HsScriptProcessAssessment $currentRoot @(
 ) @() $identityProvider
 Assert-Equal 'IDLE' $foreignCommandLine.Status 'foreign channel path must not be mistaken for current runtime'
 
+# Elevated Stable can expose a blank CIM CommandLine while the exact native
+# process query remains readable. Enrich that one classification input and
+# exclude the verified foreign channel; an unavailable native query must still
+# remain ambiguous/fail-closed.
+$nativeStableCommandLine = {
+    param($processId)
+    if ($processId -eq 6606) {
+        return 'javaw.exe -jar "C:\fixtures\Hearthstone Script\hs-script_4.jar"'
+    }
+    return ''
+}.GetNewClosure()
+$foreignNativeCommandLine = Resolve-HsScriptProcessAssessment $currentRoot @(
+    [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 6606; CommandLine = '' }
+) @() $identityProvider $nativeStableCommandLine
+Assert-Equal 'IDLE' $foreignNativeCommandLine.Status `
+    'blank-CIM Stable command line resolved by native API must not block Beta deployment'
+
+$nativeUnknownCommandLine = {
+    param($processId)
+    throw 'native command-line identity unavailable'
+}.GetNewClosure()
+$nativeUnknown = Resolve-HsScriptProcessAssessment $currentRoot @(
+    [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 7707; CommandLine = '' }
+) @() $identityProvider $nativeUnknownCommandLine
+Assert-Equal 'AMBIGUOUS' $nativeUnknown.Status `
+    'unavailable native command line must remain fail-closed'
+
 Write-Output 'DeploymentProcessOwnership.Tests.ps1 PASSED'
