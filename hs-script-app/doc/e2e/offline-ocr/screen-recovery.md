@@ -913,3 +913,11 @@ this deletion boundary.
   the bounded terminal-result observer obtain a fresh result/destination frame;
   never relabel the menu as a result page. Regress the exact v4.16.794 menu
   capture and retain active-game, queue, pause, and unknown-result fences.
+- A final matchmaking Start proof may briefly contend with an already-authorized
+  mode-entry focus transaction. The proof capture may wait only within one
+  bounded lock budget (currently 1.5 seconds), then must revalidate the exact
+  PID/HWND foreground and deck/Start visual before dispatch. It must never
+  capture concurrently with mode input, reuse an expired permit, or turn a
+  `capture-null` into a click; queue-visible, active-game, paused, and unknown
+  frames remain hard vetoes. Keep a production-policy regression for the
+  bounded wait and timeout/fail-closed behavior.

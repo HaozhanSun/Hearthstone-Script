@@ -584,12 +584,55 @@ internal object StartupModeEntryDispatchPolicy {
         }
     }
 
-    /** Captures skip focus changes while mode-entry input owns the same HWND. */
-    fun <T> withRecoveryCapture(processId: Int, hwnd: String, capture: () -> T): T? {
-        if (activeModeEntry.get() == (processId to hwnd)) return null
-        if (!focusTransactionLock.tryLock()) return null
+    /**
+     * Captures skip focus changes while mode-entry input owns the same HWND.
+     * A bounded wait is available for the final Start proof: it may arrive
+     * while a short, already-authorized mode-entry transaction still owns the
+     * lock. The wait never captures concurrently with that transaction and
+     * still fails closed when the bounded window expires.
+     */
+    fun <T> withRecoveryCapture(
+        processId: Int,
+        hwnd: String,
+        waitMillis: Long = 0L,
+        capture: () -> T,
+    ): T? {
+        val identity = processId to hwnd
+        if (waitMillis <= 0L && activeModeEntry.get() == identity) return null
+        val deadline = if (waitMillis > 0L) {
+            System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(waitMillis)
+        } else {
+            0L
+        }
+        if (waitMillis > 0L) {
+            while (activeModeEntry.get() == identity) {
+                val remainingNanos = deadline - System.nanoTime()
+                if (remainingNanos <= 0L) return null
+                try {
+                    Thread.sleep(minOf(25L, TimeUnit.NANOSECONDS.toMillis(remainingNanos).coerceAtLeast(1L)))
+                } catch (error: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return null
+                }
+            }
+        }
+        val acquired = try {
+            if (waitMillis > 0L) {
+                val remainingNanos = deadline - System.nanoTime()
+                remainingNanos > 0L && focusTransactionLock.tryLock(
+                    TimeUnit.NANOSECONDS.toMillis(remainingNanos).coerceAtLeast(1L),
+                    TimeUnit.MILLISECONDS,
+                )
+            } else {
+                focusTransactionLock.tryLock()
+            }
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!acquired) return null
         return try {
-            if (activeModeEntry.get() == (processId to hwnd)) null else capture()
+            if (activeModeEntry.get() == identity) null else capture()
         } finally {
             focusTransactionLock.unlock()
         }

@@ -147,6 +147,10 @@ class MatchmakingSearchRecoveryTest {
             screenStateSource.contains("purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE"),
             "the final Start refresh must use the bounded pre-session startup-capture exception",
         )
+        assertTrue(
+            screenStateSource.contains("captureLockWaitMillis = MATCHMAKING_START_PROOF_CAPTURE_LOCK_WAIT_MS"),
+            "the final Start refresh must use the bounded focus-lock retry rather than failing on a transient capture-null",
+        )
         assertNull(
             ScreenRecoveryCapturePurposePolicy.preflightRejectionReason(
                 currentSessionReady = false,

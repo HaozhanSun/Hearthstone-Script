@@ -281,6 +281,7 @@ object MouseUtil {
      */
     internal fun <T> withRecoveryForeground(
         hwnd: HWND?,
+        captureLockWaitMillis: Long = 0L,
         block: () -> T?,
     ): RecoveryForegroundResult<T> {
         val requestedTarget = hwnd ?: return RecoveryForegroundResult(false, null)
@@ -289,6 +290,7 @@ object MouseUtil {
         val coordinated = StartupModeEntryDispatchPolicy.withRecoveryCapture(
             processId,
             requestedTarget.toString(),
+            waitMillis = captureLockWaitMillis,
         ) {
             withRecoveryForegroundUnlocked(requestedTarget, block)
         }

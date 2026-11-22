@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class StartupModeEntryDispatchPolicyTest {
     @Test
@@ -133,6 +135,36 @@ class StartupModeEntryDispatchPolicyTest {
         assertEquals("captured", StartupModeEntryDispatchPolicy.withRecoveryCapture(33512, "game-hwnd") {
             "captured"
         })
+    }
+
+    @Test
+    fun `bounded final proof capture waits for an in-flight mode transaction then captures`() {
+        val entered = CountDownLatch(1)
+        val modeThread = Thread {
+            StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
+                chooserProofFresh = true,
+                paused = false,
+                processId = 33512,
+                hwnd = "game-hwnd",
+            ) {
+                entered.countDown()
+                Thread.sleep(150L)
+                true
+            }
+        }
+        modeThread.start()
+        assertTrue(entered.await(1, TimeUnit.SECONDS))
+        assertEquals(
+            "captured",
+            StartupModeEntryDispatchPolicy.withRecoveryCapture(
+                33512,
+                "game-hwnd",
+                waitMillis = 1_000L,
+            ) { "captured" },
+            "final Start proof may wait for the bounded mode transition, but must never capture concurrently",
+        )
+        modeThread.join(1_000L)
+        assertFalse(modeThread.isAlive)
     }
 
     @Test

@@ -48,6 +48,7 @@ import net.sourceforge.tess4j.Tesseract
  * screen mappings.
  */
 object ScreenStateRecovery {
+    private const val MATCHMAKING_START_PROOF_CAPTURE_LOCK_WAIT_MS = 1_500L
 
     enum class InspectionResult {
         DISABLED,
@@ -291,7 +292,10 @@ object ScreenStateRecovery {
         val expectedPid = GameUtil.findGameProcessIdForDiagnostics() ?: return false
         val expectedPidInt = expectedPid.toInt()
         val expectedHwnd = resolveLiveGameWindow() ?: return false
-        val captureResult = MouseUtil.withRecoveryForeground(expectedHwnd) {
+        val captureResult = MouseUtil.withRecoveryForeground(
+            expectedHwnd,
+            captureLockWaitMillis = MATCHMAKING_START_PROOF_CAPTURE_LOCK_WAIT_MS,
+        ) {
             val currentHwnd = resolveLiveGameWindow()
             val currentPid = GameUtil.findGameProcessIdForDiagnostics()
             if (currentHwnd == null || currentHwnd.toString() != expectedHwnd.toString() ||
