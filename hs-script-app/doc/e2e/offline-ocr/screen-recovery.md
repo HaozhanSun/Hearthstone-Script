@@ -53,9 +53,12 @@
   after the automatic-deck-completion modal. A modal, UNKNOWN frame, stale proof,
   or active queue must remain no-input. When the fresh candidate capture already
   proves a current Power.log/session or `WarEx.inWar`, the Beta watchdog skips
-  candidate OCR and defers to the active-game fence; only a visual search frame
-  may additionally establish queue evidence. This prevents a progressing game
-  from producing repeated 12-second OCR timeouts without weakening queue safety.
+  candidate OCR and defers to the active-game fence. A fresh visual search
+  frame, a recently authorized search screen, or the bounded 60-second
+  queue-entry guard must likewise skip candidate OCR and defer to the active-
+  queue fence. The long 15-minute input-intent history alone must not trigger
+  this shortcut. This prevents a progressing game or queue from producing
+  repeated 12-second OCR timeouts without weakening queue safety.
 - For the Beta previous-ranked-win startup confirmation, let an authorized
   `IDLE_CLIENT_PROBE` in LOGIN recognize the exact win sentence from the
   dedicated bounded ROI, but treat that frame as classification evidence only.

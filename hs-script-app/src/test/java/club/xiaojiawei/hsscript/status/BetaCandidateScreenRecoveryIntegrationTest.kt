@@ -94,7 +94,7 @@ class BetaCandidateScreenRecoveryIntegrationTest {
     }
 
     @Test
-    fun `current session or active game skips candidate OCR while queue visual remains protected`() {
+    fun `current session active game or fresh queue evidence skips candidate OCR`() {
         assertTrue(ScreenStateRecovery.betaCandidateOcrShouldSkipForTest(
             currentSessionReady = true,
             inWar = false,
@@ -107,16 +107,34 @@ class BetaCandidateScreenRecoveryIntegrationTest {
             currentSessionReady = false,
             inWar = false,
         ))
+        assertTrue(ScreenStateRecovery.betaCandidateOcrShouldSkipForTest(
+            currentSessionReady = false,
+            inWar = false,
+            queueVisible = true,
+        ), "a fresh SEARCHING visual must bypass candidate OCR")
+        assertTrue(ScreenStateRecovery.betaCandidateOcrShouldSkipForTest(
+            currentSessionReady = false,
+            inWar = false,
+            recentActiveScreen = true,
+        ), "a recently authorized SEARCHING screen must bypass candidate OCR")
+        assertTrue(ScreenStateRecovery.betaCandidateOcrShouldSkipForTest(
+            currentSessionReady = false,
+            inWar = false,
+            shortEntryGuard = true,
+        ), "the bounded queue-entry race guard must bypass candidate OCR")
 
         val source = Files.readString(sourceRootFrom(Path.of("")).resolve(
             "src/main/java/club/xiaojiawei/hsscript/status/ScreenStateRecovery.kt",
         ))
-        val skip = source.indexOf("betaCandidateOcrShouldSkip(currentSessionReady, WarEx.inWar)")
+        val skip = source.indexOf("val skipCandidateOcr = betaCandidateOcrShouldSkip(")
         val boundedOcr = source.indexOf("runCandidateOcrBounded(capture)")
         assertTrue(skip >= 0 && boundedOcr > skip,
-            "current-session/active-game short-circuit must precede candidate OCR")
-        assertTrue(source.contains("screen = if (queueVisible) \"MATCHMAKING\" else \"GAMEPLAY\""),
-            "the short-circuit must retain a visual queue classification when present")
+            "current-session/active-game/queue short-circuit must precede candidate OCR")
+        assertTrue(source.contains("screen = if (queueFence) \"MATCHMAKING\" else \"GAMEPLAY\""),
+            "the short-circuit must retain active queue classification when fresh evidence is present")
+        assertTrue(source.contains("recentActiveScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen()") &&
+            source.contains("shortEntryGuard = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()"),
+            "the short-circuit must use only fresh queue evidence or the bounded entry guard")
 
         val activeGame = ScreenStateRecovery.FreshScreenObservation(
             screen = "GAMEPLAY",

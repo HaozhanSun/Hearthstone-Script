@@ -401,24 +401,39 @@ object ScreenStateRecovery {
             !GameUtil.isVerifiedCurrentGameWindow(gameWindow)
         ) return null
         val currentSessionReady = capture.evidence.currentSessionReady
-        if (useUpstreamClassifier && betaCandidateOcrShouldSkip(currentSessionReady, WarEx.inWar)) {
-            // A current Power.log/session or active in-war state is already an
-            // authoritative watchdog fence. Do not spend 12+ seconds in
-            // candidate OCR while gameplay is progressing; retain only the
-            // visual SEARCHING signal needed to protect a real queue.
-            val queueVisible = capture.visual.matchmakingSearchVisual
+        val queueVisible = capture.visual.matchmakingSearchVisual
+        val recentActiveScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen()
+        val shortEntryGuard = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
+        val skipCandidateOcr = betaCandidateOcrShouldSkip(
+            currentSessionReady = currentSessionReady,
+            inWar = WarEx.inWar,
+            queueVisible = queueVisible,
+            recentActiveScreen = recentActiveScreen,
+            shortEntryGuard = shortEntryGuard,
+        )
+        if (useUpstreamClassifier && skipCandidateOcr) {
+            // A current Power.log/session, active in-war state, fresh SEARCHING
+            // visual, or short queue-entry guard is already an authoritative
+            // watchdog fence. Do not spend 12+ seconds in candidate OCR while
+            // gameplay or matchmaking is progressing.
             val queueLifecycleActive = hasCurrentCandidateMatchmakingEvidence(
                 currentSessionReady = currentSessionReady,
                 queueVisible = queueVisible,
-                recentActiveScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
-                shortEntryGuard = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+                recentActiveScreen = recentActiveScreen,
+                shortEntryGuard = shortEntryGuard,
                 recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
             )
+            val queueFence = queueVisible || recentActiveScreen || shortEntryGuard
+            val skipReason = if (queueFence) "active-matchmaking-evidence" else "current-session-or-active-game"
             val activeObservation = FreshScreenObservation(
-                screen = if (queueVisible) "MATCHMAKING" else "GAMEPLAY",
+                screen = if (queueFence) "MATCHMAKING" else "GAMEPLAY",
                 mode = ModeEnum.TOURNAMENT.name,
                 confidence = 98,
-                evidence = if (queueVisible) "matchmaking-search-visual" else "current-session-or-active-game-no-ocr",
+                evidence = when {
+                    queueVisible -> "matchmaking-search-visual"
+                    queueFence -> "active-matchmaking-evidence-no-ocr"
+                    else -> "current-session-or-active-game-no-ocr"
+                },
                 pid = initialPid,
                 hwnd = gameWindow.toString(),
                 screenshot = capture.file?.absolutePath,
@@ -431,10 +446,12 @@ object ScreenStateRecovery {
                     .let { if (it) centeredModalPanelFingerprint(capture.image) else null },
             )
             log.info {
-                "BETA_CANDIDATE_SCREEN_OCR_SKIPPED reason=current-session-or-active-game " +
+                "BETA_CANDIDATE_SCREEN_OCR_SKIPPED reason=$skipReason " +
                     "screen=${activeObservation.screen} pid=$initialPid hwnd=$gameWindow " +
                     "currentSessionReady=$currentSessionReady inWar=${WarEx.inWar} " +
-                    "queueVisible=$queueVisible noActiveMatchmakingEvidence=${activeObservation.noActiveMatchmakingEvidence}"
+                    "queueVisible=$queueVisible recentActiveScreen=$recentActiveScreen " +
+                    "shortEntryGuard=$shortEntryGuard " +
+                    "noActiveMatchmakingEvidence=${activeObservation.noActiveMatchmakingEvidence}"
             }
             return activeObservation
         }
@@ -509,12 +526,12 @@ object ScreenStateRecovery {
                 evidence = null,
             )
         }
-        val queueVisible = capture.visual.matchmakingSearchVisual || looksLikeMatchmakingText(ocrEvidence.text)
+        val classifiedQueueVisible = queueVisible || looksLikeMatchmakingText(ocrEvidence.text)
         val queueLifecycleActive = hasCurrentCandidateMatchmakingEvidence(
             currentSessionReady = currentSessionReady,
-            queueVisible = queueVisible,
-            recentActiveScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
-            shortEntryGuard = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+            queueVisible = classifiedQueueVisible,
+            recentActiveScreen = recentActiveScreen,
+            shortEntryGuard = shortEntryGuard,
             recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
         )
         val noActiveMatchmakingEvidence = !queueLifecycleActive
@@ -608,10 +625,24 @@ object ScreenStateRecovery {
     internal fun betaCandidateOcrShouldSkipForTest(
         currentSessionReady: Boolean,
         inWar: Boolean,
-    ): Boolean = betaCandidateOcrShouldSkip(currentSessionReady, inWar)
+        queueVisible: Boolean = false,
+        recentActiveScreen: Boolean = false,
+        shortEntryGuard: Boolean = false,
+    ): Boolean = betaCandidateOcrShouldSkip(
+        currentSessionReady,
+        inWar,
+        queueVisible,
+        recentActiveScreen,
+        shortEntryGuard,
+    )
 
-    private fun betaCandidateOcrShouldSkip(currentSessionReady: Boolean, inWar: Boolean): Boolean =
-        currentSessionReady || inWar
+    private fun betaCandidateOcrShouldSkip(
+        currentSessionReady: Boolean,
+        inWar: Boolean,
+        queueVisible: Boolean,
+        recentActiveScreen: Boolean,
+        shortEntryGuard: Boolean,
+    ): Boolean = currentSessionReady || inWar || queueVisible || recentActiveScreen || shortEntryGuard
 
     /** Deterministic timeout seam; production still supplies the native OCR probe. */
     internal fun runCandidateOcrBoundedForTest(timeoutMs: Long, probe: () -> Unit): String =
