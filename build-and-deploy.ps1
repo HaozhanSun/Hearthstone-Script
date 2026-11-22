@@ -274,6 +274,10 @@ if ($stoppedRuntimeProcesses.Count -gt 0) {
         try { Wait-Process -Id ([int]$stoppedPid) -Timeout 10 -ErrorAction SilentlyContinue } catch { }
     }
 }
+$remainingAssessment = Resolve-HsScriptProcessAssessment $runtimeRoot @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop) @(Get-HsScriptRuntimeMarkers $runtimeRoot)
+if ($remainingAssessment.Status -ne 'IDLE') {
+    throw "Refusing to deploy while the channel runtime is still owned or ambiguous: status=$($remainingAssessment.Status) pids=$($remainingAssessment.ProcessIds -join ',') reason=$($remainingAssessment.Reason)"
+}
 $remainingRuntimeProcesses = @(Get-CimInstance Win32_Process | Where-Object {
     $_.Name -in @('java.exe', 'javaw.exe') -and
     ([string]$_.CommandLine).IndexOf(([System.IO.Path]::GetFullPath($runtimeRoot).TrimEnd('\')), [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and

@@ -124,6 +124,10 @@ $runtimeStop = $deployScript.IndexOf('Stop-ManagedHsScriptProcesses', [System.St
 if ($artifactCheck -lt 0 -or $runtimeStop -lt 0 -or $artifactCheck -gt $runtimeStop) {
     throw 'Artifact timestamp must be verified before the deployment process is stopped or runtime is modified'
 }
+$runtimeAssessment = $deployScript.IndexOf('Resolve-HsScriptProcessAssessment', [System.StringComparison]::Ordinal)
+if ($runtimeAssessment -lt $runtimeStop) {
+    throw 'Build/deploy must recheck ownership with native identity-aware assessment after stopping'
+}
 $betaGameGuard = $deployScript.IndexOf('Assert-HsScriptBetaGameProcessAbsent | Out-Null', [System.StringComparison]::Ordinal)
 $betaRuntimeRestart = $deployScript.IndexOf('Start-HsScriptBetaRuntimeAfterDeploy', [System.StringComparison]::Ordinal)
 $shortcutSync = $deployScript.IndexOf("sync-shortcuts.ps1", [System.StringComparison]::Ordinal)

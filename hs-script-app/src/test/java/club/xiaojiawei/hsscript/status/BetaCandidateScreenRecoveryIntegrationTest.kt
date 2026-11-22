@@ -360,6 +360,15 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         ).use(ImageIO::read)
         assertEquals("RANK_PROGRESS_CONTINUATION", UpstreamScreenStateRecovery.classifyImageForResultFixture(fixture))
 
+        val currentIncidentFixture = requireNotNull(
+            javaClass.getResourceAsStream("/offline-ocr/screen-recovery/beta-live-platinum9-rank-reward-20261122-082555.png"),
+        ).use(ImageIO::read)
+        assertEquals(
+            "RANK_PROGRESS_CONTINUATION",
+            UpstreamScreenStateRecovery.classifyImageForResultFixture(currentIncidentFixture),
+            "the current Platinum 9 frame must enter the production result path before the watchdog fallback",
+        )
+
         // This is the production handoff shape from the incident: stale
         // lifecycle phase FILL_DECK/current-session remains true while the
         // current Power.log has no new bytes. Drive the actual classifier
