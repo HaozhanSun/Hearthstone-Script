@@ -62,6 +62,50 @@ class BetaCandidateScreenRecoveryIntegrationTest {
     }
 
     @Test
+    fun `live Platinum 9 reward classification survives stale fill-deck session and reaches bounded restart`() {
+        val fixture = requireNotNull(
+            javaClass.getResourceAsStream("/offline-ocr/screen-recovery/beta-live-platinum9-rank-reward-20261121.png"),
+        ).use(ImageIO::read)
+        assertEquals("RANK_PROGRESS_CONTINUATION", UpstreamScreenStateRecovery.classifyImageForResultFixture(fixture))
+
+        // This is the production handoff shape from the incident: stale
+        // lifecycle phase FILL_DECK/current-session remains true while the
+        // current Power.log has no new bytes. Terminal visual classification
+        // is independent; the existing candidate fence still requires the
+        // current session and no active queue before the full Beta restart.
+        val reward = BetaCandidateScreenWatchdog.Snapshot(
+            nowMs = 0L,
+            screen = "RANK_PROGRESS_CONTINUATION",
+            confidence = 93,
+            captureConfirmed = true,
+            foregroundConfirmed = true,
+            pid = 29_000L,
+            hwnd = "0x27010",
+            foregroundIdentity = "0x27010",
+            working = true,
+            paused = false,
+            inWar = false,
+            mulligan = false,
+            terminal = true,
+            currentSessionReady = true,
+            noActiveMatchmakingEvidence = true,
+        )
+        val watchdog = BetaCandidateScreenWatchdog()
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(reward).action)
+        assertEquals(BetaCandidateScreenWatchdog.Action.WAIT,
+            watchdog.observe(reward.copy(nowMs = 119_999L)).action)
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(reward.copy(nowMs = 120_000L)).action)
+
+        assertEquals(BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_GAME,
+            BetaCandidateScreenWatchdog().observe(reward.copy(inWar = true)).action)
+        assertEquals(BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_MATCHMAKING,
+            BetaCandidateScreenWatchdog().observe(reward.copy(noActiveMatchmakingEvidence = false)).action)
+        assertEquals(BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
+            BetaCandidateScreenWatchdog().observe(reward.copy(paused = true)).action)
+    }
+
+    @Test
     fun `OCR exception is contained as unknown and cannot authorize a candidate restart`() {
         val frame = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
         val classification = UpstreamScreenStateRecovery.classifyFreshScreenForWatchdogSafely(

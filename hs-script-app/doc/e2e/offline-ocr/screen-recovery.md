@@ -812,3 +812,16 @@ this deletion boundary.
   visible quest overlay, reconnect modal, terminal/result state, pause, or a
   pending mandatory-rank guard must retain the fence. Cover both allowed
   transitions and every retained safety fence.
+- Beta 2026-11-21 Platinum 9 reward regression: a centered blue-ribbon rank
+  reward can be structurally mistaken for Event Quest when the stale lifecycle
+  phase remains `FILL_DECK` and the current Power.log has no new bytes. Check
+  the calibrated Continue/ribbon/center/warm signature before the broad Event
+  Quest classifier so the production path reaches `RANK_PROGRESS_CONTINUATION`
+  and its existing terminal-cleanup capability. The signature is only a
+  classification; current-session, exact PID/HWND/foreground, active-game,
+  active-queue, terminal, and manual-pause fences still govern any click or
+  restart. A manual pause must defer without erasing a proven same-identity
+  episode; after explicit resume, the unchanged authorized reward may finish
+  the 119999/120000 ms watchdog boundary, while changed identity or ambiguous
+  evidence requires a fresh baseline. Regress the captured Platinum 9 frame,
+  the full Beta candidate-to-restart chain, and live-game/queue/pause fences.

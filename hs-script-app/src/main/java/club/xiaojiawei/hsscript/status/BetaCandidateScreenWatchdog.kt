@@ -94,7 +94,11 @@ internal class BetaCandidateScreenWatchdog(
 
     fun observe(snapshot: Snapshot): Decision {
         if (!snapshot.working) return deferWithoutEvidence(snapshot, Action.DEFER_NOT_WORKING, "worker-not-working")
-        if (snapshot.paused) return deferWithoutEvidence(snapshot, Action.DEFER_MANUAL_PAUSE, "manual-pause")
+        // Manual pause is a hard dispatch fence, but it must not erase a
+        // positively identified episode.  Preserve its identity/timer so a
+        // later explicit resume can finish the already-earned bounded wait;
+        // contradictory screen/PID/HWND/queue evidence still resets below.
+        if (snapshot.paused) return deferManualPause(snapshot)
         if (snapshot.inWar) return deferProgress(Action.DEFER_ACTIVE_GAME, "active-game")
         if (snapshot.mulligan) return deferProgress(Action.DEFER_MULLIGAN, "mulligan")
         if (snapshot.observationMissing) {
@@ -254,6 +258,14 @@ internal class BetaCandidateScreenWatchdog(
             restartCount = restartCount,
         )
     }
+
+    private fun deferManualPause(snapshot: Snapshot): Decision = Decision(
+        action = Action.DEFER_MANUAL_PAUSE,
+        reason = "manual-pause",
+        stableForMs = (snapshot.nowMs - (stableSinceMs ?: snapshot.nowMs)).coerceAtLeast(0L),
+        positiveObservations = positiveObservations,
+        restartCount = restartCount,
+    )
 
     /** A brief null capture is uncertainty, not queue evidence; retain one bounded episode gap. */
     private fun deferMissingObservation(snapshot: Snapshot): Decision {

@@ -334,6 +334,42 @@ class BetaCandidateScreenWatchdogTest {
     }
 
     @Test
+    fun `manual pause fences dispatch without erasing a proven reward episode`() {
+        val reward = candidate(
+            nowMs = 0L,
+            screen = "RANK_PROGRESS_CONTINUATION",
+            terminal = true,
+            currentSessionReady = true,
+        )
+        val watchdog = BetaCandidateScreenWatchdog()
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(reward).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
+            watchdog.observe(reward.copy(nowMs = 60_000L, paused = true)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            watchdog.observe(reward.copy(nowMs = 119_999L)).action,
+            "resuming the same exact reward keeps the original timer and remains below the boundary",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(reward.copy(nowMs = 120_000L)).action,
+            "a manual pause cannot permanently suppress the bounded restart once the operator resumes",
+        )
+
+        val changed = BetaCandidateScreenWatchdog()
+        changed.observe(reward)
+        assertEquals(BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
+            changed.observe(reward.copy(nowMs = 60_000L, paused = true)).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESET_IDENTITY,
+            changed.observe(reward.copy(nowMs = 120_000L, pid = 43L, hwnd = "hwnd-2", foregroundIdentity = "hwnd-2")).action,
+            "a changed client identity after pause must restart from a fresh baseline",
+        )
+    }
+
+    @Test
     fun `fresh active matchmaking evidence always fences even a repeated unknown modal`() {
         val watchdog = BetaCandidateScreenWatchdog()
         val queued = candidate(

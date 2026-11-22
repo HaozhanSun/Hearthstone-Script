@@ -1,11 +1,38 @@
 package club.xiaojiawei.hsscript.status
 
+import javax.imageio.ImageIO
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ResultPageEvidencePolicyTest {
+    @Test
+    fun `live Beta Platinum 9 reward fixture outranks Event Quest classifier`() {
+        val image = requireNotNull(ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/beta-live-platinum9-rank-reward-20261121.png",
+        ))))
+        assertTrue(
+            ResultPageEvidencePolicy.looksLikeRankProgressContinuationVisual(
+                continueGrayLightRatio = 0.043,
+                bannerLowSaturationRatio = 0.254,
+                centerDarkRatio = 0.164,
+                bannerWarmRatio = 0.394,
+            ),
+            "the captured Platinum 9 Continue/ribbon/panel signature must be admitted before generic modal detection",
+        )
+        assertEquals(
+            "RANK_PROGRESS_CONTINUATION",
+            UpstreamScreenStateRecovery.classifyImageForResultFixture(image),
+            "the actual live reward screenshot must not fall through to EVENT_QUEST_OVERLAY",
+        )
+        assertTrue(
+            StartupQuestOverlayVisualClassifier.isQuestOverlay(image),
+            "the regression must prove ordering: this frame still matches the broad modal geometry, but rank evidence wins first",
+        )
+    }
+
     @Test
     fun `v4 16 679 defeat screenshot signature is recognized before OCR`() {
         val observation = requireNotNull(

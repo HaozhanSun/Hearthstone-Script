@@ -198,11 +198,23 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.25..0.32 &&
             centerDarkRatio in 0.19..0.24 &&
             bannerWarmRatio in 0.30..0.40
+        // 2026-11-21 Beta Platinum 9 reward capture (23:27:11) rendered the
+        // same blue-ribbon rank page with a lighter/dimmer center panel than
+        // the v4.16.765 family: continue=.043, low-saturation=.254,
+        // center-dark=.164, warm=.394.  Keep this narrow four-region variant
+        // ahead of the broad Event Quest structural detector; it only
+        // authorizes the existing terminal-result path and does not grant
+        // generic startup or gameplay input.
+        val livePlatinumNineRewardVariant = continueGrayLightRatio in 0.038..0.050 &&
+            bannerLowSaturationRatio in 0.24..0.28 &&
+            centerDarkRatio in 0.15..0.18 &&
+            bannerWarmRatio in 0.36..0.42
         return capturedRankProgressSignature || establishedRankProgressSignature ||
             coolBoardGoldRewardSignature || largeGoldMedalRewardSignature ||
             incidentCoolBoardRewardSignature || incidentWarmBannerRewardSignature ||
             liveRankNineRewardSignature || liveRankNineCoolBoardSignature ||
-            liveRankTenCoolBoardSignature || livePlatinumProgressFamily
+            liveRankTenCoolBoardSignature || livePlatinumProgressFamily ||
+            livePlatinumNineRewardVariant
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */
