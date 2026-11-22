@@ -353,7 +353,8 @@ function Resolve-HsScriptProcessAssessment(
     [object[]]$ProcessRecords,
     [object[]]$Markers,
     [scriptblock]$GetIdentity = ${function:Get-HsScriptProcessIdentity},
-    [scriptblock]$GetCommandLine = ${function:Get-HsScriptNativeCommandLine}
+    [scriptblock]$GetCommandLine = ${function:Get-HsScriptNativeCommandLine},
+    [switch]$UseNativeCommandLine
 ) {
     $root = Get-HsScriptCanonicalRuntimeRoot $ScriptDirectory
     $verifiedMarkers = @{}
@@ -398,7 +399,7 @@ function Resolve-HsScriptProcessAssessment(
         }
         if ($name -notin @('java.exe', 'javaw.exe')) { continue }
         $commandLine = [string]$process.CommandLine
-        if ([string]::IsNullOrWhiteSpace($commandLine)) {
+        if ($UseNativeCommandLine -and [string]::IsNullOrWhiteSpace($commandLine)) {
             # Elevated peer JVMs can expose a blank CIM CommandLine even when
             # the exact native query is readable. Enrich only this read-only
             # classification input; unknown/failed native reads remain blank

@@ -209,9 +209,15 @@ $nativeStableCommandLine = {
 }.GetNewClosure()
 $foreignNativeCommandLine = Resolve-HsScriptProcessAssessment $currentRoot @(
     [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 6606; CommandLine = '' }
-) @() $identityProvider $nativeStableCommandLine
+) @() $identityProvider $nativeStableCommandLine -UseNativeCommandLine
 Assert-Equal 'IDLE' $foreignNativeCommandLine.Status `
     'blank-CIM Stable command line resolved by native API must not block Beta deployment'
+
+$genericNativeCommandLine = Resolve-HsScriptProcessAssessment $currentRoot @(
+    [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 6606; CommandLine = '' }
+) @() $identityProvider $nativeStableCommandLine
+Assert-Equal 'AMBIGUOUS' $genericNativeCommandLine.Status `
+    'native command-line enrichment must remain opt-in for generic/Stable-RC assessment'
 
 $nativeUnknownCommandLine = {
     param($processId)
@@ -219,7 +225,7 @@ $nativeUnknownCommandLine = {
 }.GetNewClosure()
 $nativeUnknown = Resolve-HsScriptProcessAssessment $currentRoot @(
     [pscustomobject]@{ Name = 'javaw.exe'; ProcessId = 7707; CommandLine = '' }
-) @() $identityProvider $nativeUnknownCommandLine
+) @() $identityProvider $nativeUnknownCommandLine -UseNativeCommandLine
 Assert-Equal 'AMBIGUOUS' $nativeUnknown.Status `
     'unavailable native command line must remain fail-closed'
 

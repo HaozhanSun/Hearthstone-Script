@@ -129,6 +129,9 @@ $runtimeAssessment = $deployScript.IndexOf('Resolve-HsScriptProcessAssessment', 
 if ($runtimeAssessment -lt $runtimeStop) {
     throw 'Build/deploy must recheck ownership with native identity-aware assessment after stopping'
 }
+if ($deployScript -notmatch "-UseNativeCommandLine:\(\`$Channel -eq 'beta'\)") {
+    throw 'Native command-line enrichment must be explicitly opt-in for the Beta deployment preflight'
+}
 $betaGameGuard = $deployScript.IndexOf('Assert-HsScriptBetaGameProcessAbsent | Out-Null', [System.StringComparison]::Ordinal)
 $betaRuntimeRestart = $deployScript.IndexOf('Start-HsScriptBetaRuntimeAfterDeploy', [System.StringComparison]::Ordinal)
 $shortcutSync = $deployScript.IndexOf("sync-shortcuts.ps1", [System.StringComparison]::Ordinal)
