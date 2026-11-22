@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class StartupModeEntryDispatchPolicyTest {
     @Test
@@ -165,6 +166,60 @@ class StartupModeEntryDispatchPolicyTest {
         )
         modeThread.join(1_000L)
         assertFalse(modeThread.isAlive)
+    }
+
+    @Test
+    fun `bounded final proof capture times out and interruption fail closed`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val modeThread = Thread {
+            StartupModeEntryDispatchPolicy.dispatchTraditionalBattleIfReady(
+                chooserProofFresh = true,
+                paused = false,
+                processId = 33512,
+                hwnd = "game-hwnd",
+            ) {
+                entered.countDown()
+                release.await(2, TimeUnit.SECONDS)
+                true
+            }
+        }
+        modeThread.start()
+        assertTrue(entered.await(1, TimeUnit.SECONDS))
+
+        val started = System.nanoTime()
+        assertEquals(
+            null,
+            StartupModeEntryDispatchPolicy.withRecoveryCapture(
+                33512,
+                "game-hwnd",
+                waitMillis = 50L,
+            ) { "must-not-capture" },
+        )
+        assertTrue(
+            (System.nanoTime() - started) < TimeUnit.MILLISECONDS.toNanos(500L),
+            "timeout must consume one bounded budget, not wait twice",
+        )
+
+        val interruptedResult = AtomicReference<String?>("unset")
+        val captureThread = Thread {
+            interruptedResult.set(
+                StartupModeEntryDispatchPolicy.withRecoveryCapture(
+                    33512,
+                    "game-hwnd",
+                    waitMillis = 1_000L,
+                ) { "must-not-capture" },
+            )
+        }
+        captureThread.start()
+        Thread.sleep(50L)
+        captureThread.interrupt()
+        captureThread.join(1_000L)
+        release.countDown()
+        modeThread.join(1_000L)
+        assertFalse(captureThread.isAlive)
+        assertFalse(modeThread.isAlive)
+        assertEquals(null, interruptedResult.get(), "interrupted proof refresh must fail closed")
     }
 
     @Test

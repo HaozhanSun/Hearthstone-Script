@@ -18,6 +18,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingDialogRecoveryPolicy
 import club.xiaojiawei.hsscript.strategy.mode.MatchmakingInputGuardPolicy
+import club.xiaojiawei.hsscript.strategy.mode.TournamentModeStrategy
 import javax.imageio.ImageIO
 
 class MatchmakingSearchRecoveryTest {
@@ -1251,6 +1252,30 @@ class MatchmakingSearchRecoveryTest {
         } finally {
             LifecycleTrace.resetMatchmakingEvidenceForTest()
         }
+    }
+
+    @Test
+    fun `fresh queue image after bounded proof wait prevents a final Start dispatch`() {
+        val queue = requireNotNull(
+            javaClass.getResourceAsStream(
+                "/offline-ocr/screen-recovery/beta-live-matchmaking-search-20261122-120541.png",
+            ),
+        ).use(ImageIO::read)
+        var dispatches = 0
+        assertFalse(
+            TournamentModeStrategy.dispatchMatchmakingStartControlAfterFreshProof(
+                refreshProof = {
+                    Thread.sleep(50L) // model a successful bounded lock wait
+                    true
+                },
+                isAuthorized = {
+                    !ScreenStateRecovery.exactMatchmakingVisualForWatchdogForTest(queue)
+                },
+                dispatchStartControl = { dispatches++; true },
+            ),
+            "a fresh search frame remains a hard Start veto after proof contention resolves",
+        )
+        assertEquals(0, dispatches)
     }
 
     @Test
