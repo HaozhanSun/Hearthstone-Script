@@ -638,19 +638,31 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         return dispatchStartControl()
     }
 
-    private fun clickMatchmakingStartControl(): Boolean {
-        // The completion-dialog sequence can take longer than the short-lived
-        // startup proof. Re-capture the exact deck-selection screen before
-        // the final Start click; never extend an old proof or infer readiness
-        // from the queue intent created by the first click.
-        val proofWasReady = ActionDispatchGate.isStartupScreenConfirmedForAction("matchmaking.start")
-        val freshProofRecorded = !proofWasReady &&
-            ScreenStateRecovery.refreshFreshDeckSelectionStartProofForMatchmaking()
+    /**
+     * Mint a new, exact deck-selection proof immediately before every Start
+     * dispatch.  The first click can open the automatic deck-completion modal;
+     * that multi-step flow must never reuse the expiring pre-modal proof or
+     * infer queue state from the earlier click intent.
+     */
+    internal fun dispatchMatchmakingStartControlAfterFreshProof(
+        refreshProof: () -> Boolean,
+        isAuthorized: () -> Boolean,
+        dispatchStartControl: () -> Boolean,
+    ): Boolean {
+        val refreshed = refreshProof()
         return dispatchMatchmakingStartControlIfAuthorized(
-            isAuthorized = {
-                (proofWasReady || freshProofRecorded) &&
-                    ActionDispatchGate.isStartupScreenConfirmedForAction("matchmaking.start")
-            },
+            isAuthorized = { refreshed && isAuthorized() },
+            dispatchStartControl = dispatchStartControl,
+        )
+    }
+
+    private fun clickMatchmakingStartControl(): Boolean {
+        // Always re-capture: this covers both the initial click and the final
+        // click after deck completion, including the exact proof-expiry race
+        // observed in v4.16.784 at ~8 seconds.
+        return dispatchMatchmakingStartControlAfterFreshProof(
+            refreshProof = { ScreenStateRecovery.refreshFreshDeckSelectionStartProofForMatchmaking() },
+            isAuthorized = { ActionDispatchGate.isStartupScreenConfirmedForAction("matchmaking.start") },
             dispatchStartControl = { clickMatchmakingControl(START_RECT) },
         )
     }

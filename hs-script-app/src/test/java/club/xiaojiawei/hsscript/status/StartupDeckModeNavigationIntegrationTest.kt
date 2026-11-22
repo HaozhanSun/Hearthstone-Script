@@ -1095,6 +1095,67 @@ class StartupDeckModeNavigationIntegrationTest {
     }
 
     @Test
+    fun `post completion modal refreshes exact Start proof before final dispatch`() {
+        var surface = "deck"
+        var refreshes = 0
+        var dispatches = 0
+        fun refreshProof(): Boolean {
+            refreshes++
+            return surface == "deck"
+        }
+        fun authorized(): Boolean = surface == "deck"
+        fun dispatch(): Boolean {
+            dispatches++
+            return true
+        }
+
+        // Initial configured deck screen: the first Start reaches the real
+        // dispatch seam and records an accepted click intent only afterward.
+        assertTrue(TournamentModeStrategy.dispatchMatchmakingStartControlAfterFreshProof(
+            refreshProof = ::refreshProof,
+            isAuthorized = ::authorized,
+            dispatchStartControl = ::dispatch,
+        ))
+        assertEquals(1, dispatches)
+
+        // The first click opened automatic deck completion. A modal frame is
+        // never eligible to mint or reuse Start proof.
+        surface = "auto-complete-modal"
+        assertFalse(TournamentModeStrategy.dispatchMatchmakingStartControlAfterFreshProof(
+            refreshProof = ::refreshProof,
+            isAuthorized = ::authorized,
+            dispatchStartControl = ::dispatch,
+        ))
+        assertEquals(1, dispatches)
+
+        // After the two confirmation clicks, a fresh exact deck frame mints a
+        // new proof and the final Start reaches physical dispatch.
+        surface = "deck"
+        assertTrue(TournamentModeStrategy.dispatchMatchmakingStartControlAfterFreshProof(
+            refreshProof = ::refreshProof,
+            isAuthorized = ::authorized,
+            dispatchStartControl = ::dispatch,
+        ))
+        assertEquals(2, dispatches)
+        assertEquals(3, refreshes)
+
+        // Unknown/stale proof and a current queue remain hard vetoes.
+        surface = "unknown"
+        assertFalse(TournamentModeStrategy.dispatchMatchmakingStartControlAfterFreshProof(
+            refreshProof = ::refreshProof,
+            isAuthorized = ::authorized,
+            dispatchStartControl = ::dispatch,
+        ))
+        surface = "active-queue"
+        assertFalse(TournamentModeStrategy.dispatchMatchmakingStartControlAfterFreshProof(
+            refreshProof = { refreshes++; true },
+            isAuthorized = { false },
+            dispatchStartControl = ::dispatch,
+        ))
+        assertEquals(2, dispatches)
+    }
+
+    @Test
     fun `saved live post quest Wild frame reaches only fresh Start dispatch authorization`() {
         val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/beta-live-wild-deck-selection-post-quest-20261108-152551.png",

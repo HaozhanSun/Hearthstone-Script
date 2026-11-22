@@ -130,6 +130,10 @@ class MatchmakingSearchRecoveryTest {
             "final Start must refresh an exact deck-screen proof after the completion sequence",
         )
         assertTrue(
+            tournamentSource.contains("dispatchMatchmakingStartControlAfterFreshProof("),
+            "both initial and post-completion Start clicks must use the fresh-proof consumer seam",
+        )
+        assertTrue(
             screenStateSource.contains("MATCHMAKING_START_PROOF_REFRESH decision="),
             "the fresh-proof callsite must emit a structured decision reason",
         )

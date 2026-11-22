@@ -90,6 +90,68 @@ class BetaCandidateScreenRecoveryIntegrationTest {
     }
 
     @Test
+    fun `current session or active game skips candidate OCR while queue visual remains protected`() {
+        assertTrue(ScreenStateRecovery.betaCandidateOcrShouldSkipForTest(
+            currentSessionReady = true,
+            inWar = false,
+        ))
+        assertTrue(ScreenStateRecovery.betaCandidateOcrShouldSkipForTest(
+            currentSessionReady = false,
+            inWar = true,
+        ))
+        assertFalse(ScreenStateRecovery.betaCandidateOcrShouldSkipForTest(
+            currentSessionReady = false,
+            inWar = false,
+        ))
+
+        val source = Files.readString(sourceRootFrom(Path.of("")).resolve(
+            "src/main/java/club/xiaojiawei/hsscript/status/ScreenStateRecovery.kt",
+        ))
+        val skip = source.indexOf("betaCandidateOcrShouldSkip(currentSessionReady, WarEx.inWar)")
+        val boundedOcr = source.indexOf("runCandidateOcrBounded(capture)")
+        assertTrue(skip >= 0 && boundedOcr > skip,
+            "current-session/active-game short-circuit must precede candidate OCR")
+        assertTrue(source.contains("screen = if (queueVisible) \"MATCHMAKING\" else \"GAMEPLAY\""),
+            "the short-circuit must retain a visual queue classification when present")
+
+        val activeGame = ScreenStateRecovery.FreshScreenObservation(
+            screen = "GAMEPLAY",
+            mode = "TOURNAMENT",
+            confidence = 98,
+            evidence = "current-session-or-active-game-no-ocr",
+            pid = 20_632L,
+            hwnd = "native@0x923029e",
+            screenshot = null,
+            perceptualFingerprint = 1L,
+            currentSessionReady = true,
+            noActiveMatchmakingEvidence = true,
+            hubModeChooserVisible = false,
+            modalVisible = false,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_GAME,
+            BetaCandidateScreenWatchdog().observe(
+                BetaScreenRecoveryService.candidateSnapshotForTest(0L, activeGame)
+                    .copy(working = true, paused = false, inWar = true),
+            ).action,
+            "current active game must defer before any OCR-derived recovery action",
+        )
+        val queue = activeGame.copy(
+            screen = "MATCHMAKING",
+            evidence = "matchmaking-search-visual",
+            noActiveMatchmakingEvidence = false,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_GAME,
+            BetaCandidateScreenWatchdog().observe(
+                BetaScreenRecoveryService.candidateSnapshotForTest(0L, queue)
+                    .copy(working = true, paused = false, inWar = true),
+            ).action,
+            "a current game fence remains stronger than queue-screen recovery",
+        )
+    }
+
+    @Test
     fun `centered modal fingerprint ignores animated underlay but changes with modal content`() {
         val first = modalFixture(background = Color(18, 42, 78), modalVariant = 0)
         val animatedUnderlay = modalFixture(background = Color(118, 28, 36), modalVariant = 0)

@@ -395,6 +395,44 @@ object ScreenStateRecovery {
         if (GameUtil.findGameProcessIdForDiagnostics() != initialPid ||
             !GameUtil.isVerifiedCurrentGameWindow(gameWindow)
         ) return null
+        val currentSessionReady = capture.evidence.currentSessionReady
+        if (useUpstreamClassifier && betaCandidateOcrShouldSkip(currentSessionReady, WarEx.inWar)) {
+            // A current Power.log/session or active in-war state is already an
+            // authoritative watchdog fence. Do not spend 12+ seconds in
+            // candidate OCR while gameplay is progressing; retain only the
+            // visual SEARCHING signal needed to protect a real queue.
+            val queueVisible = capture.visual.matchmakingSearchVisual
+            val queueLifecycleActive = hasCurrentCandidateMatchmakingEvidence(
+                currentSessionReady = currentSessionReady,
+                queueVisible = queueVisible,
+                recentActiveScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
+                shortEntryGuard = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+                recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
+            )
+            val activeObservation = FreshScreenObservation(
+                screen = if (queueVisible) "MATCHMAKING" else "GAMEPLAY",
+                mode = ModeEnum.TOURNAMENT.name,
+                confidence = 98,
+                evidence = if (queueVisible) "matchmaking-search-visual" else "current-session-or-active-game-no-ocr",
+                pid = initialPid,
+                hwnd = gameWindow.toString(),
+                screenshot = capture.file?.absolutePath,
+                perceptualFingerprint = perceptualFingerprint(capture.image),
+                currentSessionReady = currentSessionReady,
+                noActiveMatchmakingEvidence = !queueLifecycleActive,
+                hubModeChooserVisible = false,
+                modalVisible = capture.visual.centeredModalPanelVisual,
+                centeredModalFingerprint = capture.visual.centeredModalPanelVisual
+                    .let { if (it) centeredModalPanelFingerprint(capture.image) else null },
+            )
+            log.info {
+                "BETA_CANDIDATE_SCREEN_OCR_SKIPPED reason=current-session-or-active-game " +
+                    "screen=${activeObservation.screen} pid=$initialPid hwnd=$gameWindow " +
+                    "currentSessionReady=$currentSessionReady inWar=${WarEx.inWar} " +
+                    "queueVisible=$queueVisible noActiveMatchmakingEvidence=${activeObservation.noActiveMatchmakingEvidence}"
+            }
+            return activeObservation
+        }
         // The structural visual classifier and bounded OCR are deliberately
         // limited to the Beta candidate watchdog. Generic recovery callers
         // retain their existing OCR/detect semantics (including Stable/RC).
@@ -466,7 +504,6 @@ object ScreenStateRecovery {
                 evidence = null,
             )
         }
-        val currentSessionReady = capture.evidence.currentSessionReady
         val queueVisible = capture.visual.matchmakingSearchVisual || looksLikeMatchmakingText(ocrEvidence.text)
         val queueLifecycleActive = hasCurrentCandidateMatchmakingEvidence(
             currentSessionReady = currentSessionReady,
@@ -562,6 +599,14 @@ object ScreenStateRecovery {
     }
 
     internal fun candidateOcrTimeoutMsForTest(): Long = BETA_CANDIDATE_OCR_TIMEOUT_MS
+
+    internal fun betaCandidateOcrShouldSkipForTest(
+        currentSessionReady: Boolean,
+        inWar: Boolean,
+    ): Boolean = betaCandidateOcrShouldSkip(currentSessionReady, inWar)
+
+    private fun betaCandidateOcrShouldSkip(currentSessionReady: Boolean, inWar: Boolean): Boolean =
+        currentSessionReady || inWar
 
     /** Deterministic timeout seam; production still supplies the native OCR probe. */
     internal fun runCandidateOcrBoundedForTest(timeoutMs: Long, probe: () -> Unit): String =
