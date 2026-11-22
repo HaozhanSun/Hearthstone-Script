@@ -87,7 +87,10 @@ $requiredFocusedRegressionTests = @(
     'MatchmakingSearchRecoveryTest',
     'MatchmakingDialogRecoveryPolicyTest',
     'BetaCandidateScreenWatchdogTest',
-    'BetaCandidateScreenRecoveryIntegrationTest'
+    'BetaCandidateScreenRecoveryIntegrationTest',
+    'BetaCandidateRestartFencePolicyTest',
+    'ScreenRecoveryCaptureAuthorityTest',
+    'StartupDeckModeNavigationIntegrationTest'
 )
 foreach ($requiredTest in $requiredFocusedRegressionTests) {
     if ($deployScript -notmatch "-Dtest=.*$requiredTest") {
