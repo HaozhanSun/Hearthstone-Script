@@ -90,12 +90,25 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         val reward = BetaScreenRecoveryService.candidateSnapshotForTest(
             now = 0L,
             observation = observation,
-            terminalOverride = true,
         ).copy(working = true, paused = false)
         assertEquals("RANK_PROGRESS_CONTINUATION", reward.screen)
         assertTrue(reward.currentSessionReady)
         assertTrue(reward.terminal)
         assertTrue(reward.noActiveMatchmakingEvidence)
+        assertFalse(
+            BetaScreenRecoveryService.candidateSnapshotForTest(
+                now = 0L,
+                observation = observation.copy(currentSessionReady = false),
+            ).terminal,
+            "rank visual alone cannot mint terminal proof without current-session evidence",
+        )
+        assertFalse(
+            BetaScreenRecoveryService.candidateSnapshotForTest(
+                now = 0L,
+                observation = observation.copy(noActiveMatchmakingEvidence = false),
+            ).terminal,
+            "rank visual cannot mint terminal proof while queue evidence is active",
+        )
         val watchdog = BetaCandidateScreenWatchdog()
         assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(reward).action)
         assertEquals(BetaCandidateScreenWatchdog.Action.WAIT,
@@ -109,6 +122,26 @@ class BetaCandidateScreenRecoveryIntegrationTest {
             BetaCandidateScreenWatchdog().observe(reward.copy(noActiveMatchmakingEvidence = false)).action)
         assertEquals(BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
             BetaCandidateScreenWatchdog().observe(reward.copy(paused = true)).action)
+
+        assertEquals(
+            PostResultRankProgressPolicy.Action.CONTINUE,
+            PostResultRankProgressPolicy.decide(
+                rankProgressVisible = true,
+                terminalCleanupAuthorized = true,
+                captureAuthorized = true,
+                rankProgressInputAttempts = 0,
+            ),
+            "ordinary rank-result recovery still owns the first Continue action before the two-minute fallback",
+        )
+        val recoverySource = Files.readString(sourceRootFrom(Path.of("")).resolve(
+            "src/main/java/club/xiaojiawei/hsscript/status/ScreenStateRecovery.kt",
+        ))
+        val rankBranch = recoverySource.indexOf("ScreenKind.RANK_PROGRESS_CONTINUATION ->")
+        assertTrue(rankBranch >= 0)
+        assertTrue(
+            recoverySource.indexOf("GameUtil.dismissStaleGameEndScreen(", rankBranch) > rankBranch,
+            "the normal rank branch must dispatch bounded Continue cleanup before watchdog restart is considered",
+        )
     }
 
     @Test

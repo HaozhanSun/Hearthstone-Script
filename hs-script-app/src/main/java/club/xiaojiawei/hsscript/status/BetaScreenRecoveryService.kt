@@ -303,7 +303,15 @@ internal object BetaScreenRecoveryService {
             paused = PauseStatus.isPause,
             inWar = WarEx.inWar,
             mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
-            terminal = GameUtil.isTerminalGameState() || WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER,
+            // A stale FILL_DECK/GAMEPLAY lifecycle can survive the result
+            // event.  The exact rank-progress visual is an independently
+            // authorized terminal proof only when this current session has no
+            // queue evidence, is not in-war/mulligan, and carries a usable
+            // capture identity.  The final restart fence still rechecks the
+            // live PID/HWND/window before invoking Core.
+            terminal = GameUtil.isTerminalGameState() ||
+                WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER ||
+                hasAuthorizedTerminalVisualProof(observation),
             currentSessionReady = observation?.currentSessionReady == true,
             noActiveMatchmakingEvidence = observation?.noActiveMatchmakingEvidence == true,
             allowHealthyScreenRecovery = preSessionHealthyRecoveryCandidate,
@@ -315,10 +323,16 @@ internal object BetaScreenRecoveryService {
     internal fun candidateSnapshotForTest(
         now: Long,
         observation: ScreenStateRecovery.FreshScreenObservation?,
-        terminalOverride: Boolean? = null,
-    ): BetaCandidateScreenWatchdog.Snapshot = candidateSnapshot(now, observation).let { snapshot ->
-        terminalOverride?.let { snapshot.copy(terminal = it) } ?: snapshot
-    }
+    ): BetaCandidateScreenWatchdog.Snapshot = candidateSnapshot(now, observation)
+
+    private fun hasAuthorizedTerminalVisualProof(
+        observation: ScreenStateRecovery.FreshScreenObservation?,
+    ): Boolean = observation != null &&
+        observation.screen.equals("RANK_PROGRESS_CONTINUATION", ignoreCase = true) &&
+        observation.currentSessionReady &&
+        observation.noActiveMatchmakingEvidence &&
+        observation.pid > 0L && observation.hwnd.isNotBlank() &&
+        !WarEx.inWar && WarEx.war.currentPhase != WarPhaseEnum.REPLACE_CARD
 
     private fun candidateRestartStillSafe(observation: ScreenStateRecovery.FreshScreenObservation?): Boolean =
         candidateRestartFenceReason(observation) == null
@@ -343,7 +357,9 @@ internal object BetaScreenRecoveryService {
         if (!observation.noActiveMatchmakingEvidence) return "active-matchmaking-evidence"
 
         val screen = observation.screen.uppercase()
-        val terminalState = GameUtil.isTerminalGameState() || WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER
+        val terminalState = GameUtil.isTerminalGameState() ||
+            WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER ||
+            hasAuthorizedTerminalVisualProof(observation)
         val terminalScreen = screen in setOf(
             "RESULT",
             "RANK_PROGRESS_CONTINUATION",
