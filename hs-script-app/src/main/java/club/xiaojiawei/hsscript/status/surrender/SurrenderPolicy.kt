@@ -580,6 +580,28 @@ object SurrenderPolicy {
         return true
     }
 
+    /**
+     * A failed mandatory-rank surrender capture is still a hard gameplay
+     * fence. Never Surrender may relax ordinary protective rules only after
+     * this game's rank barrier has positively authorized continuation.
+     */
+    internal fun mandatoryRankSurrenderPending(): Boolean =
+        MulliganRankDispatchBarrier.currentState() in setOf(
+            MulliganRankDispatchBarrier.State.PENDING,
+            MulliganRankDispatchBarrier.State.SURRENDER_REQUIRED,
+        ) || MandatoryRankSurrenderGuard.isPending()
+
+    private fun deferForMandatoryRankSurrender(stage: SurrenderCheckStage): Boolean {
+        if (!mandatoryRankSurrenderPending()) return false
+        log.warn {
+            "SURRENDER_POLICY_DEFERRED reason=mandatory-rank-surrender-pending " +
+                "stage=${stage.name} action=WAIT ordinaryInput=false " +
+                "neverSurrenderBypass=false rankBarrier=${MulliganRankDispatchBarrier.currentState()} " +
+                "recoveryPending=${MandatoryRankSurrenderGuard.isPending()}"
+        }
+        return true
+    }
+
     /** Common executor guard for direct GameUtil.surrender callers and stale requests. */
     internal fun surrenderDispatchBlockReason(mandatoryRank: Boolean): String? = when {
         currentRankContinueAuthorized() -> "verified-rank-eligibility"
@@ -596,6 +618,7 @@ object SurrenderPolicy {
     @Synchronized
     fun evaluateOpponentHeroBeforeMulligan(war: War): SurrenderRuleResult? {
         if (skipGenericSurrenderForEligibleRank(SurrenderCheckStage.OPPONENT_HERO_RESOLVED)) return null
+        if (deferForMandatoryRankSurrender(SurrenderCheckStage.OPPONENT_HERO_RESOLVED)) return null
         enforcePersistentStreakGuardForCurrentPolicy()?.let { streakDecision ->
             if (!streakDecision.blocksAutomaticSurrender) return streakDecision
             logPersistentStreakContinueOnce("opponent-hero", streakDecision)
@@ -1333,6 +1356,7 @@ object SurrenderPolicy {
      */
     fun evaluateTurnStart(war: War): SurrenderRuleResult? {
         if (skipGenericSurrenderForEligibleRank(SurrenderCheckStage.TURN_START)) return null
+        if (deferForMandatoryRankSurrender(SurrenderCheckStage.TURN_START)) return null
         enforcePersistentStreakGuardForCurrentPolicy()?.let { streakDecision ->
             if (!streakDecision.blocksAutomaticSurrender) return streakDecision
             logPersistentStreakContinueOnce("turn", streakDecision)
@@ -1430,6 +1454,7 @@ object SurrenderPolicy {
     @Synchronized
     internal fun evaluateOpponentPlayedCard(war: War): SurrenderRuleResult? {
         if (skipGenericSurrenderForEligibleRank(SurrenderCheckStage.OPPONENT_CARD_PLAYED)) return null
+        if (deferForMandatoryRankSurrender(SurrenderCheckStage.OPPONENT_CARD_PLAYED)) return null
         if (System.getProperty("hs.script.e2e.skip-surrender-policy") == "true") return null
         if (!war.me.isValid() || !war.rival.isValid()) return null
         val cardsByZone = sequenceOf(

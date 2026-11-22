@@ -4,11 +4,39 @@ import club.xiaojiawei.hsscript.status.DebugRunLease
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import java.nio.file.Files
 import java.nio.file.Path
 
 class NeverSurrenderPolicyTest {
+
+    @Test
+    fun `mandatory rank barrier suppresses Never Surrender continue after capture failure`() {
+        SurrenderPolicy.resetForNewGame()
+        MulliganRankDispatchBarrier.resetForTest()
+        MandatoryRankSurrenderGuard.resetForTest()
+        try {
+            val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+            assertNotNull(MulliganRankDispatchBarrier.requireSurrender(ticket))
+
+            // This is the live failure shape: rank 9 already requested the
+            // mandatory surrender, but the settings capture then failed.
+            // Never Surrender must not turn the later turn callback into a
+            // generic CONTINUE decision.
+            assertTrue(SurrenderPolicy.mandatoryRankSurrenderPending())
+            assertFalse(SurrenderPolicy.currentRankContinueAuthorized())
+
+            // Completing the mandatory recovery is the only transition that
+            // removes the fence; a fresh game reset must also clear it.
+            MulliganRankDispatchBarrier.completeSurrender()
+            assertFalse(SurrenderPolicy.mandatoryRankSurrenderPending())
+        } finally {
+            MandatoryRankSurrenderGuard.resetForTest()
+            MulliganRankDispatchBarrier.resetForTest()
+            SurrenderPolicy.resetForNewGame()
+        }
+    }
 
     @Test
     fun `setting is effective only for beta-derived channels`() {

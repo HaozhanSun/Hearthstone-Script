@@ -48,6 +48,13 @@ object GameTurnPhaseStrategy : AbstractPhaseStrategy() {
                     cancelAllTask()
                     war.isMyTurn = true
                     val turnStartSurrender = SurrenderPolicy.evaluateTurnStart(war)
+                    if (SurrenderPolicy.mandatoryRankSurrenderPending()) {
+                        log.warn {
+                            "TURN_START_ACTIONS_DEFERRED reason=mandatory-rank-surrender-pending " +
+                                "ordinaryInput=false phaseAdvance=false action=WAIT"
+                        }
+                        return false
+                    }
                     if (turnStartSurrender != null) {
                         if (GameUtil.surrender(reason = turnStartSurrender.reason)) return false
                         if (GameUtil.isTerminalGameState() || !SurrenderPolicy.currentRankContinueAuthorized()) {

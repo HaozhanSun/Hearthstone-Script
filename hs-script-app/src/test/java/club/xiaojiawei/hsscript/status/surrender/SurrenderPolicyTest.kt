@@ -39,6 +39,26 @@ import javax.imageio.ImageIO
 class SurrenderPolicyTest {
 
     @Test
+    fun `mandatory rank surrender remains a hard fence when later callbacks see capture failure`() {
+        SurrenderPolicy.resetForNewGame()
+        MulliganRankDispatchBarrier.resetForTest()
+        MandatoryRankSurrenderGuard.resetForTest()
+        try {
+            val ticket = MulliganRankDispatchBarrier.beginCurrentGame()
+            assertTrue(MulliganRankDispatchBarrier.requireSurrender(ticket) != null)
+
+            val war = warWithRivalHero("星界雪怒")
+            assertNull(SurrenderPolicy.evaluateTurnStart(war))
+            assertNull(SurrenderPolicy.evaluateOpponentHeroBeforeMulligan(war))
+            assertTrue(SurrenderPolicy.mandatoryRankSurrenderPending())
+        } finally {
+            MandatoryRankSurrenderGuard.resetForTest()
+            MulliganRankDispatchBarrier.resetForTest()
+            SurrenderPolicy.resetForNewGame()
+        }
+    }
+
+    @Test
     fun `persistent streaks are reconstructed in end time order after restart`() {
         val base = LocalDateTime.of(2026, 8, 28, 12, 0)
         val records = listOf(

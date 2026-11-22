@@ -921,3 +921,12 @@ this deletion boundary.
   `capture-null` into a click; queue-visible, active-game, paused, and unknown
   frames remain hard vetoes. Keep a production-policy regression for the
   bounded wait and timeout/fail-closed behavior.
+- Mandatory rank surrender is a gameplay fence, not a best-effort suggestion.
+  After a fresh rank-9/8/etc. denial moves `MulliganRankDispatchBarrier` to
+  `SURRENDER_REQUIRED`, a failed settings/confirmation capture must emit
+  `SURRENDER_POLICY_DEFERRED reason=mandatory-rank-surrender-pending` and wait
+  for bounded recovery; `NeverSurrender` must not emit a generic CONTINUE
+  bypass, and turn-start/card/mulligan input must remain blocked. Only an
+  authoritative mandatory-surrender completion or terminal proof may release
+  the fence. Keep regressions for capture-failed recovery, manual pause, and
+  ordinary gameplay dispatch while the barrier is unresolved.
