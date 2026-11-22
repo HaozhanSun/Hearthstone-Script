@@ -727,10 +727,11 @@ object ScreenStateRecovery {
         currentSessionReady: Boolean = false,
         configuredDeckStrategy: Boolean = DeckStrategyManager.currentDeckStrategy != null,
         configuredRunMode: Boolean = DeckStrategyManager.currentRunMode != null,
+        purpose: ScreenRecoveryCapturePurpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
     ): UpstreamScreenStateRecovery.FreshScreenClassification? {
         return classifyBetaCandidateVisual(
             currentSessionReady = currentSessionReady,
-            purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+            purpose = purpose,
             image = image,
             visual = visualSignature(image),
             configuredDeckStrategy = configuredDeckStrategy,
@@ -780,6 +781,7 @@ object ScreenStateRecovery {
             !visual.matchmakingSearchVisual &&
             looksLikeStartupLoadingVisual(image, visual)
         val visualRankProgressCandidate = currentSessionReady && purpose in setOf(
+            ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
             ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
             ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
             ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,

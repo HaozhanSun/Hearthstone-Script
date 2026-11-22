@@ -501,11 +501,24 @@ class BetaCandidateScreenRecoveryIntegrationTest {
                 currentSessionReady = true,
                 configuredDeckStrategy = false,
                 configuredRunMode = false,
+                purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
             ),
             { "the exact live result frame must reach the production Beta candidate classifier before OCR" },
         )
         assertEquals("RANK_PROGRESS_CONTINUATION", betaClassification.screen)
         assertEquals("rank-progress-continue-visual", betaClassification.evidence)
+        val screenStateResultClassification = requireNotNull(
+            ScreenStateRecovery.classifyBetaCandidateVisualForTest(
+                fixture,
+                currentSessionReady = true,
+                configuredDeckStrategy = false,
+                configuredRunMode = false,
+                purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+            ),
+            { "the current-session terminal result must also classify on the real SCREEN_STATE_RECOVERY purpose" },
+        )
+        assertEquals("RANK_PROGRESS_CONTINUATION", screenStateResultClassification.screen)
+        assertEquals("rank-progress-continue-visual", screenStateResultClassification.evidence)
 
         // Reconstruct the same CREATE_GAME-scoped terminal proof used by the
         // live listener.  The outcome is CONCEDED (not a win), and only the
