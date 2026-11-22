@@ -131,6 +131,13 @@ class BetaCandidateRestartFencePolicyTest {
             "phase/barrier state alone must not authorize a restart without the exact Mulligan screen",
         )
         assertEquals(
+            "mulligan",
+            BetaCandidateRestartFencePolicy.rejectionReason(
+                pendingMulligan.copy(screen = "UNKNOWN"),
+            ),
+            "a no-session pending phase still requires the exact Mulligan screen",
+        )
+        assertEquals(
             "manual-pause",
             BetaCandidateRestartFencePolicy.rejectionReason(pendingMulligan.copy(paused = true)),
         )
