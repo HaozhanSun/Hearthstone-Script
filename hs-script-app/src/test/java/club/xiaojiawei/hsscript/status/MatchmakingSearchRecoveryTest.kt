@@ -1106,11 +1106,22 @@ class MatchmakingSearchRecoveryTest {
             ),
         ).use(ImageIO::read)
         assertTrue(MatchmakingSearchVisualPolicy.isVisible(liveSearch))
+        assertTrue(
+            ScreenStateRecovery.exactMatchmakingVisualForWatchdogForTest(liveSearch),
+            "the generic watchdog callsite must recognize the exact live search frame before OCR",
+        )
         assertFalse(
             ScreenStateRecovery.hasCenteredModalPanel(liveSearch),
             "the live 08:01:59 queue frame has no centered dialog and is eligible for the visual fast path",
         )
         assertEquals("MATCHMAKING", UpstreamScreenStateRecovery.classifyImageForTest("", liveSearch))
+        val errorModal = requireNotNull(
+            javaClass.getResourceAsStream("/offline-ocr/screen-recovery/start-game-error-dialog-over-deck-selection.png"),
+        ).use(ImageIO::read)
+        assertFalse(
+            ScreenStateRecovery.exactMatchmakingVisualForWatchdogForTest(errorModal),
+            "centered dialogs must not enter the generic queue fast path",
+        )
 
         val source = listOf(
             Path.of("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt"),
@@ -1122,6 +1133,18 @@ class MatchmakingSearchRecoveryTest {
         assertTrue(branch >= 0 && ocr > branch,
             "the production upstream callsite must classify an authorized search visual before OCR")
         assertTrue(text.contains("reason=exact-matchmaking-search-visual"))
+        val recoverySource = Files.readString(
+            listOf(
+                Path.of("src/main/java/club/xiaojiawei/hsscript/status/ScreenStateRecovery.kt"),
+                Path.of("hs-script-app/src/main/java/club/xiaojiawei/hsscript/status/ScreenStateRecovery.kt"),
+            ).first { Files.isRegularFile(it) },
+        )
+        assertTrue(
+            recoverySource.contains("isExactMatchmakingVisualForWatchdog(capture.image, capture.visual)") &&
+                recoverySource.indexOf("SCREEN_RECOVERY_OCR_SKIPPED reason=exact-matchmaking-search-visual") <
+                recoverySource.indexOf("runOCR(capture)"),
+            "the generic watchdog must classify the exact queue visual before OCR",
+        )
     }
 
     @Test

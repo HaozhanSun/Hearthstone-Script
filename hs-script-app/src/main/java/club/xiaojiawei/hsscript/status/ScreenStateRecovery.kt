@@ -405,6 +405,37 @@ object ScreenStateRecovery {
         ) return null
         val currentSessionReady = capture.evidence.currentSessionReady
         val queueVisible = capture.visual.matchmakingSearchVisual
+        if (isExactMatchmakingVisualForWatchdog(capture.image, capture.visual)) {
+            val recentActiveScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen()
+            val shortEntryGuard = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
+            val queueLifecycleActive = hasCurrentCandidateMatchmakingEvidence(
+                currentSessionReady = currentSessionReady,
+                queueVisible = true,
+                recentActiveScreen = recentActiveScreen,
+                shortEntryGuard = shortEntryGuard,
+                recentInputIntent = LifecycleTrace.hasRecentMatchmakingInputIntent(),
+            )
+            log.info {
+                "SCREEN_RECOVERY_OCR_SKIPPED reason=exact-matchmaking-search-visual " +
+                    "action=CLASSIFY_CURRENT_CAPTURE_NO_INPUT_NO_RESTART " +
+                    "pid=$initialPid hwnd=$gameWindow currentSessionReady=$currentSessionReady"
+            }
+            return FreshScreenObservation(
+                screen = "MATCHMAKING",
+                mode = ModeEnum.TOURNAMENT.name,
+                confidence = 98,
+                evidence = "matchmaking-search-visual",
+                pid = initialPid,
+                hwnd = gameWindow.toString(),
+                screenshot = capture.file?.absolutePath,
+                perceptualFingerprint = perceptualFingerprint(capture.image),
+                currentSessionReady = currentSessionReady,
+                noActiveMatchmakingEvidence = !queueLifecycleActive,
+                hubModeChooserVisible = false,
+                modalVisible = false,
+                foregroundConfirmed = captureResult.foregroundConfirmed,
+            )
+        }
         val recentActiveScreen = LifecycleTrace.hasRecentActiveMatchmakingScreen()
         val shortEntryGuard = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
         // A completed result page can leave the lifecycle/session latch stale
@@ -891,6 +922,16 @@ object ScreenStateRecovery {
 
     internal fun centeredModalPanelFingerprintForTest(image: BufferedImage): Long =
         centeredModalPanelFingerprint(image)
+
+    internal fun exactMatchmakingVisualForWatchdogForTest(image: BufferedImage): Boolean =
+        isExactMatchmakingVisualForWatchdog(image, visualSignature(image))
+
+    private fun isExactMatchmakingVisualForWatchdog(
+        image: BufferedImage,
+        visual: VisualSignature,
+    ): Boolean = visual.matchmakingSearchVisual &&
+        !visual.centeredModalPanelVisual &&
+        !HubModeChooserVisualPolicy.isVisible(image)
 
     /** Read-only process/log boundary used to distinguish an explicit rearm from a healthy heartbeat. */
     internal fun isCurrentGameSessionReadyForStart(): Boolean = currentSessionModelReady()
