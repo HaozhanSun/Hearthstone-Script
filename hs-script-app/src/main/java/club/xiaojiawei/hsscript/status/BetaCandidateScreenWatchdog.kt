@@ -53,6 +53,8 @@ internal class BetaCandidateScreenWatchdog(
         val allowHealthyScreenRecovery: Boolean = false,
         /** True when this probe returned no usable screen observation at all. */
         val observationMissing: Boolean = false,
+        /** A prior authorized positive frame still identifies this same candidate. */
+        val staleObservationAvailable: Boolean = false,
     )
 
     data class Decision(
@@ -272,6 +274,39 @@ internal class BetaCandidateScreenWatchdog(
         val firstMissing = missingObservationSinceMs == null
         if (firstMissing) missingObservationSinceMs = snapshot.nowMs
         val gapMs = (snapshot.nowMs - (missingObservationSinceMs ?: snapshot.nowMs)).coerceAtLeast(0L)
+        val stableForMs = (snapshot.nowMs - (stableSinceMs ?: snapshot.nowMs)).coerceAtLeast(0L)
+        val lastRestart = lastRestartAtMs
+        if (lastRestart != null && snapshot.nowMs - lastRestart < repeatBackoffMs) {
+            return decision(Action.BACKOFF, "bounded-repeat-backoff", stableForMs)
+        }
+        if (lastRestart != null) {
+            stableSinceMs = snapshot.nowMs
+            positiveObservations = 1
+            lastRestartAtMs = null
+            return decision(Action.REARM, "repeat-backoff-expired", 0L)
+        }
+        if (snapshot.staleObservationAvailable &&
+            stableForMs >= stableThresholdMs &&
+            positiveObservations >= MIN_POSITIVE_OBSERVATIONS &&
+            snapshot.noActiveMatchmakingEvidence &&
+            !snapshot.currentSessionReady &&
+            !snapshot.inWar &&
+            !snapshot.mulligan &&
+            !snapshot.terminal &&
+            snapshot.working &&
+            !snapshot.paused &&
+            !exhausted && restartCount < maxRestartsPerIdentity.coerceAtLeast(1)
+        ) {
+            restartCount++
+            lastRestartAtMs = snapshot.nowMs
+            return Decision(
+                action = Action.RESTART,
+                reason = "candidate-stable-threshold-reached-from-missing-capture",
+                stableForMs = stableForMs,
+                positiveObservations = positiveObservations,
+                restartCount = restartCount,
+            )
+        }
         if (gapMs > MAX_MISSING_OBSERVATION_GAP_MS) {
             stableSinceMs = snapshot.nowMs
             positiveObservations = 0
@@ -307,7 +342,13 @@ internal class BetaCandidateScreenWatchdog(
         const val DEFAULT_STABLE_THRESHOLD_MS = 120_000L
         const val DEFAULT_REPEAT_BACKOFF_MS = 120_000L
         const val DEFAULT_MAX_RESTARTS_PER_IDENTITY = 2
-        const val MAX_MISSING_OBSERVATION_GAP_MS = 45_000L
+        /**
+         * Foreground capture is serialized with the ordinary recovery loop.
+         * A null probe is therefore allowed to span the full candidate
+         * threshold plus one monitor tick, but never becomes positive evidence itself.  The next
+         * classified frame must still match the exact prior PID/HWND/screen.
+         */
+        const val MAX_MISSING_OBSERVATION_GAP_MS = DEFAULT_STABLE_THRESHOLD_MS + 10_000L
         const val MIN_POSITIVE_CONFIDENCE = 85
         const val MIN_POSITIVE_OBSERVATIONS = 2
 

@@ -16,6 +16,7 @@ import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
 import club.xiaojiawei.hsscript.utils.GameUtil
 import club.xiaojiawei.hsscript.utils.SystemUtil
 import club.xiaojiawei.hsscript.consts.LOG_PATH
+import club.xiaojiawei.hsscript.consts.GAME_WAR_LOG_NAME
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
@@ -63,6 +64,8 @@ internal object BetaScreenRecoveryService {
     private val startupRecoveryScheduled = AtomicBoolean(false)
     @Volatile private var missingGameRecoveryState = LiveMissingGameRecoveryPolicy.State()
     @Volatile private var missingGameExhaustionNotified = false
+    @Volatile private var lastCandidateAuthorizedObservation: ScreenStateRecovery.FreshScreenObservation? = null
+    @Volatile private var lastCandidateAuthorizedObservationAtMs: Long = 0L
 
     fun scheduleStartupHandoffWatchdog(
         startupHandshakeConfirmed: () -> Boolean,
@@ -179,6 +182,8 @@ internal object BetaScreenRecoveryService {
         lastObservedGamePid = null
         missingGameRecoveryState = LiveMissingGameRecoveryPolicy.State()
         missingGameExhaustionNotified = false
+        lastCandidateAuthorizedObservation = null
+        lastCandidateAuthorizedObservationAtMs = 0L
     }
 
     internal fun onFeatureChanged(enabled: Boolean) {
@@ -225,6 +230,11 @@ internal object BetaScreenRecoveryService {
     internal fun candidateScreenMonitorScheduledForTest(): Boolean =
         candidateScreenMonitor?.let { !it.isDone && !it.isCancelled } == true
 
+    internal fun resetCandidateObservationForTest() {
+        lastCandidateAuthorizedObservation = null
+        lastCandidateAuthorizedObservationAtMs = 0L
+    }
+
     private fun detectCandidateScreen() {
         val now = System.currentTimeMillis()
         val observation = if (
@@ -236,6 +246,19 @@ internal object BetaScreenRecoveryService {
                 }
                 .getOrNull()
         } else null
+        if (observation != null) {
+            val queueOrGame = observation.currentSessionReady ||
+                observation.screen.equals("MATCHMAKING", ignoreCase = true) ||
+                observation.screen.equals("GAMEPLAY", ignoreCase = true) ||
+                !observation.noActiveMatchmakingEvidence
+            if (queueOrGame) {
+                lastCandidateAuthorizedObservation = null
+                lastCandidateAuthorizedObservationAtMs = 0L
+            } else if (observation.captureIdentityIsUsableForCandidate()) {
+                lastCandidateAuthorizedObservation = observation
+                lastCandidateAuthorizedObservationAtMs = now
+            }
+        }
         val snapshot = candidateSnapshot(now, observation)
         val decision = candidateScreenWatchdog.observe(snapshot)
         if (decision.action != BetaCandidateScreenWatchdog.Action.WAIT &&
@@ -259,12 +282,21 @@ internal object BetaScreenRecoveryService {
             return
         }
         if (decision.action != BetaCandidateScreenWatchdog.Action.RESTART) return
-        if (!candidateRestartStillSafe(observation)) {
-            val restartFenceReason = candidateRestartFenceReason(observation) ?: "runtime-fence-changed"
+        val restartObservation = observation ?: lastCandidateAuthorizedObservation
+        if (observation == null && restartObservation != null) {
+            log.warn {
+                "BETA_CANDIDATE_SCREEN_RESTART_USING_LAST_AUTHORIZED_OBSERVATION " +
+                    "screen=${restartObservation.screen} pid=${restartObservation.pid} hwnd=${restartObservation.hwnd} " +
+                    "ageMs=${(now - lastCandidateAuthorizedObservationAtMs).coerceAtLeast(0L)} " +
+                    "reason=bounded-capture-gap"
+            }
+        }
+        if (!candidateRestartStillSafe(restartObservation)) {
+            val restartFenceReason = candidateRestartFenceReason(restartObservation) ?: "runtime-fence-changed"
             candidateScreenWatchdog.reset()
             log.warn {
                 "BETA_CANDIDATE_SCREEN_RESTART_DEFERRED reason=$restartFenceReason " +
-                    "action=NO_RESTART pid=${observation?.pid ?: "none"} hwnd=${observation?.hwnd ?: "none"}"
+                    "action=NO_RESTART pid=${restartObservation?.pid ?: "none"} hwnd=${restartObservation?.hwnd ?: "none"}"
             }
             return
         }
@@ -281,24 +313,31 @@ internal object BetaScreenRecoveryService {
         now: Long,
         observation: ScreenStateRecovery.FreshScreenObservation?,
     ): BetaCandidateScreenWatchdog.Snapshot {
+        val staleObservation = observation == null &&
+            lastCandidateAuthorizedObservation?.let {
+                now - lastCandidateAuthorizedObservationAtMs <= BetaCandidateScreenWatchdog.MAX_MISSING_OBSERVATION_GAP_MS
+            } == true
+        val effectiveObservation = observation ?: lastCandidateAuthorizedObservation.takeIf { staleObservation }
+        val activeQueueEvidence = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+            LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
         val preSessionHealthyRecoveryCandidate = observation != null &&
             !observation.currentSessionReady &&
             observation.noActiveMatchmakingEvidence &&
             observation.screen.uppercase() in setOf("HOME", "TOURNAMENT", "DECK_SELECTION", "STARTUP_LAUNCHER")
         return BetaCandidateScreenWatchdog.Snapshot(
             nowMs = now,
-            screen = observation?.screen,
-            dialogScreen = observation?.takeIf { it.modalVisible && !it.screen.equals("UNKNOWN", ignoreCase = true) }
+            screen = effectiveObservation?.screen,
+            dialogScreen = effectiveObservation?.takeIf { it.modalVisible && !it.screen.equals("UNKNOWN", ignoreCase = true) }
                 ?.screen
                 ?.takeUnless { it in HEALTHY_CANDIDATE_SCREENS },
-            visualModalConfirmed = observation?.modalVisible == true,
-            visualModalFingerprint = observation?.centeredModalFingerprint,
-            confidence = observation?.confidence ?: 0,
+            visualModalConfirmed = effectiveObservation?.modalVisible == true,
+            visualModalFingerprint = effectiveObservation?.centeredModalFingerprint,
+            confidence = effectiveObservation?.confidence ?: 0,
             captureConfirmed = observation != null,
             foregroundConfirmed = observation != null,
-            pid = observation?.pid,
-            hwnd = observation?.hwnd,
-            foregroundIdentity = observation?.hwnd,
+            pid = effectiveObservation?.pid,
+            hwnd = effectiveObservation?.hwnd,
+            foregroundIdentity = effectiveObservation?.hwnd,
             working = WorkTimeListener.working,
             paused = PauseStatus.isPause,
             inWar = WarEx.inWar,
@@ -313,21 +352,35 @@ internal object BetaScreenRecoveryService {
             // Hearthstone process.  They are authoritative only after the
             // current Power.log/session is readable; otherwise they must not
             // veto the bounded empty-session startup candidate.
-            terminal = (observation?.currentSessionReady == true &&
+            terminal = (effectiveObservation?.currentSessionReady == true &&
                 (GameUtil.isTerminalGameState() || WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER)) ||
-                hasAuthorizedTerminalVisualProof(observation),
-            currentSessionReady = observation?.currentSessionReady == true,
-            noActiveMatchmakingEvidence = observation?.noActiveMatchmakingEvidence == true,
+                hasAuthorizedTerminalVisualProof(effectiveObservation),
+            currentSessionReady = effectiveObservation?.currentSessionReady == true,
+            noActiveMatchmakingEvidence = effectiveObservation?.noActiveMatchmakingEvidence == true &&
+                !activeQueueEvidence,
             allowHealthyScreenRecovery = preSessionHealthyRecoveryCandidate,
             observationMissing = observation == null,
+            staleObservationAvailable = staleObservation,
         )
     }
+
+    private fun ScreenStateRecovery.FreshScreenObservation.captureIdentityIsUsableForCandidate(): Boolean =
+        pid > 0L && hwnd.isNotBlank() && confidence >= 85 &&
+            screen.uppercase() in setOf("HOME", "TOURNAMENT", "DECK_SELECTION", "STARTUP_LAUNCHER") &&
+            !currentSessionReady && noActiveMatchmakingEvidence
 
     /** Deterministic seam for the missing-observation/queue-fence regression. */
     internal fun candidateSnapshotForTest(
         now: Long,
         observation: ScreenStateRecovery.FreshScreenObservation?,
-    ): BetaCandidateScreenWatchdog.Snapshot = candidateSnapshot(now, observation)
+        rememberAuthorizedObservation: Boolean = false,
+    ): BetaCandidateScreenWatchdog.Snapshot {
+        if (rememberAuthorizedObservation && observation?.captureIdentityIsUsableForCandidate() == true) {
+            lastCandidateAuthorizedObservation = observation
+            lastCandidateAuthorizedObservationAtMs = now
+        }
+        return candidateSnapshot(now, observation)
+    }
 
     private fun hasAuthorizedTerminalVisualProof(
         observation: ScreenStateRecovery.FreshScreenObservation?,
@@ -356,6 +409,17 @@ internal object BetaScreenRecoveryService {
         val currentHwnd = ScriptStatus.gameHWND
         val terminalLatch = GameUtil.isTerminalGameState() ||
             WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER
+        val latestPowerLog = GameUtil.getLatestLogDir()?.resolve(GAME_WAR_LOG_NAME)
+        val currentSessionReady = observation?.currentSessionReady == true ||
+            CurrentGameScreenReadinessPolicy.isReady(
+                gameWindowVerified = currentHwnd?.let { GameUtil.isVerifiedCurrentGameWindow(it) } == true,
+                attachedPowerLogPath = PowerLogListener.logFile?.path(),
+                currentSessionPowerLogPath = latestPowerLog?.absolutePath,
+                powerLogLength = PowerLogListener.logFile?.length() ?: 0L,
+            )
+        val activeQueueEvidence = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+            LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() ||
+            LifecycleTrace.hasRecentMatchmakingInputIntent()
         return BetaCandidateRestartFencePolicy.rejectionReason(
             BetaCandidateRestartFencePolicy.Snapshot(
                 betaChannel = BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL),
@@ -364,8 +428,8 @@ internal object BetaScreenRecoveryService {
                 paused = PauseStatus.isPause,
                 inWar = WarEx.inWar,
                 mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
-                noActiveMatchmakingEvidence = observation?.noActiveMatchmakingEvidence == true,
-                currentSessionReady = observation?.currentSessionReady == true,
+                noActiveMatchmakingEvidence = observation?.noActiveMatchmakingEvidence == true && !activeQueueEvidence,
+                currentSessionReady = currentSessionReady,
                 screen = observation?.screen ?: "UNKNOWN",
                 lifecycleTerminalLatch = terminalLatch,
                 authorizedTerminalVisualProof = hasAuthorizedTerminalVisualProof(observation),

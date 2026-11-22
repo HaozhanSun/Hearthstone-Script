@@ -270,13 +270,14 @@ class BetaCandidateScreenWatchdogTest {
             "a null observation is missing evidence, not active matchmaking",
         )
         assertEquals(
-            BetaCandidateScreenWatchdog.Action.WAIT,
-            watchdog.observe(deck.copy(nowMs = 90_000L)).action,
-            "a brief missing-capture gap preserves the same PID/HWND episode",
+            BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN,
+            watchdog.observe(deck.copy(nowMs = 90_000L, observationMissing = true, captureConfirmed = false)).action,
+            "repeated null probes remain uncertainty and do not erase the verified episode",
         )
         assertEquals(
             BetaCandidateScreenWatchdog.Action.WAIT,
             watchdog.observe(deck.copy(nowMs = 119_999L)).action,
+            "a brief missing-capture gap preserves the same PID/HWND episode",
         )
         assertEquals(
             BetaCandidateScreenWatchdog.Action.RESTART,
@@ -288,7 +289,7 @@ class BetaCandidateScreenWatchdogTest {
         expiredGap.observe(deck.copy(nowMs = 60_000L, observationMissing = true, captureConfirmed = false))
         assertEquals(
             BetaCandidateScreenWatchdog.Action.RESET_IDENTITY,
-            expiredGap.observe(deck.copy(nowMs = 105_001L)).action,
+            expiredGap.observe(deck.copy(nowMs = 200_001L)).action,
             "a gap beyond the bounded grace must require a new baseline",
         )
 
@@ -302,6 +303,60 @@ class BetaCandidateScreenWatchdogTest {
         assertEquals(
             BetaCandidateScreenWatchdog.Action.RESET_IDENTITY,
             queued.observe(deck.copy(nowMs = 120_000L)).action,
+        )
+    }
+
+    @Test
+    fun `repeated missing captures can dispatch once from retained exact candidate evidence`() {
+        val deck = candidate(
+            nowMs = 0L,
+            screen = "DECK_SELECTION",
+            currentSessionReady = false,
+            noActiveMatchmakingEvidence = true,
+            allowHealthyScreenRecovery = true,
+        )
+        val watchdog = BetaCandidateScreenWatchdog()
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(deck).action)
+        assertEquals(BetaCandidateScreenWatchdog.Action.WAIT, watchdog.observe(deck.copy(nowMs = 1L)).action)
+        val missing = deck.copy(
+            nowMs = 20_000L,
+            observationMissing = true,
+            captureConfirmed = false,
+            foregroundConfirmed = false,
+            staleObservationAvailable = true,
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN, watchdog.observe(missing).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN,
+            watchdog.observe(missing.copy(nowMs = 90_000L)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN,
+            watchdog.observe(missing.copy(nowMs = 119_999L)).action,
+            "a missing capture remains non-positive immediately before the boundary",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(missing.copy(nowMs = 120_000L)).action,
+            "retained exact evidence reaches one bounded restart without treating UNKNOWN as positive",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.BACKOFF,
+            watchdog.observe(missing.copy(nowMs = 120_001L)).action,
+            "the same missing episode cannot dispatch a second immediate restart",
+        )
+
+        val queued = BetaCandidateScreenWatchdog()
+        queued.observe(deck)
+        queued.observe(deck.copy(nowMs = 1L))
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN,
+            queued.observe(missing.copy(nowMs = 20_000L, noActiveMatchmakingEvidence = false)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN,
+            queued.observe(missing.copy(nowMs = 120_000L, noActiveMatchmakingEvidence = false)).action,
+            "active queue evidence prevents stale-observation restart",
         )
     }
 

@@ -298,7 +298,12 @@ object ScreenStateRecovery {
             } else {
                 captureScreen(
                     expectedHwnd,
-                    purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+                    // A final Start proof is a fresh, exact foreground
+                    // startup capture.  It must remain available before the
+                    // first CREATE_GAME/Power.log bytes exist; STALE_CLIENT_PROBE
+                    // intentionally requires a 120s stale interval and would
+                    // deadlock every pre-session Start refresh at staleForMs=0.
+                    purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
                     staleForMs = 0L,
                 )
             }
@@ -663,6 +668,14 @@ object ScreenStateRecovery {
             !visual.matchmakingSearchVisual &&
             !visual.centeredModalPanelVisual &&
             ScreenWatchdog.hasEnabledDeckSelectionStartButton(image)
+        val visualHubChooserCandidate = !currentSessionReady && purpose in setOf(
+            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+        ) && !visual.startupQuestOverlayVisual &&
+            !visual.matchmakingSearchVisual &&
+            !visual.centeredModalPanelVisual &&
+            HubModeChooserVisualPolicy.isVisible(image)
         return when {
             // A freshly launched client can legitimately show the Battle.net
             // handoff while its new Power.log is still empty. This is a
@@ -676,6 +689,13 @@ object ScreenStateRecovery {
                     mode = ModeEnum.LOGIN.name,
                     confidence = 96,
                     evidence = "battlenet-launcher-empty-session-visual",
+                )
+            visualHubChooserCandidate ->
+                UpstreamScreenStateRecovery.FreshScreenClassification(
+                    screen = "TOURNAMENT",
+                    mode = ModeEnum.HUB.name,
+                    confidence = 94,
+                    evidence = "hub-mode-chooser-visual",
                 )
             visualDeckSelectionCandidate ->
                 UpstreamScreenStateRecovery.FreshScreenClassification(

@@ -141,6 +141,35 @@ class MatchmakingSearchRecoveryTest {
             screenStateSource.contains("TournamentModeConfirmation.observeImageVisualOnly"),
             "the final Start refresh must remain bounded and avoid a second expensive OCR probe",
         )
+        assertTrue(
+            screenStateSource.contains("purpose = ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE"),
+            "the final Start refresh must use the bounded pre-session startup-capture exception",
+        )
+        assertNull(
+            ScreenRecoveryCapturePurposePolicy.preflightRejectionReason(
+                currentSessionReady = false,
+                preSessionQueueModalAuthorized = false,
+                preSessionMatchmakingAuthorized = false,
+                preSessionStartupClientProbeAuthorized = ScreenRecoveryCapturePurposePolicy
+                    .allowsPreSessionStartupClientProbe(
+                        ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                        currentSessionReady = false,
+                    ),
+            ),
+            "an exact startup proof may classify a pre-session deck screen before CREATE_GAME",
+        )
+        assertFalse(
+            ScreenRecoveryCapturePurposePolicy.allowsPreSessionStaleClientProbe(
+                purpose = ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+                nonGameplayScreen = true,
+                activeGame = false,
+                mulligan = false,
+                terminal = false,
+                stuckForMs = 0L,
+                warModelAuthoritative = false,
+            ),
+            "the stale-client purpose must not be weakened to authorize an immediate Start refresh",
+        )
 
         LifecycleTrace.resetMatchmakingEvidenceForTest()
         try {

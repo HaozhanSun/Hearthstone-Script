@@ -850,3 +850,15 @@ this deletion boundary.
   `In Game` control as the captured 2026-11-22 incident frame; the production
   capture authority still requires that those pixels come from the exact
   foreground target HWND/PID before this structural classification is used.
+- Beta pre-match Start proof is a fresh startup capture, not a stale-client
+  probe. `STALE_CLIENT_PROBE` requires a bounded stale interval and therefore
+  must not be used with `staleForMs=0` while the current Power.log is empty;
+  `STARTUP_CLIENT_PROBE` is the narrow pre-session exception, and its exact
+  PID/HWND/foreground, enabled Start, configured-mode, modal, queue, pause, and
+  terminal fences remain mandatory before dispatch. Candidate watchdog null
+  captures are uncertainty rather than queue evidence. When the preceding
+  positive frame and the next fresh frame retain the same exact identity and
+  semantic screen, intermittent capture gaps may span the full 120000 ms
+  candidate threshold; a changed identity, contradictory screen, active queue
+  or game, pause, or a gap beyond that bound requires a fresh baseline and
+  never permits an input action from UNKNOWN.
