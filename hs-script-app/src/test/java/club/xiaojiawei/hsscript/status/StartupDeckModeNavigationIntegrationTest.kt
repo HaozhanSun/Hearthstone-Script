@@ -17,6 +17,16 @@ import java.awt.image.BufferedImage
 import javax.imageio.ImageIO
 
 class StartupDeckModeNavigationIntegrationTest {
+    private fun upstreamScreenStateRecoverySource(): String {
+        val relativePath = "src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt"
+        val sourceFile = listOf(
+            File(relativePath),
+            File("hs-script-app/$relativePath"),
+        ).firstOrNull { it.isFile }
+            ?: error("Unable to locate $relativePath from module or repository-root working directory")
+        return sourceFile.readText()
+    }
+
     @Test
     fun `captured three choice selector authorizes only fresh configured Wild control proof`() {
         val selector = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
@@ -1035,8 +1045,7 @@ class StartupDeckModeNavigationIntegrationTest {
         assertEquals("DECK_SELECTION", UpstreamScreenStateRecovery.classifyStartupDeckSelectionVisualForTest("二=", image))
         assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
         assertEquals("WILD", TournamentModeConfirmation.observeImage(image).observedMode.name)
-        val upstreamSource = File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt")
-            .readText()
+        val upstreamSource = upstreamScreenStateRecoverySource()
         assertTrue(upstreamSource.contains("detection?.kind != ScreenKind.DECK_SELECTION"),
             "startup invalidation must preserve the independent mode permit until the exact deck/Start proof is evaluated")
 
@@ -1352,8 +1361,7 @@ class StartupDeckModeNavigationIntegrationTest {
 
     @Test
     fun `upstream idle probe and final apply callsites share the mode proof gate`() {
-        val source = File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt")
-            .readText()
+        val source = upstreamScreenStateRecoverySource()
         assertTrue(source.contains(
             "val startupClientProbe = StartupDeckModeNavigationPolicy.isModeProofProbe(authorizedCapture.purpose)",
         ), "upstream startup/stale/idle captures must enter the common mode proof branch")
@@ -1655,7 +1663,7 @@ class StartupDeckModeNavigationIntegrationTest {
             freshDeckSelectionStartReady = false,
             selectedModeStartPermitValid = false,
         ), "IDLE_CLIENT_PROBE must never authorize Start from the opposite mode")
-        val source = File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt").readText()
+        val source = upstreamScreenStateRecoverySource()
         assertTrue(source.contains("purpose = authorizedCapture.purpose"),
             "the runtime callsite must pass IDLE_CLIENT_PROBE through this same purpose gate")
         StartupInputReadiness.resetForTest()
@@ -1663,7 +1671,7 @@ class StartupDeckModeNavigationIntegrationTest {
 
     @Test
     fun `recovery source opens selector then requires fresh selector proof before Wild and Start`() {
-        val upstream = File("src/main/java/club/xiaojiawei/hsscript/status/UpstreamScreenStateRecovery.kt").readText()
+        val upstream = upstreamScreenStateRecoverySource()
         assertTrue(upstream.contains("dispatchOpenSelectorForVerifiedDeckMismatch("))
         assertEquals(
             2,
