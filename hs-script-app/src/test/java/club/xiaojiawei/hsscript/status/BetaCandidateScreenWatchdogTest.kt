@@ -214,6 +214,98 @@ class BetaCandidateScreenWatchdogTest {
     }
 
     @Test
+    fun `positively classified pre-session FILL_DECK holds at 119999 then restarts at 120000`() {
+        val deck = candidate(
+            nowMs = 0L,
+            screen = "DECK_SELECTION",
+            currentSessionReady = false,
+            noActiveMatchmakingEvidence = true,
+            allowHealthyScreenRecovery = true,
+        )
+        val watchdog = BetaCandidateScreenWatchdog()
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(deck).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            watchdog.observe(deck.copy(nowMs = 119_999L)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(deck.copy(nowMs = 120_000L)).action,
+            "the exact positively classified pre-session deck frame reaches the bounded restart threshold",
+        )
+
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN,
+            BetaCandidateScreenWatchdog().observe(
+                deck.copy(screen = "UNKNOWN", confidence = 0, allowHealthyScreenRecovery = false),
+            ).action,
+            "unknown OCR must remain fail-closed",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_MATCHMAKING,
+            BetaCandidateScreenWatchdog().observe(deck.copy(noActiveMatchmakingEvidence = false)).action,
+            "fresh queue evidence fences the deck restart",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
+            BetaCandidateScreenWatchdog().observe(deck.copy(paused = true)).action,
+            "manual pause fences the deck restart",
+        )
+    }
+
+    @Test
+    fun `transient missing capture is uncertain and restarts the same-screen timer from a fresh baseline`() {
+        val deck = candidate(
+            nowMs = 0L,
+            screen = "DECK_SELECTION",
+            currentSessionReady = false,
+            noActiveMatchmakingEvidence = true,
+            allowHealthyScreenRecovery = true,
+        )
+        val watchdog = BetaCandidateScreenWatchdog()
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(deck).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN,
+            watchdog.observe(deck.copy(nowMs = 60_000L, observationMissing = true, captureConfirmed = false)).action,
+            "a null observation is missing evidence, not active matchmaking",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            watchdog.observe(deck.copy(nowMs = 90_000L)).action,
+            "a brief missing-capture gap preserves the same PID/HWND episode",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            watchdog.observe(deck.copy(nowMs = 119_999L)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(deck.copy(nowMs = 120_000L)).action,
+        )
+
+        val expiredGap = BetaCandidateScreenWatchdog()
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, expiredGap.observe(deck).action)
+        expiredGap.observe(deck.copy(nowMs = 60_000L, observationMissing = true, captureConfirmed = false))
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESET_IDENTITY,
+            expiredGap.observe(deck.copy(nowMs = 105_001L)).action,
+            "a gap beyond the bounded grace must require a new baseline",
+        )
+
+        val queued = BetaCandidateScreenWatchdog()
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, queued.observe(deck).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_MATCHMAKING,
+            queued.observe(deck.copy(nowMs = 60_000L, noActiveMatchmakingEvidence = false)).action,
+            "a real current queue fence remains distinct from a missing capture",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESET_IDENTITY,
+            queued.observe(deck.copy(nowMs = 120_000L)).action,
+        )
+    }
+
+    @Test
     fun `terminal result screen reaches hard restart only after current session proof and two minutes`() {
         val watchdog = BetaCandidateScreenWatchdog()
         val result = candidate(
@@ -320,6 +412,7 @@ class BetaCandidateScreenWatchdogTest {
         currentSessionReady: Boolean = true,
         noActiveMatchmakingEvidence: Boolean = true,
         allowHealthyScreenRecovery: Boolean = false,
+        observationMissing: Boolean = false,
     ) = BetaCandidateScreenWatchdog.Snapshot(
         nowMs = nowMs,
         screen = screen,
@@ -340,5 +433,6 @@ class BetaCandidateScreenWatchdogTest {
         currentSessionReady = currentSessionReady,
         noActiveMatchmakingEvidence = noActiveMatchmakingEvidence,
         allowHealthyScreenRecovery = allowHealthyScreenRecovery,
+        observationMissing = observationMissing,
     )
 }

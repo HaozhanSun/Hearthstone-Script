@@ -98,6 +98,71 @@ class BetaCandidateScreenRecoveryIntegrationTest {
     }
 
     @Test
+    fun `candidate callsite marks a null fresh capture as missing evidence rather than active queue`() {
+        val missing = BetaScreenRecoveryService.candidateSnapshotForTest(
+            now = 60_000L,
+            observation = null,
+        )
+        assertTrue(missing.observationMissing)
+        assertFalse(missing.noActiveMatchmakingEvidence)
+        val decision = BetaCandidateScreenWatchdog().observe(missing.copy(working = true, paused = false))
+        assertEquals(BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN, decision.action)
+        assertEquals("observation-missing", decision.reason)
+
+        val currentQueueFrame = ScreenStateRecovery.FreshScreenObservation(
+            screen = "DECK_SELECTION",
+            mode = "TOURNAMENT",
+            confidence = 94,
+            evidence = "deck-selection-start-control-visual",
+            pid = 31468L,
+            hwnd = "0x27010",
+            screenshot = null,
+            perceptualFingerprint = java.lang.Long.parseUnsignedLong("86ca24794d2550c9", 16),
+            currentSessionReady = false,
+            noActiveMatchmakingEvidence = false,
+            hubModeChooserVisible = false,
+            modalVisible = false,
+        )
+        val queueDecision = BetaCandidateScreenWatchdog().observe(
+            BetaScreenRecoveryService.candidateSnapshotForTest(60_000L, currentQueueFrame)
+                .copy(working = true, paused = false),
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_MATCHMAKING, queueDecision.action)
+        assertEquals("active-matchmaking-evidence", queueDecision.reason)
+
+        val preSessionDeckFrame = currentQueueFrame.copy(noActiveMatchmakingEvidence = true)
+        val episode = BetaCandidateScreenWatchdog()
+        val initial = BetaScreenRecoveryService.candidateSnapshotForTest(0L, preSessionDeckFrame)
+            .copy(working = true, paused = false)
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, episode.observe(initial).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN,
+            episode.observe(BetaScreenRecoveryService.candidateSnapshotForTest(60_000L, null)
+                .copy(working = true, paused = false)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            episode.observe(BetaScreenRecoveryService.candidateSnapshotForTest(90_000L, preSessionDeckFrame)
+                .copy(working = true, paused = false)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            episode.observe(BetaScreenRecoveryService.candidateSnapshotForTest(120_000L, preSessionDeckFrame)
+                .copy(working = true, paused = false)).action,
+            "the positive pre-session DECK_SELECTION episode survives one bounded missing sample",
+        )
+        val arbitraryUnknown = preSessionDeckFrame.copy(screen = "UNKNOWN", confidence = 0, evidence = null)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN,
+            BetaCandidateScreenWatchdog().observe(
+                BetaScreenRecoveryService.candidateSnapshotForTest(0L, arbitraryUnknown)
+                    .copy(working = true, paused = false),
+            ).action,
+            "the production candidate snapshot keeps arbitrary UNKNOWN fail-closed",
+        )
+    }
+
+    @Test
     fun `start game error modal restarts only without queue game or pause evidence`() {
         val fixture = requireNotNull(
             javaClass.getResourceAsStream("/offline-ocr/screen-recovery/start-game-error-dialog-over-deck-selection.png"),

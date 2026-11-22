@@ -634,6 +634,14 @@ this deletion boundary.
   Power.log/session plus terminal proof. Active gameplay, queue evidence,
   mulligan, pause, missing capture, and OCR exceptions all resolve to WAIT or
   a structured fence reason—never input or restart.
+- A Beta `FILL_DECK` candidate never promotes arbitrary OCR-`UNKNOWN` to a
+  restart target. If a fresh capture is temporarily missing, classify it as
+  `WAIT_UNCERTAIN`/`observation-missing`; preserve the same exact PID/HWND
+  DECK_SELECTION episode only across the bounded 45-second capture gap, then
+  require a fresh baseline. Do not conflate missing capture with active
+  matchmaking; a real current queue visual/session remains a separate hard
+  fence. Manual F2 pause remains a hard veto even after a candidate has aged
+  past 120 seconds.
 - A post-game Event Quest overlay can leave the in-memory Tournament phase at
   `FILL_DECK` after `WarEx` cleanup. Permit its exact top-left dismiss only
   when the fresh foreground-owned client capture confirms the structural Event

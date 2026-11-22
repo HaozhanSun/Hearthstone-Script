@@ -307,8 +307,15 @@ internal object BetaScreenRecoveryService {
             currentSessionReady = observation?.currentSessionReady == true,
             noActiveMatchmakingEvidence = observation?.noActiveMatchmakingEvidence == true,
             allowHealthyScreenRecovery = preSessionHealthyRecoveryCandidate,
+            observationMissing = observation == null,
         )
     }
+
+    /** Deterministic seam for the missing-observation/queue-fence regression. */
+    internal fun candidateSnapshotForTest(
+        now: Long,
+        observation: ScreenStateRecovery.FreshScreenObservation?,
+    ): BetaCandidateScreenWatchdog.Snapshot = candidateSnapshot(now, observation)
 
     private fun candidateRestartStillSafe(observation: ScreenStateRecovery.FreshScreenObservation?): Boolean =
         candidateRestartFenceReason(observation) == null

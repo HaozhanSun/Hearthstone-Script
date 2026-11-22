@@ -51,6 +51,8 @@ internal class BetaCandidateScreenWatchdog(
         val noActiveMatchmakingEvidence: Boolean = false,
         /** A no-session constructed hub/deck frame may be the stalled startup candidate. */
         val allowHealthyScreenRecovery: Boolean = false,
+        /** True when this probe returned no usable screen observation at all. */
+        val observationMissing: Boolean = false,
     )
 
     data class Decision(
@@ -76,6 +78,7 @@ internal class BetaCandidateScreenWatchdog(
     private var lastRestartAtMs: Long? = null
     private var exhausted = false
     private var requireFreshBaseline = false
+    private var missingObservationSinceMs: Long? = null
 
     fun reset() {
         identity = null
@@ -86,6 +89,7 @@ internal class BetaCandidateScreenWatchdog(
         lastRestartAtMs = null
         exhausted = false
         requireFreshBaseline = false
+        missingObservationSinceMs = null
     }
 
     fun observe(snapshot: Snapshot): Decision {
@@ -93,6 +97,9 @@ internal class BetaCandidateScreenWatchdog(
         if (snapshot.paused) return deferWithoutEvidence(snapshot, Action.DEFER_MANUAL_PAUSE, "manual-pause")
         if (snapshot.inWar) return deferProgress(Action.DEFER_ACTIVE_GAME, "active-game")
         if (snapshot.mulligan) return deferProgress(Action.DEFER_MULLIGAN, "mulligan")
+        if (snapshot.observationMissing) {
+            return deferMissingObservation(snapshot)
+        }
 
         val screen = snapshot.screen?.takeIf { it.isNotBlank() }
         val dialog = snapshot.dialogScreen?.takeIf { it.isNotBlank() }
@@ -121,7 +128,8 @@ internal class BetaCandidateScreenWatchdog(
             snapshot.pid == null || snapshot.pid <= 0L || snapshot.hwnd.isNullOrBlank() ||
             snapshot.foregroundIdentity.isNullOrBlank() ||
             (snapshot.confidence < MIN_POSITIVE_CONFIDENCE && !positiveVisualModal) ||
-            screen == null || (screen.equals("UNKNOWN", ignoreCase = true) && visualModal == null) ||
+            screen == null ||
+            (screen.equals("UNKNOWN", ignoreCase = true) && visualModal == null) ||
             dialog?.equals("UNKNOWN", ignoreCase = true) == true
         ) {
             return deferWithoutEvidence(snapshot, Action.WAIT_UNCERTAIN, "capture-or-ocr-uncertain")
@@ -147,6 +155,27 @@ internal class BetaCandidateScreenWatchdog(
         val previousIdentity = identity
         val semanticIdentityChanged = previousIdentity?.screen != currentIdentity.screen
         val timeWentBackwards = lastObservationAtMs != null && snapshot.nowMs < lastObservationAtMs!!
+        val missingSince = missingObservationSinceMs
+        if (missingSince != null) {
+            val gapMs = snapshot.nowMs - missingSince
+            missingObservationSinceMs = null
+            if (gapMs > MAX_MISSING_OBSERVATION_GAP_MS || previousIdentity != currentIdentity) {
+                identity = currentIdentity
+                stableSinceMs = snapshot.nowMs
+                lastObservationAtMs = snapshot.nowMs
+                positiveObservations = 1
+                requireFreshBaseline = false
+                return decision(
+                    Action.RESET_IDENTITY,
+                    if (gapMs > MAX_MISSING_OBSERVATION_GAP_MS) {
+                        "missing-observation-gap-expired"
+                    } else {
+                        "missing-observation-identity-changed"
+                    },
+                    0L,
+                )
+            }
+        }
         if (semanticIdentityChanged || timeWentBackwards) {
             identity = currentIdentity
             stableSinceMs = snapshot.nowMs
@@ -226,6 +255,30 @@ internal class BetaCandidateScreenWatchdog(
         )
     }
 
+    /** A brief null capture is uncertainty, not queue evidence; retain one bounded episode gap. */
+    private fun deferMissingObservation(snapshot: Snapshot): Decision {
+        val firstMissing = missingObservationSinceMs == null
+        if (firstMissing) missingObservationSinceMs = snapshot.nowMs
+        val gapMs = (snapshot.nowMs - (missingObservationSinceMs ?: snapshot.nowMs)).coerceAtLeast(0L)
+        if (gapMs > MAX_MISSING_OBSERVATION_GAP_MS) {
+            stableSinceMs = snapshot.nowMs
+            positiveObservations = 0
+            requireFreshBaseline = true
+        }
+        lastObservationAtMs = snapshot.nowMs
+        return Decision(
+            action = Action.WAIT_UNCERTAIN,
+            reason = if (gapMs > MAX_MISSING_OBSERVATION_GAP_MS) {
+                "observation-missing-gap-expired"
+            } else {
+                "observation-missing"
+            },
+            stableForMs = (snapshot.nowMs - (stableSinceMs ?: snapshot.nowMs)).coerceAtLeast(0L),
+            positiveObservations = positiveObservations,
+            restartCount = restartCount,
+        )
+    }
+
     private fun decision(action: Action, reason: String, nowMs: Long): Decision = Decision(
         action = action,
         reason = reason,
@@ -242,6 +295,7 @@ internal class BetaCandidateScreenWatchdog(
         const val DEFAULT_STABLE_THRESHOLD_MS = 120_000L
         const val DEFAULT_REPEAT_BACKOFF_MS = 120_000L
         const val DEFAULT_MAX_RESTARTS_PER_IDENTITY = 2
+        const val MAX_MISSING_OBSERVATION_GAP_MS = 45_000L
         const val MIN_POSITIVE_CONFIDENCE = 85
         const val MIN_POSITIVE_OBSERVATIONS = 2
 
