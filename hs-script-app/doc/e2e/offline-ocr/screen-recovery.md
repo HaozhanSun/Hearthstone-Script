@@ -310,6 +310,14 @@ this deletion boundary.
   screenshot fixture with both recovery classifiers tested; UNKNOWN result
   frames retain bounded observation/retry behavior and never count an accepted
   OS input as proof of transition.
+- The Beta Platinum 10 rank-up page (2026-11-22 live frame) can overlap the
+  broad Event Quest structural visual. Its calibrated four-region signature
+  (Continue light, low-saturation banner, center darkness, and warm banner)
+  must be evaluated before `EVENT_QUEST_OVERLAY` in both recovery classifiers.
+  This is a read-only classification: it permits only the existing terminal
+  result Continue/recovery path after authoritative Power.log proof. Chest,
+  generic event-quest, unknown, active-game, queue, and paused frames remain
+  fail-closed and must not be auto-dismissed or restarted by this signature.
 - The v4.16.698 Diamond 10 capture demonstrates that foreground/SendInput
   acceptance does not prove client consumption: the exact center Continue
   target `(960, 1020)` was inside the visible lower-center label, yet the page

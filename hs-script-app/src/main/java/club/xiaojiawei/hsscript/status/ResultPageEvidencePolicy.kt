@@ -219,12 +219,24 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.26..0.31 &&
             centerDarkRatio in 0.14..0.17 &&
             bannerWarmRatio in 0.25..0.30
+        // v4.16.796's Platinum 10 rank-up page (2026-11-22 15:28) was
+        // structurally mistaken for the broad Event Quest overlay. Its
+        // centered medal is darker/larger than the prior Platinum 9 family,
+        // while the fixed Continue band and muted blue ribbon remain stable.
+        // Keep this four-region cluster narrow and require the same result
+        // precedence as every other rank continuation; it never authorizes
+        // chest dismissal or generic modal input.
+        val livePlatinumTenRankUpSignature = continueGrayLightRatio in 0.040..0.055 &&
+            bannerLowSaturationRatio in 0.25..0.31 &&
+            centerDarkRatio in 0.32..0.38 &&
+            bannerWarmRatio in 0.38..0.47
         return capturedRankProgressSignature || establishedRankProgressSignature ||
             coolBoardGoldRewardSignature || largeGoldMedalRewardSignature ||
             incidentCoolBoardRewardSignature || incidentWarmBannerRewardSignature ||
             liveRankNineRewardSignature || liveRankNineCoolBoardSignature ||
             liveRankTenCoolBoardSignature || livePlatinumProgressFamily ||
-            livePlatinumNineRewardVariant || livePlatinumNineNov22RewardSignature
+            livePlatinumNineRewardVariant || livePlatinumNineNov22RewardSignature ||
+            livePlatinumTenRankUpSignature
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */

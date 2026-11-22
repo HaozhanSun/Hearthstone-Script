@@ -9,6 +9,33 @@ import kotlin.test.assertTrue
 
 class ResultPageEvidencePolicyTest {
     @Test
+    fun `live Beta Platinum 10 rank-up frame outranks broad Event Quest visual`() {
+        val image = requireNotNull(ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/beta-live-platinum10-rank-reward-20261122-152811.png",
+        ))))
+        assertTrue(
+            ResultPageEvidencePolicy.looksLikeRankProgressContinuationVisual(
+                continueGrayLightRatio = 0.049,
+                bannerLowSaturationRatio = 0.262,
+                centerDarkRatio = 0.360,
+                bannerWarmRatio = 0.435,
+            ),
+            "the live Platinum 10 four-region signature must be admitted before the quest detector",
+        )
+        assertEquals(
+            "RANK_PROGRESS_CONTINUATION",
+            UpstreamScreenStateRecovery.classifyImageForResultFixture(image),
+            "the exact frame must enter the bounded rank continuation path",
+        )
+        assertEquals(
+            "RANK_PROGRESS_CONTINUATION",
+            ScreenStateRecovery.classifyImageForResultFixture(image),
+        )
+        assertTrue(StartupQuestOverlayVisualClassifier.isQuestOverlay(image))
+        assertFalse(UpstreamScreenStateRecovery.classifyImageForTest("", image) == "EVENT_QUEST_OVERLAY")
+    }
+
+    @Test
     fun `live Beta November 22 Platinum 9 reward is rank progress before quest overlay`() {
         val image = requireNotNull(ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/beta-live-platinum9-rank-reward-20261122-082555.png",

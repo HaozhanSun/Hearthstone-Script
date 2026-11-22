@@ -1981,6 +1981,23 @@ object ScreenStateRecovery {
                 ScreenKind.RECONNECT_FAILURE,
             )
         ) return targetedDetection
+        // Rank-up Continue evidence must outrank the broad quest-modal
+        // geometry. The live Platinum 10 frame satisfies both signatures;
+        // only the narrow four-region rank contract may escape the quest path.
+        if (ResultPageEvidencePolicy.looksLikeRankProgressContinuationVisual(
+                visual.resultContinueGrayLightRatio,
+                visual.resultBannerLowSaturationRatio,
+                visual.loadingCentralDarkRatio,
+                visual.resultBannerWarmRatio,
+            )
+        ) {
+            return Detection(
+                ScreenKind.RANK_PROGRESS_CONTINUATION,
+                ModeEnum.GAMEPLAY,
+                96,
+                "rank-progress-continue-visual",
+            )
+        }
         // The recorded exact quest-modal visual must preempt an underlay deck
         // or Hub label from a targeted ROI, but never a reconnect/server dialog.
         if (visual.startupQuestOverlayVisual) {

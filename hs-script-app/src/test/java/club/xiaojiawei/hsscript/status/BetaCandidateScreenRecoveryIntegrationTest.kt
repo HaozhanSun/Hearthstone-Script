@@ -508,6 +508,65 @@ class BetaCandidateScreenRecoveryIntegrationTest {
     }
 
     @Test
+    fun `live Platinum 10 rank-up frame reaches production candidate and boundary fallback`() {
+        val fixture = requireNotNull(
+            javaClass.getResourceAsStream(
+                "/offline-ocr/screen-recovery/beta-live-platinum10-rank-reward-20261122-152811.png",
+            ),
+        ).use(ImageIO::read)
+        val classification = requireNotNull(
+            ScreenStateRecovery.classifyBetaCandidateVisualForTest(
+                fixture,
+                currentSessionReady = true,
+                configuredDeckStrategy = false,
+                configuredRunMode = false,
+                purpose = ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
+            ),
+        ) {
+            "the exact current-session Platinum 10 frame must reach the production candidate classifier"
+        }
+        assertEquals("RANK_PROGRESS_CONTINUATION", classification.screen)
+        assertEquals("rank-progress-continue-visual", classification.evidence)
+
+        val observation = ScreenStateRecovery.FreshScreenObservation(
+            screen = requireNotNull(classification.screen),
+            mode = classification.mode,
+            confidence = classification.confidence,
+            evidence = classification.evidence,
+            pid = 30220L,
+            hwnd = "native@0x7306d6",
+            screenshot = "beta-live-platinum10-rank-reward-20261122-152811.png",
+            perceptualFingerprint = 0xc3a67211L,
+            currentSessionReady = true,
+            noActiveMatchmakingEvidence = true,
+            hubModeChooserVisible = false,
+            modalVisible = true,
+            foregroundConfirmed = true,
+        )
+        val candidate = BetaScreenRecoveryService.candidateSnapshotForTest(0L, observation)
+            .copy(working = true, paused = false)
+        assertTrue(candidate.terminal)
+        val watchdog = BetaCandidateScreenWatchdog()
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(candidate).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            watchdog.observe(candidate.copy(nowMs = 119_999L)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(candidate.copy(nowMs = 120_000L)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_MATCHMAKING,
+            BetaCandidateScreenWatchdog().observe(candidate.copy(noActiveMatchmakingEvidence = false)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
+            BetaCandidateScreenWatchdog().observe(candidate.copy(paused = true)).action,
+        )
+    }
+
+    @Test
     fun `authoritative Power log plus live Platinum 9 frame reaches one guarded restart at the boundary`() {
         val fixture = requireNotNull(
             javaClass.getResourceAsStream("/offline-ocr/screen-recovery/beta-live-platinum9-rank-reward-20261122-082555.png"),
