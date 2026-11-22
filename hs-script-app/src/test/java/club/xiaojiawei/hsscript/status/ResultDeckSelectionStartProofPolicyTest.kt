@@ -146,6 +146,93 @@ class ResultDeckSelectionStartProofPolicyTest {
     }
 
     @Test
+    fun `both production result consumers preserve transition authority and reach Start gate`() {
+        val image = fixture("/offline-ocr/screen-recovery/deck-selection-screen.png")
+        assertTrue(ScreenWatchdog.hasEnabledDeckSelectionStartButton(image))
+        val consumers = listOf(
+            "screen-state" to { pid: Int, hwnd: String, capturedAtNanos: Long, modal: Boolean, observed: String ->
+                ScreenStateRecovery.recordResultDeckSelectionStartProofForTest(
+                    image, capturedAtNanos, pid, hwnd, true, modal,
+                    observedModeOverride = observed,
+                    expectedModeOverride = "WILD",
+                )
+            },
+            "upstream" to { pid: Int, hwnd: String, capturedAtNanos: Long, modal: Boolean, observed: String ->
+                UpstreamScreenStateRecovery.recordResultDeckSelectionStartProofForTest(
+                    image, capturedAtNanos, pid, hwnd, true, modal,
+                    observedModeOverride = observed,
+                    expectedModeOverride = "WILD",
+                )
+            },
+        )
+
+        consumers.forEachIndexed { index, (name, consumer) ->
+            StartupInputReadiness.resetForTest()
+            val pid = 41_000 + index
+            val hwnd = "result-consumer-$name"
+            try {
+                val now = System.currentTimeMillis()
+                StartupInputReadiness.recordSelectedTournamentMode(pid, hwnd, "WILD", now)
+                assertFalse(
+                    consumer(pid, hwnd, System.nanoTime() - 1_000_000L, true, "UNKNOWN"),
+                    "$name must reject the incomplete transition frame",
+                )
+                assertTrue(
+                    StartupInputReadiness.hasSelectedTournamentModeStartPermit(pid, hwnd, "WILD"),
+                    "$name must preserve selected mode through transition frame",
+                )
+                assertTrue(
+                    consumer(pid, hwnd, System.nanoTime() - 1_000_000L, false, "UNKNOWN"),
+                    "$name must record the next fresh exact deck/Start frame",
+                )
+                assertTrue(
+                    ActionDispatchGate.allowForState(
+                        action = "matchmaking.start",
+                        paused = false,
+                        working = true,
+                        currentSessionReady = false,
+                        freshDeckSelectionStartReady = StartupInputReadiness.isDeckSelectionStartReady(pid, hwnd),
+                        selectedModeStartPermitValid = StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+                            pid, hwnd, "WILD",
+                        ),
+                    ),
+                    "$name consumer must reach the real Start gate",
+                )
+
+                StartupInputReadiness.resetForTest()
+                StartupInputReadiness.recordSelectedTournamentMode(
+                    pid, hwnd, "WILD", System.currentTimeMillis() -
+                        StartupInputReadiness.SELECTED_MODE_START_PERMIT_MAX_AGE_MS - 1,
+                )
+                assertFalse(
+                    consumer(pid, hwnd, System.nanoTime() - 1_000_000L, false, "UNKNOWN"),
+                    "$name must reject an expired selected-mode permit",
+                )
+
+                StartupInputReadiness.resetForTest()
+                StartupInputReadiness.recordSelectedTournamentMode(pid, hwnd, "WILD")
+                assertFalse(
+                    consumer(pid, "$hwnd-changed", System.nanoTime() - 1_000_000L, false, "UNKNOWN"),
+                    "$name must reject a changed window identity",
+                )
+
+                StartupInputReadiness.resetForTest()
+                StartupInputReadiness.recordSelectedTournamentMode(pid, hwnd, "WILD")
+                assertFalse(
+                    consumer(pid, hwnd, System.nanoTime() - 1_000_000L, false, "STANDARD"),
+                    "$name must reject a positively observed opposite mode",
+                )
+                assertFalse(
+                    StartupInputReadiness.hasSelectedTournamentModeStartPermit(pid, hwnd, "WILD"),
+                    "$name must clear selected mode after an opposite-mode veto",
+                )
+            } finally {
+                StartupInputReadiness.resetForTest()
+            }
+        }
+    }
+
+    @Test
     fun `stale unauthorized unknown and opposite mode result frames cannot leave Start proof`() {
         assertFalse(record(
             captureAuthorized = true,
@@ -222,8 +309,8 @@ class ResultDeckSelectionStartProofPolicyTest {
             upstream.contains("pid = authorizedCapture.capture.processId.toInt()") &&
             upstream.contains("captureAuthorized = authorizedCapture.foregroundVerified"),
         )
-        assertTrue(local.contains("TournamentModeConfirmation.observeImageVisualOnly(capture.image)"))
-        assertTrue(upstream.contains("TournamentModeConfirmation.observeImageVisualOnly(capture.image)"))
+        assertTrue(local.contains("TournamentModeConfirmation.observeImageVisualOnly(image)"))
+        assertTrue(upstream.contains("TournamentModeConfirmation.observeImageVisualOnly(image)"))
     }
 
     private fun fixture(path: String) = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(path)))

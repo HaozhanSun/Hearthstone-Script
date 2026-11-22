@@ -2461,12 +2461,61 @@ object ScreenStateRecovery {
         pid: Int?,
         hwnd: String,
         captureAuthorized: Boolean,
-    ) {
-        val mode = TournamentModeConfirmation.observeImageVisualOnly(capture.image)
-        val expectedMode = DeckStrategyManager.currentRunMode?.name
-        val captureAgeMs = (System.nanoTime() - capture.capturedAtNanos) / 1_000_000L
-        val startVisible = ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image)
-        val modalVisible = capture.visual.centeredModalPanelVisual
+    ): Boolean = recordResultDeckSelectionStartProofFields(
+        image = capture.image,
+        capturedAtNanos = capture.capturedAtNanos,
+        pid = pid,
+        hwnd = hwnd,
+        captureAuthorized = captureAuthorized,
+        modalVisible = capture.visual.centeredModalPanelVisual,
+        confidence = detection.confidence,
+        evidence = detection.evidence,
+    )
+
+    /** Consumer seam used by deterministic tests for this production caller. */
+    internal fun recordResultDeckSelectionStartProofForTest(
+        image: BufferedImage,
+        capturedAtNanos: Long,
+        pid: Int?,
+        hwnd: String,
+        captureAuthorized: Boolean,
+        modalVisible: Boolean,
+        confidence: Int = 100,
+        evidence: String = "deck-selection-start-control-visual",
+        observedModeOverride: String? = null,
+        expectedModeOverride: String? = null,
+    ): Boolean = recordResultDeckSelectionStartProofFields(
+        image = image,
+        capturedAtNanos = capturedAtNanos,
+        pid = pid,
+        hwnd = hwnd,
+        captureAuthorized = captureAuthorized,
+        modalVisible = modalVisible,
+        confidence = confidence,
+        evidence = evidence,
+        observedModeOverride = observedModeOverride,
+        expectedModeOverride = expectedModeOverride,
+    )
+
+    private fun recordResultDeckSelectionStartProofFields(
+        image: BufferedImage,
+        capturedAtNanos: Long,
+        pid: Int?,
+        hwnd: String,
+        captureAuthorized: Boolean,
+        modalVisible: Boolean,
+        confidence: Int,
+        evidence: String,
+        observedModeOverride: String? = null,
+        expectedModeOverride: String? = null,
+    ): Boolean {
+        val mode = observedModeOverride?.let {
+            TournamentModeObservation(ObservedTournamentMode.valueOf(it), "", "test-override")
+        }
+            ?: TournamentModeConfirmation.observeImageVisualOnly(image)
+        val expectedMode = expectedModeOverride ?: DeckStrategyManager.currentRunMode?.name
+        val captureAgeMs = (System.nanoTime() - capturedAtNanos) / 1_000_000L
+        val startVisible = ScreenWatchdog.hasEnabledDeckSelectionStartButton(image)
         val selectedModePermitValid = pid != null && expectedMode != null &&
             mode.observedMode.name == "UNKNOWN" && StartupInputReadiness.hasSelectedTournamentModeStartPermit(
                 pid, hwnd, expectedMode,
@@ -2476,8 +2525,8 @@ object ScreenStateRecovery {
             captureAgeMs = captureAgeMs,
             pid = pid,
             hwnd = hwnd,
-            confidence = detection.confidence,
-            evidence = detection.evidence,
+            confidence = confidence,
+            evidence = evidence,
             expectedMode = expectedMode,
             observedMode = mode.observedMode.name,
             enabledStartVisible = startVisible,
@@ -2495,10 +2544,11 @@ object ScreenStateRecovery {
                     mode.observedMode.name != expectedMode && !selectedModePermitValid -> "configured-mode-not-visually-confirmed"
                     else -> "capture-or-screen-evidence-rejected"
                 }} expectedMode=${expectedMode ?: "UNKNOWN"} observedMode=${mode.observedMode.name} " +
-                "captureAgeMs=$captureAgeMs captureAuthorized=$captureAuthorized confidence=${detection.confidence} " +
-                "evidence=${detection.evidence} startVisible=$startVisible modal=$modalVisible " +
+                "captureAgeMs=$captureAgeMs captureAuthorized=$captureAuthorized confidence=$confidence " +
+                "evidence=$evidence startVisible=$startVisible modal=$modalVisible " +
                 "selectedModePermitValid=$selectedModePermitValid pid=${pid ?: "none"} hwnd=$hwnd"
         }
+        return recorded
     }
 
     /** Contract seam shared by the live postcheck and deterministic mapping tests. */
