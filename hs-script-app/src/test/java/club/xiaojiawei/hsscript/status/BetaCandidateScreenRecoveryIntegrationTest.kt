@@ -1,7 +1,10 @@
 package club.xiaojiawei.hsscript.status
 
 import club.xiaojiawei.hsscript.core.IdleWatchdogRestartSequence
+import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
+import club.xiaojiawei.hsscript.status.surrender.MandatoryRankSurrenderGuard
+import club.xiaojiawei.hsscript.status.surrender.MulliganRankDispatchBarrier
 import java.nio.file.Files
 import java.nio.file.Path
 import java.awt.Color
@@ -11,6 +14,7 @@ import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
 import kotlin.test.Test
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
@@ -20,11 +24,23 @@ import kotlin.test.assertTrue
 
 class BetaCandidateScreenRecoveryIntegrationTest {
 
+    @BeforeEach
+    fun resetSharedTerminalStateBeforeTest() {
+        resetSharedTerminalState()
+    }
+
     @AfterEach
     fun resetCandidateObservation() {
+        resetSharedTerminalState()
+    }
+
+    private fun resetSharedTerminalState() {
         BetaScreenRecoveryService.resetCandidateObservationForTest()
         LifecycleTrace.resetMatchmakingEvidenceForTest()
         PowerLogListener.resetTerminalInputFenceForTest()
+        MandatoryRankSurrenderGuard.resetForTest()
+        MulliganRankDispatchBarrier.resetForTest()
+        WarEx.inWar = false
     }
 
     @Test
@@ -532,6 +548,8 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         assertNotNull(PowerLogListener.bindVerifiedLocalMulliganEntity("laz#12793"))
         assertTrue(PowerLogListener.hasVerifiedCurrentGameTerminalOutcome())
         assertEquals("CONCEDED", PowerLogListener.currentGameTerminalForVerifiedLocalPlayer()?.name)
+        assertFalse(MandatoryRankSurrenderGuard.isPending())
+        assertFalse(MandatoryRankSurrenderGuard.isTerminalCleanupPending())
         assertTrue(
             PowerLogListener.confirmCurrentGameTerminalDestination(
                 screenKind = "RANK_PROGRESS_CONTINUATION",
