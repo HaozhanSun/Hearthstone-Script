@@ -269,6 +269,16 @@ internal object StartupInputReadiness {
         clearSelectedTournamentMode(pid, hwnd)
     }
 
+    /**
+     * Clear only the transient screen proof when a transition frame is
+     * incomplete.  The selected-mode permit is independent authority for a
+     * later exact deck/Start capture and must survive a transient UNKNOWN or
+     * disabled-control result-page frame in the same verified window.
+     */
+    internal fun invalidateScreenProofPreservingSelectedMode(pid: Int? = null, hwnd: String? = null) {
+        invalidateScreenProof(pid, hwnd)
+    }
+
     private fun invalidateScreenProof(pid: Int? = null, hwnd: String? = null) {
         proof.updateAndGet { current ->
             if (current != null && (pid == null || current.pid == pid) &&

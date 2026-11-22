@@ -2953,6 +2953,10 @@ object UpstreamScreenStateRecovery {
         val expectedMode = DeckStrategyManager.currentRunMode?.name
         val captureAgeMs = (System.nanoTime() - capture.capturedAtNanos) / 1_000_000L
         val startVisible = ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image)
+        val selectedModePermitValid = pid != null && expectedMode != null &&
+            mode.observedMode.name == "UNKNOWN" && StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+                pid, hwnd, expectedMode,
+            )
         val recorded = ResultDeckSelectionStartProofPolicy.record(
             captureAuthorized = captureAuthorized,
             captureAgeMs = captureAgeMs,
@@ -2972,13 +2976,14 @@ object UpstreamScreenStateRecovery {
                     !captureAuthorized -> "capture-unauthorized"
                     captureAgeMs !in 0..ResultDeckSelectionStartProofPolicy.MAX_CAPTURE_AGE_MS -> "capture-stale"
                     expectedMode !in setOf("WILD", "STANDARD") -> "configured-mode-unavailable"
-                    mode.observedMode.name != expectedMode -> "configured-mode-not-visually-confirmed"
                     !startVisible -> "start-control-not-visible"
                     modalVisible -> "modal-visible"
+                    mode.observedMode.name != expectedMode && !selectedModePermitValid -> "configured-mode-not-visually-confirmed"
                     else -> "capture-or-screen-evidence-rejected"
                 }} expectedMode=${expectedMode ?: "UNKNOWN"} observedMode=${mode.observedMode.name} " +
                 "captureAgeMs=$captureAgeMs captureAuthorized=$captureAuthorized confidence=${detection.confidence} " +
-                "evidence=${detection.evidence} startVisible=$startVisible modal=$modalVisible pid=${pid ?: "none"} hwnd=$hwnd"
+                "evidence=${detection.evidence} startVisible=$startVisible modal=$modalVisible " +
+                "selectedModePermitValid=$selectedModePermitValid pid=${pid ?: "none"} hwnd=$hwnd"
         }
     }
 

@@ -64,6 +64,88 @@ class ResultDeckSelectionStartProofPolicyTest {
     }
 
     @Test
+    fun `transitional UNKNOWN result frame does not erase selected mode before fresh deck proof`() {
+        val pid = 40_020
+        val hwnd = "exact-game-window"
+        StartupInputReadiness.recordSelectedTournamentMode(pid, hwnd, "WILD", now = 40_000L)
+
+        // The result-page destination probe can race the deck screen and see
+        // UNKNOWN with no enabled Start control. It must clear only its
+        // transient screen proof, not the independently selected mode.
+        assertFalse(ResultDeckSelectionStartProofPolicy.record(
+            captureAuthorized = true,
+            captureAgeMs = 10,
+            pid = pid,
+            hwnd = hwnd,
+            confidence = 100,
+            evidence = "deck-selection-title",
+            expectedMode = "WILD",
+            observedMode = "UNKNOWN",
+            enabledStartVisible = false,
+            modalVisible = false,
+            now = 40_001L,
+        ))
+        assertTrue(StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+            pid, hwnd, "WILD", 40_002L,
+        ), "an incomplete transition frame must preserve same-window mode authority")
+
+        // The later screen-recovery frame has the exact deck-selection and
+        // enabled Start control, while OCR still returns UNKNOWN.
+        assertTrue(ResultDeckSelectionStartProofPolicy.record(
+            captureAuthorized = true,
+            captureAgeMs = 10,
+            pid = pid,
+            hwnd = hwnd,
+            confidence = 94,
+            evidence = "deck-selection-start-control-visual",
+            expectedMode = "WILD",
+            observedMode = "UNKNOWN",
+            enabledStartVisible = true,
+            modalVisible = false,
+            now = 40_003L,
+        ))
+        assertTrue(StartupInputReadiness.isDeckSelectionStartReady(pid, hwnd, 40_004L))
+        assertTrue(
+            ActionDispatchGate.allowForState(
+                action = "matchmaking.start",
+                paused = false,
+                working = true,
+                currentSessionReady = false,
+                freshDeckSelectionStartReady = StartupInputReadiness.isDeckSelectionStartReady(
+                    pid, hwnd, 40_004L,
+                ),
+                selectedModeStartPermitValid = StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+                    pid, hwnd, "WILD", 40_004L,
+                ),
+            ),
+            "the result-destination transition must reach the real Start dispatch gate after fresh proof",
+        )
+    }
+
+    @Test
+    fun `contradictory observed mode still clears selected mode permit`() {
+        val pid = 40_020
+        val hwnd = "exact-game-window"
+        StartupInputReadiness.recordSelectedTournamentMode(pid, hwnd, "WILD", now = 41_000L)
+        assertFalse(ResultDeckSelectionStartProofPolicy.record(
+            captureAuthorized = true,
+            captureAgeMs = 10,
+            pid = pid,
+            hwnd = hwnd,
+            confidence = 100,
+            evidence = "deck-selection-title",
+            expectedMode = "WILD",
+            observedMode = "STANDARD",
+            enabledStartVisible = true,
+            modalVisible = false,
+            now = 41_001L,
+        ))
+        assertFalse(StartupInputReadiness.hasSelectedTournamentModeStartPermit(
+            pid, hwnd, "WILD", 41_002L,
+        ), "a positive opposite-mode observation remains a hard safety veto")
+    }
+
+    @Test
     fun `stale unauthorized unknown and opposite mode result frames cannot leave Start proof`() {
         assertFalse(record(
             captureAuthorized = true,
