@@ -707,4 +707,67 @@ class TerminalResultSequenceControllerTest {
             inputExecutor.shutdownNow()
         }
     }
+
+    @Test
+    fun `live Platinum 9 frame enters terminal consumer and releases to deck destination`() {
+        val frame = loadImage("/offline-ocr/screen-recovery/beta-live-platinum9-rank-reward-20261122-082555.png")
+        val rankKind = UpstreamScreenStateRecovery.classifyImageForResultFixture(frame)
+        assertEquals("RANK_PROGRESS_CONTINUATION", rankKind)
+
+        val observerExecutor = Executors.newSingleThreadScheduledExecutor()
+        val inputExecutor = Executors.newSingleThreadScheduledExecutor()
+        val dispatches = AtomicInteger()
+        val destination = CountDownLatch(1)
+        val controller = TerminalResultSequenceController(
+            observerExecutor = observerExecutor,
+            inputExecutor = inputExecutor,
+            initialInputCount = 0,
+            initialRetryIntervalMillis = 20L,
+            retryIntervalMillis = { 20L },
+            observerIntervalMillis = 25L,
+            monitorIntervalMillis = 10L,
+            maxDurationMillis = 5_000L,
+            observe = {
+                if (dispatches.get() == 0) {
+                    ResultScreenObservation(
+                        resultVisible = true,
+                        captureAuthorized = true,
+                        rankProgressVisible = rankKind == "RANK_PROGRESS_CONTINUATION",
+                        continueControlVisible = true,
+                    )
+                } else {
+                    ResultScreenObservation(
+                        resultVisible = false,
+                        captureAuthorized = true,
+                        destinationScreen = "DECK_SELECTION",
+                        destinationConfidence = 95,
+                    )
+                }
+            },
+            terminalProofValid = { true }, // complete current-game Power.log proof is supplied by the production terminal gate
+            paused = { false },
+            sameGame = { true },
+            dispatchContinue = { _, _, _, recordDispatch ->
+                recordDispatch()
+                dispatches.incrementAndGet()
+                TerminalResultSequenceController.DispatchOutcome(attempted = true, dispatchAccepted = true)
+            },
+            confirmDestination = { observation ->
+                assertEquals("DECK_SELECTION", observation.destinationScreen)
+                destination.countDown()
+                true
+            },
+            onStopped = { _, _ -> },
+        )
+        try {
+            controller.start()
+            assertTrue(destination.await(3, TimeUnit.SECONDS), "accepted Continue must reach a fresh deck destination")
+            assertEquals(1, dispatches.get(), "terminal consumer must dispatch exactly one bounded Continue")
+            assertTrue(controller.snapshot().stopped)
+        } finally {
+            controller.cancel("test-cleanup")
+            observerExecutor.shutdownNow()
+            inputExecutor.shutdownNow()
+        }
+    }
 }
