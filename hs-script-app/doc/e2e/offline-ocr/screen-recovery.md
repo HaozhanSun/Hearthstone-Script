@@ -904,3 +904,12 @@ this deletion boundary.
   existing fail-closed paths. Regress the exact 2026-11-22 queue PNG through
   the production classifier and assert that its no-OCR branch is not selected
   for HUB/modal controls.
+- Result-artifact authority is separate from Power.log outcome authority. A
+  delayed `GAME_RESULT_SCREENSHOT` capture can still be the gameplay board
+  with the in-game settings menu open (especially after a fast surrender), so
+  `ScreenWatchdog.hasVerifiedGameMenuOverlay` must reject that frame before it
+  is saved under `game-####-win/loss`. Emit
+  `GAME_RESULT_SCREENSHOT_SKIPPED reason=verified-game-menu-overlay` and let
+  the bounded terminal-result observer obtain a fresh result/destination frame;
+  never relabel the menu as a result page. Regress the exact v4.16.794 menu
+  capture and retain active-game, queue, pause, and unknown-result fences.

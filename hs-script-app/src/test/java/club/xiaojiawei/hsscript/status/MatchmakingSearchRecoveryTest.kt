@@ -1210,6 +1210,46 @@ class MatchmakingSearchRecoveryTest {
     }
 
     @Test
+    fun `v794 exact queue frame supersedes stale FILL_DECK after unknown result probe`() {
+        val queue = requireNotNull(
+            javaClass.getResourceAsStream(
+                "/offline-ocr/screen-recovery/beta-live-matchmaking-search-20261122-120541.png",
+            ),
+        ).use(ImageIO::read)
+        assertFalse(ScreenStateRecovery.hasCenteredModalPanel(queue))
+        assertTrue(MatchmakingSearchVisualPolicy.isVisible(queue))
+        assertEquals("MATCHMAKING", UpstreamScreenStateRecovery.classifyImageForTest("", queue))
+        assertTrue(ScreenStateRecovery.exactMatchmakingVisualForWatchdogForTest(queue))
+
+        LifecycleTrace.resetMatchmakingEvidenceForTest()
+        try {
+            // The result probe was UNKNOWN and the lifecycle phase remained
+            // FILL_DECK, but this fresh authorized search frame is stronger
+            // current evidence. It must preserve the live queue and prevent
+            // stale-screen recovery from dispatching clicks/restarts.
+            assertTrue(
+                MatchmakingQueueLifecycleEvidencePolicy.propagateClassifiedSearchScreenIfAuthorized(
+                    screenKind = "MATCHMAKING",
+                    captureAuthorized = true,
+                    observedAt = 706_510L,
+                ),
+            )
+            assertTrue(LifecycleTrace.hasRecentActiveMatchmakingScreen(706_511L))
+            assertTrue(LifecycleTrace.hasRecentMatchmakingInputIntent(706_511L))
+            assertTrue(
+                LifecycleTrace.shouldSuppressStateRecoveryForMatchmaking(
+                    observedAt = 706_510L,
+                    now = 706_511L,
+                ),
+                "the exact current search frame must suppress stale FILL_DECK recovery",
+            )
+            assertEquals("MATCHMAKING", UpstreamScreenStateRecovery.classifyImageForTest("", queue))
+        } finally {
+            LifecycleTrace.resetMatchmakingEvidenceForTest()
+        }
+    }
+
+    @Test
     fun `authorized visual queue evidence propagates with empty Power log but unknown screen does not`() {
         val queueProbe = ScreenStateRecovery.StartGameErrorDialogProbe(
             state = MatchmakingDialogRecoveryPolicy.Probe.NO_ERROR_DIALOG,

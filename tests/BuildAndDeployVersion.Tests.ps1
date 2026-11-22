@@ -88,6 +88,7 @@ $requiredFocusedRegressionTests = @(
     'MatchmakingDialogRecoveryPolicyTest',
     'TerminalResultSequenceControllerTest',
     'TerminalCleanupIncidentFixtureTest',
+    'GameResultScreenshotTest',
     'ResultPageEvidencePolicyTest',
     'BetaCandidateScreenWatchdogTest',
     'BetaCandidateScreenRecoveryIntegrationTest',

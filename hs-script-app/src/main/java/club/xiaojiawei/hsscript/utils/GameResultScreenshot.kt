@@ -2,6 +2,7 @@ package club.xiaojiawei.hsscript.utils
 
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscript.status.BetaArtifactStorage
+import club.xiaojiawei.hsscript.status.ScreenWatchdog
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
 import java.awt.Robot
@@ -46,6 +47,18 @@ object GameResultScreenshot {
 
     fun save(image: java.awt.image.BufferedImage, outcome: String, gameNumber: Int): File? {
         return runCatching {
+            // Power.log terminal state is authoritative for the outcome, but
+            // it does not prove that the delayed desktop capture is a result
+            // page.  A verified in-game settings menu is a covered gameplay
+            // frame (the client may still be animating the terminal state),
+            // so never label or persist it as a win/loss result artifact.
+            if (ScreenWatchdog.hasVerifiedGameMenuOverlay(image)) {
+                log.warn {
+                    "GAME_RESULT_SCREENSHOT_SKIPPED reason=verified-game-menu-overlay " +
+                        "outcome=$outcome game=$gameNumber evidence=result-page-not-captured"
+                }
+                return null
+            }
             val screenshotDirectory = BetaArtifactStorage.directory("game-results", File(
                 System.getProperty(
                     "hs.script.result-screenshot.dir",

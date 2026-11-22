@@ -744,9 +744,13 @@ object ScreenWatchdog {
         val frameBottom = colorRatio(image, 0.398, 0.595, 0.602, 0.622, darkNeutral)
         val frameLeft = colorRatio(image, 0.398, 0.278, 0.418, 0.595, darkNeutral)
         val frameRight = colorRatio(image, 0.582, 0.278, 0.602, 0.595, darkNeutral)
+        // The current client paints a slightly shallower lower frame while
+        // the red Concede row is active (the live 2026-11-22 capture has
+        // frameBottom=.489). Keep all four button bands and the side/top
+        // frame authority; only relax the lower edge for this known layout.
         val accepted = headerBeige >= 0.12 && surrenderRed >= 0.10 &&
             optionsBeige >= 0.10 && exitBeige >= 0.10 &&
-            frameTop >= 0.55 && frameBottom >= 0.55 &&
+            frameTop >= 0.55 && frameBottom >= 0.45 &&
             frameLeft >= 0.55 && frameRight >= 0.55
         return SettingsOverlayMetrics(
             image.width,
