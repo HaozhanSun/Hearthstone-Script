@@ -10,6 +10,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class BetaCandidateScreenRecoveryIntegrationTest {
@@ -57,6 +58,42 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         assertEquals(
             BetaCandidateScreenWatchdog.Action.RESTART,
             watchdog.observe(first.copy(nowMs = BetaCandidateScreenWatchdog.DEFAULT_STABLE_THRESHOLD_MS)).action,
+        )
+    }
+
+    @Test
+    fun `OCR exception is contained as unknown and cannot authorize a candidate restart`() {
+        val frame = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
+        val classification = UpstreamScreenStateRecovery.classifyFreshScreenForWatchdogSafely(
+            image = frame,
+            ocrText = { error("simulated OCR provider failure") },
+        )
+        assertNull(classification.screen)
+        assertEquals(0, classification.confidence)
+        assertEquals("ocr-exception-contained", classification.evidence)
+
+        val watchdog = BetaCandidateScreenWatchdog()
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN,
+            watchdog.observe(
+                BetaCandidateScreenWatchdog.Snapshot(
+                    nowMs = 120_000L,
+                    screen = classification.screen,
+                    confidence = classification.confidence,
+                    captureConfirmed = true,
+                    foregroundConfirmed = true,
+                    pid = 42L,
+                    hwnd = "hwnd-42",
+                    foregroundIdentity = "hwnd-42",
+                    working = true,
+                    paused = false,
+                    inWar = false,
+                    mulligan = false,
+                    terminal = false,
+                    currentSessionReady = false,
+                    noActiveMatchmakingEvidence = true,
+                ),
+            ).action,
         )
     }
 

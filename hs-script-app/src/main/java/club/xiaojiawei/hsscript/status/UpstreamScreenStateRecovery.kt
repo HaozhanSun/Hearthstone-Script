@@ -2641,6 +2641,29 @@ object UpstreamScreenStateRecovery {
         )
     }
 
+    /**
+     * Candidate-screen probes are observational only.  OCR providers are
+     * external/native code and may throw before the normal empty-text path is
+     * reached; contain that failure as UNKNOWN so a watchdog can never turn an
+     * OCR exception into a restart or input dispatch.
+     */
+    internal fun classifyFreshScreenForWatchdogSafely(
+        image: BufferedImage,
+        ocrText: () -> String,
+    ): FreshScreenClassification = runCatching {
+        classifyFreshScreenForWatchdog(ocrText(), image)
+    }.getOrElse { error ->
+        log.warn(error) {
+            "BETA_CANDIDATE_SCREEN_OCR_EXCEPTION action=WAIT_UNCERTAIN screen=UNKNOWN"
+        }
+        FreshScreenClassification(
+            screen = null,
+            mode = null,
+            confidence = 0,
+            evidence = "ocr-exception-contained",
+        )
+    }
+
     /** A fresh queue screen is authoritative proof that result cleanup reached its post-result destination. */
     internal fun confirmPendingTerminalCleanupAtMatchmaking(
         screenKind: String,

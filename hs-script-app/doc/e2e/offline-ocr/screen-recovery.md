@@ -625,6 +625,15 @@ this deletion boundary.
   before its final restart. Known-screen identity must tolerate
   small animation/glow changes but distinguish a real screen transition; it is
   bound to PID/HWND rather than lifecycle phase labels.
+- The Beta candidate watchdog also recognizes the exact opponent-disconnect
+  start-error/reconnect-failure dialog and the three terminal season-rank
+  reward stages as bounded same-screen restart candidates. They must remain
+  unchanged in a fresh authorized PID/HWND capture for 119999/120000 ms before
+  the full no-pause close-and-starter restart is eligible. The disconnect
+  dialog is pre-session-only; season-rank reward restart requires current
+  Power.log/session plus terminal proof. Active gameplay, queue evidence,
+  mulligan, pause, missing capture, and OCR exceptions all resolve to WAIT or
+  a structured fence reason—never input or restart.
 - A post-game Event Quest overlay can leave the in-memory Tournament phase at
   `FILL_DECK` after `WarEx` cleanup. Permit its exact top-left dismiss only
   when the fresh foreground-owned client capture confirms the structural Event

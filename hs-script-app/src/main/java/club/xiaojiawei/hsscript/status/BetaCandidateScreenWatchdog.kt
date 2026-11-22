@@ -259,6 +259,12 @@ internal class BetaCandidateScreenWatchdog(
         private val TERMINAL_SCREENS = setOf(
             "RESULT",
             "RANK_PROGRESS_CONTINUATION",
+            // These are post-game season-rank reward stages. They remain
+            // terminal-only candidates: a current session and authoritative
+            // terminal proof are required before a hard restart is eligible.
+            "SEASON_RANK_AWARD",
+            "SEASON_RANK_AWARD_CHEST",
+            "SEASON_RANK_AWARD_REWARDS",
         )
     }
 }

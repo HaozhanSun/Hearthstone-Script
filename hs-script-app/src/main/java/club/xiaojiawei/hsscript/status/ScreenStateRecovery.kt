@@ -412,9 +412,24 @@ object ScreenStateRecovery {
         // A fresh structural deck-screen proof is authoritative and avoids a
         // 20+ second OCR probe.  OCR remains the fallback for all other
         // screens and is still required for text-only classifications.
-        val ocrEvidence = if (visualClassification == null) runOCR(capture) else OcrEvidence("", emptyMap())
+        val ocrEvidence = if (visualClassification == null) {
+            runCatching { runOCR(capture) }.getOrElse { error ->
+                log.warn(error) {
+                    "BETA_CANDIDATE_SCREEN_OCR_EXCEPTION action=WAIT_UNCERTAIN " +
+                        "pid=$initialPid hwnd=$gameWindow"
+                }
+                OcrEvidence(
+                    text = "",
+                    targeted = emptyMap(),
+                    resultProbeTimings = ResultProbeOcrTimings(path = "EXCEPTION_CONTAINED"),
+                )
+            }
+        } else OcrEvidence("", emptyMap())
         val classification = visualClassification ?: if (useUpstreamClassifier) {
-            UpstreamScreenStateRecovery.classifyFreshScreenForWatchdog(ocrEvidence.text, capture.image)
+            UpstreamScreenStateRecovery.classifyFreshScreenForWatchdogSafely(
+                image = capture.image,
+                ocrText = { ocrEvidence.text },
+            )
         } else {
             detect(ocrEvidence, capture.visual)?.let { detection ->
                 UpstreamScreenStateRecovery.FreshScreenClassification(

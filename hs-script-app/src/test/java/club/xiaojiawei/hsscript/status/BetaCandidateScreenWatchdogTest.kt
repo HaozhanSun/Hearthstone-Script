@@ -134,6 +134,65 @@ class BetaCandidateScreenWatchdogTest {
     }
 
     @Test
+    fun `opponent disconnect dialog uses exact 119999 and 120000 second-stage boundary`() {
+        val watchdog = BetaCandidateScreenWatchdog()
+        val dialog = candidate(
+            nowMs = 0L,
+            screen = "START_GAME_ERROR_DIALOG",
+            dialogScreen = "START_GAME_ERROR_DIALOG",
+            currentSessionReady = false,
+            noActiveMatchmakingEvidence = true,
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(dialog).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            watchdog.observe(dialog.copy(nowMs = 119_999L)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(dialog.copy(nowMs = 120_000L)).action,
+        )
+    }
+
+    @Test
+    fun `season rank reward overlay is restartable only with terminal proof and current session`() {
+        val watchdog = BetaCandidateScreenWatchdog()
+        val reward = candidate(
+            nowMs = 0L,
+            screen = "SEASON_RANK_AWARD_REWARDS",
+            dialogScreen = "SEASON_RANK_AWARD_REWARDS",
+            terminal = true,
+            currentSessionReady = true,
+            noActiveMatchmakingEvidence = true,
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(reward).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            watchdog.observe(reward.copy(nowMs = 119_999L)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(reward.copy(nowMs = 120_000L)).action,
+        )
+
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_TERMINAL,
+            BetaCandidateScreenWatchdog().observe(reward.copy(terminal = false)).action,
+            "reward-looking screen without terminal proof must not restart",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_MATCHMAKING,
+            BetaCandidateScreenWatchdog().observe(reward.copy(noActiveMatchmakingEvidence = false)).action,
+            "a fresh queue visual must fence reward-overlay restart",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
+            BetaCandidateScreenWatchdog().observe(reward.copy(paused = true)).action,
+            "manual pause must fence reward-overlay restart",
+        )
+    }
+
+    @Test
     fun `empty-session constructed deck screen is restartable only as an explicitly authorized stalled candidate`() {
         val watchdog = BetaCandidateScreenWatchdog()
         val stuckDeck = candidate(

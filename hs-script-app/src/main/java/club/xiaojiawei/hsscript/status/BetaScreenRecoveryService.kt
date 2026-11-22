@@ -260,9 +260,10 @@ internal object BetaScreenRecoveryService {
         }
         if (decision.action != BetaCandidateScreenWatchdog.Action.RESTART) return
         if (!candidateRestartStillSafe(observation)) {
+            val restartFenceReason = candidateRestartFenceReason(observation) ?: "runtime-fence-changed"
             candidateScreenWatchdog.reset()
             log.warn {
-                "BETA_CANDIDATE_SCREEN_RESTART_DEFERRED reason=runtime-fence-changed " +
+                "BETA_CANDIDATE_SCREEN_RESTART_DEFERRED reason=$restartFenceReason " +
                     "action=NO_RESTART pid=${observation?.pid ?: "none"} hwnd=${observation?.hwnd ?: "none"}"
             }
             return
@@ -309,22 +310,66 @@ internal object BetaScreenRecoveryService {
         )
     }
 
-    private fun candidateRestartStillSafe(observation: ScreenStateRecovery.FreshScreenObservation?): Boolean {
-        if (!BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL) ||
-            observation == null || !WorkTimeListener.working || PauseStatus.isPause ||
-            observation.currentSessionReady ||
-            WarEx.inWar || WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD ||
-            !observation.noActiveMatchmakingEvidence
-        ) return false
+    private fun candidateRestartStillSafe(observation: ScreenStateRecovery.FreshScreenObservation?): Boolean =
+        candidateRestartFenceReason(observation) == null
+
+    /**
+     * Keep the full-close restart narrow at the final dispatch boundary.
+     * Ordinary pre-session candidates still require an empty/unready session;
+     * the two explicit exceptions are (a) an opponent-disconnect/start-error
+     * dialog with no current session and (b) a terminal season-rank reward
+     * stage with current-session and terminal proof.  A queue visual, active
+     * game, mulligan, or manual pause always wins and blocks the restart.
+     */
+    private fun candidateRestartFenceReason(
+        observation: ScreenStateRecovery.FreshScreenObservation?,
+    ): String? {
+        if (!BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL)) return "non-beta-channel"
+        if (observation == null) return "observation-missing"
+        if (!WorkTimeListener.working) return "worker-not-working"
+        if (PauseStatus.isPause) return "manual-pause"
+        if (WarEx.inWar) return "active-game"
+        if (WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD) return "mulligan"
+        if (!observation.noActiveMatchmakingEvidence) return "active-matchmaking-evidence"
+
+        val screen = observation.screen.uppercase()
         val terminalState = GameUtil.isTerminalGameState() || WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER
-        val terminalScreen = observation.screen.equals("RESULT", ignoreCase = true) ||
-            observation.screen.equals("RANK_PROGRESS_CONTINUATION", ignoreCase = true)
-        if (terminalState && !(terminalScreen && observation.currentSessionReady)) return false
-        if (terminalScreen && !(terminalState && observation.currentSessionReady)) return false
+        val terminalScreen = screen in setOf(
+            "RESULT",
+            "RANK_PROGRESS_CONTINUATION",
+            "SEASON_RANK_AWARD",
+            "SEASON_RANK_AWARD_CHEST",
+            "SEASON_RANK_AWARD_REWARDS",
+        )
+        val opponentDisconnectDialog = screen in setOf(
+            "START_GAME_ERROR_DIALOG",
+            "RECONNECT_FAILURE",
+        )
+        if (terminalState && !(terminalScreen && observation.currentSessionReady)) {
+            return "terminal-proof-or-screen-missing"
+        }
+        if (terminalScreen && !(terminalState && observation.currentSessionReady)) {
+            return "terminal-reward-proof-missing"
+        }
+        if (opponentDisconnectDialog && observation.currentSessionReady) {
+            return "opponent-disconnect-current-session-not-empty"
+        }
+        if (!terminalScreen && !opponentDisconnectDialog && observation.currentSessionReady) {
+            return "current-session-ready"
+        }
+        if (!terminalScreen && !opponentDisconnectDialog && terminalState) {
+            return "terminal-state-without-terminal-screen"
+        }
         val currentPid = GameUtil.findGameProcessIdForDiagnostics()
         val currentHwnd = ScriptStatus.gameHWND
-        return currentPid == observation.pid && currentHwnd?.toString() == observation.hwnd &&
-            GameUtil.isVerifiedCurrentGameWindow(currentHwnd, observation.pid)
+        val pidMatches = currentPid == observation.pid
+        val hwndMatches = currentHwnd?.toString() == observation.hwnd
+        if (!pidMatches) return "pid-changed"
+        if (!hwndMatches) return "hwnd-changed"
+        if (!GameUtil.isVerifiedCurrentGameWindow(currentHwnd, observation.pid)) {
+            return "current-window-unverified"
+        }
+        return null
     }
 
     private val HEALTHY_CANDIDATE_SCREENS = setOf(
