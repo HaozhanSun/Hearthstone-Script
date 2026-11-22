@@ -311,6 +311,50 @@ internal object BetaScreenRecoveryService {
     }
 
     /**
+     * Deterministic production-dispatch seam.  The live monitor uses the
+     * default process/window providers above; tests may supply an exact
+     * captured PID/HWND and a restart recorder without touching the desktop.
+     */
+    internal fun dispatchCandidateRestartForTest(
+        decision: BetaCandidateScreenWatchdog.Decision,
+        observation: ScreenStateRecovery.FreshScreenObservation?,
+        currentPid: Long,
+        currentHwnd: String,
+        currentWindowVerified: Boolean,
+        restartAction: () -> Unit,
+    ): Boolean {
+        if (decision.action != BetaCandidateScreenWatchdog.Action.RESTART) return false
+        if (!candidateRestartStillSafe(
+                observation,
+                currentPidOverride = currentPid,
+                currentHwndOverride = currentHwnd,
+                currentWindowVerifiedOverride = currentWindowVerified,
+                betaChannelOverride = true,
+                workingOverride = true,
+                pausedOverride = false,
+                inWarOverride = false,
+            )) return false
+        restartAction()
+        return true
+    }
+
+    internal fun candidateRestartFenceReasonForDispatchTest(
+        observation: ScreenStateRecovery.FreshScreenObservation,
+        currentPid: Long,
+        currentHwnd: String,
+        currentWindowVerified: Boolean,
+    ): String? = candidateRestartFenceReason(
+        observation,
+        currentPidOverride = currentPid,
+        currentHwndOverride = currentHwnd,
+        currentWindowVerifiedOverride = currentWindowVerified,
+        betaChannelOverride = true,
+        workingOverride = true,
+        pausedOverride = false,
+        inWarOverride = false,
+    )
+
+    /**
      * Reconcile stale queue latches only after a fresh, structurally authorized
      * pre-session deck-selection frame.  The watchdog is read-only here: a
      * real SEARCHING frame, current session, modal, pause, or unverified frame
@@ -393,7 +437,8 @@ internal object BetaScreenRecoveryService {
             // current Power.log/session is readable; otherwise they must not
             // veto the bounded empty-session startup candidate.
             terminal = (effectiveObservation?.currentSessionReady == true &&
-                (GameUtil.isTerminalGameState() || WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER)) ||
+                (GameUtil.isTerminalGameState() || WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER ||
+                    PowerLogListener.hasVerifiedCurrentGameTerminalOutcome())) ||
                 hasAuthorizedTerminalVisualProof(effectiveObservation),
             currentSessionReady = effectiveObservation?.currentSessionReady == true,
             noActiveMatchmakingEvidence = effectiveObservation?.noActiveMatchmakingEvidence == true &&
@@ -476,8 +521,25 @@ internal object BetaScreenRecoveryService {
         observation.pid > 0L && observation.hwnd.isNotBlank() &&
         !WarEx.inWar && WarEx.war.currentPhase != WarPhaseEnum.REPLACE_CARD
 
-    private fun candidateRestartStillSafe(observation: ScreenStateRecovery.FreshScreenObservation?): Boolean =
-        candidateRestartFenceReason(observation) == null
+    private fun candidateRestartStillSafe(
+        observation: ScreenStateRecovery.FreshScreenObservation?,
+        currentPidOverride: Long? = null,
+        currentHwndOverride: String? = null,
+        currentWindowVerifiedOverride: Boolean? = null,
+        betaChannelOverride: Boolean? = null,
+        workingOverride: Boolean? = null,
+        pausedOverride: Boolean? = null,
+        inWarOverride: Boolean? = null,
+    ): Boolean = candidateRestartFenceReason(
+        observation,
+        currentPidOverride,
+        currentHwndOverride,
+        currentWindowVerifiedOverride,
+        betaChannelOverride,
+        workingOverride,
+        pausedOverride,
+        inWarOverride,
+    ) == null
 
     /**
      * Keep the full-close restart narrow at the final dispatch boundary.
@@ -489,11 +551,20 @@ internal object BetaScreenRecoveryService {
      */
     private fun candidateRestartFenceReason(
         observation: ScreenStateRecovery.FreshScreenObservation?,
+        currentPidOverride: Long? = null,
+        currentHwndOverride: String? = null,
+        currentWindowVerifiedOverride: Boolean? = null,
+        betaChannelOverride: Boolean? = null,
+        workingOverride: Boolean? = null,
+        pausedOverride: Boolean? = null,
+        inWarOverride: Boolean? = null,
     ): String? {
-        val currentPid = GameUtil.findGameProcessIdForDiagnostics()
+        val currentPid = currentPidOverride ?: GameUtil.findGameProcessIdForDiagnostics()
         val currentHwnd = ScriptStatus.gameHWND
+        val currentHwndText = currentHwndOverride ?: currentHwnd?.toString()
         val terminalLatch = GameUtil.isTerminalGameState() ||
-            WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER
+            WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER ||
+            PowerLogListener.hasVerifiedCurrentGameTerminalOutcome()
         val latestPowerLog = GameUtil.getLatestLogDir()?.resolve(GAME_WAR_LOG_NAME)
         val currentSessionReady = observation?.currentSessionReady == true ||
             CurrentGameScreenReadinessPolicy.isReady(
@@ -505,11 +576,11 @@ internal object BetaScreenRecoveryService {
         val activeQueueEvidence = hasCurrentCandidateQueueEvidence()
         return BetaCandidateRestartFencePolicy.rejectionReason(
             BetaCandidateRestartFencePolicy.Snapshot(
-                betaChannel = BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL),
+                betaChannel = betaChannelOverride ?: BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL),
                 observationPresent = observation != null,
-                working = WorkTimeListener.working,
-                paused = PauseStatus.isPause,
-                inWar = WarEx.inWar,
+                working = workingOverride ?: WorkTimeListener.working,
+                paused = pausedOverride ?: PauseStatus.isPause,
+                inWar = inWarOverride ?: WarEx.inWar,
                 mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
                 noActiveMatchmakingEvidence = observation?.noActiveMatchmakingEvidence == true && !activeQueueEvidence,
                 currentSessionReady = currentSessionReady,
@@ -519,9 +590,9 @@ internal object BetaScreenRecoveryService {
                 authorizedTerminalVisualProof = hasAuthorizedTerminalVisualProof(observation),
                 foregroundConfirmed = observation?.foregroundConfirmed == true,
                 pidMatches = observation != null && currentPid == observation.pid,
-                hwndMatches = observation != null && currentHwnd?.toString() == observation.hwnd,
-                currentWindowVerified = observation != null &&
-                    GameUtil.isVerifiedCurrentGameWindow(currentHwnd, observation.pid),
+                hwndMatches = observation != null && currentHwndText == observation.hwnd,
+                currentWindowVerified = currentWindowVerifiedOverride ?: (observation != null &&
+                    GameUtil.isVerifiedCurrentGameWindow(currentHwnd, observation.pid)),
             ),
         )
     }

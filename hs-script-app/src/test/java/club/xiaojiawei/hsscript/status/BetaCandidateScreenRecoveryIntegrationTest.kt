@@ -14,6 +14,7 @@ import org.junit.jupiter.api.AfterEach
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -444,6 +445,112 @@ class BetaCandidateScreenRecoveryIntegrationTest {
             recoverySource.indexOf("GameUtil.dismissStaleGameEndScreen(", rankBranch) > rankBranch,
             "the normal rank branch must dispatch bounded Continue cleanup before watchdog restart is considered",
         )
+    }
+
+    @Test
+    fun `authoritative Power log plus live Platinum 9 frame reaches one guarded restart at the boundary`() {
+        val fixture = requireNotNull(
+            javaClass.getResourceAsStream("/offline-ocr/screen-recovery/beta-live-platinum9-rank-reward-20261122-082555.png"),
+        ).use(ImageIO::read)
+        assertEquals("RANK_PROGRESS_CONTINUATION", UpstreamScreenStateRecovery.classifyImageForResultFixture(fixture))
+
+        // Reconstruct the same CREATE_GAME-scoped terminal proof used by the
+        // live listener.  The outcome is CONCEDED (not a win), and only the
+        // terminal UI cleanup authority is exercised here.
+        PowerLogListener.observeCurrentGameTerminalEvidenceLine("D 08:17:00.000 PowerTaskList.DebugPrintPower() - CREATE_GAME")
+        PowerLogListener.observeCurrentGameTerminalEvidenceLine("Player EntityID=1 PlayerID=1 GameAccountId=[hi=12 lo=34]")
+        PowerLogListener.observeCurrentGameTerminalEvidenceLine("PlayerID=1, PlayerName=laz#12793")
+        PowerLogListener.observeCurrentGameTerminalEvidenceLine("D 08:17:21.000 TAG_CHANGE Entity=laz#12793 tag=PLAYSTATE value=CONCEDED")
+        PowerLogListener.observeCurrentGameTerminalEvidenceLine("D 08:17:21.100 TAG_CHANGE Entity=GameEntity tag=STEP value=FINAL_GAMEOVER")
+        PowerLogListener.observeCurrentGameTerminalEvidenceLine("D 08:17:21.200 TAG_CHANGE Entity=GameEntity tag=STATE value=COMPLETE")
+        assertNotNull(PowerLogListener.bindVerifiedLocalMulliganEntity("laz#12793"))
+        assertTrue(PowerLogListener.hasVerifiedCurrentGameTerminalOutcome())
+        assertEquals("CONCEDED", PowerLogListener.currentGameTerminalForVerifiedLocalPlayer()?.name)
+        assertTrue(
+            PowerLogListener.confirmCurrentGameTerminalDestination(
+                screenKind = "RANK_PROGRESS_CONTINUATION",
+                confidence = 96,
+                freshCaptureAuthorized = true,
+                resultPageEvidenceVisible = true,
+            ),
+            "fresh result proof releases only the terminal input fence; it does not create a win",
+        )
+
+        val observation = ScreenStateRecovery.FreshScreenObservation(
+            screen = "RANK_PROGRESS_CONTINUATION",
+            mode = "GAMEPLAY",
+            confidence = 96,
+            evidence = "post-result-rank-progress-visual",
+            pid = 31_000L,
+            hwnd = "0x27010",
+            screenshot = "beta-live-platinum9-rank-reward-20261122-082555.png",
+            perceptualFingerprint = 0x082555L,
+            currentSessionReady = true,
+            noActiveMatchmakingEvidence = true,
+            hubModeChooserVisible = false,
+            modalVisible = true,
+            foregroundConfirmed = true,
+        )
+        val first = BetaScreenRecoveryService.candidateSnapshotForTest(0L, observation)
+            .copy(working = true, paused = false)
+        assertTrue(first.terminal, "terminal must come from the current CREATE_GAME Power.log proof")
+        val watchdog = BetaCandidateScreenWatchdog()
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(first).action)
+        assertEquals(BetaCandidateScreenWatchdog.Action.WAIT, watchdog.observe(first.copy(nowMs = 119_999L)).action)
+        val threshold = watchdog.observe(first.copy(nowMs = 120_000L))
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESTART, threshold.action)
+
+        val restarts = mutableListOf<String>()
+        assertNull(
+            BetaScreenRecoveryService.candidateRestartFenceReasonForDispatchTest(
+                observation,
+                currentPid = observation.pid,
+                currentHwnd = observation.hwnd,
+                currentWindowVerified = true,
+            ),
+            "the guarded production seam must allow only the verified terminal frame",
+        )
+        assertTrue(
+            BetaScreenRecoveryService.dispatchCandidateRestartForTest(
+                decision = threshold,
+                observation = observation,
+                currentPid = observation.pid,
+                currentHwnd = observation.hwnd,
+                currentWindowVerified = true,
+                restartAction = { restarts += "beta-close-and-canonical-starter-chain" },
+            ),
+        )
+        assertEquals(listOf("beta-close-and-canonical-starter-chain"), restarts)
+
+        val queue = BetaScreenRecoveryService.candidateSnapshotForTest(
+            120_001L,
+            observation.copy(screen = "MATCHMAKING", noActiveMatchmakingEvidence = false),
+        ).copy(working = true, paused = false)
+        assertEquals(BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_MATCHMAKING, BetaCandidateScreenWatchdog().observe(queue).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_GAME,
+            BetaCandidateScreenWatchdog().observe(first.copy(inWar = true)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
+            BetaCandidateScreenWatchdog().observe(first.copy(paused = true)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_TERMINAL,
+            BetaCandidateScreenWatchdog().observe(first.copy(terminal = false)).action,
+        )
+        assertTrue(
+            !BetaScreenRecoveryService.dispatchCandidateRestartForTest(
+                threshold.copy(action = BetaCandidateScreenWatchdog.Action.RESTART),
+                observation.copy(pid = 31_001L),
+                currentPid = observation.pid,
+                currentHwnd = observation.hwnd,
+                currentWindowVerified = true,
+                restartAction = { restarts += "changed-identity" },
+            ),
+            "changed PID must not invoke the restart chain",
+        )
+        assertEquals(listOf("beta-close-and-canonical-starter-chain"), restarts)
     }
 
     @Test
@@ -1000,8 +1107,8 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         )
         assertTrue(
             service.contains("pidMatches = observation != null && currentPid == observation.pid") &&
-                service.contains("hwndMatches = observation != null && currentHwnd?.toString() == observation.hwnd") &&
-                service.contains("currentWindowVerified = observation != null") &&
+                service.contains("hwndMatches = observation != null && currentHwndText == observation.hwnd") &&
+                service.contains("currentWindowVerified = currentWindowVerifiedOverride ?: (observation != null") &&
                 service.contains("BetaCandidateRestartFencePolicy.rejectionReason"),
             "candidate restart must bind the exact current Beta Hearthstone PID/HWND before close",
         )
