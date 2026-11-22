@@ -111,8 +111,16 @@ try {
     } }
     $startNewRuntime = {
         param($Launcher, $WorkingDirectory)
-        Assert-Equal $launcherPath $Launcher 'post-deploy launch uses canonical manifest-backed VBS'
-        Assert-Equal $runtimeRoot $WorkingDirectory 'canonical launcher starts from Beta runtime root'
+        # This callback is invoked from a module-owned closure where the
+        # test-local Assert-Equal function is not in scope. Keep the same
+        # fail-fast assertions inline rather than allowing a missing helper
+        # to mask an incorrect launcher or working directory.
+        if ($launcherPath -ne $Launcher) {
+            throw "post-deploy launch uses canonical manifest-backed VBS expected=[$launcherPath] actual=[$Launcher]"
+        }
+        if ($runtimeRoot -ne $WorkingDirectory) {
+            throw "canonical launcher starts from Beta runtime root expected=[$runtimeRoot] actual=[$WorkingDirectory]"
+        }
         $launcherCalls.Add($Launcher) | Out-Null
         $newMarker = @{
             processId = 77011; processStartTimeUtc = $newStart; executablePath = $javaPath
