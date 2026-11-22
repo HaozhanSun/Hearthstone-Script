@@ -83,16 +83,16 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
     }
 
     @Test
-    fun `three second settings settle never bypasses fresh exact settings confirmation`() {
+    fun `five second settings settle never bypasses fresh exact settings confirmation`() {
         val settings = readFixture("rank6-live-mulligan-settings-overlay.png")
         val state = "mode=GAMEPLAY|inWar=true|warPhase=REPLACE_CARD|myTurn=false|myMulliganInput=true"
         val probe = ScreenWatchdog.MandatorySurrenderPostClickProbe()
         val gearClickAt = 200_000L
         probe.markSettingsClickDispatched(gearClickAt)
 
-        assertFalse(probe.settingsOverlayProbeTiming(gearClickAt + 2_999L)!!.shouldInspect)
-        assertEquals(3_000L, ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_SETTLE_MS)
-        val due = probe.settingsOverlayProbeTiming(gearClickAt + 3_000L)
+        assertFalse(probe.settingsOverlayProbeTiming(gearClickAt + 4_999L)!!.shouldInspect)
+        assertEquals(5_000L, ScreenWatchdog.MandatorySurrenderPostClickProbe.SETTINGS_OVERLAY_SETTLE_MS)
+        val due = probe.settingsOverlayProbeTiming(gearClickAt + 5_000L)
         assertTrue(due!!.shouldInspect)
 
         val freshScreen = ScreenWatchdog.classifyForSurrenderForTest(
@@ -105,8 +105,8 @@ class MandatoryRankSurrenderRecoveryPolicyTest {
             MandatoryRankSurrenderRecoveryPolicy.Action.CLICK_SURRENDER,
             MandatoryRankSurrenderRecoveryPolicy.decide(freshScreen).action,
         )
-        probe.finishSettingsOverlayProbe(settingsConfirmed = true, now = gearClickAt + 3_000L)
-        assertEquals(null, probe.settingsOverlayProbeTiming(gearClickAt + 3_001L))
+        probe.finishSettingsOverlayProbe(settingsConfirmed = true, now = gearClickAt + 5_000L)
+        assertEquals(null, probe.settingsOverlayProbeTiming(gearClickAt + 5_001L))
     }
 
     @Test
