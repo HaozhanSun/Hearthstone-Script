@@ -30,7 +30,9 @@ import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.File
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
 import net.sourceforge.tess4j.Tesseract
@@ -79,6 +81,7 @@ object ScreenStateRecovery {
     private const val RECOVERY_POSTCHECK_TIMEOUT_MS = 3_000L
     private const val RECOVERY_POSTCHECK_POLL_MS = 300L
     private const val STARTUP_QUEST_OVERLAY_MAX_PROBES = StartupQuestOverlayRecoveryFence.MAX_REOBSERVATIONS
+    private const val BETA_CANDIDATE_OCR_TIMEOUT_MS = 12_000L
     private const val RECONNECT_SPINNER_CHECK_DELAY_MS = 10_000L
     /**
      * The client displays a distinct slow-connection warning only after a
@@ -104,6 +107,7 @@ object ScreenStateRecovery {
     private val startGameErrorProbeInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     private val startupMenuReprobeInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     private val startupMenuReprobePending = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val betaCandidateOcrInFlight = AtomicBoolean(false)
 
     private enum class ScreenKind(val code: String) {
         DECK_SELECTION("DECK_SELECTION"),
@@ -391,29 +395,46 @@ object ScreenStateRecovery {
         if (GameUtil.findGameProcessIdForDiagnostics() != initialPid ||
             !GameUtil.isVerifiedCurrentGameWindow(gameWindow)
         ) return null
-        val visualDeckSelectionCandidate = capture.purpose in setOf(
-            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
-            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
-            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
-        ) && DeckStrategyManager.currentDeckStrategy != null &&
-            DeckStrategyManager.currentRunMode != null &&
-            !capture.visual.startupQuestOverlayVisual &&
-            !capture.visual.matchmakingSearchVisual &&
-            !capture.visual.centeredModalPanelVisual &&
-            ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image)
-        val visualClassification = if (visualDeckSelectionCandidate) {
-            UpstreamScreenStateRecovery.FreshScreenClassification(
-                screen = "DECK_SELECTION",
-                mode = ModeEnum.TOURNAMENT.name,
-                confidence = 94,
-                evidence = "deck-selection-start-control-visual",
+        // The structural visual classifier and bounded OCR are deliberately
+        // limited to the Beta candidate watchdog. Generic recovery callers
+        // retain their existing OCR/detect semantics (including Stable/RC).
+        val visualClassification = if (useUpstreamClassifier) {
+            classifyBetaCandidateVisual(
+                currentSessionReady = capture.evidence.currentSessionReady,
+                purpose = capture.purpose,
+                image = capture.image,
+                visual = capture.visual,
             )
-        } else null
+        } else {
+            // Preserve the pre-existing generic recovery deck-screen shortcut
+            // for Stable/RC and non-candidate callers; the new launcher branch
+            // remains Beta-candidate-only.
+            val visualDeckSelectionCandidate = capture.purpose in setOf(
+                ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+                ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+                ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+            ) && DeckStrategyManager.currentDeckStrategy != null &&
+                DeckStrategyManager.currentRunMode != null &&
+                !capture.visual.startupQuestOverlayVisual &&
+                !capture.visual.matchmakingSearchVisual &&
+                !capture.visual.centeredModalPanelVisual &&
+                ScreenWatchdog.hasEnabledDeckSelectionStartButton(capture.image)
+            if (visualDeckSelectionCandidate) {
+                UpstreamScreenStateRecovery.FreshScreenClassification(
+                    screen = "DECK_SELECTION",
+                    mode = ModeEnum.TOURNAMENT.name,
+                    confidence = 94,
+                    evidence = "deck-selection-start-control-visual",
+                )
+            } else null
+        }
         // A fresh structural deck-screen proof is authoritative and avoids a
         // 20+ second OCR probe.  OCR remains the fallback for all other
         // screens and is still required for text-only classifications.
         val ocrEvidence = if (visualClassification == null) {
-            runCatching { runOCR(capture) }.getOrElse { error ->
+            runCatching {
+                if (useUpstreamClassifier) runCandidateOcrBounded(capture) else runOCR(capture)
+            }.getOrElse { error ->
                 log.warn(error) {
                     "BETA_CANDIDATE_SCREEN_OCR_EXCEPTION action=WAIT_UNCERTAIN " +
                         "pid=$initialPid hwnd=$gameWindow"
@@ -485,6 +506,74 @@ object ScreenStateRecovery {
     }
 
     /**
+     * Tesseract has no cancellable API. Run the candidate-only OCR fallback
+     * on a daemon thread with a hard join deadline so one malformed launcher
+     * frame cannot stop the ten-second watchdog. A timed-out native call is
+     * never reused for authorization; subsequent probes wait until it exits.
+     */
+    private fun runCandidateOcrBounded(capture: Capture): OcrEvidence =
+        runCandidateOcrBoundedProbe(probe = { runOCR(capture) })
+
+    private fun runCandidateOcrBoundedProbe(
+        probe: () -> OcrEvidence,
+        timeoutMs: Long = BETA_CANDIDATE_OCR_TIMEOUT_MS,
+    ): OcrEvidence {
+        if (!betaCandidateOcrInFlight.compareAndSet(false, true)) {
+            log.warn {
+                "BETA_CANDIDATE_SCREEN_OCR_SKIPPED reason=probe-in-flight " +
+                    "action=WAIT_UNCERTAIN timeoutMs=$timeoutMs"
+            }
+            return OcrEvidence("", emptyMap(), ResultProbeOcrTimings(path = "IN_FLIGHT"))
+        }
+        val result = AtomicReference<OcrEvidence?>(null)
+        val failure = AtomicReference<Throwable?>(null)
+        val worker = Thread({
+            try {
+                result.set(probe())
+            } catch (error: Throwable) {
+                failure.set(error)
+            } finally {
+                betaCandidateOcrInFlight.set(false)
+            }
+        }, "BetaCandidateOcr")
+        worker.isDaemon = true
+        worker.start()
+        try {
+            worker.join(timeoutMs.coerceAtLeast(1L))
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            worker.interrupt()
+            log.warn {
+                "BETA_CANDIDATE_SCREEN_OCR_INTERRUPTED action=WAIT_UNCERTAIN " +
+                    "timeoutMs=$timeoutMs"
+            }
+            return OcrEvidence("", emptyMap(), ResultProbeOcrTimings(path = "INTERRUPTED"))
+        }
+        if (worker.isAlive) {
+            worker.interrupt()
+            log.warn {
+                "BETA_CANDIDATE_SCREEN_OCR_TIMEOUT action=WAIT_UNCERTAIN " +
+                    "timeoutMs=$timeoutMs"
+            }
+            return OcrEvidence("", emptyMap(), ResultProbeOcrTimings(path = "TIMEOUT"))
+        }
+        failure.get()?.let { error -> throw error }
+        return result.get() ?: OcrEvidence("", emptyMap(), ResultProbeOcrTimings(path = "EMPTY"))
+    }
+
+    internal fun candidateOcrTimeoutMsForTest(): Long = BETA_CANDIDATE_OCR_TIMEOUT_MS
+
+    /** Deterministic timeout seam; production still supplies the native OCR probe. */
+    internal fun runCandidateOcrBoundedForTest(timeoutMs: Long, probe: () -> Unit): String =
+        runCandidateOcrBoundedProbe(
+            probe = {
+                probe()
+                OcrEvidence("", emptyMap(), ResultProbeOcrTimings(path = "COMPLETED"))
+            },
+            timeoutMs = timeoutMs,
+        ).resultProbeTimings.path
+
+    /**
      * Candidate-watchdog queue authority: a long-lived input intent is only
      * meaningful once the current session is readable. Visual SEARCHING, a
      * fresh active-screen observation, and the short entry race remain
@@ -498,6 +587,61 @@ object ScreenStateRecovery {
         recentInputIntent: Boolean,
     ): Boolean = queueVisible || recentActiveScreen || shortEntryGuard ||
         currentSessionReady && recentInputIntent
+
+    /** Offline seam for the exact launcher screenshot used by the Beta incident. */
+    internal fun classifyBetaCandidateVisualForTest(
+        image: BufferedImage,
+        currentSessionReady: Boolean = false,
+    ): UpstreamScreenStateRecovery.FreshScreenClassification? {
+        return classifyBetaCandidateVisual(
+            currentSessionReady = currentSessionReady,
+            purpose = ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+            image = image,
+            visual = visualSignature(image),
+        )
+    }
+
+    /** Pure visual branch shared by the production watchdog and fixture tests. */
+    private fun classifyBetaCandidateVisual(
+        currentSessionReady: Boolean,
+        purpose: ScreenRecoveryCapturePurpose,
+        image: BufferedImage,
+        visual: VisualSignature,
+    ): UpstreamScreenStateRecovery.FreshScreenClassification? {
+        val visualDeckSelectionCandidate = purpose in setOf(
+            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+        ) && DeckStrategyManager.currentDeckStrategy != null &&
+            DeckStrategyManager.currentRunMode != null &&
+            !visual.startupQuestOverlayVisual &&
+            !visual.matchmakingSearchVisual &&
+            !visual.centeredModalPanelVisual &&
+            ScreenWatchdog.hasEnabledDeckSelectionStartButton(image)
+        return when {
+            // A freshly launched client can legitimately show the Battle.net
+            // handoff while its new Power.log is still empty. This is a
+            // structural, read-only candidate only; capture authority and the
+            // final restart fence still require exact PID/HWND/foreground and
+            // no queue/game/pause evidence. Skip OCR because launcher text is
+            // not Hearthstone evidence and native OCR can hold the watchdog.
+            !currentSessionReady && visual.battleNetLauncherVisual ->
+                UpstreamScreenStateRecovery.FreshScreenClassification(
+                    screen = "STARTUP_LAUNCHER",
+                    mode = ModeEnum.LOGIN.name,
+                    confidence = 96,
+                    evidence = "battlenet-launcher-empty-session-visual",
+                )
+            visualDeckSelectionCandidate ->
+                UpstreamScreenStateRecovery.FreshScreenClassification(
+                    screen = "DECK_SELECTION",
+                    mode = ModeEnum.TOURNAMENT.name,
+                    confidence = 94,
+                    evidence = "deck-selection-start-control-visual",
+                )
+            else -> null
+        }
+    }
 
     private fun perceptualFingerprint(image: BufferedImage): Long {
         var fingerprint = 0L

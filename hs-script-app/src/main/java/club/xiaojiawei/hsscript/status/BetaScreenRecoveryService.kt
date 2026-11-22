@@ -284,7 +284,7 @@ internal object BetaScreenRecoveryService {
         val preSessionHealthyRecoveryCandidate = observation != null &&
             !observation.currentSessionReady &&
             observation.noActiveMatchmakingEvidence &&
-            observation.screen.uppercase() in setOf("HOME", "TOURNAMENT", "DECK_SELECTION")
+            observation.screen.uppercase() in setOf("HOME", "TOURNAMENT", "DECK_SELECTION", "STARTUP_LAUNCHER")
         return BetaCandidateScreenWatchdog.Snapshot(
             nowMs = now,
             screen = observation?.screen,
@@ -309,8 +309,12 @@ internal object BetaScreenRecoveryService {
             // queue evidence, is not in-war/mulligan, and carries a usable
             // capture identity.  The final restart fence still rechecks the
             // live PID/HWND/window before invoking Core.
-            terminal = GameUtil.isTerminalGameState() ||
-                WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER ||
+            // Lifecycle terminal latches can outlive a freshly launched
+            // Hearthstone process.  They are authoritative only after the
+            // current Power.log/session is readable; otherwise they must not
+            // veto the bounded empty-session startup candidate.
+            terminal = (observation?.currentSessionReady == true &&
+                (GameUtil.isTerminalGameState() || WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER)) ||
                 hasAuthorizedTerminalVisualProof(observation),
             currentSessionReady = observation?.currentSessionReady == true,
             noActiveMatchmakingEvidence = observation?.noActiveMatchmakingEvidence == true,
@@ -348,54 +352,29 @@ internal object BetaScreenRecoveryService {
     private fun candidateRestartFenceReason(
         observation: ScreenStateRecovery.FreshScreenObservation?,
     ): String? {
-        if (!BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL)) return "non-beta-channel"
-        if (observation == null) return "observation-missing"
-        if (!WorkTimeListener.working) return "worker-not-working"
-        if (PauseStatus.isPause) return "manual-pause"
-        if (WarEx.inWar) return "active-game"
-        if (WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD) return "mulligan"
-        if (!observation.noActiveMatchmakingEvidence) return "active-matchmaking-evidence"
-
-        val screen = observation.screen.uppercase()
-        val terminalState = GameUtil.isTerminalGameState() ||
-            WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER ||
-            hasAuthorizedTerminalVisualProof(observation)
-        val terminalScreen = screen in setOf(
-            "RESULT",
-            "RANK_PROGRESS_CONTINUATION",
-            "SEASON_RANK_AWARD",
-            "SEASON_RANK_AWARD_CHEST",
-            "SEASON_RANK_AWARD_REWARDS",
-        )
-        val opponentDisconnectDialog = screen in setOf(
-            "START_GAME_ERROR_DIALOG",
-            "RECONNECT_FAILURE",
-        )
-        if (terminalState && !(terminalScreen && observation.currentSessionReady)) {
-            return "terminal-proof-or-screen-missing"
-        }
-        if (terminalScreen && !(terminalState && observation.currentSessionReady)) {
-            return "terminal-reward-proof-missing"
-        }
-        if (opponentDisconnectDialog && observation.currentSessionReady) {
-            return "opponent-disconnect-current-session-not-empty"
-        }
-        if (!terminalScreen && !opponentDisconnectDialog && observation.currentSessionReady) {
-            return "current-session-ready"
-        }
-        if (!terminalScreen && !opponentDisconnectDialog && terminalState) {
-            return "terminal-state-without-terminal-screen"
-        }
         val currentPid = GameUtil.findGameProcessIdForDiagnostics()
         val currentHwnd = ScriptStatus.gameHWND
-        val pidMatches = currentPid == observation.pid
-        val hwndMatches = currentHwnd?.toString() == observation.hwnd
-        if (!pidMatches) return "pid-changed"
-        if (!hwndMatches) return "hwnd-changed"
-        if (!GameUtil.isVerifiedCurrentGameWindow(currentHwnd, observation.pid)) {
-            return "current-window-unverified"
-        }
-        return null
+        val terminalLatch = GameUtil.isTerminalGameState() ||
+            WarEx.war.currentPhase == WarPhaseEnum.GAME_OVER
+        return BetaCandidateRestartFencePolicy.rejectionReason(
+            BetaCandidateRestartFencePolicy.Snapshot(
+                betaChannel = BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL),
+                observationPresent = observation != null,
+                working = WorkTimeListener.working,
+                paused = PauseStatus.isPause,
+                inWar = WarEx.inWar,
+                mulligan = WarEx.war.currentPhase == WarPhaseEnum.REPLACE_CARD,
+                noActiveMatchmakingEvidence = observation?.noActiveMatchmakingEvidence == true,
+                currentSessionReady = observation?.currentSessionReady == true,
+                screen = observation?.screen ?: "UNKNOWN",
+                lifecycleTerminalLatch = terminalLatch,
+                authorizedTerminalVisualProof = hasAuthorizedTerminalVisualProof(observation),
+                pidMatches = observation != null && currentPid == observation.pid,
+                hwndMatches = observation != null && currentHwnd?.toString() == observation.hwnd,
+                currentWindowVerified = observation != null &&
+                    GameUtil.isVerifiedCurrentGameWindow(currentHwnd, observation.pid),
+            ),
+        )
     }
 
     private val HEALTHY_CANDIDATE_SCREENS = setOf(

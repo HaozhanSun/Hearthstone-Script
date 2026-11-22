@@ -825,3 +825,20 @@ this deletion boundary.
   the 119999/120000 ms watchdog boundary, while changed identity or ambiguous
   evidence requires a fresh baseline. Regress the captured Platinum 9 frame,
   the full Beta candidate-to-restart chain, and live-game/queue/pause fences.
+- Beta empty-session startup handoff: a fresh Battle.net launcher frame can be
+  the only visible result while the new Hearthstone Power.log is still empty.
+  The Beta candidate watchdog may classify that frame structurally as
+  `STARTUP_LAUNCHER` only after exact foreground/PID/HWND/pixel ownership has
+  been established; it must skip OCR (launcher OCR is slow and has no reliable
+  Hearthstone text), wait the full 119999/120000 ms boundary, and dispatch only
+  the existing serialized close-and-starter-chain restart. A stale terminal
+  latch from the prior session is not current-session proof and must not veto
+  this pre-session candidate. Current SEARCHING/active-game evidence, manual
+  pause, missing/exceptional OCR, changed PID/HWND, or an unverified window
+  remain hard fences. Preserve the existing post-restart mode/rank/start proof
+  barriers; this classification never authorizes matchmaking input.
+  The regression fixture `battlenet-launcher-startup-live-20261031-redacted.png`
+  uses the same launcher mark, Hearthstone hero panel, and lower-left blue
+  `In Game` control as the captured 2026-11-22 incident frame; the production
+  capture authority still requires that those pixels come from the exact
+  foreground target HWND/PID before this structural classification is used.

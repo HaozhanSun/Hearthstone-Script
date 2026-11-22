@@ -5,6 +5,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.awt.Color
 import java.awt.image.BufferedImage
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -14,6 +16,78 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class BetaCandidateScreenRecoveryIntegrationTest {
+
+    @Test
+    fun `empty-session Battle net handoff enters the bounded candidate chain without OCR`() {
+        val fixture = requireNotNull(
+            javaClass.getResourceAsStream("/offline-ocr/screen-recovery/battlenet-launcher-startup-live-20261031-redacted.png"),
+        ).use(ImageIO::read)
+        assertTrue(BattleNetLauncherVisualPolicy.isVisible(fixture))
+
+        val classification = requireNotNull(
+            ScreenStateRecovery.classifyBetaCandidateVisualForTest(fixture, currentSessionReady = false),
+        )
+        assertEquals("STARTUP_LAUNCHER", classification.screen)
+        assertEquals(96, classification.confidence)
+        assertEquals("battlenet-launcher-empty-session-visual", classification.evidence)
+        assertNull(
+            ScreenStateRecovery.classifyBetaCandidateVisualForTest(fixture, currentSessionReady = true),
+            "the launcher visual is a pre-session handoff proof only",
+        )
+
+        val observation = ScreenStateRecovery.FreshScreenObservation(
+            screen = requireNotNull(classification.screen),
+            mode = classification.mode,
+            confidence = classification.confidence,
+            evidence = classification.evidence,
+            pid = 33888L,
+            hwnd = "native@0x13a07f4",
+            screenshot = "battlenet-launcher-startup-live-20261031-redacted.png",
+            perceptualFingerprint = 0x015028L,
+            currentSessionReady = false,
+            noActiveMatchmakingEvidence = true,
+            hubModeChooserVisible = false,
+            modalVisible = false,
+        )
+        val watchdog = BetaCandidateScreenWatchdog()
+        val first = BetaScreenRecoveryService.candidateSnapshotForTest(0L, observation)
+            .copy(working = true, paused = false)
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(first).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            watchdog.observe(first.copy(nowMs = 119_999L)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(first.copy(nowMs = 120_000L)).action,
+            "the exact launcher handoff can reach the existing serialized restart chain only after two minutes",
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_MATCHMAKING,
+            BetaCandidateScreenWatchdog().observe(first.copy(noActiveMatchmakingEvidence = false)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
+            BetaCandidateScreenWatchdog().observe(first.copy(paused = true)).action,
+        )
+
+        val recoverySource = Files.readString(sourceRootFrom(Path.of("")).resolve(
+            "src/main/java/club/xiaojiawei/hsscript/status/ScreenStateRecovery.kt",
+        ))
+        assertTrue(
+            recoverySource.contains("battlenet-launcher-empty-session-visual") &&
+                recoverySource.contains("visual.battleNetLauncherVisual"),
+            "the production candidate callsite must classify the launcher structurally before OCR",
+        )
+        val serviceSource = Files.readString(sourceRootFrom(Path.of("")).resolve(
+            "src/main/java/club/xiaojiawei/hsscript/status/BetaScreenRecoveryService.kt",
+        ))
+        assertTrue(
+            serviceSource.contains("observation.currentSessionReady &&") &&
+                serviceSource.contains("hasAuthorizedTerminalVisualProof(observation)"),
+            "the final restart fence must ignore stale terminal latches for an empty-session launcher",
+        )
+    }
 
     @Test
     fun `centered modal fingerprint ignores animated underlay but changes with modal content`() {
@@ -146,6 +220,7 @@ class BetaCandidateScreenRecoveryIntegrationTest {
 
     @Test
     fun `OCR exception is contained as unknown and cannot authorize a candidate restart`() {
+        assertEquals(12_000L, ScreenStateRecovery.candidateOcrTimeoutMsForTest())
         val frame = BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB)
         val classification = UpstreamScreenStateRecovery.classifyFreshScreenForWatchdogSafely(
             image = frame,
@@ -178,6 +253,40 @@ class BetaCandidateScreenRecoveryIntegrationTest {
                 ),
             ).action,
         )
+    }
+
+    @Test
+    fun `bounded candidate OCR timeout keeps later monitor probes responsive`() {
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val timedOut = ScreenStateRecovery.runCandidateOcrBoundedForTest(timeoutMs = 50L, probe = {
+            started.countDown()
+            // Native OCR may ignore interruption; keep the surrogate in-flight
+            // until the explicit release so the single-flight guard is tested.
+            var interrupted = false
+            while (true) {
+                try {
+                    if (release.await(25, TimeUnit.MILLISECONDS)) break
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+            if (interrupted) Thread.currentThread().interrupt()
+        })
+        assertTrue(started.await(1, TimeUnit.SECONDS))
+        assertEquals("TIMEOUT", timedOut)
+
+        val inFlight = ScreenStateRecovery.runCandidateOcrBoundedForTest(timeoutMs = 50L, probe = { })
+        assertEquals("IN_FLIGHT", inFlight)
+
+        release.countDown()
+        // The daemon probe releases the single-flight gate once native OCR
+        // returns; a completed probe is accepted on the next monitor tick.
+        repeat(20) {
+            if (ScreenStateRecovery.runCandidateOcrBoundedForTest(timeoutMs = 50L, probe = { }) == "COMPLETED") return
+            Thread.sleep(10L)
+        }
+        error("timed-out candidate OCR worker did not release its single-flight gate")
     }
 
     @Test
@@ -439,15 +548,20 @@ class BetaCandidateScreenRecoveryIntegrationTest {
             "candidate restart must reject an active current session",
         )
         assertTrue(
-            service.contains("currentPid == observation.pid") &&
-                service.contains("currentHwnd?.toString() == observation.hwnd") &&
-                service.contains("GameUtil.isVerifiedCurrentGameWindow(currentHwnd, observation.pid)"),
+            service.contains("pidMatches = observation != null && currentPid == observation.pid") &&
+                service.contains("hwndMatches = observation != null && currentHwnd?.toString() == observation.hwnd") &&
+                service.contains("currentWindowVerified = observation != null") &&
+                service.contains("BetaCandidateRestartFencePolicy.rejectionReason"),
             "candidate restart must bind the exact current Beta Hearthstone PID/HWND before close",
         )
-        val safety = service.indexOf("!observation.noActiveMatchmakingEvidence")
         val restartDecision = service.indexOf("BetaCandidateScreenWatchdog.Action.RESTART")
         val restart = service.indexOf("Core.restartFromIdleWatchdog()", restartDecision)
-        assertTrue(safety >= 0, "Beta restart safety must reject active matchmaking evidence")
+        assertTrue(
+            service.contains("noActiveMatchmakingEvidence = observation?.noActiveMatchmakingEvidence == true") &&
+                Files.readString(sourceRootFrom(Path.of("")).resolve("src/main/java/club/xiaojiawei/hsscript/status/BetaCandidateRestartFencePolicy.kt"))
+                    .contains("active-matchmaking-evidence"),
+            "Beta restart safety must reject active matchmaking evidence",
+        )
         assertTrue(
             restartDecision >= 0 && restart > restartDecision,
             "Beta restart must dispatch only after the watchdog threshold decision",

@@ -320,6 +320,7 @@ internal class BetaCandidateScreenWatchdog(
             "COLLECTION",
             "GAME_MODE",
             "GAMEPLAY",
+            "STARTUP_LAUNCHER",
         )
 
         private val TERMINAL_SCREENS = setOf(
