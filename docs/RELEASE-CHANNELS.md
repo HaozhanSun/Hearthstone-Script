@@ -46,6 +46,18 @@ manifests, single-instance identities, and shortcuts.
   ownership. A missing, altered, or unrelated title still fails closed. This
   fallback is Beta-root-only and must not be applied to Stable or Release
   Candidate process handling.
+- The checked-in `build-and-deploy.ps1 -Channel beta` remains the only Beta
+  install path and fails closed while Hearthstone is present. If a normal
+  graceful-close attempt cannot clear an exact Beta-owned process, the
+  secretary may force-stop only the independently verified Beta launcher/runtime
+  PID(s), and the matching Hearthstone PID only when current Beta log/process
+  lineage proves that pairing. The secretary must first record the current
+  Beta manifest/channel/runtime root, deployment ID/hash, PIDs, and state;
+  wait for the selected PIDs to exit; verify Stable and Release Candidate
+  processes were not touched; and rerun the checked-in Beta path. Ambiguous
+  marker, manifest, command-line, start-time, runtime-root, or channel
+  identity is a hard refusal. This fallback never authorizes broad or
+  name-only termination and never applies to Stable or Release Candidate.
 
 ## Release Candidate
 

@@ -30,6 +30,14 @@ only when authority or intent remains genuinely ambiguous, and record why.
   allowlist and manual Pester gate here. The five-chest no-input rule is an
   issue-specific runtime exception retained here and its closeout, not copied
   into unrelated card-back classifier policy.
+- 2026-11-21 Beta restart fallback audit: reviewed `AGENTS.md`, this SOP,
+  `RELEASE-CHANNELS.md`, `build-and-deploy.ps1`, and
+  `beta-deployment-process-utils.ps1`. Retained the checked-in
+  `build-and-deploy.ps1 -Channel beta` path as the only install path and its
+  fail-closed game-process preflight. Added one secretary-only operational
+  fallback for a graceful-close failure: force-stop exact, independently
+  verified Beta-owned PID(s), then rerun the same checked-in path. Stable and
+  Release Candidate identities remain out of scope.
 
 ## 1. Operating model and evidence ownership
 
@@ -143,7 +151,20 @@ shortcut edit can substitute for it.
 3. Keep launch, game launch, strategy refresh, and deployment as separate
    observations. A visual-only check uses a passive launch mode when automation
    could otherwise begin gameplay.
-4. For a temporary Beta Never Surrender run, verify exact Beta channel and
+4. If a graceful close does not stop the exact Beta process, the secretary may
+   use a bounded force-stop fallback before rerunning the release path. First
+   record the current Beta manifest/channel/runtime root, deployment ID and
+   hash, app PID, Hearthstone PID (only when the Beta app's current log/process
+   lineage pairs it), and a fresh state observation. Force-stop only the exact
+   verified Beta launcher/runtime PID(s); include the paired Hearthstone PID
+   only when that same lineage check requires it. Never use executable-name-only
+   or broad Java/Hearthstone termination, and never stop Stable or Release
+   Candidate processes. Wait for both selected PIDs to exit, verify the Stable
+   and Release Candidate processes remain untouched, then rerun
+   `build-and-deploy.ps1 -Channel beta` normally. Any ambiguous marker,
+   manifest, command line, start time, runtime root, or channel identity is a
+   hard refusal requiring operator review.
+5. For a temporary Beta Never Surrender run, verify exact Beta channel and
    deployment identity, fresh numeric rank evidence, and an active Debug Run
    lease with an absolute start/deadline span of exactly 30 minutes. Require
    elevated watchdog `READY` for the same run ID, deployment ID, and process
