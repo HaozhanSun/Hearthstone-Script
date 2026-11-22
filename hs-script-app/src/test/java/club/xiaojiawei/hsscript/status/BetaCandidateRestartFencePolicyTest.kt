@@ -124,6 +124,13 @@ class BetaCandidateRestartFencePolicyTest {
             ),
         )
         assertEquals(
+            "active-game",
+            BetaCandidateRestartFencePolicy.rejectionReason(
+                pendingMulligan.copy(inWar = true, screen = "UNKNOWN"),
+            ),
+            "phase/barrier state alone must not authorize a restart without the exact Mulligan screen",
+        )
+        assertEquals(
             "manual-pause",
             BetaCandidateRestartFencePolicy.rejectionReason(pendingMulligan.copy(paused = true)),
         )

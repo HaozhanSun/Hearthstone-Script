@@ -33,7 +33,8 @@ internal object BetaCandidateRestartFencePolicy {
         if (!snapshot.working) return "worker-not-working"
         if (snapshot.paused) return "manual-pause"
         val mandatoryMulliganRestart = snapshot.inWar &&
-            snapshot.mulligan && snapshot.mandatoryRankSurrenderPending
+            snapshot.mulligan && snapshot.mandatoryRankSurrenderPending &&
+            snapshot.screen.equals("MULLIGAN", ignoreCase = true)
         if (snapshot.inWar && !mandatoryMulliganRestart) return "active-game"
         if (snapshot.mulligan && !snapshot.mandatoryRankSurrenderPending) return "mulligan"
         if (snapshot.terminalInputFence) return "terminal-input-fence"

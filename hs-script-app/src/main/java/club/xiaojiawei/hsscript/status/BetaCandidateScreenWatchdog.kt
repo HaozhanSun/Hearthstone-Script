@@ -98,6 +98,8 @@ internal class BetaCandidateScreenWatchdog(
     }
 
     fun observe(snapshot: Snapshot): Decision {
+        val exactMandatoryMulliganScreen = snapshot.mandatoryRankSurrenderPending &&
+            snapshot.mulligan && snapshot.screen?.equals("MULLIGAN", ignoreCase = true) == true
         // Manual pause is a hard dispatch fence, but it must not erase a
         // positively identified episode.  Preserve its identity/timer so a
         // later explicit resume can finish the already-earned bounded wait;
@@ -109,10 +111,10 @@ internal class BetaCandidateScreenWatchdog(
         // the surrender barrier is pending, and queue evidence is absent, the
         // user-authorized two-minute Beta restart may abandon this invalid
         // test game. Normal gameplay remains fenced.
-        if (snapshot.inWar && !(snapshot.mandatoryRankSurrenderPending && snapshot.mulligan)) {
+        if (snapshot.inWar && !exactMandatoryMulliganScreen) {
             return deferProgress(Action.DEFER_ACTIVE_GAME, "active-game")
         }
-        if (snapshot.mulligan && !snapshot.mandatoryRankSurrenderPending) {
+        if (snapshot.mulligan && !exactMandatoryMulliganScreen) {
             return deferProgress(Action.DEFER_MULLIGAN, "mulligan")
         }
         if (snapshot.observationMissing) {

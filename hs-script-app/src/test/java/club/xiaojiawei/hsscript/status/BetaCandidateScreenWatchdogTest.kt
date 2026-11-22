@@ -292,6 +292,11 @@ class BetaCandidateScreenWatchdogTest {
             BetaCandidateScreenWatchdog().observe(pending.copy(inWar = true, mandatoryRankSurrenderPending = false)).action,
             "ordinary live gameplay remains fenced",
         )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_GAME,
+            BetaCandidateScreenWatchdog().observe(pending.copy(inWar = true, screen = "UNKNOWN")).action,
+            "a stale Mulligan phase cannot authorize restart without the exact screen",
+        )
         val paused = BetaCandidateScreenWatchdog()
         assertEquals(
             BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
