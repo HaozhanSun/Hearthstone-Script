@@ -209,12 +209,22 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.24..0.28 &&
             centerDarkRatio in 0.15..0.18 &&
             bannerWarmRatio in 0.36..0.42
+        // v4.16.791's 2026-11-22 Platinum 9 reward frame rendered a cooler,
+        // brighter backdrop than the earlier rank-9 captures. It still has
+        // the fixed Continue band and centered rank medal, but its measured
+        // banner low-saturation ratio is ~.277 and center-dark ratio ~.154.
+        // Keep this four-region signature narrow so a generic quest card
+        // cannot enter the result-page path.
+        val livePlatinumNineNov22RewardSignature = continueGrayLightRatio in 0.040..0.052 &&
+            bannerLowSaturationRatio in 0.26..0.31 &&
+            centerDarkRatio in 0.14..0.17 &&
+            bannerWarmRatio in 0.25..0.30
         return capturedRankProgressSignature || establishedRankProgressSignature ||
             coolBoardGoldRewardSignature || largeGoldMedalRewardSignature ||
             incidentCoolBoardRewardSignature || incidentWarmBannerRewardSignature ||
             liveRankNineRewardSignature || liveRankNineCoolBoardSignature ||
             liveRankTenCoolBoardSignature || livePlatinumProgressFamily ||
-            livePlatinumNineRewardVariant
+            livePlatinumNineRewardVariant || livePlatinumNineNov22RewardSignature
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */
