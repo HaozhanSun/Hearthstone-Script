@@ -37,6 +37,7 @@ class MatchmakingGuardPolicyTest {
         assertTrue(startMatching.contains("abortMatchmakingInputIfNoLongerNeeded"))
         assertTrue(startMatching.contains("LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = true)"))
         assertTrue(startMatching.contains("val startDispatched = clickMatchmakingStartControl()"))
+        assertTrue(startMatching.contains("requireFreshObservation = true"))
         assertTrue(startMatching.contains("rankPolicy=POST_MULLIGAN"))
         assertFalse(startMatching.contains("CurrentRankDetector"))
         assertFalse(startMatching.contains("RankEligibilityPolicy"))

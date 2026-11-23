@@ -448,6 +448,33 @@ class MatchmakingSearchRecoveryTest {
     }
 
     @Test
+    fun `post-start guard blocks uncertain capture before any deck completion retry`() {
+        assertEquals(
+            MatchmakingInputGuardPolicy.Decision.BLOCK_UNCERTAIN_AFTER_START,
+            TournamentModeStrategy.postStartMatchmakingInputDecisionForTest(
+                observedScreen = null,
+                recentActiveSearchEvidence = false,
+            ),
+            "an accepted Start followed by a capture/focus gap must not authorize completion or final-Start clicks",
+        )
+        assertEquals(
+            MatchmakingInputGuardPolicy.Decision.BLOCK_ACTIVE_SEARCH,
+            TournamentModeStrategy.postStartMatchmakingInputDecisionForTest(
+                observedScreen = null,
+                recentActiveSearchEvidence = true,
+            ),
+            "a recent search latch remains the stronger queue veto",
+        )
+        assertEquals(
+            MatchmakingInputGuardPolicy.Decision.BLOCK_ACTIVE_SEARCH,
+            TournamentModeStrategy.postStartMatchmakingInputDecisionForTest(
+                observedScreen = "MATCHMAKING",
+                recentActiveSearchEvidence = false,
+            ),
+        )
+    }
+
+    @Test
     fun `queue start establishes bounded pre-session capture authority`() {
         assertTrue(
             ScreenRecoveryCapturePurposePolicy.allowsPreSessionMatchmaking(

@@ -919,6 +919,14 @@ this deletion boundary.
   existing fail-closed paths. Regress the exact 2026-11-22 queue PNG through
   the production classifier and assert that its no-OCR branch is not selected
   for HUB/modal controls.
+- After an accepted initial matchmaking Start, a missing/foreground-unconfirmed
+  follow-up capture is not permission to click deck completion or Start again.
+  The post-Start guard must require a fresh observation, while an exact
+  `MATCHMAKING` frame or recent queue latch remains the stronger veto. Emit
+  `MATCHMAKING_INPUT_BLOCKED reason=post-start-screen-unconfirmed` and stop
+  the sequence; do not convert a transient capture gap into duplicate queue
+  input. Regress accepted-Start -> queue-visible and accepted-Start ->
+  uncertain-capture transitions with zero completion/final-Start clicks.
 - Result-artifact authority is separate from Power.log outcome authority. A
   delayed `GAME_RESULT_SCREENSHOT` capture can still be the gameplay board
   with the in-game settings menu open (especially after a fast surrender), so

@@ -10,6 +10,7 @@ internal object MatchmakingInputGuardPolicy {
     enum class Decision {
         ALLOW_INPUT,
         BLOCK_ACTIVE_SEARCH,
+        BLOCK_UNCERTAIN_AFTER_START,
         ABORT_FOR_TERMINAL_CLEANUP,
     }
 
@@ -17,6 +18,7 @@ internal object MatchmakingInputGuardPolicy {
         observedScreen: String?,
         recentActiveSearchEvidence: Boolean,
         terminalCleanupPending: Boolean = false,
+        requireFreshObservation: Boolean = false,
     ): Decision {
         if (observedScreen.equals("MATCHMAKING", ignoreCase = true)) {
             return Decision.BLOCK_ACTIVE_SEARCH
@@ -25,6 +27,9 @@ internal object MatchmakingInputGuardPolicy {
             return Decision.ABORT_FOR_TERMINAL_CLEANUP
         }
         if (recentActiveSearchEvidence && isUncertain(observedScreen)) return Decision.BLOCK_ACTIVE_SEARCH
+        if (requireFreshObservation && isUncertain(observedScreen)) {
+            return Decision.BLOCK_UNCERTAIN_AFTER_START
+        }
         return Decision.ALLOW_INPUT
     }
 

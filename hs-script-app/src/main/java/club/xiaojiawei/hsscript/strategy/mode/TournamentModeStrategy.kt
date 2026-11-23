@@ -477,7 +477,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = true)
         logMatchmakingCheckpoint(traceId, "after-start-click")
         SystemUtil.delayLong()
-        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-start-click")) return
+        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-start-click", requireFreshObservation = true)) return
         log.info { "尝试确认自动补全套牌弹窗" }
         logMatchmakingCheckpoint(traceId, "before-complete-deck-click-1")
         if (!clickMatchmakingControl(COMPLETE_DECK_CONFIRM_RECT)) {
@@ -486,7 +486,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         }
         logMatchmakingCheckpoint(traceId, "after-complete-deck-click-1")
         SystemUtil.delayShortMedium()
-        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-complete-deck-click-1")) return
+        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-complete-deck-click-1", requireFreshObservation = true)) return
         log.info { "重试确认自动补全套牌弹窗" }
         logMatchmakingCheckpoint(traceId, "before-complete-deck-click-2")
         if (!clickMatchmakingControl(COMPLETE_DECK_CONFIRM_RECT)) {
@@ -495,7 +495,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         }
         logMatchmakingCheckpoint(traceId, "after-complete-deck-click-2")
         SystemUtil.delayShortMedium()
-        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-complete-deck-click-2")) return
+        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-complete-deck-click-2", requireFreshObservation = true)) return
         log.info { "确认补全后再次点击开始" }
         logMatchmakingCheckpoint(traceId, "before-final-start-click")
         val finalStartDispatched = clickMatchmakingStartControl()
@@ -507,7 +507,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         LifecycleTrace.markMatchmakingInputDispatched(dispatchAccepted = true)
         logMatchmakingCheckpoint(traceId, "after-final-start-click")
         captureMatchmakingCheckpoint(traceId, "after-final-start-click")
-        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-final-start-click")) return
+        if (abortMatchmakingInputIfNoLongerNeeded(traceId, "after-final-start-click", requireFreshObservation = true)) return
         generateTimer(traceId)
         scheduleMatchmakingDialogRecovery(traceId)
     }
@@ -531,7 +531,11 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
      * Revalidate immediately before every queue-control input. A visible
      * search screen is authoritative even when Power.log is empty/stale.
      */
-    private fun abortMatchmakingInputIfNoLongerNeeded(traceId: Long, stage: String): Boolean {
+    private fun abortMatchmakingInputIfNoLongerNeeded(
+        traceId: Long,
+        stage: String,
+        requireFreshObservation: Boolean = false,
+    ): Boolean {
         if (abortMatchmakingIfGameStarted(traceId, stage)) return true
         val observation = runCatching { ScreenStateRecovery.observeFreshScreenForWatchdog() }
             .onFailure { error ->
@@ -544,6 +548,7 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
             observedScreen = observation?.screen,
             recentActiveSearchEvidence = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
             terminalCleanupPending = PowerLogListener.hasCurrentGameTerminalInputFence(),
+            requireFreshObservation = requireFreshObservation,
         )
         if (decision == MatchmakingInputGuardPolicy.Decision.ALLOW_INPUT) return false
         if (decision == MatchmakingInputGuardPolicy.Decision.ABORT_FOR_TERMINAL_CLEANUP) {
@@ -559,6 +564,13 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
             LifecycleTrace.markActiveMatchmakingScreenObserved()
         }
         cancelAllEnteredTasks()
+        if (decision == MatchmakingInputGuardPolicy.Decision.BLOCK_UNCERTAIN_AFTER_START) {
+            log.warn {
+                "MATCHMAKING_INPUT_BLOCKED trace=$traceId reason=post-start-screen-unconfirmed " +
+                    "stage=$stage freshObservation=false dispatch=false"
+            }
+            return true
+        }
         log.warn {
             "MATCHMAKING_INPUT_BLOCKED trace=$traceId reason=active-search-screen " +
                 "stage=$stage screen=${observation?.screen ?: "UNKNOWN"} " +
@@ -568,6 +580,18 @@ object TournamentModeStrategy : AbstractModeStrategy<Any?>() {
         }
         return true
     }
+
+    /** Production seam for the post-Start guard: no uncertain frame may authorize another click. */
+    internal fun postStartMatchmakingInputDecisionForTest(
+        observedScreen: String?,
+        recentActiveSearchEvidence: Boolean,
+        terminalCleanupPending: Boolean = false,
+    ): MatchmakingInputGuardPolicy.Decision = MatchmakingInputGuardPolicy.decide(
+        observedScreen = observedScreen,
+        recentActiveSearchEvidence = recentActiveSearchEvidence,
+        terminalCleanupPending = terminalCleanupPending,
+        requireFreshObservation = true,
+    )
 
     private fun liveGameEvidence(): MatchmakingGuardPolicy.LiveGameEvidence {
         val war = WarEx.war
