@@ -230,13 +230,22 @@ internal object ResultPageEvidencePolicy {
             bannerLowSaturationRatio in 0.25..0.31 &&
             centerDarkRatio in 0.32..0.38 &&
             bannerWarmRatio in 0.38..0.47
+        // v4.16.799's 16:24:51 Platinum 10 continuation frame kept the
+        // same centered medal but shifted its ribbon toward the cool-board
+        // cluster: continue=.043, low-saturation=.271, center-dark=.318,
+        // warm=.499. Keep this separate from the earlier rank-up signature
+        // and require all four regions before outranking Event Quest.
+        val livePlatinumTenLateRewardSignature = continueGrayLightRatio in 0.038..0.050 &&
+            bannerLowSaturationRatio in 0.25..0.30 &&
+            centerDarkRatio in 0.30..0.34 &&
+            bannerWarmRatio in 0.47..0.53
         return capturedRankProgressSignature || establishedRankProgressSignature ||
             coolBoardGoldRewardSignature || largeGoldMedalRewardSignature ||
             incidentCoolBoardRewardSignature || incidentWarmBannerRewardSignature ||
             liveRankNineRewardSignature || liveRankNineCoolBoardSignature ||
             liveRankTenCoolBoardSignature || livePlatinumProgressFamily ||
             livePlatinumNineRewardVariant || livePlatinumNineNov22RewardSignature ||
-            livePlatinumTenRankUpSignature
+            livePlatinumTenRankUpSignature || livePlatinumTenLateRewardSignature
     }
 
     /** The saved live trace showed GAME_OVER before its authoritative result proof arrived. */

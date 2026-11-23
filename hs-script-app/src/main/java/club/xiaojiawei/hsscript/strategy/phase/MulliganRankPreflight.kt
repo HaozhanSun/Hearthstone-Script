@@ -38,14 +38,27 @@ internal data class MulliganRankPreflightConfig(
      * fresh frame/probe.
      */
     internal fun effectiveAttemptTimeoutMs(provider: String, paddleXRequestTimeoutMs: Long): Long {
-        // Keep the parameters in the contract for telemetry/tests: the
-        // configured provider deadline is intentionally not allowed to widen
-        // the preflight lifecycle deadline.
         if (!provider.equals("PADDLEX", ignoreCase = true)) return attemptTimeoutMs
-        return attemptTimeoutMs.coerceAtLeast(1L)
+        // PaddleX's persistent process can load its model pipeline lazily on
+        // the first rank request. The previously-working implementation gave
+        // that request a bounded provider-aware budget; a fixed 5s timeout
+        // cancels the cold start and causes every retry to restart the sidecar.
+        // Keep the lifecycle finite and Beta-safe rather than inheriting the
+        // general OCR timeout (which defaults to 120s).
+        val requestBudget = paddleXRequestTimeoutMs.coerceAtLeast(1L)
+        val providerBudget = if (requestBudget > (Long.MAX_VALUE - PADDLEX_TIMEOUT_MARGIN_MS) / PADDLEX_TIMEOUT_MULTIPLIER) {
+            Long.MAX_VALUE
+        } else {
+            requestBudget * PADDLEX_TIMEOUT_MULTIPLIER + PADDLEX_TIMEOUT_MARGIN_MS
+        }
+        return maxOf(attemptTimeoutMs, providerBudget).coerceAtMost(PADDLEX_ATTEMPT_TIMEOUT_CAP_MS)
     }
 
     private companion object {
+        private const val PADDLEX_TIMEOUT_MULTIPLIER = 4L
+        private const val PADDLEX_TIMEOUT_MARGIN_MS = 1_000L
+        internal const val PADDLEX_ATTEMPT_TIMEOUT_CAP_MS = 45_000L
+
         fun property(name: String, default: Long): Long =
             System.getProperty(name)?.toLongOrNull()?.coerceAtLeast(0L) ?: default
 

@@ -421,7 +421,7 @@ class MulliganRankPreflightTest {
     }
 
     @Test
-    fun `PaddleX preflight deadline stays bounded despite long provider timeout`() {
+    fun `PaddleX preflight gives cold sidecar startup a bounded provider-aware budget`() {
         val scheduler = ManualScheduler()
         var continued = 0
         var attempts = 0
@@ -452,12 +452,30 @@ class MulliganRankPreflightTest {
 
         preflight.start()
         scheduler.runScheduledAfter(7_000)
-        assertEquals(5_000L, scheduler.nextTimeoutDelayMs())
+        assertEquals(41_000L, scheduler.nextTimeoutDelayMs())
         scheduler.runWorker(elapsedAfterStartMs = 4_000L)
 
         assertEquals(1, attempts)
         assertEquals(1, continued)
         assertEquals(MulliganRankPreflightState.RESOLVED, preflight.snapshot().state)
+    }
+
+    @Test
+    fun `PaddleX cold-start budget is capped while legacy keeps the configured deadline`() {
+        val config = MulliganRankPreflightConfig(attemptTimeoutMs = 5_000L)
+
+        assertEquals(
+            41_000L,
+            config.effectiveAttemptTimeoutMs("PADDLEX", 10_000L),
+        )
+        assertEquals(
+            45_000L,
+            config.effectiveAttemptTimeoutMs("PADDLEX", 120_000L),
+        )
+        assertEquals(
+            5_000L,
+            config.effectiveAttemptTimeoutMs("LEGACY", 120_000L),
+        )
     }
 
     @Test

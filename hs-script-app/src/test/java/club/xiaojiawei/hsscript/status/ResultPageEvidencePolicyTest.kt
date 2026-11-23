@@ -31,6 +31,17 @@ class ResultPageEvidencePolicyTest {
             "RANK_PROGRESS_CONTINUATION",
             ScreenStateRecovery.classifyImageForResultFixture(image),
         )
+        assertNull(
+            UpstreamScreenStateRecovery.classifyFastResultOverlayForTest(image),
+            "the Upstream fast-overlay consumer must not short-circuit this rank page as Event Quest",
+        )
+        assertNull(
+            ScreenStateRecovery.classifyFastResultOverlayForTest(image),
+            "the GameUtil/ScreenState result consumer must use the shared rank precedence",
+        )
+        val fastVisual = requireNotNull(ResultPageEvidencePolicy.fastVisualObservation(0.049, 0.262, 0.360, 0.435))
+        assertTrue(fastVisual.rankProgressVisible)
+        assertTrue(fastVisual.resultVisible == true)
         assertTrue(StartupQuestOverlayVisualClassifier.isQuestOverlay(image))
         assertFalse(UpstreamScreenStateRecovery.classifyImageForTest("", image) == "EVENT_QUEST_OVERLAY")
     }
@@ -54,6 +65,22 @@ class ResultPageEvidencePolicyTest {
             "rank progression must stay on the existing terminal-result consumer path",
         )
         assertTrue(StartupQuestOverlayVisualClassifier.isQuestOverlay(image))
+    }
+
+    @Test
+    fun `live Beta sixteen twenty four rank continuation reaches both fast consumers before quest overlay`() {
+        val image = requireNotNull(ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/beta-live-platinum10-rank-reward-20261122-162451.png",
+        ))))
+        assertEquals(
+            "RANK_PROGRESS_CONTINUATION",
+            UpstreamScreenStateRecovery.classifyImageForResultFixture(image),
+            "the exact 16:24:51 frame must not enter the fast Event Quest path; ${ScreenStateRecovery.resultVisualEvidenceForFixture(image)}",
+        )
+        assertEquals("RANK_PROGRESS_CONTINUATION", ScreenStateRecovery.classifyImageForResultFixture(image))
+        assertNull(UpstreamScreenStateRecovery.classifyFastResultOverlayForTest(image))
+        assertNull(ScreenStateRecovery.classifyFastResultOverlayForTest(image))
+        assertTrue(StartupQuestOverlayVisualClassifier.isQuestOverlay(image), "ordering regression: broad quest geometry still matches")
     }
 
     @Test

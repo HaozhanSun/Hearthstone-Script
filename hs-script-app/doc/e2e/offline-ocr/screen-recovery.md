@@ -817,6 +817,13 @@ this deletion boundary.
   `BetaNeverSurrenderOverrideTest`, `MulliganRankPreflightTest`,
   `MulliganRankDispatchBarrierTest`, `DebugRunLeaseTest`, and
   `DebugRunHardCapSupervisorTest`.
+- PaddleX rank preflight must not use the generic fixed five-second deadline:
+  the persistent sidecar may lazily load its models on the first rank request
+  (the v4.16.799 health probe took over 16 seconds). Use the provider-aware,
+  finite 45-second cap so cancellation does not restart a cold sidecar on
+  every retry; retain the pending-rank barrier and fail-closed surrender path.
+  Regression coverage must assert the provider budget, cap, cancellation, and
+  legacy-provider deadline separately.
 - An invalid or expired persisted Debug Run lease must remain refused on
   process/script startup. A normal all-day schedule becoming active does not
   prove a Debug Run deadline or an armed process watchdog. Only the explicit
