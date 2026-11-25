@@ -14,8 +14,60 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.nio.file.Files
+import java.nio.file.Path
 
 class ActionDispatchGateTest {
+
+    @Test
+    fun `missing game recovery bypasses only stale quest fence for Beta with no client`() {
+        assertTrue(
+            ActionDispatchGate.canBypassStartupQuestForMissingGameRecovery(
+                betaChannel = true,
+                gameAlive = false,
+                action = "startup.missing-game-recovery",
+                scopeActive = true,
+            ),
+        )
+        assertFalse(
+            ActionDispatchGate.canBypassStartupQuestForMissingGameRecovery(
+                betaChannel = false,
+                gameAlive = false,
+                action = "startup.missing-game-recovery",
+                scopeActive = true,
+            ),
+            "Stable/RC must retain the unresolved-quest fence",
+        )
+        assertFalse(
+            ActionDispatchGate.canBypassStartupQuestForMissingGameRecovery(
+                betaChannel = true,
+                gameAlive = true,
+                action = "startup.missing-game-recovery",
+                scopeActive = true,
+            ),
+            "a live Hearthstone process may never use the missing-game exception",
+        )
+        assertFalse(
+            ActionDispatchGate.canBypassStartupQuestForMissingGameRecovery(
+                betaChannel = true,
+                gameAlive = false,
+                action = "startup.handoff",
+                scopeActive = true,
+            ),
+            "the scope cannot authorize ordinary startup input",
+        )
+        val servicePath = listOf(
+            Path.of("src/main/java/club/xiaojiawei/hsscript/status/BetaScreenRecoveryService.kt"),
+            Path.of("hs-script-app/src/main/java/club/xiaojiawei/hsscript/status/BetaScreenRecoveryService.kt"),
+        ).firstOrNull { Files.exists(it) }
+        val service = Files.readString(
+            requireNotNull(servicePath) { "BetaScreenRecoveryService source must be available from module or repo root" },
+        )
+        assertTrue(
+            service.contains("ActionDispatchGate.allowBetaMissingGameRecovery()"),
+            "the production missing-game guardian path must use the scoped gate",
+        )
+    }
 
     @Test
     fun `missing process releases accepted terminal cleanup but retains live or unproven state`() {

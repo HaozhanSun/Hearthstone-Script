@@ -967,3 +967,17 @@ this deletion boundary.
   `RANK_SURRENDER_RECOVERY_RETRY_BUDGET_RESET` and delegates any restart to
   the identity-fenced Beta watchdog. Regress both the 119999/120000 boundary
   and the post-restart startup/mode/queue handoff.
+### Beta missing-game recovery and unresolved startup quest fences
+
+An unresolved startup quest overlay remains a hard fence for ordinary desktop
+input, queue actions, and modal dismissal. It must not deadlock the Beta
+guardian when the exact Beta runtime identity is fresh, working and unpaused,
+Hearthstone is absent, and the bounded missing-game policy reaches its retry
+grace. In that one case the guardian uses the scoped
+`startup.missing-game-recovery` gate to re-enter the configured starter chain;
+the scope is Beta-only, no-client-only, and action-specific. Stable and Release
+Candidate runtimes, live game/queue states, manual pause, stale or ambiguous
+guardian identity, and all other startup actions remain fail-closed. Structured
+logs must distinguish the scoped gate (`ACTION_DISPATCH_SCOPE`) from the actual
+starter-chain dispatch (`BETA_MISSING_GAME_RECOVERY_CHAIN_DISPATCHED`), and the
+retry state advances only after the chain is actually invoked.

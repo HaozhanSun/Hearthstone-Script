@@ -269,6 +269,41 @@ class LiveMissingGameRecoveryPolicyTest {
     }
 
     @Test
+    fun `authorized missing-game decision advances retry state only after starter dispatch`() {
+        val state = LiveMissingGameRecoveryPolicy.State(
+            missingSinceMs = now - LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS,
+        )
+        val evaluation = LiveMissingGameRecoveryPolicy.evaluate(state, evidence())
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            evaluation.decision,
+        )
+        var modeRecoveryCalls = 0
+        var starterCalls = 0
+        val result = LiveMissingGameRecoveryDispatch.dispatch(
+            decision = evaluation.decision,
+            stillAuthorized = { true },
+            recoverModeToStartup = { modeRecoveryCalls++ },
+            startConfiguredStarterChain = {
+                starterCalls++
+            },
+        )
+        assertEquals(LiveMissingGameRecoveryDispatch.Result.STARTER_CHAIN_DISPATCHED, result)
+        assertEquals(1, modeRecoveryCalls)
+        assertEquals(1, starterCalls)
+        val recorded = LiveMissingGameRecoveryPolicy.recordDispatch(evaluation.state, now)
+        assertEquals(1, recorded.attempts)
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.WAIT_RETRY_COOLDOWN,
+            LiveMissingGameRecoveryPolicy.evaluate(
+                recorded,
+                evidence(nowMs = now + LiveMissingGameRecoveryPolicy.RETRY_COOLDOWN_MS - 1),
+            ).decision,
+            "a dispatched retry must advance cooldown; a log-only intent must not reset the budget",
+        )
+    }
+
+    @Test
     fun `starter chain dispatch requires a still-authorized decision and invokes configured path`() {
         var modeRecoveryCalls = 0
         var starterChainCalls = 0

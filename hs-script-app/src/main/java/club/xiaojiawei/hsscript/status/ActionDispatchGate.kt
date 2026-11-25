@@ -10,6 +10,8 @@ import club.xiaojiawei.hsscript.status.DeckStrategyManager
 import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscript.listener.log.PowerLogListener
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
+import club.xiaojiawei.hsscriptbase.const.BuildInfo
 
 /**
  * The last, process-wide gate before an action can reach the desktop.  Phase
@@ -20,6 +22,7 @@ import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 object ActionDispatchGate {
     private val terminalCleanupBlockLogThrottle = TerminalCleanupBlockLogThrottle()
     private val startupQuestOverlayDispatchScope = ThreadLocal<Boolean>()
+    private val missingGameRecoveryDispatchScope = ThreadLocal<Boolean>()
     private val seasonRankAwardDispatchScope = ThreadLocal<String>()
     private val seasonRankAwardDispatchScreenMode = ThreadLocal<String>()
 
@@ -37,7 +40,55 @@ object ActionDispatchGate {
     internal fun isStartupQuestRecoveryFenceBlocking(action: String): Boolean =
         StartupQuestOverlayRecoveryFence.isActive() &&
             startupQuestOverlayDispatchScope.get() != true &&
+            !canBypassStartupQuestForMissingGameRecovery(
+                betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
+                gameAlive = runCatching { GameUtil.isAliveOfGame() }.getOrDefault(true),
+                action = action,
+                scopeActive = missingGameRecoveryDispatchScope.get() == true,
+            ) &&
             !(action in SEASON_RANK_AWARD_ACTIONS && seasonRankAwardDispatchScope.get() == action)
+
+    /**
+     * The startup quest fence protects desktop input, but it must not deadlock
+     * the Beta guardian when Hearthstone is actually absent.  This is deliberately
+     * a pure, narrow predicate so Stable/RC, live-game, and unrelated startup
+     * actions cannot inherit the exception.
+     */
+    internal fun canBypassStartupQuestForMissingGameRecovery(
+        betaChannel: Boolean,
+        gameAlive: Boolean,
+        action: String,
+        scopeActive: Boolean,
+    ): Boolean = betaChannel && !gameAlive && action == "startup.missing-game-recovery" && scopeActive
+
+    /** Beta-only, no-client recovery entry point. The scope lasts for one gate check. */
+    internal fun allowBetaMissingGameRecovery(): Boolean {
+        val betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
+        val gameAlive = runCatching { GameUtil.isAliveOfGame() }.getOrDefault(true)
+        if (!canBypassStartupQuestForMissingGameRecovery(
+                betaChannel = betaChannel,
+                gameAlive = gameAlive,
+                action = "startup.missing-game-recovery",
+                scopeActive = true,
+            )
+        ) {
+            log.warn {
+                "ACTION_BLOCKED action=startup.missing-game-recovery reason=beta-missing-game-scope-not-authorized " +
+                    "channel=${BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL)} gameAlive=$gameAlive dispatch=false"
+            }
+            return false
+        }
+        missingGameRecoveryDispatchScope.set(true)
+        return try {
+            log.info {
+                "ACTION_DISPATCH_SCOPE action=startup.missing-game-recovery " +
+                    "reason=beta-game-process-absent quest-fence-bypassed dispatch=CONTINUE"
+            }
+            allow("startup.missing-game-recovery")
+        } finally {
+            missingGameRecoveryDispatchScope.remove()
+        }
+    }
 
     internal fun dispatchSeasonRankAwardContinue(verifiedScreenMode: String = "HUB", dispatch: () -> Boolean): Boolean {
         return dispatchSeasonRankAwardAction(SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION, verifiedScreenMode, dispatch)

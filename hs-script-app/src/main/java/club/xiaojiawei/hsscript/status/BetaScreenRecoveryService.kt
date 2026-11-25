@@ -913,7 +913,7 @@ internal object BetaScreenRecoveryService {
                         latestGuardian?.identityMatches == true && latestGuardian.intent == "RUNNING" &&
                         latestGuardian.working && !latestGuardian.paused &&
                         latestGuardian.heartbeatAgeMs in 0..GuardianRunStateReader.MAX_HEARTBEAT_AGE_MS &&
-                        ActionDispatchGate.allow("startup.missing-game-recovery")
+                        ActionDispatchGate.allowBetaMissingGameRecovery()
                 }
                 if (!authorized()) {
                     val latestGuardian = readCurrentGuardianRunState()
