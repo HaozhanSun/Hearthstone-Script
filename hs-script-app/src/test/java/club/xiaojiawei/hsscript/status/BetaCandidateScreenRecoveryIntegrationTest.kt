@@ -1067,6 +1067,77 @@ class BetaCandidateScreenRecoveryIntegrationTest {
     }
 
     @Test
+    fun `old gods promo overlay is an exact retained candidate across capture gaps`() {
+        val image = requireNotNull(
+            javaClass.getResourceAsStream(
+                "/offline-ocr/screen-recovery/event-quest-old-gods-promo-live-20261124-210306.png",
+            ),
+        ).use(ImageIO::read)
+        assertTrue(EventQuestPromoOverlayVisualPolicy.isVisible(image))
+        assertFalse(EventQuestPromoOverlayVisualPolicy.isVisible(
+            requireNotNull(javaClass.getResourceAsStream(
+                "/offline-ocr/screen-recovery/start-game-error-dialog-over-deck-selection.png",
+            )).use(ImageIO::read),
+        ), "generic error dialogs must not receive the promo close-button permit")
+        val classification = requireNotNull(
+            ScreenStateRecovery.classifyBetaCandidateVisualForTest(image, currentSessionReady = false),
+        )
+        assertEquals("EVENT_QUEST_OVERLAY", classification.screen)
+        assertEquals("event-quest-promo-close-visual", classification.evidence)
+
+        val observation = ScreenStateRecovery.FreshScreenObservation(
+            screen = requireNotNull(classification.screen),
+            mode = classification.mode,
+            confidence = classification.confidence,
+            evidence = classification.evidence,
+            pid = 30_712L,
+            hwnd = "native@0x210306",
+            screenshot = "event-quest-old-gods-promo-live-20261124-210306.png",
+            perceptualFingerprint = 0x210306L,
+            currentSessionReady = false,
+            noActiveMatchmakingEvidence = true,
+            hubModeChooserVisible = false,
+            modalVisible = true,
+            foregroundConfirmed = true,
+        )
+        val watchdog = BetaCandidateScreenWatchdog()
+        val first = BetaScreenRecoveryService.candidateSnapshotForTest(
+            now = 0L,
+            observation = observation,
+            rememberAuthorizedObservation = true,
+        ).copy(working = true, paused = false)
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(first).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            watchdog.observe(BetaScreenRecoveryService.candidateSnapshotForTest(1L, observation).copy(working = true, paused = false)).action,
+        )
+        val missing119999 = BetaScreenRecoveryService.candidateSnapshotForTest(119_999L, null)
+            .copy(working = true, paused = false)
+        assertEquals(BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN, watchdog.observe(missing119999).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(
+                BetaScreenRecoveryService.candidateSnapshotForTest(120_000L, null)
+                    .copy(working = true, paused = false),
+            ).action,
+            "same verified promo identity must reach the bounded restart despite capture contention",
+        )
+
+        val queued = missing119999.copy(noActiveMatchmakingEvidence = false)
+        assertEquals(BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN, BetaCandidateScreenWatchdog().apply {
+            observe(first)
+        }.observe(queued).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_MANUAL_PAUSE,
+            BetaCandidateScreenWatchdog().observe(first.copy(paused = true)).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.DEFER_ACTIVE_GAME,
+            BetaCandidateScreenWatchdog().observe(first.copy(inWar = true)).action,
+        )
+    }
+
+    @Test
     fun `pending mandatory mulligan uses production candidate restart seam at exact boundary`() {
         MulliganRankDispatchBarrier.beginCurrentGame()
         assertNotNull(MulliganRankDispatchBarrier.requireSurrender(1L))

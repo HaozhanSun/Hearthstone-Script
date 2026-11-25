@@ -325,6 +325,17 @@ this deletion boundary.
   result Continue/recovery path after authoritative Power.log proof. Chest,
   generic event-quest, unknown, active-game, queue, and paused frames remain
   fail-closed and must not be auto-dismissed or restarted by this signature.
+- The Old Gods promo variant is a separate, exact visual authority. The
+  `event-quest-promo-close-visual` signature requires the existing quest
+  overlay structure plus the calibrated lower-center close-button ROI from
+  the captured frame. It may issue only the one-use
+  `recovery.startup-quest-overlay.promo-close` action at that button; generic
+  mouse actions, mode changes, cancellation, and gameplay input remain
+  blocked. If focus/OCR contention makes a fresh sample unavailable, retain
+  only the same foreground PID/HWND authorized observation for the bounded
+  candidate window; at 120 seconds the watchdog may restart only after its
+  independent no-session/queue/game/pause/foreground fences pass. Keep
+  `start-game-error` and reconnect modal frames as negative controls.
 - The v4.16.698 Diamond 10 capture demonstrates that foreground/SendInput
   acceptance does not prove client consumption: the exact center Continue
   target `(960, 1020)` was inside the visible lower-center label, yet the page

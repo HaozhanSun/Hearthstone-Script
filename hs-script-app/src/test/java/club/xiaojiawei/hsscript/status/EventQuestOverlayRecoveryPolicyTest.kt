@@ -15,6 +15,73 @@ import club.xiaojiawei.hsscript.status.surrender.CurrentGamePowerLogTerminalTrac
 
 class EventQuestOverlayRecoveryPolicyTest {
     @Test
+    fun `old gods promo gets only the bounded close-button permit`() {
+        val promo = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/event-quest-old-gods-promo-live-20261124-210306.png",
+        )))
+        assertTrue(EventQuestPromoOverlayVisualPolicy.isVisible(promo))
+        val bounds = java.awt.Rectangle(0, 0, promo.width, promo.height)
+        val point = requireNotNull(EventQuestPromoOverlayVisualPolicy.closeButtonPoint(bounds))
+        assertTrue(point.x in (0.49 * promo.width).toInt()..(0.51 * promo.width).toInt())
+        assertTrue(point.y in (0.72 * promo.height).toInt()..(0.77 * promo.height).toInt())
+        assertEquals(
+            StartupQuestOverlayDismissPolicy.PROMO_CLOSE_DISPATCH_ACTION,
+            EventQuestPromoOverlayVisualPolicy.DISPATCH_ACTION,
+        )
+        assertFalse(EventQuestPromoOverlayVisualPolicy.isVisible(ImageIO.read(requireNotNull(
+            javaClass.getResourceAsStream("/offline-ocr/screen-recovery/start-game-error-dialog-over-deck-selection.png"),
+        ))))
+
+        StartupQuestOverlayRecoveryFence.resetForTest()
+        StartupQuestOverlayRecoveryFence.begin()
+        val permit = StartupQuestOverlayDismissAuthorization.permits.issue(
+            30_712L, "native@0x210306", point, 10_000L,
+        )
+        var dispatched = false
+        try {
+            assertTrue(ActionDispatchGate.dispatchStartupQuestOverlayDismiss(
+                permit = permit,
+                pid = 30_712L,
+                window = "native@0x210306",
+                point = point,
+                nowMs = 10_000L,
+                action = StartupQuestOverlayDismissPolicy.PROMO_CLOSE_DISPATCH_ACTION,
+            ) {
+                dispatched = !ActionDispatchGate.isStartupQuestRecoveryFenceBlocking(
+                    StartupQuestOverlayDismissPolicy.PROMO_CLOSE_DISPATCH_ACTION,
+                )
+                true
+            })
+            assertTrue(dispatched, "the scoped promo action must cross the exact overlay fence")
+            assertTrue(ActionDispatchGate.isStartupQuestRecoveryFenceBlocking(
+                StartupQuestOverlayDismissPolicy.PROMO_CLOSE_DISPATCH_ACTION,
+            ), "the scoped permit must end when the bounded dispatch returns")
+        } finally {
+            StartupQuestOverlayRecoveryFence.resetForTest()
+        }
+    }
+
+    @Test
+    fun `old gods promo reaches upstream event quest classifier before bounded dispatch`() {
+        val image = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
+            "/offline-ocr/screen-recovery/event-quest-old-gods-promo-live-20261124-210306.png",
+        )))
+        val screenKind = UpstreamScreenStateRecovery.classifyImageForTest("", image)
+        assertEquals("EVENT_QUEST_OVERLAY", screenKind)
+        assertTrue(EventQuestPromoOverlayVisualPolicy.isVisible(image))
+        var started = false
+        assertTrue(UpstreamScreenStateRecovery.dispatchEventQuestRecovery(screenKind) {
+            started = true
+            assertEquals(
+                StartupQuestOverlayDismissPolicy.PROMO_CLOSE_DISPATCH_ACTION,
+                EventQuestPromoOverlayVisualPolicy.DISPATCH_ACTION,
+            )
+            true
+        })
+        assertTrue(started, "the exact promo must enter the production recovery callsite")
+    }
+
+    @Test
     fun `season award readiness exception is scoped to dedicated Continue despite unresolved quest fence`() {
         val action = SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION
         StartupQuestOverlayRecoveryFence.resetForTest()

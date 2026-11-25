@@ -3948,7 +3948,17 @@ object UpstreamScreenStateRecovery {
                 }
                 when (decision.action) {
                     EventQuestOverlayRecoveryPolicy.Action.CLICK_TOP_LEFT -> {
-                        val point = StartupQuestOverlayDismissPolicy.topLeftPixel(capture.bounds)
+                        val promoOverlay = EventQuestPromoOverlayVisualPolicy.isVisible(capture.image)
+                        val point = if (promoOverlay) {
+                            EventQuestPromoOverlayVisualPolicy.closeButtonPoint(capture.bounds)
+                        } else {
+                            StartupQuestOverlayDismissPolicy.topLeftPixel(capture.bounds)
+                        }
+                        val dispatchAction = if (promoOverlay) {
+                            StartupQuestOverlayDismissPolicy.PROMO_CLOSE_DISPATCH_ACTION
+                        } else {
+                            StartupQuestOverlayDismissPolicy.DISPATCH_ACTION
+                        }
                         val permit = point?.let {
                             StartupQuestOverlayDismissAuthorization.permits.issue(
                                 expectedPid, expectedWindow.toString(), it, System.currentTimeMillis(),
@@ -3972,6 +3982,7 @@ object UpstreamScreenStateRecovery {
                                     freshEmptySessionLoginProof = freshEmptySessionLoginProof,
                                     matchmakingSearchVisual = capture.visual.matchmakingSearchVisual,
                                     reconnectDialogVisual = reconnectDialogVisual,
+                                    dispatchAction = dispatchAction,
                                 )
                             }
                         }.onFailure { error ->
@@ -3984,7 +3995,7 @@ object UpstreamScreenStateRecovery {
                                 "freshCaptureTrusted=${captureTrusted && exactOverlay} foregroundVerified=$foregroundVerified " +
                                 "safeContext=$dispatchContextSafe postGameTerminalProof=$postGameTerminalProof " +
                                 "freshEmptySessionLoginProof=$freshEmptySessionLoginProof " +
-                                "pid=$expectedPid hwnd=$expectedWindow action=${StartupQuestOverlayDismissPolicy.DISPATCH_ACTION}"
+                                "pid=$expectedPid hwnd=$expectedWindow action=$dispatchAction promoOverlay=$promoOverlay"
                         }
                         retryAfterMs = 500L
                     }

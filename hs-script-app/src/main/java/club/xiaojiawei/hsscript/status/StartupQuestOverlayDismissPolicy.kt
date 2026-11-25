@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicReference
 /** Fail-closed permit policy for the exact startup "Your Quests" overlay. */
 internal object StartupQuestOverlayDismissPolicy {
     const val DISPATCH_ACTION = "recovery.startup-quest-overlay.top-left"
+    const val PROMO_CLOSE_DISPATCH_ACTION = EventQuestPromoOverlayVisualPolicy.DISPATCH_ACTION
     const val MAX_TAPS = 3
     const val MAX_CAPTURE_AGE_MS = 1_500L
     const val PERMIT_LIFETIME_MS = 1_200L
@@ -67,6 +68,9 @@ internal object StartupQuestOverlayDismissPolicy {
         if (clientBounds.width <= 0 || clientBounds.height <= 0) return null
         return Point(clientBounds.x, clientBounds.y)
     }
+
+    fun allowedDispatchAction(action: String): Boolean =
+        action == DISPATCH_ACTION || action == PROMO_CLOSE_DISPATCH_ACTION
 }
 
 /** A short-lived, single-use authorization tied to one current game window and point. */

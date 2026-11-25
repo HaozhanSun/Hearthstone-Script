@@ -890,6 +890,7 @@ object MouseUtil {
         window: String?,
         point: Point,
         nowMs: Long,
+        action: String = StartupQuestOverlayDismissPolicy.DISPATCH_ACTION,
         dispatch: () -> Boolean,
     ): Boolean {
         val accepted = ActionDispatchGate.dispatchStartupQuestOverlayDismiss(
@@ -898,12 +899,13 @@ object MouseUtil {
             window = window,
             point = point,
             nowMs = nowMs,
+            action = action,
             dispatch = dispatch,
         )
         if (!accepted) {
             log.warn {
                 "EVENT_QUEST_RECOVERY_CLICK_BLOCKED stage=mouse-consumer " +
-                    "reason=permit-or-action-gate-rejected action=${StartupQuestOverlayDismissPolicy.DISPATCH_ACTION} " +
+                    "reason=permit-or-action-gate-rejected action=$action " +
                     "pid=${pid ?: "none"} window=${window ?: "none"} point=(${point.x},${point.y}) input=not-sent"
             }
         }
@@ -919,8 +921,9 @@ object MouseUtil {
         freshEmptySessionLoginProof: Boolean = false,
         matchmakingSearchVisual: Boolean = false,
         reconnectDialogVisual: Boolean = false,
+        dispatchAction: String = StartupQuestOverlayDismissPolicy.DISPATCH_ACTION,
     ): Boolean {
-        val action = StartupQuestOverlayDismissPolicy.DISPATCH_ACTION
+        val action = dispatchAction
         fun contextStillMatches(): Boolean =
             StartupQuestOverlayRecoveryFence.isActive() &&
                 ScriptStatus.gameHWND?.toString() == expectedHwnd.toString() &&
@@ -964,6 +967,7 @@ object MouseUtil {
             pos,
             System.currentTimeMillis(),
             consume = false,
+            action = dispatchAction,
         )
         if (!permitValid || !contextStillMatches() || !hwndIsValid(expectedHwnd)) {
             log.warn {
@@ -1000,6 +1004,7 @@ object MouseUtil {
                     expectedHwnd.toString(),
                     pos,
                     System.currentTimeMillis(),
+                    action = action,
                 ) {
                     if (!ActionDispatchGate.allow(action) || !contextStillMatches()) {
                         log.warn {
