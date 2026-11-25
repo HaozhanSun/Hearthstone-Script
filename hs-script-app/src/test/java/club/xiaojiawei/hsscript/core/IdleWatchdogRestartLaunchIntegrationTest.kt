@@ -16,8 +16,7 @@ class IdleWatchdogRestartLaunchIntegrationTest {
         )
         assertEquals(listOf("force-close", "starter-chain"), events)
 
-        val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }
-            .first { Files.exists(it.resolve("src/main/java/club/xiaojiawei/hsscript/core/Core.kt")) }
+        val root = sourceRootFrom(Path.of(""))
         val core = Files.readString(root.resolve("src/main/java/club/xiaojiawei/hsscript/core/Core.kt"))
         val idleRestart = core.substring(core.indexOf("fun restartFromIdleWatchdog"))
         val restartBody = idleRestart.substring(idleRestart.indexOf("private fun restartInternal"))
@@ -47,5 +46,14 @@ class IdleWatchdogRestartLaunchIntegrationTest {
             events,
             "ClearStarter must not reach startup.handoff before the watchdog capability is armed",
         )
+    }
+
+    private fun sourceRootFrom(start: Path): Path {
+        val marker = Path.of("src/main/java/club/xiaojiawei/hsscript/core/Core.kt")
+        return generateSequence(start.toAbsolutePath().normalize()) { it.parent }
+            .flatMap { candidate -> sequenceOf(candidate, candidate.resolve("hs-script-app")) }
+            .distinct()
+            .firstOrNull { Files.isRegularFile(it.resolve(marker)) }
+            ?: error("Unable to locate Core.kt from ${start.toAbsolutePath()}")
     }
 }
