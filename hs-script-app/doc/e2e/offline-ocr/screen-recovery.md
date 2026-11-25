@@ -975,7 +975,9 @@ guardian when the exact Beta runtime identity is fresh, working and unpaused,
 Hearthstone is absent, and the bounded missing-game policy reaches its retry
 grace. In that one case the guardian uses the scoped
 `startup.missing-game-recovery` gate to re-enter the configured starter chain;
-the scope is Beta-only, no-client-only, and action-specific. Stable and Release
+that authorization carries a short-lived, single-use handoff capability across
+the starter scheduler to the final `startup.handoff` gate. The scope is
+Beta-only, no-client-only, and action-specific. Stable and Release
 Candidate runtimes, live game/queue states, manual pause, stale or ambiguous
 guardian identity, and all other startup actions remain fail-closed. Structured
 logs must distinguish the scoped gate (`ACTION_DISPATCH_SCOPE`) from the actual

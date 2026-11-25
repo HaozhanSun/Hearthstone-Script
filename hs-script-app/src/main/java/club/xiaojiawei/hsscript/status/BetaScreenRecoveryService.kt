@@ -898,7 +898,7 @@ internal object BetaScreenRecoveryService {
                     }
                     return@execute
                 }
-                val authorized = {
+                val stateAuthorized = {
                     val latestGuardian = readCurrentGuardianRunState()
                     isStartupFailureGenerationCurrent(recoveryGeneration) && WorkTimeListener.working &&
                         !PauseStatus.isPause && !GameUtil.isAliveOfGame() &&
@@ -912,8 +912,25 @@ internal object BetaScreenRecoveryService {
                             !LifecycleTrace.hasRecentMatchmakingInputIntent()) &&
                         latestGuardian?.identityMatches == true && latestGuardian.intent == "RUNNING" &&
                         latestGuardian.working && !latestGuardian.paused &&
-                        latestGuardian.heartbeatAgeMs in 0..GuardianRunStateReader.MAX_HEARTBEAT_AGE_MS &&
-                        ActionDispatchGate.allowBetaMissingGameRecovery()
+                        latestGuardian.heartbeatAgeMs in 0..GuardianRunStateReader.MAX_HEARTBEAT_AGE_MS
+                }
+                val authorized = {
+                    stateAuthorized() && ActionDispatchGate.allowBetaMissingGameRecovery(
+                        handoffStillAuthorized = stateAuthorized,
+                        onHandoffAccepted = {
+                            missingGameRecoveryState = LiveMissingGameRecoveryPolicy.recordDispatch(
+                                state,
+                                System.currentTimeMillis(),
+                            )
+                            missingGameExhaustionNotified = false
+                            log.warn {
+                                "BETA_MISSING_GAME_RECOVERY_DISPATCH action=START_CONFIGURED_STARTER_CHAIN " +
+                                    "attempt=${missingGameRecoveryState.attempts} " +
+                                    "limit=${LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS} " +
+                                    "acceptance=startup-handoff-gate-accepted"
+                            }
+                        },
+                    )
                 }
                 if (!authorized()) {
                     val latestGuardian = readCurrentGuardianRunState()
@@ -932,17 +949,6 @@ internal object BetaScreenRecoveryService {
                     },
                     startConfiguredStarterChain = {
                         chainAttempted = true
-                        missingGameRecoveryState = LiveMissingGameRecoveryPolicy.recordDispatch(
-                            state,
-                            System.currentTimeMillis(),
-                        )
-                        missingGameExhaustionNotified = false
-                        log.warn {
-                            "BETA_MISSING_GAME_RECOVERY_DISPATCH action=START_CONFIGURED_STARTER_CHAIN " +
-                                "attempt=${missingGameRecoveryState.attempts} " +
-                                "limit=${LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS} " +
-                                "acceptance=awaiting-game-process-window"
-                        }
                         StarterConfig.starter.start()
                     },
                 )

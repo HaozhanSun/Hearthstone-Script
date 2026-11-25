@@ -56,6 +56,24 @@ class ActionDispatchGateTest {
             ),
             "the scope cannot authorize ordinary startup input",
         )
+        assertTrue(
+            ActionDispatchGate.canAuthorizeBetaMissingGameHandoff(
+                betaChannel = true,
+                gameAlive = false,
+                paused = false,
+                working = true,
+                activeMatchmaking = false,
+                guardianAuthorized = true,
+            ),
+        )
+        listOf(
+            ActionDispatchGate.canAuthorizeBetaMissingGameHandoff(true, true, false, true, false, true),
+            ActionDispatchGate.canAuthorizeBetaMissingGameHandoff(true, false, true, true, false, true),
+            ActionDispatchGate.canAuthorizeBetaMissingGameHandoff(true, false, false, false, false, true),
+            ActionDispatchGate.canAuthorizeBetaMissingGameHandoff(true, false, false, true, true, true),
+            ActionDispatchGate.canAuthorizeBetaMissingGameHandoff(true, false, false, true, false, false),
+            ActionDispatchGate.canAuthorizeBetaMissingGameHandoff(false, false, false, true, false, true),
+        ).forEach { assertFalse(it, "handoff must fail closed for game/pause/work/queue/guardian/channel fences") }
         val servicePath = listOf(
             Path.of("src/main/java/club/xiaojiawei/hsscript/status/BetaScreenRecoveryService.kt"),
             Path.of("hs-script-app/src/main/java/club/xiaojiawei/hsscript/status/BetaScreenRecoveryService.kt"),
@@ -64,9 +82,110 @@ class ActionDispatchGateTest {
             requireNotNull(servicePath) { "BetaScreenRecoveryService source must be available from module or repo root" },
         )
         assertTrue(
-            service.contains("ActionDispatchGate.allowBetaMissingGameRecovery()"),
+            service.contains("ActionDispatchGate.allowBetaMissingGameRecovery(") &&
+                service.contains("handoffStillAuthorized = stateAuthorized"),
             "the production missing-game guardian path must use the scoped gate",
         )
+        val starter = Files.readString(
+            listOf(
+                Path.of("src/main/java/club/xiaojiawei/hsscript/starter/GameStarter.kt"),
+                Path.of("hs-script-app/src/main/java/club/xiaojiawei/hsscript/starter/GameStarter.kt"),
+            ).firstOrNull { Files.exists(it) }
+                ?: error("GameStarter source must be available from module or repo root"),
+        )
+        assertTrue(
+            starter.contains("ActionDispatchGate.allow(\"startup.handoff\")"),
+            "the actual configured starter handoff must remain behind the final gate",
+        )
+    }
+
+    @Test
+    fun `missing game capability crosses the async starter handoff without broad startup exemption`() {
+        val previousPause = PauseStatus.isPause
+        val previousOrigin = PauseStatus.pauseOrigin
+        val previousWorking = WorkTimeListener.working
+        PauseStatus.setAutomaticPause(false)
+        WorkTimeListener.working = true
+        StartupQuestOverlayRecoveryFence.begin()
+        try {
+            val beta = club.xiaojiawei.hsscriptbase.const.BuildChannel.identityToken(
+                club.xiaojiawei.hsscriptbase.const.BuildInfo.RELEASE_CHANNEL,
+            ) == "beta"
+            val gameAlive = runCatching { club.xiaojiawei.hsscript.utils.GameUtil.isAliveOfGame() }
+                .getOrDefault(true)
+            if (beta && !gameAlive) {
+                var acceptedHandoffCallbacks = 0
+                assertTrue(
+                    ActionDispatchGate.allowBetaMissingGameRecovery(
+                        handoffStillAuthorized = { true },
+                        onHandoffAccepted = { acceptedHandoffCallbacks++ },
+                    ),
+                )
+                assertFalse(
+                    ActionDispatchGate.isStartupQuestRecoveryFenceBlocking("startup.handoff"),
+                    "the capability must survive the async GameStarter handoff boundary",
+                )
+                assertTrue(
+                    ActionDispatchGate.allow("startup.handoff"),
+                    "the actual final startup.handoff gate must accept the authorized Beta recovery",
+                )
+                assertEquals(1, acceptedHandoffCallbacks, "the accepted final gate must reach the handoff callback")
+                assertFalse(
+                    ActionDispatchGate.allow("startup.handoff"),
+                    "a second actual handoff must be rejected after the one-use capability is consumed",
+                )
+                assertEquals(1, acceptedHandoffCallbacks, "a consumed capability must not invoke the callback twice")
+                StartupQuestOverlayRecoveryFence.begin()
+                assertTrue(ActionDispatchGate.allowBetaMissingGameRecovery { true })
+                PauseStatus.setAutomaticPause(true)
+                assertFalse(
+                    ActionDispatchGate.allow("startup.handoff"),
+                    "manual pause must invalidate the pending async handoff at the final gate",
+                )
+                PauseStatus.setAutomaticPause(false)
+                StartupQuestOverlayRecoveryFence.begin()
+                assertTrue(ActionDispatchGate.allowBetaMissingGameRecovery { true })
+                WorkTimeListener.working = false
+                assertFalse(
+                    ActionDispatchGate.allow("startup.handoff"),
+                    "a stopped worker must invalidate the pending async handoff at the final gate",
+                )
+                WorkTimeListener.working = true
+                // The first successful handoff may reconcile the stale quest
+                // fence as part of normal startup cleanup. Re-arm the fence
+                // before checking that a newly issued capability whose
+                // guardian callback is false cannot cross the real gate.
+                StartupQuestOverlayRecoveryFence.begin()
+                assertTrue(
+                    ActionDispatchGate.allowBetaMissingGameRecovery(
+                        handoffStillAuthorized = { false },
+                        onHandoffAccepted = { acceptedHandoffCallbacks++ },
+                    ),
+                )
+                assertTrue(
+                    !ActionDispatchGate.allow("startup.handoff"),
+                    "a lost guardian authorization must fail closed at the async handoff",
+                )
+                assertEquals(1, acceptedHandoffCallbacks, "a failed guardian recheck must not invoke handoff")
+            } else {
+                assertFalse(
+                    ActionDispatchGate.canBypassStartupQuestForMissingGameRecovery(
+                        betaChannel = beta,
+                        gameAlive = gameAlive,
+                        action = "startup.missing-game-recovery",
+                        scopeActive = true,
+                    ),
+                )
+            }
+        } finally {
+            StartupQuestOverlayRecoveryFence.resetForTest()
+            WorkTimeListener.working = previousWorking
+            if (previousOrigin == PauseStatus.Origin.MANUAL) {
+                PauseStatus.setManualPause(previousPause)
+            } else {
+                PauseStatus.setAutomaticPause(previousPause)
+            }
+        }
     }
 
     @Test
