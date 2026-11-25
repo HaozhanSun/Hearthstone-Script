@@ -61,7 +61,7 @@ object ActionDispatchGate {
     internal fun isStartupQuestRecoveryFenceBlocking(action: String): Boolean =
         StartupQuestOverlayRecoveryFence.isActive() &&
             !(startupQuestOverlayDispatchScope.get() == true &&
-                action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION) &&
+                StartupQuestOverlayDismissPolicy.allowedDispatchAction(action)) &&
             !canBypassStartupQuestForMissingGameRecovery(
                 betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
                 gameAlive = runCatching { GameUtil.isAliveOfGame() }.getOrDefault(true),
@@ -550,7 +550,7 @@ object ActionDispatchGate {
                     gameWindow.toString(),
                     System.currentTimeMillis(),
                 ),
-            startupQuestOverlayDismissPermitValid = action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION &&
+            startupQuestOverlayDismissPermitValid = StartupQuestOverlayDismissPolicy.allowedDispatchAction(action) &&
                 startupQuestOverlayDispatchScope.get() == true,
             freshDeckSelectionStartReady = freshDeckSelectionStartReady,
             selectedModeStartPermitValid = selectedModeStartPermitValid,
@@ -596,7 +596,7 @@ object ActionDispatchGate {
                     gameWindow.toString(),
                     System.currentTimeMillis(),
                 ),
-            startupQuestOverlayDismissPermitValid = action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION &&
+            startupQuestOverlayDismissPermitValid = StartupQuestOverlayDismissPolicy.allowedDispatchAction(action) &&
                 startupQuestOverlayDispatchScope.get() == true,
             freshDeckSelectionStartReady = freshDeckSelectionStartReady,
             startupDeckSelectionModeNavigationPermitValid = startupDeckSelectionModeNavigationReady,
@@ -655,6 +655,7 @@ object ActionDispatchGate {
         point: java.awt.Point,
         nowMs: Long,
         consume: Boolean,
+        action: String = StartupQuestOverlayDismissPolicy.DISPATCH_ACTION,
     ): Boolean {
         val valid = if (consume) {
             StartupQuestOverlayDismissAuthorization.permits.consume(permit, pid, window, point, nowMs)
@@ -663,7 +664,7 @@ object ActionDispatchGate {
         }
         if (!valid) {
             log.warn {
-                "ACTION_BLOCKED action=recovery.startup-quest-overlay.top-left " +
+                "ACTION_BLOCKED action=$action " +
                     "reason=no-valid-one-use-permit pid=${pid ?: "none"} window=${window ?: "none"} " +
                     "point=(${point.x},${point.y}) dispatch=false"
             }
@@ -677,9 +678,11 @@ object ActionDispatchGate {
         window: String?,
         point: java.awt.Point,
         nowMs: Long,
+        action: String = StartupQuestOverlayDismissPolicy.DISPATCH_ACTION,
         dispatch: () -> Boolean,
     ): Boolean {
         if (!StartupQuestOverlayRecoveryFence.isActive() ||
+            !StartupQuestOverlayDismissPolicy.allowedDispatchAction(action) ||
             !startupQuestOverlayPermitValid(permit, pid, window, point, nowMs, consume = true)
         ) return false
         startupQuestOverlayDispatchScope.set(true)

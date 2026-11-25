@@ -362,7 +362,10 @@ internal class BetaCandidateScreenWatchdog(
          * threshold plus one monitor tick, but never becomes positive evidence itself.  The next
          * classified frame must still match the exact prior PID/HWND/screen.
          */
-        const val MAX_MISSING_OBSERVATION_GAP_MS = DEFAULT_STABLE_THRESHOLD_MS + 10_000L
+        // OCR/focus contention can keep the last authorized modal frame alive
+        // for several monitor ticks. Retain it for one additional threshold,
+        // while the final PID/HWND/foreground/queue/pause fences are rechecked.
+        const val MAX_MISSING_OBSERVATION_GAP_MS = DEFAULT_STABLE_THRESHOLD_MS * 2L
         const val MIN_POSITIVE_CONFIDENCE = 85
         const val MIN_POSITIVE_OBSERVATIONS = 2
 

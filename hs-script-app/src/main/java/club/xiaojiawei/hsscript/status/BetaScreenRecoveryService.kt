@@ -491,7 +491,11 @@ internal object BetaScreenRecoveryService {
 
     private fun ScreenStateRecovery.FreshScreenObservation.captureIdentityIsUsableForCandidate(): Boolean =
         pid > 0L && hwnd.isNotBlank() && confidence >= 85 &&
-            screen.uppercase() in setOf("HOME", "TOURNAMENT", "DECK_SELECTION", "STARTUP_LAUNCHER") &&
+            (
+                screen.uppercase() in setOf("HOME", "TOURNAMENT", "DECK_SELECTION", "STARTUP_LAUNCHER") ||
+                    (screen.equals("EVENT_QUEST_OVERLAY", ignoreCase = true) &&
+                        evidence == "event-quest-promo-close-visual" && modalVisible)
+            ) &&
             !currentSessionReady && noActiveMatchmakingEvidence
 
     /** Deterministic seam for the missing-observation/queue-fence regression. */

@@ -815,6 +815,12 @@ object ScreenStateRecovery {
         ) && !visual.startupQuestOverlayVisual &&
             !visual.matchmakingSearchVisual &&
             looksLikeStartupLoadingVisual(image, visual)
+        val visualEventQuestPromoCandidate = !currentSessionReady && purpose in setOf(
+            ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.STALE_CLIENT_PROBE,
+            ScreenRecoveryCapturePurpose.IDLE_CLIENT_PROBE,
+        ) && !visual.matchmakingSearchVisual &&
+            EventQuestPromoOverlayVisualPolicy.isVisible(image)
         val visualRankProgressCandidate = currentSessionReady && purpose in setOf(
             ScreenRecoveryCapturePurpose.SCREEN_STATE_RECOVERY,
             ScreenRecoveryCapturePurpose.STARTUP_CLIENT_PROBE,
@@ -842,6 +848,13 @@ object ScreenStateRecovery {
                     mode = ModeEnum.STARTUP.name,
                     confidence = 92,
                     evidence = "startup-loading-visual",
+                )
+            visualEventQuestPromoCandidate ->
+                UpstreamScreenStateRecovery.FreshScreenClassification(
+                    screen = "EVENT_QUEST_OVERLAY",
+                    mode = ModeEnum.HUB.name,
+                    confidence = 96,
+                    evidence = "event-quest-promo-close-visual",
                 )
             visualRankProgressCandidate ->
                 UpstreamScreenStateRecovery.FreshScreenClassification(
