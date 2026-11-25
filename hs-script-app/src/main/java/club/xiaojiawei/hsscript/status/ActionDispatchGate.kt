@@ -25,12 +25,24 @@ object ActionDispatchGate {
     private val startupQuestOverlayDispatchScope = ThreadLocal<Boolean>()
     private val missingGameRecoveryDispatchScope = ThreadLocal<Boolean>()
     private val missingGameRecoveryHandoffCapability = AtomicReference<MissingGameRecoveryHandoffCapability?>()
+    private val idleWatchdogRestartHandoffCapability = AtomicReference<IdleWatchdogRestartHandoffCapability?>()
     private val seasonRankAwardDispatchScope = ThreadLocal<String>()
     private val seasonRankAwardDispatchScreenMode = ThreadLocal<String>()
     private const val MISSING_GAME_HANDOFF_CAPABILITY_TTL_MS = 30_000L
+    private const val IDLE_WATCHDOG_HANDOFF_CAPABILITY_TTL_MS = 30_000L
 
     private data class MissingGameRecoveryHandoffCapability(
         val expiresAtMs: Long,
+        val stillAuthorized: () -> Boolean,
+        val onHandoffAccepted: () -> Unit,
+    )
+
+    private data class IdleWatchdogRestartHandoffCapability(
+        val expectedGamePid: Long?,
+        val restartGeneration: Long,
+        val expiresAtMs: Long,
+        val expectedPidStillAbsent: () -> Boolean,
+        val restartGenerationMatches: () -> Boolean,
         val stillAuthorized: () -> Boolean,
         val onHandoffAccepted: () -> Unit,
     )
@@ -55,6 +67,7 @@ object ActionDispatchGate {
                 action = action,
                 scopeActive = missingGameRecoveryDispatchScope.get() == true,
             ) && !hasValidMissingGameRecoveryHandoffCapability(action) &&
+            !hasValidIdleWatchdogRestartHandoffCapability(action) &&
             !(action in SEASON_RANK_AWARD_ACTIONS && seasonRankAwardDispatchScope.get() == action)
 
     /**
@@ -78,6 +91,92 @@ object ActionDispatchGate {
         activeMatchmaking: Boolean,
         guardianAuthorized: Boolean,
     ): Boolean = betaChannel && !gameAlive && !paused && working && !activeMatchmaking && guardianAuthorized
+
+    /**
+     * The idle watchdog may bypass the unresolved startup-quest fence only
+     * after it has force-closed the exact Beta Hearthstone process.  This is a
+     * separate capability from missing-game recovery: it is one-use, short
+     * lived, and the final gate rechecks every runtime fence on the async
+     * GameStarter thread.
+     */
+    internal fun canAuthorizeBetaIdleWatchdogRestartHandoff(
+        betaChannel: Boolean,
+        gameAlive: Boolean,
+        paused: Boolean,
+        working: Boolean,
+        activeMatchmaking: Boolean,
+        currentSessionReady: Boolean,
+        guardianAuthorized: Boolean,
+        expectedPidStillAbsent: Boolean,
+        restartGenerationMatches: Boolean,
+    ): Boolean = betaChannel && !gameAlive && !paused && working &&
+        !activeMatchmaking && !currentSessionReady && guardianAuthorized &&
+        expectedPidStillAbsent && restartGenerationMatches
+
+    internal fun armBetaIdleWatchdogRestartHandoff(
+        expectedGamePid: Long?,
+        restartGeneration: Long,
+        restartGenerationMatches: () -> Boolean,
+        expectedPidStillAbsent: () -> Boolean,
+        handoffStillAuthorized: () -> Boolean,
+        onHandoffAccepted: () -> Unit = {},
+    ): Boolean {
+        if (expectedGamePid == null || expectedGamePid <= 0L) {
+            log.warn {
+                "ACTION_BLOCKED action=startup.handoff reason=idle-watchdog-game-pid-unbound dispatch=false"
+            }
+            return false
+        }
+        val betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
+        val gameAlive = runCatching { GameUtil.isAliveOfGame() }.getOrDefault(true)
+        val activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+            LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
+        val currentSessionReady = runCatching { ScreenStateRecovery.isCurrentGameSessionReadyForStart() }
+            .getOrDefault(true)
+        val expectedPidAbsent = runCatching { expectedPidStillAbsent() }.getOrDefault(false)
+        val generationMatches = runCatching { restartGenerationMatches() }.getOrDefault(false)
+        val guardianAuthorized = runCatching { handoffStillAuthorized() }.getOrDefault(false)
+        if (!canAuthorizeBetaIdleWatchdogRestartHandoff(
+                betaChannel = betaChannel,
+                gameAlive = gameAlive,
+                paused = PauseStatus.isPause,
+                working = WorkTimeListener.working,
+                activeMatchmaking = activeMatchmaking,
+                currentSessionReady = currentSessionReady,
+                guardianAuthorized = guardianAuthorized,
+                expectedPidStillAbsent = expectedPidAbsent,
+                restartGenerationMatches = generationMatches,
+            )
+        ) {
+            log.warn {
+                "ACTION_BLOCKED action=startup.handoff reason=idle-watchdog-handoff-not-authorized " +
+                    "channel=${BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL)} gameAlive=$gameAlive " +
+                    "pause=${PauseStatus.isPause} working=${WorkTimeListener.working} " +
+                    "activeMatchmaking=$activeMatchmaking currentSessionReady=$currentSessionReady " +
+                    "expectedPid=${expectedGamePid ?: "none"} expectedPidAbsent=$expectedPidAbsent " +
+                    "restartGeneration=$restartGeneration generationMatches=$generationMatches dispatch=false"
+            }
+            return false
+        }
+        missingGameRecoveryHandoffCapability.set(null)
+        idleWatchdogRestartHandoffCapability.set(
+            IdleWatchdogRestartHandoffCapability(
+                expectedGamePid = expectedGamePid,
+                restartGeneration = restartGeneration,
+                expiresAtMs = System.currentTimeMillis() + IDLE_WATCHDOG_HANDOFF_CAPABILITY_TTL_MS,
+                expectedPidStillAbsent = expectedPidStillAbsent,
+                restartGenerationMatches = restartGenerationMatches,
+                stillAuthorized = handoffStillAuthorized,
+                onHandoffAccepted = onHandoffAccepted,
+            ),
+        )
+        log.info {
+            "ACTION_DISPATCH_CAPABILITY_ARMED action=startup.handoff source=idle-watchdog " +
+                "reason=exact-beta-game-terminated restartGeneration=$restartGeneration " +
+                "expectedPid=${expectedGamePid ?: "none"} ttlMs=$IDLE_WATCHDOG_HANDOFF_CAPABILITY_TTL_MS"
+        }
+        return true
+    }
 
     /** Beta-only, no-client recovery entry point. The scope lasts for one gate check. */
     internal fun allowBetaMissingGameRecovery(
@@ -107,6 +206,7 @@ object ActionDispatchGate {
             }
             allow("startup.missing-game-recovery").also { allowed ->
                 if (allowed) {
+                    idleWatchdogRestartHandoffCapability.set(null)
                     missingGameRecoveryHandoffCapability.set(
                         MissingGameRecoveryHandoffCapability(
                             expiresAtMs = System.currentTimeMillis() + MISSING_GAME_HANDOFF_CAPABILITY_TTL_MS,
@@ -151,6 +251,43 @@ object ActionDispatchGate {
             !missingGameRecoveryHandoffCapability.compareAndSet(capability, null)
         ) return null
         return capability.onHandoffAccepted
+    }
+
+    private fun hasValidIdleWatchdogRestartHandoffCapability(action: String): Boolean {
+        if (action != "startup.handoff") return false
+        val capability = idleWatchdogRestartHandoffCapability.get() ?: return false
+        val valid = capability.expectedGamePid != null && capability.expectedGamePid > 0L &&
+            System.currentTimeMillis() <= capability.expiresAtMs &&
+            canAuthorizeBetaIdleWatchdogRestartHandoff(
+                betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
+                gameAlive = runCatching { GameUtil.isAliveOfGame() }.getOrDefault(true),
+                paused = PauseStatus.isPause,
+                working = WorkTimeListener.working,
+                activeMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen() ||
+                    LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+                currentSessionReady = runCatching { ScreenStateRecovery.isCurrentGameSessionReadyForStart() }
+                    .getOrDefault(true),
+                guardianAuthorized = runCatching { capability.stillAuthorized() }.getOrDefault(false),
+                expectedPidStillAbsent = runCatching { capability.expectedPidStillAbsent() }.getOrDefault(false),
+                restartGenerationMatches = runCatching { capability.restartGenerationMatches() }.getOrDefault(false),
+            )
+        if (!valid) idleWatchdogRestartHandoffCapability.compareAndSet(capability, null)
+        return valid
+    }
+
+    private fun consumeIdleWatchdogRestartHandoffCapability(action: String): (() -> Unit)? {
+        if (action != "startup.handoff") return {}
+        val capability = idleWatchdogRestartHandoffCapability.get() ?: return null
+        if (!hasValidIdleWatchdogRestartHandoffCapability(action) ||
+            !idleWatchdogRestartHandoffCapability.compareAndSet(capability, null)
+        ) return null
+        return capability.onHandoffAccepted
+    }
+
+    /** Test isolation for the process-wide one-use handoff capabilities. */
+    internal fun resetRecoveryHandoffCapabilitiesForTest() {
+        missingGameRecoveryHandoffCapability.set(null)
+        idleWatchdogRestartHandoffCapability.set(null)
     }
 
     internal fun dispatchSeasonRankAwardContinue(verifiedScreenMode: String = "HUB", dispatch: () -> Boolean): Boolean {
@@ -479,6 +616,22 @@ object ActionDispatchGate {
                 log.error(error) {
                     "ACTION_DISPATCH_CALLBACK_FAILED action=startup.handoff " +
                         "reason=missing-game-recovery-accounting dispatch=false"
+                }
+                return false
+            }
+        }
+        if (action == "startup.handoff" && idleWatchdogRestartHandoffCapability.get() != null) {
+            val onHandoffAccepted = consumeIdleWatchdogRestartHandoffCapability(action)
+            if (onHandoffAccepted == null) {
+                log.warn {
+                    "ACTION_BLOCKED action=startup.handoff reason=idle-watchdog-handoff-capability-consumed dispatch=false"
+                }
+                return false
+            }
+            runCatching { onHandoffAccepted() }.onFailure { error ->
+                log.error(error) {
+                    "ACTION_DISPATCH_CALLBACK_FAILED action=startup.handoff " +
+                        "reason=idle-watchdog-restart-accounting dispatch=false"
                 }
                 return false
             }

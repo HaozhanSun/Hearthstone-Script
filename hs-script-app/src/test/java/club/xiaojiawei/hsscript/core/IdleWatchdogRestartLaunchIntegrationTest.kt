@@ -27,5 +27,25 @@ class IdleWatchdogRestartLaunchIntegrationTest {
         val starterLaunch = restartBody.indexOf("StarterConfig.starter.start()", sequenceCall)
         assertTrue(sequenceCall >= 0 && forceClose > sequenceCall && launchLog > forceClose && starterLaunch > launchLog,
             "idle recovery must force-close then hand off to GameStarter/platform startup")
+        assertTrue(
+            restartBody.contains("afterForceClose = { afterClientTerminated?.invoke() }") &&
+                restartBody.indexOf("afterForceClose = { afterClientTerminated?.invoke() }") < launchLog,
+            "the watchdog capability must be armed after force-close and before ClearStarter/GameStarter handoff",
+        )
+    }
+
+    @Test
+    fun `idle watchdog callback is ordered between verified close and starter handoff`() {
+        val events = mutableListOf<String>()
+        IdleWatchdogRestartSequence.dispatch(
+            forceCloseClient = { events += "force-close" },
+            afterForceClose = { events += "arm-handoff-capability" },
+            startStarterChain = { events += "starter-chain" },
+        )
+        assertEquals(
+            listOf("force-close", "arm-handoff-capability", "starter-chain"),
+            events,
+            "ClearStarter must not reach startup.handoff before the watchdog capability is armed",
+        )
     }
 }

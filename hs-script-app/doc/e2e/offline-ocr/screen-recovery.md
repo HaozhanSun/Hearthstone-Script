@@ -983,3 +983,15 @@ guardian identity, and all other startup actions remain fail-closed. Structured
 logs must distinguish the scoped gate (`ACTION_DISPATCH_SCOPE`) from the actual
 starter-chain dispatch (`BETA_MISSING_GAME_RECOVERY_CHAIN_DISPATCHED`), and the
 retry state advances only after the chain is actually invoked.
+
+The same unresolved-quest fence must not block the separate Beta idle-watchdog
+restart after the watchdog has force-closed and verified the exact stale
+Hearthstone PID. That path arms a distinct, short-lived, single-use
+`startup.handoff` capability only between the verified close and the
+`ClearStarter`/`GameStarter` handoff. The final gate rechecks Beta channel,
+restart generation, guardian identity/heartbeat, worker working state, manual
+pause, current session, active queue/entry evidence, and absence of the killed
+PID; ordinary startup and every ambiguous or changed-identity path remain
+quest-fenced. Emit `ACTION_DISPATCH_CAPABILITY_ARMED source=idle-watchdog`
+and consume it only at the actual `startup.handoff` call, never at a logged
+restart request.

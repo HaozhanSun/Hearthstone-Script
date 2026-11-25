@@ -189,6 +189,98 @@ class ActionDispatchGateTest {
     }
 
     @Test
+    fun `idle watchdog capability crosses only the actual async startup handoff`() {
+        assertTrue(
+            ActionDispatchGate.canAuthorizeBetaIdleWatchdogRestartHandoff(
+                betaChannel = true,
+                gameAlive = false,
+                paused = false,
+                working = true,
+                activeMatchmaking = false,
+                currentSessionReady = false,
+                guardianAuthorized = true,
+                expectedPidStillAbsent = true,
+                restartGenerationMatches = true,
+            ),
+        )
+        listOf(
+            ActionDispatchGate.canAuthorizeBetaIdleWatchdogRestartHandoff(true, true, false, true, false, false, true, true, true),
+            ActionDispatchGate.canAuthorizeBetaIdleWatchdogRestartHandoff(true, false, true, true, false, false, true, true, true),
+            ActionDispatchGate.canAuthorizeBetaIdleWatchdogRestartHandoff(true, false, false, false, false, false, true, true, true),
+            ActionDispatchGate.canAuthorizeBetaIdleWatchdogRestartHandoff(true, false, false, true, true, false, true, true, true),
+            ActionDispatchGate.canAuthorizeBetaIdleWatchdogRestartHandoff(true, false, false, true, false, true, true, true, true),
+            ActionDispatchGate.canAuthorizeBetaIdleWatchdogRestartHandoff(true, false, false, true, false, false, false, true, true),
+            ActionDispatchGate.canAuthorizeBetaIdleWatchdogRestartHandoff(true, false, false, true, false, false, true, false, true),
+            ActionDispatchGate.canAuthorizeBetaIdleWatchdogRestartHandoff(true, false, false, true, false, false, true, true, false),
+            ActionDispatchGate.canAuthorizeBetaIdleWatchdogRestartHandoff(false, false, false, true, false, false, true, true, true),
+        ).forEach { assertFalse(it, "idle watchdog handoff must fail closed for every runtime fence") }
+
+        val previousPause = PauseStatus.isPause
+        val previousOrigin = PauseStatus.pauseOrigin
+        val previousWorking = WorkTimeListener.working
+        ActionDispatchGate.resetRecoveryHandoffCapabilitiesForTest()
+        PauseStatus.setAutomaticPause(false)
+        WorkTimeListener.working = true
+        StartupQuestOverlayRecoveryFence.begin()
+        try {
+            val beta = club.xiaojiawei.hsscriptbase.const.BuildChannel.identityToken(
+                club.xiaojiawei.hsscriptbase.const.BuildInfo.RELEASE_CHANNEL,
+            ) == "beta"
+            val gameAlive = runCatching { club.xiaojiawei.hsscript.utils.GameUtil.isAliveOfGame() }
+                .getOrDefault(true)
+            if (beta && !gameAlive) {
+                var accepted = 0
+                assertTrue(
+                    ActionDispatchGate.armBetaIdleWatchdogRestartHandoff(
+                        expectedGamePid = 5304L,
+                        restartGeneration = 17L,
+                        restartGenerationMatches = { true },
+                        expectedPidStillAbsent = { true },
+                        handoffStillAuthorized = { true },
+                        onHandoffAccepted = { accepted++ },
+                    ),
+                    "the watchdog must arm only after the exact game is absent and all initial fences pass",
+                )
+                assertFalse(ActionDispatchGate.isStartupQuestRecoveryFenceBlocking("startup.handoff"))
+                assertTrue(
+                    ActionDispatchGate.allow("startup.handoff"),
+                    "the actual GameStarter startup.handoff call must consume the watchdog capability",
+                )
+                assertEquals(1, accepted)
+                assertFalse(ActionDispatchGate.allow("startup.handoff"), "the capability is one-use")
+                assertEquals(1, accepted)
+
+                StartupQuestOverlayRecoveryFence.begin()
+                var generationMatches = true
+                assertTrue(
+                    ActionDispatchGate.armBetaIdleWatchdogRestartHandoff(
+                        expectedGamePid = 5304L,
+                        restartGeneration = 18L,
+                        restartGenerationMatches = { generationMatches },
+                        expectedPidStillAbsent = { true },
+                        handoffStillAuthorized = { true },
+                    ),
+                    "the watchdog arms while its generation is current",
+                )
+                generationMatches = false
+                assertFalse(
+                    ActionDispatchGate.allow("startup.handoff"),
+                    "a changed restart generation must invalidate the async handoff before launch",
+                )
+            }
+        } finally {
+            ActionDispatchGate.resetRecoveryHandoffCapabilitiesForTest()
+            StartupQuestOverlayRecoveryFence.resetForTest()
+            WorkTimeListener.working = previousWorking
+            if (previousOrigin == PauseStatus.Origin.MANUAL) {
+                PauseStatus.setManualPause(previousPause)
+            } else {
+                PauseStatus.setAutomaticPause(previousPause)
+            }
+        }
+    }
+
+    @Test
     fun `missing process releases accepted terminal cleanup but retains live or unproven state`() {
         MandatoryRankSurrenderGuard.resetForTest()
         try {

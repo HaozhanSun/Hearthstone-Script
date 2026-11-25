@@ -60,6 +60,7 @@ internal object BetaScreenRecoveryService {
     @Volatile private var lastObservedGamePid: Long? = null
     private val startupFailureDispatchInFlight = AtomicBoolean(false)
     private val startupFailureGeneration = AtomicLong(0L)
+    private val candidateRestartGeneration = AtomicLong(0L)
     @Volatile private var startupRecoveryGraceUntil = 0L
     private val startupRecoveryScheduled = AtomicBoolean(false)
     @Volatile private var missingGameRecoveryState = LiveMissingGameRecoveryPolicy.State()
@@ -301,13 +302,50 @@ internal object BetaScreenRecoveryService {
             }
             return
         }
+        val restartGeneration = candidateRestartGeneration.incrementAndGet()
+        val expectedGamePid = restartObservation?.pid
         log.error {
             "BETA_CANDIDATE_SCREEN_RESTART_AUTHORIZED " +
                 "screen=${snapshot.screen ?: "UNKNOWN"} dialog=${snapshot.dialogScreen ?: "none"} " +
                 "stableForMs=${decision.stableForMs} positiveObservations=${decision.positiveObservations} " +
-                "restartCount=${decision.restartCount} action=CORE_IDLE_WATCHDOG_RESTART_NO_INPUT_NO_PAUSE"
+                "restartCount=${decision.restartCount} restartGeneration=$restartGeneration " +
+                "expectedGamePid=${expectedGamePid ?: "none"} action=CORE_IDLE_WATCHDOG_RESTART_NO_INPUT_NO_PAUSE"
         }
-        Core.restartFromIdleWatchdog()
+        Core.restartFromIdleWatchdog(
+            afterClientTerminated = {
+                val armed = ActionDispatchGate.armBetaIdleWatchdogRestartHandoff(
+                    expectedGamePid = expectedGamePid,
+                    restartGeneration = restartGeneration,
+                    restartGenerationMatches = {
+                        candidateRestartGeneration.get() == restartGeneration
+                    },
+                    expectedPidStillAbsent = {
+                        expectedGamePid != null &&
+                            !GameUtil.isAliveOfGame() &&
+                            GameUtil.findGameProcessIdForDiagnostics() == null
+                    },
+                    handoffStillAuthorized = {
+                        val guardian = readCurrentGuardianRunState()
+                        lifecycleStarted && BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL) &&
+                            candidateRestartGeneration.get() == restartGeneration &&
+                            WorkTimeListener.working && !PauseStatus.isPause &&
+                            !GameUtil.isAliveOfGame() &&
+                            !ScreenStateRecovery.isCurrentGameSessionReadyForStart() &&
+                            !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
+                            !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard() &&
+                            !LifecycleTrace.hasRecentMatchmakingInputIntent() &&
+                            guardian?.identityMatches == true && guardian.intent == "RUNNING" &&
+                            guardian.working && !guardian.paused &&
+                            guardian.heartbeatAgeMs in 0..GuardianRunStateReader.MAX_HEARTBEAT_AGE_MS
+                    },
+                )
+                log.info {
+                    "BETA_IDLE_WATCHDOG_RESTART_HANDOFF_ARMED armed=$armed " +
+                        "restartGeneration=$restartGeneration expectedGamePid=${expectedGamePid ?: "none"} " +
+                        "acceptance=actual-startup-handoff-gate"
+                }
+            },
+        )
     }
 
     /**

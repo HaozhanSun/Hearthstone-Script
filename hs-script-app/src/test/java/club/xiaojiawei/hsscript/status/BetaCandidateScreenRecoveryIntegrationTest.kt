@@ -1250,10 +1250,19 @@ class BetaCandidateScreenRecoveryIntegrationTest {
         )
         val restartDecision = service.indexOf("BetaCandidateScreenWatchdog.Action.RESTART")
         val safetyFence = service.indexOf("candidateRestartStillSafe", restartDecision)
-        val serializedRestart = service.indexOf("Core.restartFromIdleWatchdog()", safetyFence)
+        val serializedRestart = service.indexOf("Core.restartFromIdleWatchdog(", safetyFence)
         assertTrue(
             restartDecision >= 0 && safetyFence > restartDecision && serializedRestart > safetyFence,
             "candidate recovery must pass the runtime fence before the serialized full restart",
+        )
+        assertTrue(
+            service.contains("Core.restartFromIdleWatchdog(") &&
+                service.contains("afterClientTerminated = {") &&
+                service.contains("ActionDispatchGate.armBetaIdleWatchdogRestartHandoff(") &&
+                service.contains("expectedPidStillAbsent") &&
+                service.contains("restartGenerationMatches") &&
+                service.contains("lifecycleStarted && BuildChannel.isBetaDerived(BuildInfo.RELEASE_CHANNEL)"),
+            "the candidate watchdog must arm the one-use handoff only after Core verifies the game close",
         )
 
         val reactorRoot = requireNotNull(moduleRoot.parent)
@@ -1338,7 +1347,7 @@ class BetaCandidateScreenRecoveryIntegrationTest {
             "candidate restart must bind the exact current Beta Hearthstone PID/HWND before close",
         )
         val restartDecision = service.indexOf("BetaCandidateScreenWatchdog.Action.RESTART")
-        val restart = service.indexOf("Core.restartFromIdleWatchdog()", restartDecision)
+        val restart = service.indexOf("Core.restartFromIdleWatchdog(", restartDecision)
         assertTrue(
             service.contains("noActiveMatchmakingEvidence = observation?.noActiveMatchmakingEvidence == true") &&
                 service.contains("PowerLogListener.hasCurrentGameTerminalInputFence()") &&

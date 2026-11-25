@@ -153,15 +153,19 @@ object Core {
      * The idle watchdog is not a user action and must never synthesize F2-like
      * pause transitions while recovering a confirmed home screen.
      */
-    fun restartFromIdleWatchdog(sync: Boolean = false) {
+    fun restartFromIdleWatchdog(sync: Boolean = false, afterClientTerminated: (() -> Unit)? = null) {
         log.warn {
             "CORE_IDLE_WATCHDOG_RESTART_REQUEST sync=$sync pause=${PauseStatus.isPause} " +
                 "working=${WorkTimeListener.working} action=FORCE_CLOSE_THEN_STARTER_CHAIN"
         }
-        restartInternal(sync = sync, source = "idle-watchdog")
+        restartInternal(sync = sync, source = "idle-watchdog", afterClientTerminated = afterClientTerminated)
     }
 
-    private fun restartInternal(sync: Boolean, source: String) {
+    private fun restartInternal(
+        sync: Boolean,
+        source: String,
+        afterClientTerminated: (() -> Unit)? = null,
+    ) {
         if (!restartInFlight.compareAndSet(false, true)) {
             log.warn { "CORE_RESTART_SUPPRESSED reason=restart-already-in-flight" }
             return
@@ -174,6 +178,7 @@ object Core {
                 if (source == "idle-watchdog") {
                     IdleWatchdogRestartSequence.dispatch(
                         forceCloseClient = { GameUtil.killGame(true) },
+                        afterForceClose = { afterClientTerminated?.invoke() },
                         startStarterChain = {
                             log.info { "${GAME_CN_NAME}重启中…… source=$source pauseBeforeRestart=false" }
                             log.warn {
