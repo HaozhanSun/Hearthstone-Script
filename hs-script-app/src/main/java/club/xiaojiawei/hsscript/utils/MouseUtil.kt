@@ -884,6 +884,32 @@ object MouseUtil {
     }
 
     /** Dispatch only the one fresh, permit-bound startup quest-overlay tap. */
+    internal fun dispatchStartupQuestOverlayRecoveryClick(
+        permit: StartupQuestOverlayDismissPermitStore.Permit?,
+        pid: Long?,
+        window: String?,
+        point: Point,
+        nowMs: Long,
+        dispatch: () -> Boolean,
+    ): Boolean {
+        val accepted = ActionDispatchGate.dispatchStartupQuestOverlayDismiss(
+            permit = permit,
+            pid = pid,
+            window = window,
+            point = point,
+            nowMs = nowMs,
+            dispatch = dispatch,
+        )
+        if (!accepted) {
+            log.warn {
+                "EVENT_QUEST_RECOVERY_CLICK_BLOCKED stage=mouse-consumer " +
+                    "reason=permit-or-action-gate-rejected action=${StartupQuestOverlayDismissPolicy.DISPATCH_ACTION} " +
+                    "pid=${pid ?: "none"} window=${window ?: "none"} point=(${point.x},${point.y}) input=not-sent"
+            }
+        }
+        return accepted
+    }
+
     internal fun leftButtonClickForStartupQuestOverlayRecovery(
         pos: Point,
         clientBounds: java.awt.Rectangle,
@@ -968,7 +994,7 @@ object MouseUtil {
                     }
                     return false
                 }
-                return ActionDispatchGate.dispatchStartupQuestOverlayDismiss(
+                return dispatchStartupQuestOverlayRecoveryClick(
                     permit,
                     expectedPid,
                     expectedHwnd.toString(),

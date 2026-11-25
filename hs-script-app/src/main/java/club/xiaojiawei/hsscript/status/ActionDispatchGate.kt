@@ -60,7 +60,8 @@ object ActionDispatchGate {
 
     internal fun isStartupQuestRecoveryFenceBlocking(action: String): Boolean =
         StartupQuestOverlayRecoveryFence.isActive() &&
-            startupQuestOverlayDispatchScope.get() != true &&
+            !(startupQuestOverlayDispatchScope.get() == true &&
+                action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION) &&
             !canBypassStartupQuestForMissingGameRecovery(
                 betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
                 gameAlive = runCatching { GameUtil.isAliveOfGame() }.getOrDefault(true),

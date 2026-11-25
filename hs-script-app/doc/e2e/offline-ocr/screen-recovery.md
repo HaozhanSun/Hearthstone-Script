@@ -26,6 +26,13 @@
   pause, or non-working state must retain the fence. Log the detected evidence
   and each release/block reason so a visible chooser cannot remain hidden
   behind stale internal LOGIN state.
+- The one-use Event Quest dismissal scope is action-specific: it may authorize
+  only `recovery.startup-quest-overlay.top-left` through the permit-bound
+  `MouseUtil` consumer. It must never open generic `mouse.left`, Hub promo/ad,
+  mode-selection, queue, or gameplay input while the startup quest fence is
+  active. Emit a structured block reason for stale permit, PID/HWND/focus
+  drift, pause, queue/game contradiction, or a second use of the permit; a
+  successful `SendInput` must remain distinct from a fresh overlay-gone proof.
 - Beta v4.16.752 live evidence (2026-11-08): Event Quest recovery's accepted
   `(0,0)` top-left click was followed by a fresh capture with the overlay gone
   and `hub-mode-chooser-visual`; the modal dismissal itself worked. Earlier

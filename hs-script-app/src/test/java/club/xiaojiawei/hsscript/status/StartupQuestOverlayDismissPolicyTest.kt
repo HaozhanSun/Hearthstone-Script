@@ -208,6 +208,56 @@ class StartupQuestOverlayDismissPolicyTest {
     }
 
     @Test
+    fun `overlay dispatch scope authorizes only the exact one-use overlay action`() {
+        val action = StartupQuestOverlayDismissPolicy.DISPATCH_ACTION
+        val point = Point(8, 8)
+        val wasWorking = WorkTimeListener.working
+        val wasPaused = PauseStatus.isPause
+        val wasAutomaticPause = PauseStatus.isAutomaticPause
+        try {
+            WorkTimeListener.working = true
+            PauseStatus.setAutomaticPause(false)
+            StartupQuestOverlayRecoveryFence.begin()
+            val permit = assertNotNull(
+                StartupQuestOverlayDismissAuthorization.permits.issue(44L, "window-55", point, 1_000L),
+            )
+            var callbackRan = false
+            assertTrue(
+                ActionDispatchGate.dispatchStartupQuestOverlayDismiss(
+                    permit,
+                    44L,
+                    "window-55",
+                    point,
+                    1_001L,
+                ) {
+                    callbackRan = true
+                    assertTrue(ActionDispatchGate.allow(action), "the consumed permit must authorize its exact action")
+                    assertFalse(
+                        ActionDispatchGate.allow("mouse.left"),
+                        "the overlay exception must never open a generic mouse action",
+                    )
+                    true
+                },
+            )
+            assertTrue(callbackRan)
+            assertTrue(
+                ActionDispatchGate.isStartupQuestRecoveryFenceBlocking(action),
+                "the temporary scope is removed after the one-use callback, so a second special action is blocked",
+            )
+            assertTrue(ActionDispatchGate.isStartupQuestRecoveryFenceBlocking("mouse.left"))
+        } finally {
+            StartupQuestOverlayRecoveryFence.resetForTest()
+            StartupQuestOverlayDismissAuthorization.permits.revoke()
+            WorkTimeListener.working = wasWorking
+            when {
+                wasPaused && wasAutomaticPause -> PauseStatus.setAutomaticPause(true)
+                wasPaused -> PauseStatus.setManualPause(true)
+                else -> PauseStatus.setAutomaticPause(false)
+            }
+        }
+    }
+
+    @Test
     fun `top-left point stays inside the captured client bounds`() {
         assertEquals(
             Point(108, 208),
