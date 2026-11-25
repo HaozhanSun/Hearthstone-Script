@@ -437,12 +437,24 @@ internal object BetaScreenRecoveryService {
         now: Long,
         observation: ScreenStateRecovery.FreshScreenObservation?,
     ): BetaCandidateScreenWatchdog.Snapshot {
+        val authorizedObservation = lastCandidateAuthorizedObservation
+        val allowExtendedMissingGrace = authorizedObservation?.evidence == "event-quest-promo-close-visual"
+        val maxMissingGap = if (allowExtendedMissingGrace) {
+            BetaCandidateScreenWatchdog.EXTENDED_PROMO_MISSING_OBSERVATION_GAP_MS
+        } else {
+            BetaCandidateScreenWatchdog.MAX_MISSING_OBSERVATION_GAP_MS
+        }
         val staleObservation = observation == null &&
-            lastCandidateAuthorizedObservation?.let {
-                now - lastCandidateAuthorizedObservationAtMs <= BetaCandidateScreenWatchdog.MAX_MISSING_OBSERVATION_GAP_MS
+            authorizedObservation?.let {
+                now - lastCandidateAuthorizedObservationAtMs <= maxMissingGap
             } == true
         val effectiveObservation = observation ?: lastCandidateAuthorizedObservation.takeIf { staleObservation }
-        val activeQueueEvidence = hasCurrentCandidateQueueEvidence()
+        // A fresh, foreground-authorized deck Start frame is the explicit
+        // reconciliation boundary for stale pre-match latches.  Preserve a
+        // real terminal-input fence, but do not let the same stale screen
+        // latch re-veto the just-reconciled frame while it is being observed.
+        val freshDeckReconciled = effectiveObservation?.let(::isFreshAuthorizedDeckSelection) == true
+        val activeQueueEvidence = hasCurrentCandidateQueueEvidence() && !freshDeckReconciled
         val preSessionHealthyRecoveryCandidate = observation != null &&
             !observation.currentSessionReady &&
             observation.noActiveMatchmakingEvidence &&
@@ -486,6 +498,7 @@ internal object BetaScreenRecoveryService {
             allowHealthyScreenRecovery = preSessionHealthyRecoveryCandidate,
             observationMissing = observation == null,
             staleObservationAvailable = staleObservation,
+            allowExtendedMissingObservationGrace = allowExtendedMissingGrace,
         )
     }
 

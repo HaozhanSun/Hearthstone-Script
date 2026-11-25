@@ -1106,6 +1106,7 @@ class BetaCandidateScreenRecoveryIntegrationTest {
             observation = observation,
             rememberAuthorizedObservation = true,
         ).copy(working = true, paused = false)
+        assertTrue(first.allowExtendedMissingObservationGrace)
         assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(first).action)
         assertEquals(
             BetaCandidateScreenWatchdog.Action.WAIT,

@@ -58,6 +58,8 @@ internal class BetaCandidateScreenWatchdog(
         val observationMissing: Boolean = false,
         /** A prior authorized positive frame still identifies this same candidate. */
         val staleObservationAvailable: Boolean = false,
+        /** The exact promo overlay may span several OCR/focus monitor ticks. */
+        val allowExtendedMissingObservationGrace: Boolean = false,
     )
 
     data class Decision(
@@ -321,7 +323,7 @@ internal class BetaCandidateScreenWatchdog(
                 restartCount = restartCount,
             )
         }
-        if (gapMs > MAX_MISSING_OBSERVATION_GAP_MS) {
+        if (gapMs > maxMissingObservationGapMs(snapshot)) {
             stableSinceMs = snapshot.nowMs
             positiveObservations = 0
             requireFreshBaseline = true
@@ -329,7 +331,7 @@ internal class BetaCandidateScreenWatchdog(
         lastObservationAtMs = snapshot.nowMs
         return Decision(
             action = Action.WAIT_UNCERTAIN,
-            reason = if (gapMs > MAX_MISSING_OBSERVATION_GAP_MS) {
+            reason = if (gapMs > maxMissingObservationGapMs(snapshot)) {
                 "observation-missing-gap-expired"
             } else {
                 "observation-missing"
@@ -356,16 +358,10 @@ internal class BetaCandidateScreenWatchdog(
         const val DEFAULT_STABLE_THRESHOLD_MS = 120_000L
         const val DEFAULT_REPEAT_BACKOFF_MS = 120_000L
         const val DEFAULT_MAX_RESTARTS_PER_IDENTITY = 2
-        /**
-         * Foreground capture is serialized with the ordinary recovery loop.
-         * A null probe is therefore allowed to span the full candidate
-         * threshold plus one monitor tick, but never becomes positive evidence itself.  The next
-         * classified frame must still match the exact prior PID/HWND/screen.
-         */
-        // OCR/focus contention can keep the last authorized modal frame alive
-        // for several monitor ticks. Retain it for one additional threshold,
-        // while the final PID/HWND/foreground/queue/pause fences are rechecked.
-        const val MAX_MISSING_OBSERVATION_GAP_MS = DEFAULT_STABLE_THRESHOLD_MS * 2L
+        /** Default grace is one monitor tick beyond the 120-second threshold. */
+        const val MAX_MISSING_OBSERVATION_GAP_MS = DEFAULT_STABLE_THRESHOLD_MS + 10_000L
+        /** Only the exact promo visual may use the longer focus/OCR grace. */
+        const val EXTENDED_PROMO_MISSING_OBSERVATION_GAP_MS = DEFAULT_STABLE_THRESHOLD_MS * 2L
         const val MIN_POSITIVE_CONFIDENCE = 85
         const val MIN_POSITIVE_OBSERVATIONS = 2
 
@@ -392,4 +388,11 @@ internal class BetaCandidateScreenWatchdog(
             "SEASON_RANK_AWARD_REWARDS",
         )
     }
+
+    private fun maxMissingObservationGapMs(snapshot: Snapshot): Long =
+        if (snapshot.allowExtendedMissingObservationGrace) {
+            EXTENDED_PROMO_MISSING_OBSERVATION_GAP_MS
+        } else {
+            MAX_MISSING_OBSERVATION_GAP_MS
+        }
 }
