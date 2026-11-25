@@ -91,6 +91,8 @@ $requiredFocusedRegressionTests = @(
     'TerminalCleanupIncidentFixtureTest',
     'GameResultScreenshotTest',
     'ResultPageEvidencePolicyTest',
+    'StartupQuestOverlayDismissPolicyTest',
+    'MouseUtilFocusGateTest',
     'BetaCandidateScreenWatchdogTest',
     'IdleWatchdogRestartLaunchIntegrationTest',
     'BetaCandidateScreenRecoveryIntegrationTest',
