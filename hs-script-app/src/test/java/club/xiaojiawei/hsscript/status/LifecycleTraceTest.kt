@@ -62,6 +62,77 @@ class LifecycleTraceTest {
     }
 
     @Test
+    fun betaGenerationRearmClearsStaleOptionalStartupActivityWhenExtensionsAreDisabled() {
+        val now = 2_000_000L
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)
+        BetaScreenRecoveryService.onFeatureChanged(true)
+        BetaScreenRecoveryService.markStartupHandoffAttempt("stale-before-toggle", now)
+        assertTrue(
+            BetaScreenRecoveryService.startupHandoffActivityDefersForTest(now + 1),
+            "the test must first establish an active startup-handoff window",
+        )
+
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
+        BetaScreenRecoveryService.onFeatureChanged(false)
+        BetaScreenRecoveryService.markStartupRequested("beta-missing-game-restart", now + 2)
+
+        assertFalse(
+            BetaScreenRecoveryService.startupHandoffActivityDefersForTest(now + 3),
+            "an optional activity window must not defer exact-Beta missing-game recovery after re-arm",
+        )
+    }
+
+    @Test
+    fun freshStartupHandoffActivityCannotDeferBetaRecoveryPastMissingGameGrace() {
+        val now = 3_000_000L
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)
+        BetaScreenRecoveryService.onFeatureChanged(true)
+        BetaScreenRecoveryService.markStartupRequested("beta-generation-start", now)
+        BetaScreenRecoveryService.markStartupHandoffAttempt("fresh-starter-retry", now + 1)
+
+        val startupChainActive = BetaScreenRecoveryService.startupHandoffActivityDefersForTest(now + 2)
+        assertTrue(startupChainActive, "the production tracker must observe the fresh handoff retry")
+
+        fun evaluate(missingSinceMs: Long, nowMs: Long) = LiveMissingGameRecoveryPolicy.evaluate(
+            LiveMissingGameRecoveryPolicy.State(missingSinceMs = missingSinceMs),
+            LiveMissingGameRecoveryPolicy.Evidence(
+                identityMatches = true,
+                heartbeatAgeMs = 1_000L,
+                runningIntent = true,
+                working = true,
+                paused = false,
+                gameAlive = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                terminalState = false,
+                startupChainActive = startupChainActive,
+                nowMs = nowMs,
+            ),
+            maxStarterChainAttempts = LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS,
+            allowStartupChainRecoveryAfterMissingGrace = true,
+        )
+
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.WAIT_STARTUP_CHAIN,
+            evaluate(
+                now - LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS + 1L,
+                now,
+            ).decision,
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            evaluate(
+                now - LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS,
+                now,
+            ).decision,
+            "a fresh starter retry must not recreate the five-minute deferment after 120000ms",
+        )
+
+        // Leave the shared production tracker clean for the remaining tests.
+        BetaScreenRecoveryService.markStartupRequested("test-cleanup", now + 3)
+    }
+
+    @Test
     fun startupRecoveryGraceDefersOptionalRecoveryOnlyDuringTheGraceWindow() {
         val now = 1_000_000L
         ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)

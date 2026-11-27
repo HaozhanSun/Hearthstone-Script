@@ -129,6 +129,8 @@ internal object LiveMissingGameRecoveryPolicy {
         state: State,
         evidence: Evidence,
         maxStarterChainAttempts: Int = MAX_STARTER_CHAIN_ATTEMPTS,
+        /** Exact Beta only: bound startup activity by the missing-client grace. */
+        allowStartupChainRecoveryAfterMissingGrace: Boolean = false,
     ): Evaluation {
         if (!evidence.identityMatches || evidence.heartbeatAgeMs !in 0..GuardianRunStateReader.MAX_HEARTBEAT_AGE_MS) {
             return Evaluation(State(), Decision.WAIT_UNVERIFIED)
@@ -145,10 +147,20 @@ internal object LiveMissingGameRecoveryPolicy {
 
         val missingSince = state.missingSinceMs.takeIf { it > 0L } ?: evidence.nowMs
         val activeState = state.copy(missingSinceMs = missingSince)
-        if (evidence.startupChainActive) return Evaluation(activeState, Decision.WAIT_STARTUP_CHAIN)
-        if (evidence.nowMs - missingSince < MISSING_GAME_GRACE_MS) {
+        val missingForMs = evidence.nowMs - missingSince
+        if (evidence.startupChainActive && !allowStartupChainRecoveryAfterMissingGrace) {
+            return Evaluation(activeState, Decision.WAIT_STARTUP_CHAIN)
+        }
+        if (missingForMs < MISSING_GAME_GRACE_MS) {
+            if (evidence.startupChainActive) return Evaluation(activeState, Decision.WAIT_STARTUP_CHAIN)
             return Evaluation(activeState, Decision.WAIT_MISSING_GAME_GRACE)
         }
+        // Startup handoff activity is initiation evidence, not proof that a
+        // client will appear. Once the independent 120s no-client grace has
+        // elapsed, the already-authorized missing-game path must be allowed to
+        // run even if the starter keeps retrying. Otherwise each retry can
+        // recreate startupChainActive and defer recovery until the tracker's
+        // much longer continuous-activity cap.
         if (activeState.lastAttemptAtMs > 0L &&
             evidence.nowMs - activeState.lastAttemptAtMs < RETRY_COOLDOWN_MS
         ) {

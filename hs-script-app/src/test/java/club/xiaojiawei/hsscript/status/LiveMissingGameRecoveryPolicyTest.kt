@@ -442,7 +442,32 @@ class LiveMissingGameRecoveryPolicyTest {
     }
 
     @Test
-    fun `startup chain activity postpones duplicate start`() {
+    fun `startup chain activity postpones only before missing-game grace`() {
+        val beforeGrace = LiveMissingGameRecoveryPolicy.evaluate(
+            LiveMissingGameRecoveryPolicy.State(
+                missingSinceMs = now - LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS + 1L,
+            ),
+            evidence(startupChainActive = true),
+            allowStartupChainRecoveryAfterMissingGrace = true,
+        )
+        assertEquals(LiveMissingGameRecoveryPolicy.Decision.WAIT_STARTUP_CHAIN, beforeGrace.decision)
+
+        val atGrace = LiveMissingGameRecoveryPolicy.evaluate(
+            LiveMissingGameRecoveryPolicy.State(
+                missingSinceMs = now - LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS,
+            ),
+            evidence(startupChainActive = true),
+            allowStartupChainRecoveryAfterMissingGrace = true,
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            atGrace.decision,
+            "repeated starter attempts must not defer the authorized no-client recovery beyond 120000ms",
+        )
+    }
+
+    @Test
+    fun `legacy callers still defer active startup chain after missing grace`() {
         val result = LiveMissingGameRecoveryPolicy.evaluate(
             LiveMissingGameRecoveryPolicy.State(missingSinceMs = now - 300_000L),
             evidence(startupChainActive = true),

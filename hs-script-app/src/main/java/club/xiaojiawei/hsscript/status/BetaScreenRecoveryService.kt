@@ -942,6 +942,7 @@ internal object BetaScreenRecoveryService {
                 nowMs = now,
             ),
             maxStarterChainAttempts = maxStarterChainAttempts,
+            allowStartupChainRecoveryAfterMissingGrace = exactBetaChannel,
         )
         missingGameRecoveryState = evaluation.state
         when (evaluation.decision) {
@@ -1418,6 +1419,11 @@ internal object BetaScreenRecoveryService {
         // activity tracker and grace window remain optional.
         if (!optionalExtensionsEnabled) {
             if (exactBetaChannel) {
+                // A handoff window can have been recorded while optional
+                // extensions were enabled and then survive a runtime toggle.
+                // It must not defer the always-on Beta missing-game monitor
+                // until the tracker's 300-second continuous-activity cap.
+                startupHandoffActivity.reset()
                 LifecycleTrace.mark(
                     "startup-recovery-generation-rearmed reason=$reason " +
                         "optionalExtensionsEnabled=false"
@@ -1436,6 +1442,26 @@ internal object BetaScreenRecoveryService {
     /** Test seam for the always-on startup-generation accounting boundary. */
     internal fun missingGameRecoveryStateForTest(): LiveMissingGameRecoveryPolicy.State =
         synchronized(missingGameRecoveryAccountingLock) { missingGameRecoveryState }
+
+    /** Production-consumer seam for stale startup-activity re-arm coverage. */
+    internal fun startupHandoffActivityDefersForTest(now: Long): Boolean =
+        startupHandoffActivity.shouldDeferNoProgress(
+            StartupHandoffActivityTracker.Context(
+                working = true,
+                paused = false,
+                automaticPause = false,
+                recoveryPending = false,
+                replaying = false,
+                inWar = false,
+                terminalState = false,
+                screen = NoProgressWatchdog.ScreenExpectation.STARTUP,
+                mode = "NONE",
+                expectedMode = "NONE",
+                gameProcessAlive = false,
+                powerLogPath = null,
+            ),
+            now,
+        )
 
     fun markStartupHandoffAttempt(reason: String, now: Long) {
         if (!ScreenRecoveryRuntime.isEnabled()) return

@@ -1062,5 +1062,12 @@ without entering `startup.missing-game-recovery` or dispatching a starter
 handoff. Keep this rule separate from the positively captured client-screen
 watchdog: both use a 120-second boundary, but the missing-game timer requires
 fresh Beta identity, independent process absence, guardian freshness, and all
-safety vetoes. Regress probe-true and probe-exception cases as well as the
-119999/120000 boundary.
+safety vetoes. When optional screen-recovery extensions are disabled, exact-Beta
+generation re-arm must also clear any older startup-handoff activity window;
+otherwise its optional 300-second continuous-activity cap can defer the
+always-on missing-game monitor after a failed restart. Startup-handoff activity
+may postpone the missing-game decision only before the independent 120000 ms
+no-client grace; repeated starter attempts must not recreate that deferment
+after the boundary. Regress probe-true and probe-exception cases,
+stale-activity re-arm, active-handoff 119999/120000 behavior, and the later
+generation cycle.
