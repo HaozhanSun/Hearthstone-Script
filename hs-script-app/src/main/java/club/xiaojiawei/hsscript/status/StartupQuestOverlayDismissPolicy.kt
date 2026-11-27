@@ -145,6 +145,32 @@ internal object StartupQuestOverlayRecoveryFence {
             }
         }
     }
+
+    /**
+     * Release only an overlay fence that belongs to an observed Hearthstone
+     * client which has since exited. The process-owned identity is important:
+     * an unresolved fence with no captured PID/HWND remains fail-closed, and a
+     * new/live client, queue, terminal state, or operator/human hold must keep
+     * the fence intact. This is used by missing-game recovery before its
+     * bounded starter-chain handoff, not by ordinary input paths.
+     */
+    fun reconcileExitedGameForMissingRecovery(
+        gameProcessAlive: Boolean,
+        activeGame: Boolean,
+        activeMatchmaking: Boolean,
+        terminalState: Boolean,
+        recentMatchmakingIntent: Boolean,
+        working: Boolean,
+        paused: Boolean,
+    ): Boolean {
+        if (!active.get() || sessionIdentity == null || gameProcessAlive ||
+            activeGame || activeMatchmaking || terminalState || recentMatchmakingIntent ||
+            !working || paused
+        ) return false
+        resolve()
+        return true
+    }
+
     fun escalationDecision(evidence: StartupQuestOverlayEscalationPolicy.Evidence) = escalation.observe(evidence)
     fun tryBeginObservation() = active.get() && inFlight.compareAndSet(false, true)
     fun finishObservation() { inFlight.set(false) }

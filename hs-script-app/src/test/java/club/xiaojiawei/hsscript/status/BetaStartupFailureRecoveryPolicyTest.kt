@@ -8,6 +8,30 @@ import org.junit.jupiter.api.Test
 class BetaStartupFailureRecoveryPolicyTest {
 
     @Test
+    fun `default missing-process startup fallback is exactly two minutes`() {
+        assertEquals(120_000L, BetaStartupFailureRecoveryPolicy.DEFAULT_NO_PROGRESS_TIMEOUT_MS)
+        val policy = BetaStartupFailureRecoveryPolicy()
+        val missing = snapshot(
+            nowMs = 119_999L,
+            stalledForMs = 119_999L,
+            processAlive = false,
+            currentPid = null,
+            gameWindowMatchesPid = false,
+            powerLogIsCurrentSession = false,
+            powerLogLength = 0L,
+            dialog = null,
+        )
+        val beforeBoundary = policy.observe(missing)
+        assertEquals(BetaStartupFailureRecoveryPolicy.Action.WAIT, beforeBoundary.action)
+        assertEquals("startup-no-progress-grace", beforeBoundary.reason)
+        assertEquals(1L, beforeBoundary.retryDelayMs)
+
+        val atBoundary = policy.observe(missing.copy(nowMs = 120_000L, stalledForMs = 120_000L))
+        assertEquals(BetaStartupFailureRecoveryPolicy.Action.REBIND_WINDOW, atBoundary.action)
+        assertEquals("game-process-missing", atBoundary.reason)
+    }
+
+    @Test
     fun `only exact native Hearthstone application error caption with breakpoint body is accepted`() {
         val exact = candidate()
         assertTrue(WindowsApplicationErrorDialogProbe.isTargetDialog(exact))

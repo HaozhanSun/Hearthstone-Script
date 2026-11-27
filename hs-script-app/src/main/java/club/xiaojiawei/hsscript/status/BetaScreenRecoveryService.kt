@@ -758,6 +758,21 @@ internal object BetaScreenRecoveryService {
         val activeMatchmakingScreen = pid != null && LifecycleTrace.hasRecentActiveMatchmakingScreen()
         val recentMatchmakingIntent = LifecycleTrace.hasRecentMatchmakingInputIntent()
         val activeOrRecentMatchmaking = activeMatchmakingScreen || recentMatchmakingIntent
+        if (pid == null && StartupQuestOverlayRecoveryFence.reconcileExitedGameForMissingRecovery(
+                gameProcessAlive = false,
+                activeGame = liveMatch,
+                activeMatchmaking = activeOrRecentMatchmaking,
+                terminalState = terminal,
+                recentMatchmakingIntent = recentMatchmakingIntent,
+                working = WorkTimeListener.working,
+                paused = PauseStatus.isPause,
+            )
+        ) {
+            log.info {
+                "BETA_MISSING_GAME_RECOVERY_QUEST_FENCE_RECONCILED " +
+                    "reason=observed-overlay-client-exited exactProcessPresent=false dispatch=CONTINUE"
+            }
+        }
         val dialog = WindowsApplicationErrorDialogProbe.detect()?.asPolicyEvidence()
         val hwnd = ScriptStatus.gameHWND
         val windowMatchesPid = pid != null && hwnd != null &&

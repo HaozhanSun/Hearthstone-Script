@@ -116,11 +116,25 @@ class LiveMissingGameRecoveryPolicyTest {
         val first = LiveMissingGameRecoveryPolicy.evaluate(LiveMissingGameRecoveryPolicy.State(), evidence())
         assertEquals(LiveMissingGameRecoveryPolicy.Decision.WAIT_MISSING_GAME_GRACE, first.decision)
 
+        val oneMillisecondEarly = LiveMissingGameRecoveryPolicy.evaluate(
+            first.state,
+            evidence(nowMs = now + LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS - 1L),
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.WAIT_MISSING_GAME_GRACE,
+            oneMillisecondEarly.decision,
+            "the missing-game fallback must not fire at 119999ms",
+        )
+
         val afterGrace = LiveMissingGameRecoveryPolicy.evaluate(
             first.state,
             evidence(nowMs = now + LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS),
         )
-        assertEquals(LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN, afterGrace.decision)
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            afterGrace.decision,
+            "the fallback becomes eligible exactly at 120000ms",
+        )
     }
 
     @Test
@@ -336,6 +350,27 @@ class LiveMissingGameRecoveryPolicyTest {
         )
         assertEquals(LiveMissingGameRecoveryDispatch.Result.BLOCKED, denied)
         assertEquals(1, starterChainCalls)
+    }
+
+    @Test
+    fun `authorization loss after mode recovery prevents duplicate starter dispatch`() {
+        var modeRecoveryCalls = 0
+        var starterChainCalls = 0
+        var authorized = true
+        val result = LiveMissingGameRecoveryDispatch.dispatch(
+            decision = LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            stillAuthorized = {
+                if (modeRecoveryCalls == 0) authorized else false
+            },
+            recoverModeToStartup = {
+                modeRecoveryCalls++
+                authorized = false
+            },
+            startConfiguredStarterChain = { starterChainCalls++ },
+        )
+        assertEquals(LiveMissingGameRecoveryDispatch.Result.BLOCKED, result)
+        assertEquals(1, modeRecoveryCalls)
+        assertEquals(0, starterChainCalls, "a changed pause/guardian/queue state must not start a second path")
     }
 
     @Test
