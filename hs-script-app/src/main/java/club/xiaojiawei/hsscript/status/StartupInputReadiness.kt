@@ -493,7 +493,10 @@ internal object StartupInputAuthorizationPolicy {
         )
     ) {
         startupDeckSelectionModeNavigationReady
-    } else if (action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION) {
+    } else if (StartupQuestOverlayDismissPolicy.allowedDispatchAction(action)) {
+        // The promo-close action is a separate, point-bound permit. It must
+        // cross the final startup gate, but never inherit generic startup or
+        // gameplay input authorization.
         startupQuestOverlayDismissPermitValid
     } else if (action == SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION) {
         seasonRankAwardContinuePermitValid

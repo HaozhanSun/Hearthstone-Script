@@ -13,6 +13,7 @@ import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The last, process-wide gate before an action can reach the desktop.  Phase
@@ -28,13 +29,14 @@ object ActionDispatchGate {
     private val idleWatchdogRestartHandoffCapability = AtomicReference<IdleWatchdogRestartHandoffCapability?>()
     private val seasonRankAwardDispatchScope = ThreadLocal<String>()
     private val seasonRankAwardDispatchScreenMode = ThreadLocal<String>()
-    private const val MISSING_GAME_HANDOFF_CAPABILITY_TTL_MS = 30_000L
+    private const val MISSING_GAME_HANDOFF_CAPABILITY_TTL_MS = 120_000L
     private const val IDLE_WATCHDOG_HANDOFF_CAPABILITY_TTL_MS = 30_000L
 
     private data class MissingGameRecoveryHandoffCapability(
         val expiresAtMs: Long,
         val stillAuthorized: () -> Boolean,
         val onHandoffAccepted: () -> Unit,
+        val remainingHandoffs: AtomicInteger = AtomicInteger(2),
     )
 
     private data class IdleWatchdogRestartHandoffCapability(
@@ -232,6 +234,7 @@ object ActionDispatchGate {
         if (action != "startup.handoff") return false
         val capability = missingGameRecoveryHandoffCapability.get() ?: return false
         val valid = System.currentTimeMillis() <= capability.expiresAtMs &&
+            capability.remainingHandoffs.get() > 0 &&
             canAuthorizeBetaMissingGameHandoff(
                 betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
                 gameAlive = runCatching { GameUtil.isAliveOfGame() }.getOrDefault(true),
@@ -248,9 +251,8 @@ object ActionDispatchGate {
     private fun consumeMissingGameRecoveryHandoffCapability(action: String): (() -> Unit)? {
         if (action != "startup.handoff") return {}
         val capability = missingGameRecoveryHandoffCapability.get() ?: return null
-        if (!hasValidMissingGameRecoveryHandoffCapability(action) ||
-            !missingGameRecoveryHandoffCapability.compareAndSet(capability, null)
-        ) return null
+        if (!hasValidMissingGameRecoveryHandoffCapability(action)) return null
+        if (capability.remainingHandoffs.getAndDecrement() <= 0) return null
         return capability.onHandoffAccepted
     }
 

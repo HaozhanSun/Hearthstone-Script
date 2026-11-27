@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import club.xiaojiawei.hsscript.status.surrender.CurrentGamePowerLogTerminalTracker
+import club.xiaojiawei.hsscript.listener.WorkTimeListener
 
 class EventQuestOverlayRecoveryPolicyTest {
     @Test
@@ -33,12 +34,25 @@ class EventQuestOverlayRecoveryPolicyTest {
         ))))
 
         StartupQuestOverlayRecoveryFence.resetForTest()
+        val previousWorking = WorkTimeListener.working
+        val previousPause = PauseStatus.isPause
+        WorkTimeListener.working = true
+        PauseStatus.setAutomaticPause(false)
         StartupQuestOverlayRecoveryFence.begin()
         val permit = StartupQuestOverlayDismissAuthorization.permits.issue(
             30_712L, "native@0x210306", point, 10_000L,
         )
         var dispatched = false
         try {
+            assertTrue(
+                StartupInputAuthorizationPolicy.allows(
+                    action = StartupQuestOverlayDismissPolicy.PROMO_CLOSE_DISPATCH_ACTION,
+                    currentSessionReady = false,
+                    freshOnlineMenuReady = false,
+                    startupQuestOverlayDismissPermitValid = true,
+                ),
+                "the exact promo action must pass the final startup gate only with its scoped permit",
+            )
             assertTrue(ActionDispatchGate.dispatchStartupQuestOverlayDismiss(
                 permit = permit,
                 pid = 30_712L,
@@ -50,6 +64,10 @@ class EventQuestOverlayRecoveryPolicyTest {
                 dispatched = !ActionDispatchGate.isStartupQuestRecoveryFenceBlocking(
                     StartupQuestOverlayDismissPolicy.PROMO_CLOSE_DISPATCH_ACTION,
                 )
+                assertTrue(
+                    ActionDispatchGate.allow(StartupQuestOverlayDismissPolicy.PROMO_CLOSE_DISPATCH_ACTION),
+                    "the actual promo consumer gate must accept the scoped one-use action",
+                )
                 true
             })
             assertTrue(dispatched, "the scoped promo action must cross the exact overlay fence")
@@ -58,6 +76,8 @@ class EventQuestOverlayRecoveryPolicyTest {
             ), "the scoped permit must end when the bounded dispatch returns")
         } finally {
             StartupQuestOverlayRecoveryFence.resetForTest()
+            WorkTimeListener.working = previousWorking
+            PauseStatus.setAutomaticPause(previousPause)
         }
     }
 

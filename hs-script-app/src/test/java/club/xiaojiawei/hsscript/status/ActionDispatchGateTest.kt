@@ -130,11 +130,16 @@ class ActionDispatchGateTest {
                     "the actual final startup.handoff gate must accept the authorized Beta recovery",
                 )
                 assertEquals(1, acceptedHandoffCallbacks, "the accepted final gate must reach the handoff callback")
+                assertTrue(
+                    ActionDispatchGate.allow("startup.handoff"),
+                    "a bounded missing-game recovery may retry the alternate launcher lane",
+                )
+                assertEquals(2, acceptedHandoffCallbacks, "both bounded launcher lanes must reach the handoff callback")
                 assertFalse(
                     ActionDispatchGate.allow("startup.handoff"),
-                    "a second actual handoff must be rejected after the one-use capability is consumed",
+                    "the bounded missing-game capability must reject a third handoff",
                 )
-                assertEquals(1, acceptedHandoffCallbacks, "a consumed capability must not invoke the callback twice")
+                assertEquals(2, acceptedHandoffCallbacks, "the handoff budget must not be exceeded")
                 StartupQuestOverlayRecoveryFence.begin()
                 assertTrue(ActionDispatchGate.allowBetaMissingGameRecovery { true })
                 PauseStatus.setAutomaticPause(true)
@@ -166,7 +171,7 @@ class ActionDispatchGateTest {
                     !ActionDispatchGate.allow("startup.handoff"),
                     "a lost guardian authorization must fail closed at the async handoff",
                 )
-                assertEquals(1, acceptedHandoffCallbacks, "a failed guardian recheck must not invoke handoff")
+                assertEquals(2, acceptedHandoffCallbacks, "a failed guardian recheck must not invoke a third handoff")
             } else {
                 assertFalse(
                     ActionDispatchGate.canBypassStartupQuestForMissingGameRecovery(
