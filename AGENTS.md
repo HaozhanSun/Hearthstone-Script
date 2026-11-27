@@ -46,6 +46,30 @@ Do not call a build complete if the build succeeds but deployment or shortcut re
   E2E completion gate. The checked-in channel validation workflow must pass
   before promotion.
 
+## Mandatory pre-exit delegation gate
+
+Before every final response, handoff, request for user action, or worker
+completion, the agent must perform this gate:
+
+1. Identify every action the response asks or implicitly leaves the user to do.
+2. For each action, ask: can I do this for the user now using an available,
+   authorized tool, existing connection, or permitted worker?
+3. If yes, execute it, verify the outcome, and report the evidence instead of
+   asking the user to perform it. Do not hand back a command merely because it
+   is long-running, inconvenient, or already prepared. Continue independent
+   authorized work even if a separate step is genuinely blocked.
+4. If no, first try reasonable authorized alternatives. Ask the user only for
+   indispensable intervention (for example, physical access, consent, sign-in,
+   a required approval, or an unavailable capability). Name the exact blocker,
+   alternatives attempted, and the smallest necessary user action.
+
+Record `Pre-exit delegation check: PASS` in the handoff with either the actions
+performed and their verification, or the indispensable user action and evidence
+of its blocker. A blocked task remains open; this check cannot waive permission,
+security, workspace ownership, regression, release, or live acceptance gates.
+Apply the same rule to the secretary and every worker, including documentation
+and investigation-only tasks.
+
 ## Operational feedback
 
 - Workers report to the current secretary session; only that session deploys.
