@@ -23,6 +23,7 @@ import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.Future
 import java.util.concurrent.ExecutorService
@@ -45,6 +46,7 @@ import java.time.Instant
 internal object BetaScreenRecoveryService {
     private const val STARTUP_RECOVERY_GRACE_MS = 3_000L
     private const val STARTUP_HANDSHAKE_TIMEOUT_MS = 60_000L
+    private const val STARTUP_FAILURE_MONITOR_INTERVAL_MS = 10_000L
     private val noProgressWatchdog = NoProgressWatchdog()
     private val candidateScreenWatchdog = BetaCandidateScreenWatchdog()
     private val startupHandoffActivity = StartupHandoffActivityTracker()
@@ -59,6 +61,18 @@ internal object BetaScreenRecoveryService {
     private val missingGameRecoveryExecutor: ExecutorService by lazy {
         Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "BetaMissingGameRecovery").apply { isDaemon = true }
+        }
+    }
+    /**
+     * The Beta startup-failure observer must not wait behind screen/OCR work.
+     * Its 10-second tick is the clock that starts the missing-client grace
+     * decision; sharing EXTRA_THREAD_POOL can defer that clock for minutes
+     * when the capture queue is saturated. Release Candidate intentionally
+     * keeps the pre-existing shared-pool scheduling below.
+     */
+    private val betaStartupFailureMonitorExecutor: ScheduledExecutorService by lazy {
+        Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "BetaStartupRecoveryMonitor").apply { isDaemon = true }
         }
     }
     private val recoveryCascadeGuard = RecoveryCascadeGuard()
@@ -716,15 +730,26 @@ internal object BetaScreenRecoveryService {
         // extension. Its lifecycle must not depend on the user-configurable
         // ScreenRecoveryRuntime feature flag.
         val generation = startupFailureGeneration.get()
-        val task = EXTRA_THREAD_POOL.scheduleWithFixedDelay({
+        val task = startupFailureMonitorExecutor().scheduleWithFixedDelay({
             if (isStartupFailureGenerationCurrent(generation)) {
+                val startedAtNanos = System.nanoTime()
                 runCatching { detectStartupFailure(generation) }
                     .onFailure { error -> log.error(error) { "BETA_STARTUP_RECOVERY_OBSERVATION_FAILED watchdog=RETAINED" } }
+                val durationMs = TimeUnit.NANOSECONDS.toMillis(
+                    (System.nanoTime() - startedAtNanos).coerceAtLeast(0L),
+                )
+                if (durationMs >= STARTUP_FAILURE_MONITOR_INTERVAL_MS) {
+                    log.warn {
+                        "BETA_STARTUP_RECOVERY_OBSERVATION_SLOW durationMs=$durationMs " +
+                            "intervalMs=$STARTUP_FAILURE_MONITOR_INTERVAL_MS " +
+                            "scheduler=dedicated-beta-monitor watchdog=RETAINED"
+                    }
+                }
             }
-        }, 10, 10, TimeUnit.SECONDS)
+        }, STARTUP_FAILURE_MONITOR_INTERVAL_MS, STARTUP_FAILURE_MONITOR_INTERVAL_MS, TimeUnit.MILLISECONDS)
         startupFailureMonitor = task
         log.info {
-            "BETA_STARTUP_RECOVERY_MONITOR_STARTED intervalMs=10000 " +
+            "BETA_STARTUP_RECOVERY_MONITOR_STARTED intervalMs=$STARTUP_FAILURE_MONITOR_INTERVAL_MS " +
                 "generation=$generation optionalExtensionsEnabled=${ScreenRecoveryRuntime.isEnabled()}"
         }
     }
@@ -735,6 +760,18 @@ internal object BetaScreenRecoveryService {
 
     internal fun startupFailureMonitorScheduledForTest(): Boolean =
         startupFailureMonitor?.let { !it.isDone && !it.isCancelled } == true
+
+    private fun startupFailureMonitorExecutor(channel: String = BuildInfo.RELEASE_CHANNEL): ScheduledExecutorService =
+        if (BuildChannel.identityToken(channel) == "beta") betaStartupFailureMonitorExecutor else EXTRA_THREAD_POOL
+
+    internal fun startupFailureMonitorUsesDedicatedExecutorForTest(channel: String): Boolean =
+        startupFailureMonitorExecutor(channel) === betaStartupFailureMonitorExecutor
+
+    /** Test seam for the same executor selector used by the production monitor. */
+    internal fun scheduleStartupFailureMonitorProbeForTest(
+        channel: String,
+        probe: () -> Unit,
+    ): ScheduledFuture<*> = startupFailureMonitorExecutor(channel).schedule(probe, 0, TimeUnit.MILLISECONDS)
 
     /** The Beta missing-game continuation must not share the OCR/screen pool. */
     internal fun missingGameRecoveryDispatchExecutorIsolatedForTest(): Boolean =

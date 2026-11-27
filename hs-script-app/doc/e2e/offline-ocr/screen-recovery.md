@@ -196,14 +196,19 @@ this deletion boundary.
   tell whether safety, state freshness, startup policy, or a missing strategy
   blocked input.
 - Beta missing-client recovery has two separate timing boundaries: the
-  always-on monitor observes the 120-second no-client grace, then its
-  final-gate/serialized restart continuation runs on a dedicated daemon
-  executor rather than the shared OCR/screen-recovery pool. This prevents a
-  saturated capture queue from holding the one-use dispatch flag and silently
-  stretching the recovery interval. The continuation must still recheck
-  exact Beta identity, guardian freshness, pause, active queue/session, and
-  game-process absence; a permit or queued intent is not transport or launch
-  confirmation. RC retains its prior shared-pool behavior.
+  always-on monitor observes the 120-second no-client grace on its own
+  dedicated daemon scheduler, then its final-gate/serialized restart
+  continuation uses a separate dedicated daemon executor. Neither clock may
+  wait behind the shared OCR/screen-recovery pool; otherwise a saturated
+  capture queue can silently stretch the recovery interval. The monitor and
+  continuation must still recheck exact Beta identity, guardian freshness,
+  pause, active queue/session, and game-process absence; a permit or queued
+  intent is not transport or launch confirmation. The monitor's synchronous
+  process snapshot, process-start, current-log, guardian-file, and read-only
+  Win32 dialog probes perform no input or intentional sleep; a tick that still
+  reaches the 10-second cadence is logged as
+  `BETA_STARTUP_RECOVERY_OBSERVATION_SLOW` so probe latency is distinguishable
+  from scheduler starvation. RC retains its prior shared-pool behavior.
 - `Mode.currMode == HUB` does not prove the HUB strategy is active. Recovery
   must request strategy re-entry when the visible screen is HOME.
 - A throttled screenshot is an explicit diagnostic outcome, not evidence that

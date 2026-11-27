@@ -222,6 +222,63 @@ class LifecycleTraceTest {
     }
 
     @Test
+    fun betaStartupFailureMonitorRunsWhileSharedPoolIsSaturatedButRcRemainsQueued() {
+        assertTrue(
+            BetaScreenRecoveryService.startupFailureMonitorUsesDedicatedExecutorForTest("beta"),
+            "the Beta startup-failure clock must use its dedicated scheduler",
+        )
+        assertFalse(
+            BetaScreenRecoveryService.startupFailureMonitorUsesDedicatedExecutorForTest("release-candidate"),
+            "Release Candidate must retain the shared startup-monitor scheduler",
+        )
+
+        val sharedPoolBlockersStarted = CountDownLatch(EXTRA_THREAD_POOL.corePoolSize)
+        val releaseSharedPool = CountDownLatch(1)
+        val betaMonitorReached = CountDownLatch(1)
+        val rcMonitorReached = CountDownLatch(1)
+        var betaProbe: java.util.concurrent.ScheduledFuture<*>? = null
+        var rcProbe: java.util.concurrent.ScheduledFuture<*>? = null
+
+        try {
+            repeat(EXTRA_THREAD_POOL.corePoolSize) {
+                EXTRA_THREAD_POOL.execute {
+                    sharedPoolBlockersStarted.countDown()
+                    releaseSharedPool.await()
+                }
+            }
+            assertTrue(
+                sharedPoolBlockersStarted.await(5, TimeUnit.SECONDS),
+                "the shared OCR/screen-recovery pool must be saturated before monitor scheduling is tested",
+            )
+
+            betaProbe = BetaScreenRecoveryService.scheduleStartupFailureMonitorProbeForTest("beta") {
+                betaMonitorReached.countDown()
+            }
+            rcProbe = BetaScreenRecoveryService.scheduleStartupFailureMonitorProbeForTest("release-candidate") {
+                rcMonitorReached.countDown()
+            }
+
+            assertTrue(
+                betaMonitorReached.await(1, TimeUnit.SECONDS),
+                "Beta startup-failure observation must not lose its 10-second recovery clock to shared-pool saturation",
+            )
+            assertFalse(
+                rcMonitorReached.await(100, TimeUnit.MILLISECONDS),
+                "RC startup-failure observation must remain queued behind the shared pool",
+            )
+        } finally {
+            betaProbe?.cancel(false)
+            releaseSharedPool.countDown()
+        }
+
+        assertTrue(
+            rcMonitorReached.await(2, TimeUnit.SECONDS),
+            "RC startup-failure observation must run after the shared pool is released",
+        )
+        rcProbe?.cancel(false)
+    }
+
+    @Test
     fun hardCapStoppedGuardianStateRequiresMatchingLineageAndDeployment() {
         val processStart = Instant.parse("2026-11-02T16:00:00Z")
         val guardian = """
