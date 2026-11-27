@@ -592,7 +592,11 @@ object ScreenStateRecovery {
             currentSessionReady = currentSessionReady,
             noActiveMatchmakingEvidence = noActiveMatchmakingEvidence,
             hubModeChooserVisible = HubModeChooserVisualPolicy.isVisible(capture.image),
-            modalVisible = hasCenteredModalPanel(capture.image),
+            // The exact promo classifier is structural and can report
+            // centeredModalPanelVisual=false on the animated frame. Preserve
+            // it as a modal for candidate identity/retention.
+            modalVisible = classification.evidence == "event-quest-promo-close-visual" ||
+                hasCenteredModalPanel(capture.image),
             centeredModalFingerprint = capture.visual.centeredModalPanelVisual
                 .let { if (it) centeredModalPanelFingerprint(capture.image) else null },
             foregroundConfirmed = captureResult.foregroundConfirmed,

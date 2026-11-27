@@ -5,11 +5,14 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
+import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class LifecycleTraceTest {
 
@@ -45,7 +48,95 @@ class LifecycleTraceTest {
     }
 
     @Test
-    fun startupRecoveryGraceDefersRecoveryOnlyDuringTheGraceWindow() {
+    fun startupRecoveryGenerationRearmsEvenWhenOptionalExtensionsAreDisabled() {
+        val now = 1_000_000L
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
+        BetaScreenRecoveryService.onFeatureChanged(false)
+
+        BetaScreenRecoveryService.markStartupRequested("offline-test", now)
+
+        val generation = BetaScreenRecoveryService.missingGameRecoveryStateForTest()
+        assertEquals(0, generation.attempts)
+        assertEquals(
+            BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
+            generation.initialHandoffPending,
+            "only exact Beta must re-arm missing-game generation accounting when optional extensions are off",
+        )
+    }
+
+    @Test
+    fun betaGenerationRearmClearsStaleOptionalStartupActivityWhenExtensionsAreDisabled() {
+        val now = 2_000_000L
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)
+        BetaScreenRecoveryService.onFeatureChanged(true)
+        BetaScreenRecoveryService.markStartupHandoffAttempt("stale-before-toggle", now)
+        assertTrue(
+            BetaScreenRecoveryService.startupHandoffActivityDefersForTest(now + 1),
+            "the test must first establish an active startup-handoff window",
+        )
+
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
+        BetaScreenRecoveryService.onFeatureChanged(false)
+        BetaScreenRecoveryService.markStartupRequested("beta-missing-game-restart", now + 2)
+
+        assertFalse(
+            BetaScreenRecoveryService.startupHandoffActivityDefersForTest(now + 3),
+            "an optional activity window must not defer exact-Beta missing-game recovery after re-arm",
+        )
+    }
+
+    @Test
+    fun freshStartupHandoffActivityCannotDeferBetaRecoveryPastMissingGameGrace() {
+        val now = 3_000_000L
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)
+        BetaScreenRecoveryService.onFeatureChanged(true)
+        BetaScreenRecoveryService.markStartupRequested("beta-generation-start", now)
+        BetaScreenRecoveryService.markStartupHandoffAttempt("fresh-starter-retry", now + 1)
+
+        val startupChainActive = BetaScreenRecoveryService.startupHandoffActivityDefersForTest(now + 2)
+        assertTrue(startupChainActive, "the production tracker must observe the fresh handoff retry")
+
+        fun evaluate(missingSinceMs: Long, nowMs: Long) = LiveMissingGameRecoveryPolicy.evaluate(
+            LiveMissingGameRecoveryPolicy.State(missingSinceMs = missingSinceMs),
+            LiveMissingGameRecoveryPolicy.Evidence(
+                identityMatches = true,
+                heartbeatAgeMs = 1_000L,
+                runningIntent = true,
+                working = true,
+                paused = false,
+                gameAlive = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                terminalState = false,
+                startupChainActive = startupChainActive,
+                nowMs = nowMs,
+            ),
+            maxStarterChainAttempts = LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS,
+            allowStartupChainRecoveryAfterMissingGrace = true,
+        )
+
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.WAIT_STARTUP_CHAIN,
+            evaluate(
+                now - LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS + 1L,
+                now,
+            ).decision,
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            evaluate(
+                now - LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS,
+                now,
+            ).decision,
+            "a fresh starter retry must not recreate the five-minute deferment after 120000ms",
+        )
+
+        // Leave the shared production tracker clean for the remaining tests.
+        BetaScreenRecoveryService.markStartupRequested("test-cleanup", now + 3)
+    }
+
+    @Test
+    fun startupRecoveryGraceDefersOptionalRecoveryOnlyDuringTheGraceWindow() {
         val now = 1_000_000L
         ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)
 
@@ -72,6 +163,62 @@ class LifecycleTraceTest {
         } finally {
             LifecycleTrace.stop("offline-test-cleanup")
         }
+    }
+
+    @Test
+    fun betaMissingGameFinalDispatchUsesAnExecutorIndependentOfScreenRecoveryPool() {
+        assertTrue(
+            BetaScreenRecoveryService.missingGameRecoveryDispatchExecutorIsolatedForTest(),
+            "the async missing-game final gate must not queue behind OCR/screen-recovery work",
+        )
+        assertFalse(
+            BetaScreenRecoveryService.missingGameRecoveryDispatchUsesDedicatedExecutorForTest("release-candidate"),
+            "Release Candidate must retain the prior shared-pool dispatch behavior",
+        )
+    }
+
+    @Test
+    fun betaMissingGameContinuationRunsWhileSharedPoolIsSaturatedButRcRemainsQueued() {
+        val sharedPoolBlockersStarted = CountDownLatch(EXTRA_THREAD_POOL.corePoolSize)
+        val releaseSharedPool = CountDownLatch(1)
+        val betaContinuationReached = CountDownLatch(1)
+        val rcContinuationReached = CountDownLatch(1)
+
+        try {
+            repeat(EXTRA_THREAD_POOL.corePoolSize) {
+                EXTRA_THREAD_POOL.execute {
+                    sharedPoolBlockersStarted.countDown()
+                    releaseSharedPool.await()
+                }
+            }
+            assertTrue(
+                sharedPoolBlockersStarted.await(5, TimeUnit.SECONDS),
+                "the shared OCR/screen-recovery pool must be saturated before dispatch is submitted",
+            )
+
+            BetaScreenRecoveryService.submitMissingGameRecoveryContinuationForTest("beta") {
+                betaContinuationReached.countDown()
+            }
+            BetaScreenRecoveryService.submitMissingGameRecoveryContinuationForTest("release-candidate") {
+                rcContinuationReached.countDown()
+            }
+
+            assertTrue(
+                betaContinuationReached.await(1, TimeUnit.SECONDS),
+                "Beta final-gate continuation must progress independently of shared-pool saturation",
+            )
+            assertFalse(
+                rcContinuationReached.await(100, TimeUnit.MILLISECONDS),
+                "RC continuation must remain queued behind the shared pool",
+            )
+        } finally {
+            releaseSharedPool.countDown()
+        }
+
+        assertTrue(
+            rcContinuationReached.await(2, TimeUnit.SECONDS),
+            "RC continuation must run after the shared pool is released",
+        )
     }
 
     @Test

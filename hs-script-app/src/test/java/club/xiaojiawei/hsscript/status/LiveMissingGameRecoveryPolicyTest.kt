@@ -116,11 +116,220 @@ class LiveMissingGameRecoveryPolicyTest {
         val first = LiveMissingGameRecoveryPolicy.evaluate(LiveMissingGameRecoveryPolicy.State(), evidence())
         assertEquals(LiveMissingGameRecoveryPolicy.Decision.WAIT_MISSING_GAME_GRACE, first.decision)
 
+        val oneMillisecondEarly = LiveMissingGameRecoveryPolicy.evaluate(
+            first.state,
+            evidence(nowMs = now + LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS - 1L),
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.WAIT_MISSING_GAME_GRACE,
+            oneMillisecondEarly.decision,
+            "the missing-game fallback must not fire at 119999ms",
+        )
+
         val afterGrace = LiveMissingGameRecoveryPolicy.evaluate(
             first.state,
             evidence(nowMs = now + LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS),
         )
-        assertEquals(LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN, afterGrace.decision)
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            afterGrace.decision,
+            "the fallback becomes eligible exactly at 120000ms",
+        )
+    }
+
+    @Test
+    fun `production restart seam is inert at 119999 and runs at 120000`() {
+        val first = LiveMissingGameRecoveryPolicy.evaluate(
+            LiveMissingGameRecoveryPolicy.State(),
+            evidence(),
+        )
+        val events = mutableListOf<String>()
+        val beforeThreshold = LiveMissingGameRecoveryPolicy.evaluate(
+            first.state,
+            evidence(nowMs = now + LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS - 1L),
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.WAIT_MISSING_GAME_GRACE,
+            beforeThreshold.decision,
+        )
+        assertEquals(
+            LiveMissingGameRecoveryDispatch.Result.NO_ACTION,
+            LiveMissingGameRecoveryDispatch.restartToStartup(
+                decision = beforeThreshold.decision,
+                stillAuthorized = { true },
+                recoverModeToStartup = { events += "mode-startup" },
+                startConfiguredStarterChain = { events += "starter-chain" },
+            ),
+        )
+        assertTrue(events.isEmpty(), "the production restart seam must not run before the exact threshold")
+
+        val atThreshold = LiveMissingGameRecoveryPolicy.evaluate(
+            first.state,
+            evidence(nowMs = now + LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS),
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            atThreshold.decision,
+        )
+        assertEquals(
+            LiveMissingGameRecoveryDispatch.Result.STARTER_CHAIN_DISPATCHED,
+            LiveMissingGameRecoveryDispatch.restartToStartup(
+                decision = atThreshold.decision,
+                stillAuthorized = { true },
+                recoverModeToStartup = { events += "mode-startup" },
+                startConfiguredStarterChain = { events += "starter-chain" },
+            ),
+        )
+        assertEquals(listOf("mode-startup", "starter-chain"), events)
+
+        val recorded = LiveMissingGameRecoveryPolicy.recordDispatch(atThreshold.state, now)
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.WAIT_MISSING_GAME_GRACE,
+            LiveMissingGameRecoveryPolicy.evaluate(
+                recorded,
+                evidence(nowMs = now + LiveMissingGameRecoveryPolicy.RETRY_COOLDOWN_MS),
+            ).decision,
+            "the current generation remains quiet while the starter outcome is observed",
+        )
+
+        val newGenerationStart = now + 1L
+        val newGeneration = LiveMissingGameRecoveryPolicy.evaluate(
+            LiveMissingGameRecoveryPolicy.State(),
+            evidence(nowMs = newGenerationStart),
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.WAIT_MISSING_GAME_GRACE,
+            LiveMissingGameRecoveryPolicy.evaluate(
+                newGeneration.state,
+                evidence(nowMs = newGenerationStart +
+                    LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS - 1L),
+            ).decision,
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            LiveMissingGameRecoveryPolicy.evaluate(
+                newGeneration.state,
+                evidence(nowMs = newGenerationStart +
+                    LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS),
+            ).decision,
+            "the restart completion callback must create a fresh 120s generation",
+        )
+    }
+
+    @Test
+    fun `Beta gets one attempt while the legacy Release Candidate budget remains three`() {
+        val state = LiveMissingGameRecoveryPolicy.State(
+            missingSinceMs = now - LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS,
+        )
+        val betaDecision = LiveMissingGameRecoveryPolicy.evaluate(
+            state,
+            evidence(),
+            maxStarterChainAttempts = LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS,
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            betaDecision.decision,
+        )
+        val betaRecorded = LiveMissingGameRecoveryPolicy.recordDispatch(betaDecision.state, now)
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.EXHAUSTED,
+            LiveMissingGameRecoveryPolicy.evaluate(
+                betaRecorded,
+                evidence(nowMs = now + LiveMissingGameRecoveryPolicy.RETRY_COOLDOWN_MS),
+                maxStarterChainAttempts = LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS,
+            ).decision,
+        )
+
+        var releaseCandidateState = state
+        repeat(LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS) {
+            val decision = LiveMissingGameRecoveryPolicy.evaluate(
+                releaseCandidateState,
+                evidence(nowMs = now + it * LiveMissingGameRecoveryPolicy.RETRY_COOLDOWN_MS),
+            )
+            assertEquals(
+                LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+                decision.decision,
+            )
+            releaseCandidateState = LiveMissingGameRecoveryPolicy.recordDispatch(decision.state, now)
+        }
+    }
+
+    @Test
+    fun `two failed Beta no-client generations each reach a fresh 120 second restart`() {
+        var state = BetaMissingGameGenerationAccounting.markStartupRequested(exactBetaChannel = true)
+        var restartRequests = 0
+
+        fun failGeneration(startMs: Long) {
+            state = BetaMissingGameGenerationAccounting.acceptHandoff(state, startMs)
+            assertEquals(0, state.attempts, "the initial handoff must not consume the forced-restart budget")
+            val thresholdMs = startMs + LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS
+            val decision = LiveMissingGameRecoveryPolicy.evaluate(
+                state,
+                evidence(nowMs = thresholdMs),
+                maxStarterChainAttempts = LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS,
+            )
+            assertEquals(
+                LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+                decision.decision,
+            )
+            state = LiveMissingGameRecoveryPolicy.recordDispatch(decision.state, thresholdMs)
+            assertEquals(1, state.attempts)
+
+            val restart = MissingGameRestartDispatch.dispatch(
+                channel = "beta",
+                stillAuthorized = { true },
+                gameAlive = { false },
+                requestRestart = { completion ->
+                    restartRequests++
+                    completion()
+                    true
+                },
+                onRestartCompleted = {
+                    state = BetaMissingGameGenerationAccounting.markStartupRequested(exactBetaChannel = true)
+                },
+            )
+            assertEquals(MissingGameRestartDispatch.Result.RESTART_REQUESTED, restart)
+        }
+
+        failGeneration(1L)
+        assertEquals(1, restartRequests)
+        failGeneration(1L + LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS + 1L)
+        assertEquals(2, restartRequests, "a failed first launch must re-arm one fresh Beta 120-second cycle")
+
+        var suppressedState = BetaMissingGameGenerationAccounting.markStartupRequested(exactBetaChannel = true)
+        suppressedState = BetaMissingGameGenerationAccounting.acceptHandoff(suppressedState, 500_000L)
+        val suppressedThreshold = 500_000L + LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS
+        val suppressedDecision = LiveMissingGameRecoveryPolicy.evaluate(
+            suppressedState,
+            evidence(nowMs = suppressedThreshold),
+            maxStarterChainAttempts = LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS,
+        )
+        suppressedState = LiveMissingGameRecoveryPolicy.recordDispatch(
+            suppressedDecision.state,
+            suppressedThreshold,
+        )
+        var suppressedRearm = 0
+        val suppressedRestart = MissingGameRestartDispatch.dispatch(
+            channel = "beta",
+            stillAuthorized = { true },
+            gameAlive = { false },
+            requestRestart = { false },
+            onRestartCompleted = {
+                suppressedRearm++
+                suppressedState = BetaMissingGameGenerationAccounting.markStartupRequested(exactBetaChannel = true)
+            },
+        )
+        assertEquals(MissingGameRestartDispatch.Result.BLOCKED, suppressedRestart)
+        assertEquals(0, suppressedRearm, "Core suppression must not create a fresh generation")
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.EXHAUSTED,
+            LiveMissingGameRecoveryPolicy.evaluate(
+                suppressedState,
+                evidence(nowMs = suppressedThreshold + LiveMissingGameRecoveryPolicy.RETRY_COOLDOWN_MS),
+                maxStarterChainAttempts = LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS,
+            ).decision,
+            "a suppressed Core restart must fail closed instead of issuing a duplicate request",
+        )
     }
 
     @Test
@@ -233,7 +442,32 @@ class LiveMissingGameRecoveryPolicyTest {
     }
 
     @Test
-    fun `startup chain activity postpones duplicate start`() {
+    fun `startup chain activity postpones only before missing-game grace`() {
+        val beforeGrace = LiveMissingGameRecoveryPolicy.evaluate(
+            LiveMissingGameRecoveryPolicy.State(
+                missingSinceMs = now - LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS + 1L,
+            ),
+            evidence(startupChainActive = true),
+            allowStartupChainRecoveryAfterMissingGrace = true,
+        )
+        assertEquals(LiveMissingGameRecoveryPolicy.Decision.WAIT_STARTUP_CHAIN, beforeGrace.decision)
+
+        val atGrace = LiveMissingGameRecoveryPolicy.evaluate(
+            LiveMissingGameRecoveryPolicy.State(
+                missingSinceMs = now - LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS,
+            ),
+            evidence(startupChainActive = true),
+            allowStartupChainRecoveryAfterMissingGrace = true,
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            atGrace.decision,
+            "repeated starter attempts must not defer the authorized no-client recovery beyond 120000ms",
+        )
+    }
+
+    @Test
+    fun `legacy callers still defer active startup chain after missing grace`() {
         val result = LiveMissingGameRecoveryPolicy.evaluate(
             LiveMissingGameRecoveryPolicy.State(missingSinceMs = now - 300_000L),
             evidence(startupChainActive = true),
@@ -266,6 +500,17 @@ class LiveMissingGameRecoveryPolicyTest {
                 evidence(nowMs = state.lastAttemptAtMs + LiveMissingGameRecoveryPolicy.RETRY_COOLDOWN_MS),
             ).decision,
         )
+        repeat(4) { index ->
+            assertEquals(
+                LiveMissingGameRecoveryPolicy.Decision.EXHAUSTED,
+                LiveMissingGameRecoveryPolicy.evaluate(
+                    state,
+                    evidence(nowMs = state.lastAttemptAtMs +
+                        (index + 2L) * LiveMissingGameRecoveryPolicy.RETRY_COOLDOWN_MS),
+                ).decision,
+                "an exhausted missing-game budget must not re-arm on later monitor ticks",
+            )
+        }
     }
 
     @Test
@@ -336,6 +581,27 @@ class LiveMissingGameRecoveryPolicyTest {
         )
         assertEquals(LiveMissingGameRecoveryDispatch.Result.BLOCKED, denied)
         assertEquals(1, starterChainCalls)
+    }
+
+    @Test
+    fun `authorization loss after mode recovery prevents duplicate starter dispatch`() {
+        var modeRecoveryCalls = 0
+        var starterChainCalls = 0
+        var authorized = true
+        val result = LiveMissingGameRecoveryDispatch.dispatch(
+            decision = LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            stillAuthorized = {
+                if (modeRecoveryCalls == 0) authorized else false
+            },
+            recoverModeToStartup = {
+                modeRecoveryCalls++
+                authorized = false
+            },
+            startConfiguredStarterChain = { starterChainCalls++ },
+        )
+        assertEquals(LiveMissingGameRecoveryDispatch.Result.BLOCKED, result)
+        assertEquals(1, modeRecoveryCalls)
+        assertEquals(0, starterChainCalls, "a changed pause/guardian/queue state must not start a second path")
     }
 
     @Test

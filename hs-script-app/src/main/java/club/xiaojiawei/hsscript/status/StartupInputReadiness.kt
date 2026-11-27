@@ -493,7 +493,10 @@ internal object StartupInputAuthorizationPolicy {
         )
     ) {
         startupDeckSelectionModeNavigationReady
-    } else if (action == StartupQuestOverlayDismissPolicy.DISPATCH_ACTION) {
+    } else if (StartupQuestOverlayDismissPolicy.allowedDispatchAction(action)) {
+        // The promo-close action is a separate, point-bound permit. It must
+        // cross the final startup gate, but never inherit generic startup or
+        // gameplay input authorization.
         startupQuestOverlayDismissPermitValid
     } else if (action == SeasonRankAwardRecoveryPolicy.DISPATCH_ACTION) {
         seasonRankAwardContinuePermitValid
@@ -676,4 +679,54 @@ internal object StartupModeEntryReprobePolicy {
     }
 
     internal fun resetForTest() = lastProbeRequest.set(null)
+}
+
+/**
+ * Re-enter the configured mode strategy when a fresh HUB chooser is observed
+ * but the mode state machine is already idle. The chooser proof authorizes
+ * only the named Traditional Battle action; this gate merely restores the
+ * strategy callback that schedules that action. It must not infer a mode
+ * from pixels or wake a strategy without one confirmed runtime selection.
+ */
+internal object StartupHubStrategyReentryPolicy {
+    const val MIN_INTERVAL_MS = 15_000L
+
+    private data class ReentryRequest(val pid: Int, val hwnd: String, val atMs: Long)
+    private val lastReentryRequest = AtomicReference<ReentryRequest?>(null)
+
+    fun shouldReenter(
+        pid: Int,
+        hwnd: String,
+        currentMode: String?,
+        runtimeSelection: RuntimeSelectionSnapshot,
+        betaChannel: Boolean,
+        nowMs: Long,
+        working: Boolean,
+        paused: Boolean,
+        modalVisible: Boolean,
+        currentSessionReady: Boolean,
+        activeGame: Boolean,
+        activeQueue: Boolean,
+        terminal: Boolean,
+    ): Boolean {
+        val configuredRunSelection = runtimeSelection.confirmed &&
+            runtimeSelection.runMode != null &&
+            !runtimeSelection.strategyId.isNullOrBlank() &&
+            runtimeSelection.deckSlot != null
+        if (pid <= 0 || hwnd.isBlank() || currentMode != "HUB" || !configuredRunSelection || !betaChannel ||
+            nowMs <= 0L || !working || paused || modalVisible || currentSessionReady || activeGame ||
+            activeQueue || terminal
+        ) {
+            return false
+        }
+        while (true) {
+            val previous = lastReentryRequest.get()
+            if (previous != null && previous.pid == pid && previous.hwnd == hwnd &&
+                (nowMs < previous.atMs || nowMs - previous.atMs < MIN_INTERVAL_MS)
+            ) return false
+            if (lastReentryRequest.compareAndSet(previous, ReentryRequest(pid, hwnd, nowMs))) return true
+        }
+    }
+
+    internal fun resetForTest() = lastReentryRequest.set(null)
 }

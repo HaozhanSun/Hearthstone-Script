@@ -1139,6 +1139,149 @@ class BetaCandidateScreenRecoveryIntegrationTest {
     }
 
     @Test
+    fun `live structural Event Quest overlay is retained across gaps and dispatches only with live identity`() {
+        val image = requireNotNull(
+            javaClass.getResourceAsStream(
+                "/offline-ocr/screen-recovery/event-quest-overlay-live-005412.png",
+            ),
+        ).use(ImageIO::read)
+        assertTrue(StartupQuestOverlayVisualClassifier.isQuestOverlay(image))
+        assertEquals("EVENT_QUEST_OVERLAY", UpstreamScreenStateRecovery.classifyImageForTest("", image))
+
+        // This is the exact evidence emitted by the upstream structural
+        // classifier in the correlated production run. It is deliberately not
+        // modalVisible: the live overlay frame is not always a centered modal.
+        val observation = ScreenStateRecovery.FreshScreenObservation(
+            screen = "EVENT_QUEST_OVERLAY",
+            mode = "HUB",
+            confidence = 96,
+            evidence = "event-quest-overlay-structural-visual",
+            pid = 33_644L,
+            hwnd = "native@0x60c32",
+            screenshot = "event-quest-overlay-live-005412.png",
+            perceptualFingerprint = 0x005412L,
+            currentSessionReady = false,
+            noActiveMatchmakingEvidence = true,
+            hubModeChooserVisible = false,
+            modalVisible = false,
+            foregroundConfirmed = true,
+        )
+        val watchdog = BetaCandidateScreenWatchdog()
+        val first = BetaScreenRecoveryService.candidateSnapshotForTest(
+            now = 0L,
+            observation = observation,
+            rememberAuthorizedObservation = true,
+        ).copy(working = true, paused = false)
+        assertTrue(
+            first.allowExtendedMissingObservationGrace,
+            "the exact structural Event Quest identity must retain the bounded focus/capture grace",
+        )
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(first).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT,
+            watchdog.observe(
+                BetaScreenRecoveryService.candidateSnapshotForTest(1L, observation)
+                    .copy(working = true, paused = false),
+            ).action,
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.WAIT_UNCERTAIN,
+            watchdog.observe(
+                BetaScreenRecoveryService.candidateSnapshotForTest(119_999L, null)
+                    .copy(working = true, paused = false),
+            ).action,
+        )
+        val restart = watchdog.observe(
+            BetaScreenRecoveryService.candidateSnapshotForTest(120_000L, null)
+                .copy(working = true, paused = false),
+        )
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            restart.action,
+            "the retained structural Event Quest identity must reach the 120s watchdog boundary",
+        )
+
+        var dispatches = 0
+        assertTrue(
+            BetaScreenRecoveryService.dispatchCandidateRestartForTest(
+                decision = restart,
+                observation = observation,
+                currentPid = observation.pid,
+                currentHwnd = observation.hwnd,
+                currentWindowVerified = true,
+                restartAction = { dispatches++ },
+            ),
+            "the production dispatch seam must accept the exact live structural identity",
+        )
+        assertEquals(1, dispatches)
+        assertEquals(
+            "pid-changed",
+            BetaScreenRecoveryService.candidateRestartFenceReasonForDispatchTest(
+                observation = observation,
+                currentPid = observation.pid + 1,
+                currentHwnd = observation.hwnd,
+                currentWindowVerified = true,
+            ),
+            "a dead/replaced Hearthstone PID must veto reuse of the stale Event Quest identity",
+        )
+        assertFalse(
+            BetaScreenRecoveryService.dispatchCandidateRestartForTest(
+                decision = restart,
+                observation = observation,
+                currentPid = observation.pid + 1,
+                currentHwnd = observation.hwnd,
+                currentWindowVerified = true,
+                restartAction = { dispatches++ },
+            ),
+        )
+        assertEquals(1, dispatches, "the PID-mismatch fence must prevent a second restart dispatch")
+    }
+
+    @Test
+    fun `live HUB chooser reaches the same bounded watchdog dispatch path`() {
+        val image = requireNotNull(
+            javaClass.getResourceAsStream(
+                "/offline-ocr/screen-recovery/hub-mode-chooser-live-20261029-035630.png",
+            ),
+        ).use(ImageIO::read)
+        val classification = requireNotNull(
+            ScreenStateRecovery.classifyBetaCandidateVisualForTest(image, currentSessionReady = false),
+        )
+        assertEquals("TOURNAMENT", classification.screen)
+        assertEquals("hub-mode-chooser-visual", classification.evidence)
+        val observation = ScreenStateRecovery.FreshScreenObservation(
+            screen = requireNotNull(classification.screen),
+            mode = classification.mode,
+            confidence = classification.confidence,
+            evidence = classification.evidence,
+            pid = 33_644L,
+            hwnd = "native@0x60c32",
+            screenshot = "hub-mode-chooser-live-20261029-035630.png",
+            perceptualFingerprint = 0x035630L,
+            currentSessionReady = false,
+            noActiveMatchmakingEvidence = true,
+            hubModeChooserVisible = true,
+            modalVisible = false,
+            foregroundConfirmed = true,
+        )
+        val watchdog = BetaCandidateScreenWatchdog()
+        val first = BetaScreenRecoveryService.candidateSnapshotForTest(
+            now = 0L,
+            observation = observation,
+            rememberAuthorizedObservation = true,
+        ).copy(working = true, paused = false)
+        assertEquals(BetaCandidateScreenWatchdog.Action.RESET_IDENTITY, watchdog.observe(first).action)
+        assertEquals(
+            BetaCandidateScreenWatchdog.Action.RESTART,
+            watchdog.observe(
+                BetaScreenRecoveryService.candidateSnapshotForTest(120_000L, observation)
+                    .copy(working = true, paused = false),
+            ).action,
+            "the fresh Hub chooser must preserve the existing 120s recovery behavior",
+        )
+    }
+
+    @Test
     fun `pending mandatory mulligan uses production candidate restart seam at exact boundary`() {
         MulliganRankDispatchBarrier.beginCurrentGame()
         assertNotNull(MulliganRankDispatchBarrier.requireSurrender(1L))

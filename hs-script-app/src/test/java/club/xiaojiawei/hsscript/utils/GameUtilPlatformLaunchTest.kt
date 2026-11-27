@@ -27,12 +27,12 @@ class GameUtilPlatformLaunchTest {
     }
 
     @Test
-    fun `Beta startup selects Beta app and configured game directory`() {
+    fun `Beta startup selects the registered Beta app and requests the WTCG launch verb`() {
         val platform = "C:\\Program Files\\Battle.net\\Battle.net.exe"
         val game = "D:\\Hearthstone"
 
         assertEquals(
-            listOf(platform, "--game=hs_beta", "--gamepath=$game", "-uid", "hs_beta"),
+            listOf(platform, "--game=hs_beta", "--exec=launch WTCG"),
             GameUtil.buildPlatformCommand(platform, true, AppRuntimeChannel.BETA, game),
         )
     }

@@ -135,6 +135,105 @@ class StartupQuestOverlayDismissPolicyTest {
     }
 
     @Test
+    fun `missing-game recovery reconciles only an observed exited overlay session`() {
+        StartupQuestOverlayRecoveryFence.resetForTest()
+        StartupQuestOverlayRecoveryFence.begin()
+        assertFalse(
+            StartupQuestOverlayRecoveryFence.reconcileExitedGameForMissingRecovery(
+                gameProcessAlive = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                terminalState = false,
+                recentMatchmakingIntent = false,
+                working = true,
+                paused = false,
+            ),
+            "a fence without an observed PID/HWND must remain fail-closed",
+        )
+        StartupQuestOverlayRecoveryFence.observeSession(44L, "window-55")
+        assertFalse(
+            StartupQuestOverlayRecoveryFence.reconcileExitedGameForMissingRecovery(
+                gameProcessAlive = true,
+                activeGame = false,
+                activeMatchmaking = false,
+                terminalState = false,
+                recentMatchmakingIntent = false,
+                working = true,
+                paused = false,
+            ),
+            "the live client must keep the overlay fence",
+        )
+        listOf(
+            mapOf("activeGame" to true),
+            mapOf("activeMatchmaking" to true),
+            mapOf("terminalState" to true),
+            mapOf("recentMatchmakingIntent" to true),
+            mapOf("working" to false),
+            mapOf("paused" to true),
+        ).forEach { veto ->
+            StartupQuestOverlayRecoveryFence.resetForTest()
+            StartupQuestOverlayRecoveryFence.begin()
+            StartupQuestOverlayRecoveryFence.observeSession(44L, "window-55")
+            assertFalse(
+                StartupQuestOverlayRecoveryFence.reconcileExitedGameForMissingRecovery(
+                    gameProcessAlive = false,
+                    activeGame = veto["activeGame"] == true,
+                    activeMatchmaking = veto["activeMatchmaking"] == true,
+                    terminalState = veto["terminalState"] == true,
+                    recentMatchmakingIntent = veto["recentMatchmakingIntent"] == true,
+                    working = veto["working"] != false,
+                    paused = veto["paused"] == true,
+                ),
+                "stale overlay reconciliation must retain every safety veto: $veto",
+            )
+            assertTrue(StartupQuestOverlayRecoveryFence.isActive())
+        }
+        StartupQuestOverlayRecoveryFence.resetForTest()
+        StartupQuestOverlayRecoveryFence.begin()
+        StartupQuestOverlayRecoveryFence.observeSession(44L, "window-55")
+        assertTrue(
+            StartupQuestOverlayRecoveryFence.reconcileExitedGameForMissingRecovery(
+                gameProcessAlive = false,
+                activeGame = false,
+                activeMatchmaking = false,
+                terminalState = false,
+                recentMatchmakingIntent = false,
+                working = true,
+                paused = false,
+            ),
+        )
+        assertFalse(StartupQuestOverlayRecoveryFence.isActive())
+    }
+
+    @Test
+    fun `missing-game reconciliation stays fenced when independent process probe is alive or fails`() {
+        listOf(
+            "alive" to { true },
+            "probe-failure" to { error("probe unavailable") },
+        ).forEach { (label, probe) ->
+            StartupQuestOverlayRecoveryFence.resetForTest()
+            StartupQuestOverlayRecoveryFence.begin()
+            StartupQuestOverlayRecoveryFence.observeSession(44L, "window-55")
+
+            val gameProcessAlive = BetaScreenRecoveryService.probeGameAliveForMissingRecovery(probe)
+            assertTrue(gameProcessAlive, "$label must fail closed as process-alive")
+            assertFalse(
+                StartupQuestOverlayRecoveryFence.reconcileExitedGameForMissingRecovery(
+                    gameProcessAlive = gameProcessAlive,
+                    activeGame = false,
+                    activeMatchmaking = false,
+                    terminalState = false,
+                    recentMatchmakingIntent = false,
+                    working = true,
+                    paused = false,
+                ),
+                "$label must not release the overlay fence or permit a missing-game handoff",
+            )
+            assertTrue(StartupQuestOverlayRecoveryFence.isActive())
+        }
+    }
+
+    @Test
     fun `fresh exact overlay authorizes at most three taps and then stops`() {
         val policy = StartupQuestOverlayDismissPolicy
         for (taps in 0 until policy.MAX_TAPS) {

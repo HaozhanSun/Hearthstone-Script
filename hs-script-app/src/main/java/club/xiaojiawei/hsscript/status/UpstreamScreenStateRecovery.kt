@@ -3202,10 +3202,74 @@ object UpstreamScreenStateRecovery {
             )
         ) {
             stuckScreenUnblockPolicy.reset()
+            val chooserPid = currentPid ?: capture.processId.toInt()
+            val chooserHwnd = authorizedCapture.gameWindow.toString()
+            val modalVisible = ScreenStateRecovery.hasCenteredModalPanel(capture.image)
+            val activeQueue = StartupHubModeChooserPolicy.hasActiveMatchmakingEvidence(
+                matchmakingSearchVisual = capture.visual.matchmakingSearchVisual,
+                hubModeChooserVisual = capture.visual.hubModeChooserVisual,
+                screenKind = detection?.kind?.code,
+                screenMode = detection?.mode?.name,
+                evidence = detection?.evidence,
+                modalVisible = modalVisible,
+                recentActiveMatchmaking = LifecycleTrace.hasRecentActiveMatchmakingScreen(),
+                activeEntryGuard = LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard(),
+            )
+            val betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
+            val runtimeSelection = DeckStrategyManager.currentRuntimeSelectionSnapshot()
+            val configuredRunSelection = runtimeSelection.confirmed &&
+                runtimeSelection.runMode != null &&
+                !runtimeSelection.strategyId.isNullOrBlank() &&
+                runtimeSelection.deckSlot != null
+            val currentSessionReady = ScreenStateRecovery.isCurrentGameSessionReadyForStart()
+            val activeGame = WarEx.inWar || Mode.currMode == ModeEnum.GAMEPLAY ||
+                Mode.nextMode == ModeEnum.GAMEPLAY
+            val terminal = GameUtil.isTerminalGameState()
+            val reenterStrategy = StartupHubStrategyReentryPolicy.shouldReenter(
+                pid = chooserPid,
+                hwnd = chooserHwnd,
+                currentMode = detection?.mode?.name ?: Mode.currMode?.name,
+                runtimeSelection = runtimeSelection,
+                betaChannel = betaChannel,
+                nowMs = System.currentTimeMillis(),
+                working = WorkTimeListener.working,
+                paused = PauseStatus.isPause,
+                modalVisible = modalVisible,
+                currentSessionReady = currentSessionReady,
+                activeGame = activeGame,
+                activeQueue = activeQueue,
+                terminal = terminal,
+            )
+            val reentryReason = when {
+                !betaChannel -> "non-beta-channel"
+                !configuredRunSelection -> "configured-runtime-selection-missing"
+                !WorkTimeListener.working -> "work-disabled"
+                PauseStatus.isPause -> "paused"
+                modalVisible -> "modal-visible"
+                currentSessionReady -> "current-session-ready"
+                activeGame -> "active-game"
+                activeQueue -> "active-queue"
+                terminal -> "terminal-state"
+                reenterStrategy -> "reentry-authorized"
+                else -> "same-pid-hwnd-throttled"
+            }
+            if (reenterStrategy) {
+                // The fresh chooser proof remains the only permit for the
+                // later named click. Re-entering HUB only restarts the
+                // configured strategy's scheduler; it does not dispatch a
+                // generic click or authorize Start.
+                Mode.recover(ModeEnum.HUB, "recognized-hub-mode-chooser", enterStrategy = true)
+            }
             log.info {
                 "STUCK_SCREEN_UNBLOCK_SKIPPED reason=recognized-hub-mode-chooser " +
-                    "action=WAIT_FOR_AUTHORIZED_TRADITIONAL_ENTRY activeGame=${WarEx.inWar} " +
-                    "activeQueue=${capture.visual.matchmakingSearchVisual || LifecycleTrace.hasRecentActiveMatchmakingScreen()}"
+                    "action=${if (reenterStrategy) "REENTER_CONFIGURED_HUB_STRATEGY" else "WAIT_FOR_AUTHORIZED_TRADITIONAL_ENTRY"} " +
+                    "reason=$reentryReason pid=$chooserPid hwnd=$chooserHwnd betaChannel=$betaChannel " +
+                    "configuredRunSelection=$configuredRunSelection runtimeSelectionState=${runtimeSelection.state} " +
+                    "runtimeSelectionMode=${runtimeSelection.runMode ?: "none"} " +
+                    "runtimeSelectionStrategy=${runtimeSelection.strategyId ?: "none"} " +
+                    "runtimeSelectionDeckSlot=${runtimeSelection.deckSlot ?: "none"} " +
+                    "modalVisible=$modalVisible activeGame=$activeGame activeQueue=$activeQueue " +
+                    "paused=${PauseStatus.isPause}"
             }
             return true
         }

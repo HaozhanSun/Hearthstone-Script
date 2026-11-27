@@ -360,8 +360,8 @@ internal class BetaCandidateScreenWatchdog(
         const val DEFAULT_MAX_RESTARTS_PER_IDENTITY = 2
         /** Default grace is one monitor tick beyond the 120-second threshold. */
         const val MAX_MISSING_OBSERVATION_GAP_MS = DEFAULT_STABLE_THRESHOLD_MS + 10_000L
-        /** Only the exact promo visual may use the longer focus/OCR grace. */
-        const val EXTENDED_PROMO_MISSING_OBSERVATION_GAP_MS = DEFAULT_STABLE_THRESHOLD_MS * 2L
+        /** Only exact Event Quest visual proofs may use the longer focus/OCR grace. */
+        const val EXTENDED_EVENT_QUEST_MISSING_OBSERVATION_GAP_MS = DEFAULT_STABLE_THRESHOLD_MS * 2L
         const val MIN_POSITIVE_CONFIDENCE = 85
         const val MIN_POSITIVE_OBSERVATIONS = 2
 
@@ -391,7 +391,7 @@ internal class BetaCandidateScreenWatchdog(
 
     private fun maxMissingObservationGapMs(snapshot: Snapshot): Long =
         if (snapshot.allowExtendedMissingObservationGrace) {
-            EXTENDED_PROMO_MISSING_OBSERVATION_GAP_MS
+            EXTENDED_EVENT_QUEST_MISSING_OBSERVATION_GAP_MS
         } else {
             MAX_MISSING_OBSERVATION_GAP_MS
         }

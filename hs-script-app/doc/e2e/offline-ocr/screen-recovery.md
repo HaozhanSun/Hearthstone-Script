@@ -195,6 +195,15 @@ this deletion boundary.
 - A trigger is not an action. Always inspect `SCREEN_RECOVERY_ACTION_GATE` to
   tell whether safety, state freshness, startup policy, or a missing strategy
   blocked input.
+- Beta missing-client recovery has two separate timing boundaries: the
+  always-on monitor observes the 120-second no-client grace, then its
+  final-gate/serialized restart continuation runs on a dedicated daemon
+  executor rather than the shared OCR/screen-recovery pool. This prevents a
+  saturated capture queue from holding the one-use dispatch flag and silently
+  stretching the recovery interval. The continuation must still recheck
+  exact Beta identity, guardian freshness, pause, active queue/session, and
+  game-process absence; a permit or queued intent is not transport or launch
+  confirmation. RC retains its prior shared-pool behavior.
 - `Mode.currMode == HUB` does not prove the HUB strategy is active. Recovery
   must request strategy re-entry when the visible screen is HOME.
 - A throttled screenshot is an explicit diagnostic outcome, not evidence that
@@ -887,6 +896,35 @@ this deletion boundary.
   `In Game` control as the captured 2026-11-22 incident frame; the production
   capture authority still requires that those pixels come from the exact
   foreground target HWND/PID before this structural classification is used.
+- Beta structural Event Quest retention: the upstream classifier emits
+  `EVENT_QUEST_OVERLAY` with `event-quest-overlay-structural-visual` for the
+  live overlay, while the older Old Gods path emits
+  `event-quest-promo-close-visual`. Both exact proofs may retain the same
+  foreground PID/HWND across the bounded capture/focus gap; generic Event
+  Quest-looking or UNKNOWN labels may not. The structural frame need not be a
+  centered modal, but empty-session, no-queue, confidence, foreground, and the
+  final live PID/HWND/window fence remain mandatory. At 119999 ms the watchdog
+  still waits; at 120000 ms it may enter the existing serialized restart chain.
+  A dead or replaced PID must veto stale-identity dispatch and fall back to the
+  separate missing-game relaunch path. Keep exact structural Event Quest and
+  fresh HUB chooser fixtures in the production candidate snapshot/final-fence
+  regression, including the PID-death veto.
+- Beta HUB chooser recovery must preserve the known-good mode-entry lifecycle:
+  a fresh exact chooser proof may re-enter the already configured HUB strategy
+  scheduler, but it must never infer a run mode or dispatch a generic click.
+  The re-entry is keyed to the current PID/HWND, throttled, and fenced by
+  working/pause/session/game/queue/terminal state; the strategy scheduler then
+  remains responsible for the one-use Traditional Battle proof, followed by
+  the existing mode-selector/Wild/Start sequence. This prevents the
+  `75748b49` early-return regression where
+  `WAIT_FOR_AUTHORIZED_TRADITIONAL_ENTRY` skipped the configured strategy
+  callback and the watchdog eventually exhausted on the four-button Hub screen.
+  A raw time-rule row is not itself an active runtime selection: the callback
+  may use a scheduled `WILD`/deck-2 selection only when the normal runtime
+  snapshot has resolved its mode and strategy (including the configured
+  high-priority schedule semantics). A missing default deck, or a schedule
+  that is not authoritative, must produce a diagnostic and remain no-input;
+  pixels must never be used to guess the intended mode.
 - Beta pre-match Start proof is a fresh startup capture, not a stale-client
   probe. `STALE_CLIENT_PROBE` requires a bounded stale interval and therefore
   must not be used with `staleForMs=0` while the current Power.log is empty;
@@ -999,8 +1037,19 @@ Beta-only, no-client-only, and action-specific. Stable and Release
 Candidate runtimes, live game/queue states, manual pause, stale or ambiguous
 guardian identity, and all other startup actions remain fail-closed. Structured
 logs must distinguish the scoped gate (`ACTION_DISPATCH_SCOPE`) from the actual
-starter-chain dispatch (`BETA_MISSING_GAME_RECOVERY_CHAIN_DISPATCHED`), and the
-retry state advances only after the chain is actually invoked.
+starter-chain request (`BETA_MISSING_GAME_RECOVERY_CHAIN_REQUESTED`), and the
+retry state advances only after the final handoff gate accepts it. For the
+exact `beta` identity, the 120000 ms boundary invokes the serialized
+`Core.restartFromIdleWatchdog` force-close/starter path, permits one handoff per
+missing-client generation. The initial handoff after that restart is recorded
+as generation setup rather than a second restart attempt; the forced-restart
+budget is recorded before Core is invoked. A fresh generation is re-armed only
+after the synchronous restart-completion signal, even when the optional screen
+recovery extensions are disabled; that UI toggle must never preserve the prior
+missing-client attempt budget. Beta launches through the registered
+WTCG product path from known-good `8ea73ac2`; Release Candidate retains the
+previous three-attempt starter-chain policy and is never allowed to invoke the
+Beta forced-restart seam.
 
 The same unresolved-quest fence must not block the separate Beta idle-watchdog
 restart after the watchdog has force-closed and verified the exact stale
@@ -1013,3 +1062,21 @@ PID; ordinary startup and every ambiguous or changed-identity path remain
 quest-fenced. Emit `ACTION_DISPATCH_CAPABILITY_ARMED source=idle-watchdog`
 and consume it only at the actual `startup.handoff` call, never at a logged
 restart request.
+
+Prevention rule: a missing diagnostic PID is not authoritative proof that the
+client exited. Before reconciling an observed PID/HWND quest fence or entering
+the missing-game timer, independently probe `GameUtil.isAliveOfGame()`. A true
+result, or any probe exception, is fail-closed: retain the fence and return
+without entering `startup.missing-game-recovery` or dispatching a starter
+handoff. Keep this rule separate from the positively captured client-screen
+watchdog: both use a 120-second boundary, but the missing-game timer requires
+fresh Beta identity, independent process absence, guardian freshness, and all
+safety vetoes. When optional screen-recovery extensions are disabled, exact-Beta
+generation re-arm must also clear any older startup-handoff activity window;
+otherwise its optional 300-second continuous-activity cap can defer the
+always-on missing-game monitor after a failed restart. Startup-handoff activity
+may postpone the missing-game decision only before the independent 120000 ms
+no-client grace; repeated starter attempts must not recreate that deferment
+after the boundary. Regress probe-true and probe-exception cases,
+stale-activity re-arm, active-handoff 119999/120000 behavior, and the later
+generation cycle.

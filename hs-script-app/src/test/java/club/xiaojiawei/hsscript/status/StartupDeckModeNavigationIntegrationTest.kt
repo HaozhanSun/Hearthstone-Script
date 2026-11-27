@@ -31,6 +31,74 @@ class StartupDeckModeNavigationIntegrationTest {
     )
 
     @Test
+    fun `fresh HUB chooser re-enters only the configured strategy and keeps all safety fences`() {
+        val upstream = upstreamScreenStateRecoverySource()
+        assertTrue(upstream.contains("StartupHubStrategyReentryPolicy.shouldReenter"))
+        assertTrue(upstream.contains(
+            "Mode.recover(ModeEnum.HUB, \"recognized-hub-mode-chooser\", enterStrategy = true)",
+        ))
+
+        StartupHubStrategyReentryPolicy.resetForTest()
+        try {
+            val confirmedSelection = RuntimeSelectionSnapshot(
+                state = RuntimeSelectionState.SCHEDULE_CONFIRMED,
+                runMode = RunModeEnum.WILD,
+                deckSlot = 2,
+                strategyId = "configured-wild",
+            )
+            val userDefaultSelection = RuntimeSelectionSnapshotFactory.userDefault(
+                runMode = RunModeEnum.CASUAL,
+                strategyId = null,
+                strategyName = null,
+            )
+            fun request(
+                pid: Int = 33_644,
+                hwnd: String = "native@0x60c32",
+                now: Long = 100_000L,
+                mode: String? = "HUB",
+                selection: RuntimeSelectionSnapshot = confirmedSelection,
+                beta: Boolean = true,
+                modal: Boolean = false,
+                working: Boolean = true,
+                paused: Boolean = false,
+                session: Boolean = false,
+                game: Boolean = false,
+                queue: Boolean = false,
+                terminal: Boolean = false,
+            ) = StartupHubStrategyReentryPolicy.shouldReenter(
+                pid, hwnd, mode, selection, beta, now, working, paused, modal, session, game, queue, terminal,
+            )
+
+            assertTrue(request(), "an exact fresh chooser with configured mode may restart the strategy scheduler")
+            assertFalse(request(now = 100_000L + StartupHubStrategyReentryPolicy.MIN_INTERVAL_MS - 1))
+            assertTrue(request(now = 100_000L + StartupHubStrategyReentryPolicy.MIN_INTERVAL_MS))
+
+            StartupHubStrategyReentryPolicy.resetForTest()
+            assertFalse(request(selection = userDefaultSelection), "pixels must not infer a missing run mode or deck")
+            assertFalse(request(
+                selection = confirmedSelection.copy(state = RuntimeSelectionState.SCHEDULE_SWITCHING, deckSlot = null),
+            ), "an unconfirmed schedule must not authorize strategy re-entry")
+            assertFalse(request(
+                selection = confirmedSelection.copy(strategyId = null),
+            ), "a confirmed schedule without a strategy must remain fail-closed")
+            assertFalse(request(beta = false), "the Hub re-entry is a Beta-only recovery extension")
+            assertFalse(request(modal = true), "a covering modal invalidates the chooser strategy re-entry")
+            assertFalse(request(mode = "TOURNAMENT"))
+            assertFalse(request(working = false))
+            assertFalse(request(paused = true))
+            assertFalse(request(session = true))
+            assertFalse(request(game = true))
+            assertFalse(request(queue = true))
+            assertFalse(request(terminal = true))
+            assertFalse(request(pid = 0))
+            assertFalse(request(hwnd = ""))
+            assertTrue(request(pid = 33_645), "a new game identity may be evaluated independently")
+        } finally {
+            StartupHubStrategyReentryPolicy.resetForTest()
+        }
+    }
+
+    @Test
     fun `captured three choice selector authorizes only fresh configured Wild control proof`() {
         val selector = ImageIO.read(requireNotNull(javaClass.getResourceAsStream(
             "/offline-ocr/screen-recovery/mode-selector-wild-standard-casual-live-20261029-190503.png",

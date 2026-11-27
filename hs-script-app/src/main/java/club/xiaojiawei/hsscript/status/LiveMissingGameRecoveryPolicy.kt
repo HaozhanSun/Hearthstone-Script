@@ -53,7 +53,10 @@ internal object GuardianRunStateReader {
 internal object LiveMissingGameRecoveryPolicy {
     const val MISSING_GAME_GRACE_MS = 120_000L
     const val RETRY_COOLDOWN_MS = 60_000L
+    /** Existing non-Beta retry budget; preserve it for Release Candidate and other callers. */
     const val MAX_STARTER_CHAIN_ATTEMPTS = 3
+    /** Beta-only budget: one restart per verified missing-client generation. */
+    const val BETA_MAX_STARTER_CHAIN_ATTEMPTS = 1
 
     enum class Decision {
         WAIT_UNVERIFIED,
@@ -100,6 +103,8 @@ internal object LiveMissingGameRecoveryPolicy {
         val missingSinceMs: Long = 0L,
         val attempts: Int = 0,
         val lastAttemptAtMs: Long = 0L,
+        /** The first handoff after a restart starts a new generation; it is not another restart attempt. */
+        val initialHandoffPending: Boolean = false,
     )
 
     data class Evidence(
@@ -120,7 +125,13 @@ internal object LiveMissingGameRecoveryPolicy {
 
     data class Evaluation(val state: State, val decision: Decision)
 
-    fun evaluate(state: State, evidence: Evidence): Evaluation {
+    fun evaluate(
+        state: State,
+        evidence: Evidence,
+        maxStarterChainAttempts: Int = MAX_STARTER_CHAIN_ATTEMPTS,
+        /** Exact Beta only: bound startup activity by the missing-client grace. */
+        allowStartupChainRecoveryAfterMissingGrace: Boolean = false,
+    ): Evaluation {
         if (!evidence.identityMatches || evidence.heartbeatAgeMs !in 0..GuardianRunStateReader.MAX_HEARTBEAT_AGE_MS) {
             return Evaluation(State(), Decision.WAIT_UNVERIFIED)
         }
@@ -136,17 +147,27 @@ internal object LiveMissingGameRecoveryPolicy {
 
         val missingSince = state.missingSinceMs.takeIf { it > 0L } ?: evidence.nowMs
         val activeState = state.copy(missingSinceMs = missingSince)
-        if (evidence.startupChainActive) return Evaluation(activeState, Decision.WAIT_STARTUP_CHAIN)
-        if (evidence.nowMs - missingSince < MISSING_GAME_GRACE_MS) {
+        val missingForMs = evidence.nowMs - missingSince
+        if (evidence.startupChainActive && !allowStartupChainRecoveryAfterMissingGrace) {
+            return Evaluation(activeState, Decision.WAIT_STARTUP_CHAIN)
+        }
+        if (missingForMs < MISSING_GAME_GRACE_MS) {
+            if (evidence.startupChainActive) return Evaluation(activeState, Decision.WAIT_STARTUP_CHAIN)
             return Evaluation(activeState, Decision.WAIT_MISSING_GAME_GRACE)
         }
-        if (activeState.attempts >= MAX_STARTER_CHAIN_ATTEMPTS) {
-            return Evaluation(activeState, Decision.EXHAUSTED)
-        }
+        // Startup handoff activity is initiation evidence, not proof that a
+        // client will appear. Once the independent 120s no-client grace has
+        // elapsed, the already-authorized missing-game path must be allowed to
+        // run even if the starter keeps retrying. Otherwise each retry can
+        // recreate startupChainActive and defer recovery until the tracker's
+        // much longer continuous-activity cap.
         if (activeState.lastAttemptAtMs > 0L &&
             evidence.nowMs - activeState.lastAttemptAtMs < RETRY_COOLDOWN_MS
         ) {
             return Evaluation(activeState, Decision.WAIT_RETRY_COOLDOWN)
+        }
+        if (activeState.attempts >= maxStarterChainAttempts) {
+            return Evaluation(activeState, Decision.EXHAUSTED)
         }
         return Evaluation(activeState, Decision.START_CONFIGURED_STARTER_CHAIN)
     }
@@ -158,11 +179,50 @@ internal object LiveMissingGameRecoveryPolicy {
     )
 }
 
+/** Pure lifecycle accounting seam used by the BetaScreenRecoveryService callbacks. */
+internal object BetaMissingGameGenerationAccounting {
+    data class ForcedRestartResult(
+        val state: LiveMissingGameRecoveryPolicy.State,
+        val accepted: Boolean,
+    )
+
+    fun markStartupRequested(exactBetaChannel: Boolean): LiveMissingGameRecoveryPolicy.State =
+        LiveMissingGameRecoveryPolicy.State(initialHandoffPending = exactBetaChannel)
+
+    fun acceptHandoff(
+        state: LiveMissingGameRecoveryPolicy.State,
+        nowMs: Long,
+    ): LiveMissingGameRecoveryPolicy.State = state.copy(
+        missingSinceMs = state.missingSinceMs.takeIf { it > 0L } ?: nowMs,
+        initialHandoffPending = false,
+    )
+
+    fun recordForcedRestart(
+        state: LiveMissingGameRecoveryPolicy.State,
+        nowMs: Long,
+    ): ForcedRestartResult = if (
+        state.attempts >= LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS
+    ) {
+        ForcedRestartResult(state = state, accepted = false)
+    } else {
+        ForcedRestartResult(
+            state = LiveMissingGameRecoveryPolicy.recordDispatch(state, nowMs),
+            accepted = true,
+        )
+    }
+}
+
 /** Side-effect boundary so tests can distinguish a policy decision from starter-chain dispatch. */
 internal object LiveMissingGameRecoveryDispatch {
     enum class Result { NO_ACTION, BLOCKED, STARTER_CHAIN_DISPATCHED }
 
-    fun dispatch(
+    /**
+     * Production missing-client restart boundary. The caller must perform
+     * the exact Beta/guardian/process/pause/queue checks immediately before
+     * invoking this seam; this method only sequences the already-authorized
+     * mode reset and configured starter chain.
+     */
+    fun restartToStartup(
         decision: LiveMissingGameRecoveryPolicy.Decision,
         stillAuthorized: () -> Boolean,
         recoverModeToStartup: () -> Unit,
@@ -177,4 +237,16 @@ internal object LiveMissingGameRecoveryDispatch {
         startConfiguredStarterChain()
         return Result.STARTER_CHAIN_DISPATCHED
     }
+
+    fun dispatch(
+        decision: LiveMissingGameRecoveryPolicy.Decision,
+        stillAuthorized: () -> Boolean,
+        recoverModeToStartup: () -> Unit,
+        startConfiguredStarterChain: () -> Unit,
+    ): Result = restartToStartup(
+        decision = decision,
+        stillAuthorized = stillAuthorized,
+        recoverModeToStartup = recoverModeToStartup,
+        startConfiguredStarterChain = startConfiguredStarterChain,
+    )
 }

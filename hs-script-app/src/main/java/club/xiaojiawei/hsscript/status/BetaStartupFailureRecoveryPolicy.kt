@@ -43,7 +43,7 @@ internal class BetaStartupFailureRecoveryPolicy(
     )
 
     companion object {
-        const val DEFAULT_NO_PROGRESS_TIMEOUT_MS = 180_000L
+        const val DEFAULT_NO_PROGRESS_TIMEOUT_MS = 120_000L
         const val INITIAL_RETRY_DELAY_MS = 15_000L
         const val MAX_RETRY_DELAY_MS = 300_000L
         const val MAX_POWER_LOG_PROGRESS_AGE_MS = 120_000L

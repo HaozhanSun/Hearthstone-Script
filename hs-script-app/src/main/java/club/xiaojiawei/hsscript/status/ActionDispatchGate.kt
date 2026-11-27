@@ -13,6 +13,7 @@ import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The last, process-wide gate before an action can reach the desktop.  Phase
@@ -28,13 +29,14 @@ object ActionDispatchGate {
     private val idleWatchdogRestartHandoffCapability = AtomicReference<IdleWatchdogRestartHandoffCapability?>()
     private val seasonRankAwardDispatchScope = ThreadLocal<String>()
     private val seasonRankAwardDispatchScreenMode = ThreadLocal<String>()
-    private const val MISSING_GAME_HANDOFF_CAPABILITY_TTL_MS = 30_000L
+    private const val MISSING_GAME_HANDOFF_CAPABILITY_TTL_MS = 120_000L
     private const val IDLE_WATCHDOG_HANDOFF_CAPABILITY_TTL_MS = 30_000L
 
     private data class MissingGameRecoveryHandoffCapability(
         val expiresAtMs: Long,
         val stillAuthorized: () -> Boolean,
-        val onHandoffAccepted: () -> Unit,
+        val onHandoffAccepted: () -> Boolean,
+        val remainingHandoffs: AtomicInteger = AtomicInteger(1),
     )
 
     private data class IdleWatchdogRestartHandoffCapability(
@@ -182,7 +184,7 @@ object ActionDispatchGate {
     /** Beta-only, no-client recovery entry point. The scope lasts for one gate check. */
     internal fun allowBetaMissingGameRecovery(
         handoffStillAuthorized: (() -> Boolean)? = null,
-        onHandoffAccepted: (() -> Unit)? = null,
+        onHandoffAccepted: (() -> Boolean)? = null,
     ): Boolean {
         val betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
         val gameAlive = runCatching { GameUtil.isAliveOfGame() }.getOrDefault(true)
@@ -217,9 +219,14 @@ object ActionDispatchGate {
                                     !LifecycleTrace.hasRecentActiveMatchmakingScreen() &&
                                     !LifecycleTrace.hasActiveMatchmakingEntryRecoveryGuard()
                             },
-                            onHandoffAccepted = onHandoffAccepted ?: {},
+                            onHandoffAccepted = onHandoffAccepted ?: { true },
                         ),
                     )
+                    log.info {
+                        "ACTION_DISPATCH_CAPABILITY_ISSUED action=startup.handoff source=missing-game " +
+                            "ttlMs=$MISSING_GAME_HANDOFF_CAPABILITY_TTL_MS maxHandoffs=1 " +
+                            "acceptance=permit-issued-not-transport-confirmed"
+                    }
                 }
             }
         } finally {
@@ -232,6 +239,7 @@ object ActionDispatchGate {
         if (action != "startup.handoff") return false
         val capability = missingGameRecoveryHandoffCapability.get() ?: return false
         val valid = System.currentTimeMillis() <= capability.expiresAtMs &&
+            capability.remainingHandoffs.get() > 0 &&
             canAuthorizeBetaMissingGameHandoff(
                 betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
                 gameAlive = runCatching { GameUtil.isAliveOfGame() }.getOrDefault(true),
@@ -245,12 +253,11 @@ object ActionDispatchGate {
         return valid
     }
 
-    private fun consumeMissingGameRecoveryHandoffCapability(action: String): (() -> Unit)? {
-        if (action != "startup.handoff") return {}
+    private fun consumeMissingGameRecoveryHandoffCapability(action: String): (() -> Boolean)? {
+        if (action != "startup.handoff") return { true }
         val capability = missingGameRecoveryHandoffCapability.get() ?: return null
-        if (!hasValidMissingGameRecoveryHandoffCapability(action) ||
-            !missingGameRecoveryHandoffCapability.compareAndSet(capability, null)
-        ) return null
+        if (!hasValidMissingGameRecoveryHandoffCapability(action)) return null
+        if (capability.remainingHandoffs.getAndDecrement() <= 0) return null
         return capability.onHandoffAccepted
     }
 
@@ -613,12 +620,23 @@ object ActionDispatchGate {
                 }
                 return false
             }
-            runCatching { onHandoffAccepted() }.onFailure { error ->
+            val callbackAccepted = runCatching { onHandoffAccepted() }.onFailure { error ->
                 log.error(error) {
                     "ACTION_DISPATCH_CALLBACK_FAILED action=startup.handoff " +
                         "reason=missing-game-recovery-accounting dispatch=false"
                 }
+            }.getOrDefault(false)
+            if (!callbackAccepted) {
+                missingGameRecoveryHandoffCapability.set(null)
+                log.warn {
+                    "ACTION_BLOCKED action=startup.handoff " +
+                        "reason=missing-game-recovery-accounting-rejected dispatch=false"
+                }
                 return false
+            }
+            log.info {
+                "ACTION_DISPATCH_HANDOFF_GATE_ACCEPTED action=startup.handoff source=missing-game " +
+                    "acceptance=final-gate-before-transport"
             }
         }
         if (action == "startup.handoff" && idleWatchdogRestartHandoffCapability.get() != null) {

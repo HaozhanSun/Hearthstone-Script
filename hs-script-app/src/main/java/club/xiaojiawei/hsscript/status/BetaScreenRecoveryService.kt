@@ -25,6 +25,9 @@ import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.Future
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -47,6 +50,17 @@ internal object BetaScreenRecoveryService {
     private val startupHandoffActivity = StartupHandoffActivityTracker()
     private val startupFailurePolicy = BetaStartupFailureRecoveryPolicy()
     private val missingGameRecoveryDispatchInFlight = AtomicBoolean(false)
+    /**
+     * The startup monitor is scheduled on EXTRA_THREAD_POOL, which also runs
+     * OCR and screen-recovery work.  Keep the async final-gate/force-restart
+     * continuation on a separate daemon lane so a busy capture queue cannot
+     * hold the one-use dispatch flag for minutes after the policy has fired.
+     */
+    private val missingGameRecoveryExecutor: ExecutorService by lazy {
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "BetaMissingGameRecovery").apply { isDaemon = true }
+        }
+    }
     private val recoveryCascadeGuard = RecoveryCascadeGuard()
     private val foregroundFailureCount = AtomicInteger(0)
     private val foregroundRecoveryPending = AtomicBoolean(false)
@@ -63,6 +77,7 @@ internal object BetaScreenRecoveryService {
     private val candidateRestartGeneration = AtomicLong(0L)
     @Volatile private var startupRecoveryGraceUntil = 0L
     private val startupRecoveryScheduled = AtomicBoolean(false)
+    private val missingGameRecoveryAccountingLock = Any()
     @Volatile private var missingGameRecoveryState = LiveMissingGameRecoveryPolicy.State()
     @Volatile private var missingGameExhaustionNotified = false
     @Volatile private var lastCandidateAuthorizedObservation: ScreenStateRecovery.FreshScreenObservation? = null
@@ -438,9 +453,16 @@ internal object BetaScreenRecoveryService {
         observation: ScreenStateRecovery.FreshScreenObservation?,
     ): BetaCandidateScreenWatchdog.Snapshot {
         val authorizedObservation = lastCandidateAuthorizedObservation
-        val allowExtendedMissingGrace = authorizedObservation?.evidence == "event-quest-promo-close-visual"
+        // Both exact Event Quest visual paths are safe to retain across the
+        // bounded capture/focus gap. The promo path is the older close-button
+        // classifier; the structural path is what the upstream classifier
+        // emits for the live overlay fixture. Do not broaden this to arbitrary
+        // EVENT_QUEST_OVERLAY/UNKNOWN labels: the helper below still requires
+        // exact evidence, PID/HWND, confidence, foreground, empty-session,
+        // and no-queue proof.
+        val allowExtendedMissingGrace = authorizedObservation?.isExactEventQuestCandidate() == true
         val maxMissingGap = if (allowExtendedMissingGrace) {
-            BetaCandidateScreenWatchdog.EXTENDED_PROMO_MISSING_OBSERVATION_GAP_MS
+            BetaCandidateScreenWatchdog.EXTENDED_EVENT_QUEST_MISSING_OBSERVATION_GAP_MS
         } else {
             BetaCandidateScreenWatchdog.MAX_MISSING_OBSERVATION_GAP_MS
         }
@@ -506,10 +528,22 @@ internal object BetaScreenRecoveryService {
         pid > 0L && hwnd.isNotBlank() && confidence >= 85 &&
             (
                 screen.uppercase() in setOf("HOME", "TOURNAMENT", "DECK_SELECTION", "STARTUP_LAUNCHER") ||
-                    (screen.equals("EVENT_QUEST_OVERLAY", ignoreCase = true) &&
-                        evidence == "event-quest-promo-close-visual" && modalVisible)
+                    isExactEventQuestCandidate()
             ) &&
             !currentSessionReady && noActiveMatchmakingEvidence
+
+    /**
+     * The upstream classifier has two intentionally distinct Event Quest
+     * proofs. The live structural proof is not necessarily a centered modal
+     * frame, so modalVisible must not be required for that exact evidence. A
+     * generic/unknown Event Quest-looking label remains fail-closed.
+     */
+    private fun ScreenStateRecovery.FreshScreenObservation.isExactEventQuestCandidate(): Boolean =
+        screen.equals("EVENT_QUEST_OVERLAY", ignoreCase = true) && when (evidence) {
+            "event-quest-promo-close-visual" -> modalVisible
+            "event-quest-overlay-structural-visual" -> true
+            else -> false
+        }
 
     /** Deterministic seam for the missing-observation/queue-fence regression. */
     internal fun candidateSnapshotForTest(
@@ -702,6 +736,29 @@ internal object BetaScreenRecoveryService {
     internal fun startupFailureMonitorScheduledForTest(): Boolean =
         startupFailureMonitor?.let { !it.isDone && !it.isCancelled } == true
 
+    /** The Beta missing-game continuation must not share the OCR/screen pool. */
+    internal fun missingGameRecoveryDispatchExecutorIsolatedForTest(): Boolean =
+        missingGameRecoveryDispatchExecutor() === missingGameRecoveryExecutor
+
+    internal fun missingGameRecoveryDispatchUsesDedicatedExecutorForTest(channel: String): Boolean =
+        missingGameRecoveryDispatchExecutor(channel) === missingGameRecoveryExecutor
+
+    private fun missingGameRecoveryDispatchExecutor(channel: String = BuildInfo.RELEASE_CHANNEL): Executor =
+        if (BuildChannel.identityToken(channel) == "beta") missingGameRecoveryExecutor else EXTRA_THREAD_POOL
+
+    private fun submitMissingGameRecoveryContinuation(
+        channel: String = BuildInfo.RELEASE_CHANNEL,
+        continuation: () -> Unit,
+    ) {
+        missingGameRecoveryDispatchExecutor(channel).execute(continuation)
+    }
+
+    /** Test seam that delegates through the same production dispatch boundary. */
+    internal fun submitMissingGameRecoveryContinuationForTest(
+        channel: String,
+        continuation: () -> Unit,
+    ) = submitMissingGameRecoveryContinuation(channel, continuation)
+
     private fun detectStartupFailure(recoveryGeneration: Long) {
         if (!isStartupFailureGenerationCurrent(recoveryGeneration) || !WorkTimeListener.working ||
             PauseStatus.isPause || PowerLogListener.replayingExistingLog
@@ -758,6 +815,37 @@ internal object BetaScreenRecoveryService {
         val activeMatchmakingScreen = pid != null && LifecycleTrace.hasRecentActiveMatchmakingScreen()
         val recentMatchmakingIntent = LifecycleTrace.hasRecentMatchmakingInputIntent()
         val activeOrRecentMatchmaking = activeMatchmakingScreen || recentMatchmakingIntent
+        // A missing diagnostic PID is not proof that the client exited. The
+        // independent process probe must also say "absent"; probe failures
+        // are fail-closed and return before any missing-game handoff.
+        val gameProcessAlive = if (pid == null) {
+            probeGameAliveForMissingRecovery { GameUtil.isAliveOfGame() }
+        } else {
+            true
+        }
+        if (pid == null && !gameProcessAlive &&
+            StartupQuestOverlayRecoveryFence.reconcileExitedGameForMissingRecovery(
+                gameProcessAlive = gameProcessAlive,
+                activeGame = liveMatch,
+                activeMatchmaking = activeOrRecentMatchmaking,
+                terminalState = terminal,
+                recentMatchmakingIntent = recentMatchmakingIntent,
+                working = WorkTimeListener.working,
+                paused = PauseStatus.isPause,
+            )
+        ) {
+            log.info {
+                "BETA_MISSING_GAME_RECOVERY_QUEST_FENCE_RECONCILED " +
+                    "reason=observed-overlay-client-exited exactProcessPresent=false dispatch=CONTINUE"
+            }
+        }
+        if (pid == null && gameProcessAlive) {
+            log.info {
+                "BETA_MISSING_GAME_RECOVERY action=WAIT reason=game-alive-probe-not-absent " +
+                    "dispatch=false"
+            }
+            return
+        }
         val dialog = WindowsApplicationErrorDialogProbe.detect()?.asPolicyEvidence()
         val hwnd = ScriptStatus.gameHWND
         val windowMatchesPid = pid != null && hwnd != null &&
@@ -814,6 +902,7 @@ internal object BetaScreenRecoveryService {
                 terminalState = terminal,
                 authoritativeTerminalProof = authoritativeTerminalPowerLog,
                 recentMatchmakingIntent = recentMatchmakingIntent,
+                gameProcessAlive = gameProcessAlive,
                 now = now,
             )
             return
@@ -861,9 +950,16 @@ internal object BetaScreenRecoveryService {
         terminalState: Boolean,
         authoritativeTerminalProof: Boolean,
         recentMatchmakingIntent: Boolean,
+        gameProcessAlive: Boolean,
         now: Long,
     ) {
         val guardian = readCurrentGuardianRunState(Instant.ofEpochMilli(now))
+        val exactBetaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
+        val maxStarterChainAttempts = if (exactBetaChannel) {
+            LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS
+        } else {
+            LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS
+        }
         val evaluation = LiveMissingGameRecoveryPolicy.evaluate(
             state,
             LiveMissingGameRecoveryPolicy.Evidence(
@@ -873,7 +969,7 @@ internal object BetaScreenRecoveryService {
                 runningIntent = guardian?.intent == "RUNNING",
                 working = WorkTimeListener.working && guardian?.working == true,
                 paused = PauseStatus.isPause || guardian?.paused != false,
-                gameAlive = GameUtil.isAliveOfGame(),
+                gameAlive = gameProcessAlive,
                 activeGame = activeGame,
                 activeMatchmaking = activeMatchmaking,
                 terminalState = terminalState,
@@ -882,6 +978,8 @@ internal object BetaScreenRecoveryService {
                 startupChainActive = startupChainActive,
                 nowMs = now,
             ),
+            maxStarterChainAttempts = maxStarterChainAttempts,
+            allowStartupChainRecoveryAfterMissingGrace = exactBetaChannel,
         )
         missingGameRecoveryState = evaluation.state
         when (evaluation.decision) {
@@ -891,7 +989,7 @@ internal object BetaScreenRecoveryService {
                 missingGameExhaustionNotified = true
                 log.error {
                     "BETA_MISSING_GAME_RECOVERY_EXHAUSTED attempts=${evaluation.state.attempts} " +
-                        "limit=${LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS} " +
+                        "limit=$maxStarterChainAttempts " +
                         "action=ALERT_AND_KEEP_JAVA_ALIVE"
                 }
                 SystemUtil.notice(
@@ -930,7 +1028,7 @@ internal object BetaScreenRecoveryService {
     ) {
         if (!missingGameRecoveryDispatchInFlight.compareAndSet(false, true)) return
         try {
-            EXTRA_THREAD_POOL.execute {
+            submitMissingGameRecoveryContinuation {
             var chainAttempted = false
             try {
                 val terminalProof = hasCompleteTerminalProofForMissingProcess()
@@ -951,7 +1049,7 @@ internal object BetaScreenRecoveryService {
                             "dispatch=false pause=${PauseStatus.isPause} gameAlive=${GameUtil.isAliveOfGame()} " +
                             "inWar=${WarEx.inWar}"
                     }
-                    return@execute
+                    return@submitMissingGameRecoveryContinuation
                 }
                 val stateAuthorized = {
                     val latestGuardian = readCurrentGuardianRunState()
@@ -973,16 +1071,10 @@ internal object BetaScreenRecoveryService {
                     stateAuthorized() && ActionDispatchGate.allowBetaMissingGameRecovery(
                         handoffStillAuthorized = stateAuthorized,
                         onHandoffAccepted = {
-                            missingGameRecoveryState = LiveMissingGameRecoveryPolicy.recordDispatch(
-                                state,
-                                System.currentTimeMillis(),
-                            )
-                            missingGameExhaustionNotified = false
-                            log.warn {
-                                "BETA_MISSING_GAME_RECOVERY_DISPATCH action=START_CONFIGURED_STARTER_CHAIN " +
-                                    "attempt=${missingGameRecoveryState.attempts} " +
-                                    "limit=${LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS} " +
-                                    "acceptance=startup-handoff-gate-accepted"
+                            if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) != "beta") {
+                                false
+                            } else {
+                                acceptMissingGameRecoveryHandoff(System.currentTimeMillis())
                             }
                         },
                     )
@@ -994,9 +1086,24 @@ internal object BetaScreenRecoveryService {
                             "dispatch=false identityMatches=${latestGuardian?.identityMatches == true} " +
                             "heartbeatAgeMs=${latestGuardian?.heartbeatAgeMs ?: "unknown"}"
                     }
-                    return@execute
+                    return@submitMissingGameRecoveryContinuation
                 }
-                val result = LiveMissingGameRecoveryDispatch.dispatch(
+                if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta" &&
+                    !recordMissingGameRecoveryRestart(System.currentTimeMillis())
+                ) {
+                    log.warn {
+                        "BETA_MISSING_GAME_RECOVERY_RESTART_SUPPRESSED " +
+                            "reason=budget-exhausted-before-core-restart dispatch=false"
+                    }
+                    return@submitMissingGameRecoveryContinuation
+                }
+                log.warn {
+                    "BETA_MISSING_GAME_RECOVERY action=RESTART_CONFIGURED_STARTER_CHAIN " +
+                        "thresholdMs=${LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS} " +
+                        "attempts=${missingGameRecoveryState.attempts} " +
+                        "acceptance=final-gate-authorized"
+                }
+                val result = LiveMissingGameRecoveryDispatch.restartToStartup(
                     decision = LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
                     stillAuthorized = authorized,
                     recoverModeToStartup = {
@@ -1004,13 +1111,66 @@ internal object BetaScreenRecoveryService {
                     },
                     startConfiguredStarterChain = {
                         chainAttempted = true
-                        StarterConfig.starter.start()
+                        if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) != "beta") {
+                            // Release Candidate keeps the prior starter-chain
+                            // behavior; the forced Core restart is Beta-only.
+                            StarterConfig.starter.start()
+                        } else {
+                            val restart = MissingGameRestartDispatch.dispatch(
+                                channel = BuildInfo.RELEASE_CHANNEL,
+                                stillAuthorized = stateAuthorized,
+                                gameAlive = { GameUtil.isAliveOfGame() },
+                                requestRestart = { afterClientTerminated ->
+                                    // This is the same serialized close-and-starter
+                                    // primitive used by the known-good watchdog path.
+                                    // With no Hearthstone PID, killGame is a no-op;
+                                    // the important effect is a fresh configured
+                                    // startup chain after the final state recheck.
+                                    // Core's API is Unit-returning and can suppress
+                                    // an overlapping restart, so sync=true plus the
+                                    // close callback is the authoritative acceptance
+                                    // signal. Do not re-arm on request intent alone.
+                                    var clientTerminationObserved = false
+                                    Core.restartFromIdleWatchdog(
+                                        sync = true,
+                                        afterClientTerminated = { clientTerminationObserved = true },
+                                    )
+                                    if (!clientTerminationObserved) {
+                                        false
+                                    } else {
+                                        afterClientTerminated()
+                                        true
+                                    }
+                                },
+                                onRestartCompleted = {
+                                    // Rearm only after the serialized restart
+                                    // boundary completes. An intent or permit
+                                    // alone must not create a new generation.
+                                    markStartupRequested(
+                                        reason = "beta-missing-game-restart",
+                                        now = System.currentTimeMillis(),
+                                    )
+                                },
+                            )
+                            if (restart == MissingGameRestartDispatch.Result.RESTART_REQUESTED) {
+                                log.warn {
+                                    "BETA_MISSING_GAME_RECOVERY_RESTART_REQUESTED " +
+                                        "action=CORE_IDLE_WATCHDOG_RESTART " +
+                                        "acceptance=awaiting-authoritative-game-process"
+                                }
+                            } else {
+                                log.warn {
+                                    "BETA_MISSING_GAME_RECOVERY_RESTART_SUPPRESSED " +
+                                        "reason=state-changed-before-core-restart dispatch=false"
+                                }
+                            }
+                        }
                     },
                 )
                 when (result) {
                     LiveMissingGameRecoveryDispatch.Result.STARTER_CHAIN_DISPATCHED -> {
                         log.info {
-                            "BETA_MISSING_GAME_RECOVERY_CHAIN_DISPATCHED " +
+                            "BETA_MISSING_GAME_RECOVERY_CHAIN_REQUESTED " +
                                 "attempt=${missingGameRecoveryState.attempts} " +
                                 "acceptance=awaiting-authoritative-game-process"
                         }
@@ -1035,6 +1195,54 @@ internal object BetaScreenRecoveryService {
         }
     }
 
+    /**
+     * Account the forced restart after the final recovery gate and read the
+     * current shared state instead of the tick's stale immutable snapshot.
+     * Multiple launcher lanes can cross the async gate before the next
+     * 10-second monitor tick; accounting must remain monotonic and stop at the
+     * policy budget rather than repeating the same attempt number forever.
+     */
+    private fun recordMissingGameRecoveryRestart(nowMs: Long): Boolean =
+        synchronized(missingGameRecoveryAccountingLock) {
+            val accounting = BetaMissingGameGenerationAccounting.recordForcedRestart(
+                state = missingGameRecoveryState,
+                nowMs = nowMs,
+            )
+            missingGameRecoveryState = accounting.state
+            if (!accounting.accepted) {
+                log.warn {
+                    "BETA_MISSING_GAME_RECOVERY_RESTART_REJECTED " +
+                        "attempts=${missingGameRecoveryState.attempts} " +
+                        "limit=${LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS} " +
+                        "acceptance=budget-exhausted-before-core-restart dispatch=false"
+                }
+                false
+            } else {
+                missingGameExhaustionNotified = false
+                log.warn {
+                    "BETA_MISSING_GAME_RECOVERY_RESTART_ACCEPTED " +
+                        "attempt=${missingGameRecoveryState.attempts} " +
+                        "limit=${LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS} " +
+                        "acceptance=final-gate-before-core-restart " +
+                        "transportConfirmed=false"
+                }
+                true
+            }
+        }
+
+    private fun acceptMissingGameRecoveryHandoff(nowMs: Long): Boolean =
+        synchronized(missingGameRecoveryAccountingLock) {
+            val current = missingGameRecoveryState
+            missingGameRecoveryState = BetaMissingGameGenerationAccounting.acceptHandoff(current, nowMs)
+            log.info {
+                "BETA_MISSING_GAME_RECOVERY_HANDOFF_ACCEPTED " +
+                    "attempt=${missingGameRecoveryState.attempts} " +
+                    "initialGenerationHandoff=${current.initialHandoffPending} " +
+                    "acceptance=final-gate-before-transport"
+            }
+            true
+        }
+
     private fun readCurrentGuardianRunState(now: Instant = Instant.now()): GuardianRunStateReader.Snapshot? {
         if (System.getProperty("hs.script.launch.source") != "shortcut") return null
         val process = ProcessHandle.current()
@@ -1057,6 +1265,14 @@ internal object BetaScreenRecoveryService {
         startupChainActive: Boolean,
         exactApplicationErrorDialogPresent: Boolean,
     ): Boolean = startupChainActive && !exactApplicationErrorDialogPresent
+
+    internal fun probeGameAliveForMissingRecovery(probe: () -> Boolean): Boolean =
+        runCatching { probe() }.getOrElse { error ->
+            log.warn(error) {
+                "BETA_MISSING_GAME_RECOVERY_GAME_ALIVE_PROBE_FAILED failClosed=true dispatch=false"
+            }
+            true
+        }
 
     private fun logStartupFailureDecision(
         decision: BetaStartupFailureRecoveryPolicy.Decision,
@@ -1219,13 +1435,70 @@ internal object BetaScreenRecoveryService {
     }
 
     fun markStartupRequested(reason: String, now: Long) {
-        if (!ScreenRecoveryRuntime.isEnabled()) return
-        missingGameRecoveryState = LiveMissingGameRecoveryPolicy.State()
-        missingGameExhaustionNotified = false
+        // The Beta startup-failure monitor is always on, while the screen
+        // recovery extensions are an independent user setting.  A completed
+        // Core restart must therefore re-arm missing-game generation
+        // accounting even when the optional screen extensions are disabled;
+        // otherwise the next monitor tick observes the previous generation's
+        // attempt budget and reports EXHAUSTED immediately.
+        val exactBetaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
+        val optionalExtensionsEnabled = ScreenRecoveryRuntime.isEnabled()
+        if (exactBetaChannel || optionalExtensionsEnabled) {
+            synchronized(missingGameRecoveryAccountingLock) {
+                missingGameRecoveryState = BetaMissingGameGenerationAccounting.markStartupRequested(
+                    exactBetaChannel = exactBetaChannel,
+                )
+                missingGameExhaustionNotified = false
+            }
+        }
+        // Preserve the original optional-extension semantics for RC and other
+        // callers: only exact Beta generation accounting is always-on. The
+        // activity tracker and grace window remain optional.
+        if (!optionalExtensionsEnabled) {
+            if (exactBetaChannel) {
+                // A handoff window can have been recorded while optional
+                // extensions were enabled and then survive a runtime toggle.
+                // It must not defer the always-on Beta missing-game monitor
+                // until the tracker's 300-second continuous-activity cap.
+                startupHandoffActivity.reset()
+                LifecycleTrace.mark(
+                    "startup-recovery-generation-rearmed reason=$reason " +
+                        "optionalExtensionsEnabled=false"
+                )
+            }
+            return
+        }
         startupHandoffActivity.reset()
         startupRecoveryGraceUntil = now + STARTUP_RECOVERY_GRACE_MS
-        LifecycleTrace.mark("startup-recovery-grace reason=$reason until=$startupRecoveryGraceUntil")
+        LifecycleTrace.mark(
+            "startup-recovery-generation-rearmed reason=$reason " +
+                "until=$startupRecoveryGraceUntil optionalExtensionsEnabled=true"
+        )
     }
+
+    /** Test seam for the always-on startup-generation accounting boundary. */
+    internal fun missingGameRecoveryStateForTest(): LiveMissingGameRecoveryPolicy.State =
+        synchronized(missingGameRecoveryAccountingLock) { missingGameRecoveryState }
+
+    /** Production-consumer seam for stale startup-activity re-arm coverage. */
+    internal fun startupHandoffActivityDefersForTest(now: Long): Boolean =
+        startupHandoffActivity.shouldDeferNoProgress(
+            StartupHandoffActivityTracker.Context(
+                working = true,
+                paused = false,
+                automaticPause = false,
+                recoveryPending = false,
+                replaying = false,
+                inWar = false,
+                terminalState = false,
+                screen = NoProgressWatchdog.ScreenExpectation.STARTUP,
+                mode = "NONE",
+                expectedMode = "NONE",
+                gameProcessAlive = false,
+                powerLogPath = null,
+            ),
+            now,
+        )
 
     fun markStartupHandoffAttempt(reason: String, now: Long) {
         if (!ScreenRecoveryRuntime.isEnabled()) return
