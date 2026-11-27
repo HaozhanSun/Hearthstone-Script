@@ -52,6 +52,14 @@ only when authority or intent remains genuinely ambiguous, and record why.
   dirty remainder, blocker, and one next action. A build, commit, or offline
   test result is not an online-E2E completion claim.
 
+- Before any final response, handoff, worker completion, or request for user
+  action, run the mandatory pre-exit delegation gate in
+  [`AGENTS.md`](../AGENTS.md#mandatory-pre-exit-delegation-gate). Carry out
+  authorized actions directly, including long-running commands, and verify
+  their outcomes. Report the gate result and concrete evidence; ask for user
+  intervention only after confirming an indispensable blocker. This is not a
+  substitute for the deployment, closeout, or online acceptance gates.
+
 ## 2. Deployment SOP
 
 Both the worker and release owner must read this section before deployment and
