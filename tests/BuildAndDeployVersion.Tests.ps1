@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $root 'build-path-utils.ps1')
 . (Join-Path $root 'build-version-utils.ps1')
 
 function Assert-Equal([string]$Expected, [string]$Actual, [string]$Label) {
@@ -81,6 +82,34 @@ Assert-Equal $stampedPom (Set-PomBuildTimestampPacific $stampedPom $buildTimesta
 Assert-Equal $buildTimestamp (Get-BuildInfoTimestampPacific "version=v4.16.504`nbuildTimestampPacific=$buildTimestamp`nchannel=beta") 'JAR build.info timestamp'
 
 $deployScript = [System.IO.File]::ReadAllText((Join-Path $root 'build-and-deploy.ps1'))
+$physicalRoot = Resolve-PhysicalDirectoryPath $root
+if (-not (Test-Path -LiteralPath (Join-Path $physicalRoot 'pom.xml') -PathType Leaf)) {
+    throw "Physical release root does not contain the root POM: $physicalRoot"
+}
+$mavenWrapper = Join-Path $physicalRoot 'mvnw.cmd'
+if (-not (Test-Path -LiteralPath $mavenWrapper -PathType Leaf)) {
+    throw "Physical release root does not contain the Maven wrapper: $physicalRoot"
+}
+$reactorArgs = @(
+    '-f', (Join-Path $physicalRoot 'pom.xml'),
+    '-pl', 'hs-script-app',
+    '-am',
+    '-Pjvm',
+    '-Djava.version=24',
+    '-Dbuild-channel=beta',
+    '-DskipTests',
+    'validate'
+)
+& $mavenWrapper @reactorArgs | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw 'The physical-root Maven reactor selector must validate hs-script-app with its upstream modules'
+}
+if ($deployScript -notmatch "build-path-utils\.ps1") {
+    throw 'Build/deploy must load the physical-path resolver before deriving the project root'
+}
+if ($deployScript -notmatch '\$projectRoot\s*=\s*Resolve-PhysicalDirectoryPath\s+\$scriptDirectory') {
+    throw 'Build/deploy must canonicalize the project root before invoking Maven'
+}
 $requiredFocusedRegressionTests = @(
     'StartupModeEntryDispatchPolicyTest',
     'BetaNeverSurrenderOverrideTest',

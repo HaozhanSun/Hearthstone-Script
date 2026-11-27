@@ -9,7 +9,9 @@ param(
 $ErrorActionPreference = "Stop"
 [System.Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem') | Out-Null
 
-$projectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $MyInvocation.MyCommand.Path)).TrimEnd('\')
+$scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $scriptDirectory 'build-path-utils.ps1')
+$projectRoot = Resolve-PhysicalDirectoryPath $scriptDirectory
 $sourceBranchOutput = @(& git -C $projectRoot branch --show-current 2>&1)
 if ($LASTEXITCODE -ne 0) {
     $gitError = ($sourceBranchOutput -join [Environment]::NewLine).Trim()
