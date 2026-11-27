@@ -103,6 +103,8 @@ internal object LiveMissingGameRecoveryPolicy {
         val missingSinceMs: Long = 0L,
         val attempts: Int = 0,
         val lastAttemptAtMs: Long = 0L,
+        /** The first handoff after a restart starts a new generation; it is not another restart attempt. */
+        val initialHandoffPending: Boolean = false,
     )
 
     data class Evidence(
@@ -163,6 +165,39 @@ internal object LiveMissingGameRecoveryPolicy {
         attempts = state.attempts + 1,
         lastAttemptAtMs = nowMs,
     )
+}
+
+/** Pure lifecycle accounting seam used by the BetaScreenRecoveryService callbacks. */
+internal object BetaMissingGameGenerationAccounting {
+    data class ForcedRestartResult(
+        val state: LiveMissingGameRecoveryPolicy.State,
+        val accepted: Boolean,
+    )
+
+    fun markStartupRequested(exactBetaChannel: Boolean): LiveMissingGameRecoveryPolicy.State =
+        LiveMissingGameRecoveryPolicy.State(initialHandoffPending = exactBetaChannel)
+
+    fun acceptHandoff(
+        state: LiveMissingGameRecoveryPolicy.State,
+        nowMs: Long,
+    ): LiveMissingGameRecoveryPolicy.State = state.copy(
+        missingSinceMs = state.missingSinceMs.takeIf { it > 0L } ?: nowMs,
+        initialHandoffPending = false,
+    )
+
+    fun recordForcedRestart(
+        state: LiveMissingGameRecoveryPolicy.State,
+        nowMs: Long,
+    ): ForcedRestartResult = if (
+        state.attempts >= LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS
+    ) {
+        ForcedRestartResult(state = state, accepted = false)
+    } else {
+        ForcedRestartResult(
+            state = LiveMissingGameRecoveryPolicy.recordDispatch(state, nowMs),
+            accepted = true,
+        )
+    }
 }
 
 /** Side-effect boundary so tests can distinguish a policy decision from starter-chain dispatch. */

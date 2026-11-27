@@ -98,8 +98,12 @@ class ActionDispatchGateTest {
             "the actual configured starter handoff must remain behind the final gate",
         )
         assertTrue(
-            service.contains("recordMissingGameRecoveryHandoff") &&
-                service.contains("acceptance=final-gate-before-transport") &&
+            service.contains("recordMissingGameRecoveryRestart") &&
+                service.contains("acceptMissingGameRecoveryHandoff") &&
+                service.contains("BetaMissingGameGenerationAccounting.recordForcedRestart") &&
+                service.contains("BetaMissingGameGenerationAccounting.acceptHandoff") &&
+                service.contains("BetaMissingGameGenerationAccounting.markStartupRequested") &&
+                service.contains("acceptance=final-gate-before-core-restart") &&
                 service.contains("LiveMissingGameRecoveryDispatch.restartToStartup(") &&
                 service.contains("action=RESTART_CONFIGURED_STARTER_CHAIN") &&
                 service.contains("Core.restartFromIdleWatchdog(") &&

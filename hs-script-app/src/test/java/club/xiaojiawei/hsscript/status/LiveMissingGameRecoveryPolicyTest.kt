@@ -255,6 +255,84 @@ class LiveMissingGameRecoveryPolicyTest {
     }
 
     @Test
+    fun `two failed Beta no-client generations each reach a fresh 120 second restart`() {
+        var state = BetaMissingGameGenerationAccounting.markStartupRequested(exactBetaChannel = true)
+        var restartRequests = 0
+
+        fun failGeneration(startMs: Long) {
+            state = BetaMissingGameGenerationAccounting.acceptHandoff(state, startMs)
+            assertEquals(0, state.attempts, "the initial handoff must not consume the forced-restart budget")
+            val thresholdMs = startMs + LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS
+            val decision = LiveMissingGameRecoveryPolicy.evaluate(
+                state,
+                evidence(nowMs = thresholdMs),
+                maxStarterChainAttempts = LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS,
+            )
+            assertEquals(
+                LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+                decision.decision,
+            )
+            state = LiveMissingGameRecoveryPolicy.recordDispatch(decision.state, thresholdMs)
+            assertEquals(1, state.attempts)
+
+            val restart = MissingGameRestartDispatch.dispatch(
+                channel = "beta",
+                stillAuthorized = { true },
+                gameAlive = { false },
+                requestRestart = { completion ->
+                    restartRequests++
+                    completion()
+                    true
+                },
+                onRestartCompleted = {
+                    state = BetaMissingGameGenerationAccounting.markStartupRequested(exactBetaChannel = true)
+                },
+            )
+            assertEquals(MissingGameRestartDispatch.Result.RESTART_REQUESTED, restart)
+        }
+
+        failGeneration(1L)
+        assertEquals(1, restartRequests)
+        failGeneration(1L + LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS + 1L)
+        assertEquals(2, restartRequests, "a failed first launch must re-arm one fresh Beta 120-second cycle")
+
+        var suppressedState = BetaMissingGameGenerationAccounting.markStartupRequested(exactBetaChannel = true)
+        suppressedState = BetaMissingGameGenerationAccounting.acceptHandoff(suppressedState, 500_000L)
+        val suppressedThreshold = 500_000L + LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS
+        val suppressedDecision = LiveMissingGameRecoveryPolicy.evaluate(
+            suppressedState,
+            evidence(nowMs = suppressedThreshold),
+            maxStarterChainAttempts = LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS,
+        )
+        suppressedState = LiveMissingGameRecoveryPolicy.recordDispatch(
+            suppressedDecision.state,
+            suppressedThreshold,
+        )
+        var suppressedRearm = 0
+        val suppressedRestart = MissingGameRestartDispatch.dispatch(
+            channel = "beta",
+            stillAuthorized = { true },
+            gameAlive = { false },
+            requestRestart = { false },
+            onRestartCompleted = {
+                suppressedRearm++
+                suppressedState = BetaMissingGameGenerationAccounting.markStartupRequested(exactBetaChannel = true)
+            },
+        )
+        assertEquals(MissingGameRestartDispatch.Result.BLOCKED, suppressedRestart)
+        assertEquals(0, suppressedRearm, "Core suppression must not create a fresh generation")
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.EXHAUSTED,
+            LiveMissingGameRecoveryPolicy.evaluate(
+                suppressedState,
+                evidence(nowMs = suppressedThreshold + LiveMissingGameRecoveryPolicy.RETRY_COOLDOWN_MS),
+                maxStarterChainAttempts = LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS,
+            ).decision,
+            "a suppressed Core restart must fail closed instead of issuing a duplicate request",
+        )
+    }
+
+    @Test
     fun `stale matchmaking latch cannot hold recovery after absent client grace`() {
         val first = LiveMissingGameRecoveryPolicy.evaluate(
             LiveMissingGameRecoveryPolicy.State(),

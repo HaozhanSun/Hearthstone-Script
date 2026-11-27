@@ -1036,7 +1036,7 @@ internal object BetaScreenRecoveryService {
                             if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) != "beta") {
                                 false
                             } else {
-                                recordMissingGameRecoveryHandoff(System.currentTimeMillis())
+                                acceptMissingGameRecoveryHandoff(System.currentTimeMillis())
                             }
                         },
                     )
@@ -1047,6 +1047,15 @@ internal object BetaScreenRecoveryService {
                         "BETA_MISSING_GAME_RECOVERY_SUPPRESSED reason=guardian-or-action-gate " +
                             "dispatch=false identityMatches=${latestGuardian?.identityMatches == true} " +
                             "heartbeatAgeMs=${latestGuardian?.heartbeatAgeMs ?: "unknown"}"
+                    }
+                    return@execute
+                }
+                if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta" &&
+                    !recordMissingGameRecoveryRestart(System.currentTimeMillis())
+                ) {
+                    log.warn {
+                        "BETA_MISSING_GAME_RECOVERY_RESTART_SUPPRESSED " +
+                            "reason=budget-exhausted-before-core-restart dispatch=false"
                     }
                     return@execute
                 }
@@ -1149,35 +1158,51 @@ internal object BetaScreenRecoveryService {
     }
 
     /**
-     * Account only at the final startup.handoff gate, and read the current
-     * shared state instead of the tick's stale immutable snapshot. Multiple
-     * launcher lanes can cross the async gate before the next 10-second
-     * monitor tick; accounting must remain monotonic and stop at the policy
-     * budget rather than repeating the same attempt number forever.
+     * Account the forced restart after the final recovery gate and read the
+     * current shared state instead of the tick's stale immutable snapshot.
+     * Multiple launcher lanes can cross the async gate before the next
+     * 10-second monitor tick; accounting must remain monotonic and stop at the
+     * policy budget rather than repeating the same attempt number forever.
      */
-    private fun recordMissingGameRecoveryHandoff(nowMs: Long): Boolean =
+    private fun recordMissingGameRecoveryRestart(nowMs: Long): Boolean =
         synchronized(missingGameRecoveryAccountingLock) {
-            val current = missingGameRecoveryState
-            if (current.attempts >= LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS) {
+            val accounting = BetaMissingGameGenerationAccounting.recordForcedRestart(
+                state = missingGameRecoveryState,
+                nowMs = nowMs,
+            )
+            missingGameRecoveryState = accounting.state
+            if (!accounting.accepted) {
                 log.warn {
-                    "BETA_MISSING_GAME_RECOVERY_HANDOFF_GATE_REJECTED " +
-                        "attempts=${current.attempts} " +
+                    "BETA_MISSING_GAME_RECOVERY_RESTART_REJECTED " +
+                        "attempts=${missingGameRecoveryState.attempts} " +
                         "limit=${LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS} " +
-                        "acceptance=budget-exhausted dispatch=false"
+                        "acceptance=budget-exhausted-before-core-restart dispatch=false"
                 }
                 false
             } else {
-                missingGameRecoveryState = LiveMissingGameRecoveryPolicy.recordDispatch(current, nowMs)
                 missingGameExhaustionNotified = false
                 log.warn {
-                    "BETA_MISSING_GAME_RECOVERY_HANDOFF_GATE_ACCEPTED " +
+                    "BETA_MISSING_GAME_RECOVERY_RESTART_ACCEPTED " +
                         "attempt=${missingGameRecoveryState.attempts} " +
                         "limit=${LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS} " +
-                        "acceptance=final-gate-before-transport " +
+                        "acceptance=final-gate-before-core-restart " +
                         "transportConfirmed=false"
                 }
                 true
             }
+        }
+
+    private fun acceptMissingGameRecoveryHandoff(nowMs: Long): Boolean =
+        synchronized(missingGameRecoveryAccountingLock) {
+            val current = missingGameRecoveryState
+            missingGameRecoveryState = BetaMissingGameGenerationAccounting.acceptHandoff(current, nowMs)
+            log.info {
+                "BETA_MISSING_GAME_RECOVERY_HANDOFF_ACCEPTED " +
+                    "attempt=${missingGameRecoveryState.attempts} " +
+                    "initialGenerationHandoff=${current.initialHandoffPending} " +
+                    "acceptance=final-gate-before-transport"
+            }
+            true
         }
 
     private fun readCurrentGuardianRunState(now: Instant = Instant.now()): GuardianRunStateReader.Snapshot? {
@@ -1374,7 +1399,9 @@ internal object BetaScreenRecoveryService {
     fun markStartupRequested(reason: String, now: Long) {
         if (!ScreenRecoveryRuntime.isEnabled()) return
         synchronized(missingGameRecoveryAccountingLock) {
-            missingGameRecoveryState = LiveMissingGameRecoveryPolicy.State()
+            missingGameRecoveryState = BetaMissingGameGenerationAccounting.markStartupRequested(
+                exactBetaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
+            )
             missingGameExhaustionNotified = false
         }
         startupHandoffActivity.reset()

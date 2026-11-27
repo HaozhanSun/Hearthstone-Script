@@ -1032,8 +1032,10 @@ starter-chain request (`BETA_MISSING_GAME_RECOVERY_CHAIN_REQUESTED`), and the
 retry state advances only after the final handoff gate accepts it. For the
 exact `beta` identity, the 120000 ms boundary invokes the serialized
 `Core.restartFromIdleWatchdog` force-close/starter path, permits one handoff per
-missing-client generation, and re-arms a fresh generation only after the
-synchronous restart-completion signal. Beta launches through the registered
+missing-client generation. The initial handoff after that restart is recorded
+as generation setup rather than a second restart attempt; the forced-restart
+budget is recorded before Core is invoked. A fresh generation is re-armed only
+after the synchronous restart-completion signal. Beta launches through the registered
 WTCG product path from known-good `8ea73ac2`; Release Candidate retains the
 previous three-attempt starter-chain policy and is never allowed to invoke the
 Beta forced-restart seam.
