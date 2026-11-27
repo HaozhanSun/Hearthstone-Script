@@ -887,6 +887,35 @@ this deletion boundary.
   `In Game` control as the captured 2026-11-22 incident frame; the production
   capture authority still requires that those pixels come from the exact
   foreground target HWND/PID before this structural classification is used.
+- Beta structural Event Quest retention: the upstream classifier emits
+  `EVENT_QUEST_OVERLAY` with `event-quest-overlay-structural-visual` for the
+  live overlay, while the older Old Gods path emits
+  `event-quest-promo-close-visual`. Both exact proofs may retain the same
+  foreground PID/HWND across the bounded capture/focus gap; generic Event
+  Quest-looking or UNKNOWN labels may not. The structural frame need not be a
+  centered modal, but empty-session, no-queue, confidence, foreground, and the
+  final live PID/HWND/window fence remain mandatory. At 119999 ms the watchdog
+  still waits; at 120000 ms it may enter the existing serialized restart chain.
+  A dead or replaced PID must veto stale-identity dispatch and fall back to the
+  separate missing-game relaunch path. Keep exact structural Event Quest and
+  fresh HUB chooser fixtures in the production candidate snapshot/final-fence
+  regression, including the PID-death veto.
+- Beta HUB chooser recovery must preserve the known-good mode-entry lifecycle:
+  a fresh exact chooser proof may re-enter the already configured HUB strategy
+  scheduler, but it must never infer a run mode or dispatch a generic click.
+  The re-entry is keyed to the current PID/HWND, throttled, and fenced by
+  working/pause/session/game/queue/terminal state; the strategy scheduler then
+  remains responsible for the one-use Traditional Battle proof, followed by
+  the existing mode-selector/Wild/Start sequence. This prevents the
+  `75748b49` early-return regression where
+  `WAIT_FOR_AUTHORIZED_TRADITIONAL_ENTRY` skipped the configured strategy
+  callback and the watchdog eventually exhausted on the four-button Hub screen.
+  A raw time-rule row is not itself an active runtime selection: the callback
+  may use a scheduled `WILD`/deck-2 selection only when the normal runtime
+  snapshot has resolved its mode and strategy (including the configured
+  high-priority schedule semantics). A missing default deck, or a schedule
+  that is not authoritative, must produce a diagnostic and remain no-input;
+  pixels must never be used to guess the intended mode.
 - Beta pre-match Start proof is a fresh startup capture, not a stale-client
   probe. `STALE_CLIENT_PROBE` requires a bounded stale interval and therefore
   must not be used with `staleForMs=0` while the current Power.log is empty;

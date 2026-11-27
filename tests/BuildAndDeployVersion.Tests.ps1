@@ -129,7 +129,8 @@ $requiredFocusedRegressionTests = @(
     'BetaCandidateScreenRecoveryIntegrationTest',
     'BetaCandidateRestartFencePolicyTest',
     'ScreenRecoveryCaptureAuthorityTest',
-    'StartupDeckModeNavigationIntegrationTest'
+    'StartupDeckModeNavigationIntegrationTest',
+    'RuntimeSelectionSnapshotTest'
 )
 foreach ($requiredTest in $requiredFocusedRegressionTests) {
     if ($deployScript -notmatch "-Dtest=.*$requiredTest") {

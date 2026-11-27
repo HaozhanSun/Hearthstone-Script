@@ -81,6 +81,73 @@ class RuntimeSelectionSnapshotTest {
     }
 
     @Test
+    fun `live equivalent all day Wild deck two schedule resolves a confirmed runtime selection`() {
+        val strategyId = DEFAULT_PIRATE_WARRIOR_STRATEGY_ID
+        val row = snapshot(
+            ruleIndex = 1,
+            rule = rule(
+                "00:00",
+                "23:59",
+                RunModeEnum.WILD,
+                setOf(2),
+                mapOf(2 to strategyId),
+                strategyId,
+            ),
+            effectiveWindow = "00:00-23:59:59",
+        )
+        val decision = WorkTimeSlotStrategyBinding.resolve(row.rule, 2, 9) { it == strategyId }
+        val runtime = RuntimeSelectionSnapshotFactory.schedule(
+            ruleSnapshot = row,
+            deckSlot = 2,
+            decision = decision,
+            strategyName = "Pirate Warrior MCTS",
+            gameLocked = false,
+        )
+
+        assertEquals(RuntimeSelectionState.SCHEDULE_CONFIRMED, runtime.state)
+        assertEquals(RunModeEnum.WILD, runtime.runMode)
+        assertEquals(2, runtime.deckSlot)
+        assertEquals(strategyId, runtime.strategyId)
+        assertTrue(runtime.confirmed)
+    }
+
+    @Test
+    fun `schedule row is authoritative only when high priority and ordinary schedule are both active`() {
+        val scheduled = RunModeEnum.WILD
+        val userDefault = RunModeEnum.CASUAL
+
+        assertEquals(
+            userDefault,
+            DeckStrategyManager.effectiveSelection(
+                highPrioritySchedule = false,
+                ordinaryScheduleActive = true,
+                scheduleSelection = scheduled,
+                userSelection = userDefault,
+            ),
+            "a persisted schedule row alone must not override the default mode",
+        )
+        assertEquals(
+            userDefault,
+            DeckStrategyManager.effectiveSelection(
+                highPrioritySchedule = true,
+                ordinaryScheduleActive = false,
+                scheduleSelection = scheduled,
+                userSelection = userDefault,
+            ),
+            "high priority outside its active time window must not override the default mode",
+        )
+        assertEquals(
+            scheduled,
+            DeckStrategyManager.effectiveSelection(
+                highPrioritySchedule = true,
+                ordinaryScheduleActive = true,
+                scheduleSelection = scheduled,
+                userSelection = userDefault,
+            ),
+        )
+    }
+
+    @Test
     fun `C current time row highlight uses the same runtime snapshot as mode and strategy display`() {
         val second = snapshot(
             ruleIndex = 1,

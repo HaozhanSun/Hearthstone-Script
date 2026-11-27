@@ -438,9 +438,16 @@ internal object BetaScreenRecoveryService {
         observation: ScreenStateRecovery.FreshScreenObservation?,
     ): BetaCandidateScreenWatchdog.Snapshot {
         val authorizedObservation = lastCandidateAuthorizedObservation
-        val allowExtendedMissingGrace = authorizedObservation?.evidence == "event-quest-promo-close-visual"
+        // Both exact Event Quest visual paths are safe to retain across the
+        // bounded capture/focus gap. The promo path is the older close-button
+        // classifier; the structural path is what the upstream classifier
+        // emits for the live overlay fixture. Do not broaden this to arbitrary
+        // EVENT_QUEST_OVERLAY/UNKNOWN labels: the helper below still requires
+        // exact evidence, PID/HWND, confidence, foreground, empty-session,
+        // and no-queue proof.
+        val allowExtendedMissingGrace = authorizedObservation?.isExactEventQuestCandidate() == true
         val maxMissingGap = if (allowExtendedMissingGrace) {
-            BetaCandidateScreenWatchdog.EXTENDED_PROMO_MISSING_OBSERVATION_GAP_MS
+            BetaCandidateScreenWatchdog.EXTENDED_EVENT_QUEST_MISSING_OBSERVATION_GAP_MS
         } else {
             BetaCandidateScreenWatchdog.MAX_MISSING_OBSERVATION_GAP_MS
         }
@@ -506,10 +513,22 @@ internal object BetaScreenRecoveryService {
         pid > 0L && hwnd.isNotBlank() && confidence >= 85 &&
             (
                 screen.uppercase() in setOf("HOME", "TOURNAMENT", "DECK_SELECTION", "STARTUP_LAUNCHER") ||
-                    (screen.equals("EVENT_QUEST_OVERLAY", ignoreCase = true) &&
-                        evidence == "event-quest-promo-close-visual" && modalVisible)
+                    isExactEventQuestCandidate()
             ) &&
             !currentSessionReady && noActiveMatchmakingEvidence
+
+    /**
+     * The upstream classifier has two intentionally distinct Event Quest
+     * proofs. The live structural proof is not necessarily a centered modal
+     * frame, so modalVisible must not be required for that exact evidence. A
+     * generic/unknown Event Quest-looking label remains fail-closed.
+     */
+    private fun ScreenStateRecovery.FreshScreenObservation.isExactEventQuestCandidate(): Boolean =
+        screen.equals("EVENT_QUEST_OVERLAY", ignoreCase = true) && when (evidence) {
+            "event-quest-promo-close-visual" -> modalVisible
+            "event-quest-overlay-structural-visual" -> true
+            else -> false
+        }
 
     /** Deterministic seam for the missing-observation/queue-fence regression. */
     internal fun candidateSnapshotForTest(
