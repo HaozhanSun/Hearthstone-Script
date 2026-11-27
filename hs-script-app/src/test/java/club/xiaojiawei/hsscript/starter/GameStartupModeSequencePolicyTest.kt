@@ -8,6 +8,14 @@ import kotlin.test.assertTrue
 
 class GameStartupModeSequencePolicyTest {
     @Test
+    fun `Beta handoff dispatches at most once before process evidence`() {
+        assertTrue(GameStartupModeSequencePolicy.mayDispatchWithinHandoff(0))
+        assertFalse(GameStartupModeSequencePolicy.mayDispatchWithinHandoff(1))
+        assertFalse(GameStartupModeSequencePolicy.mayDispatchWithinHandoff(2))
+        assertEquals(1, GameStartupModeSequencePolicy.MAX_DISPATCHES_PER_HANDOFF)
+    }
+
+    @Test
     fun `unconfirmed message mode rotates back to launcher argument instead of repeating last mode`() {
         val configured = listOf(GameStartupModeEnum.PLATFORM_ARG, GameStartupModeEnum.PLATFORM_MESSAGE)
 

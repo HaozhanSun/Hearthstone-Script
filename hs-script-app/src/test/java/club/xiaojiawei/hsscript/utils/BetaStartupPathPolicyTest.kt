@@ -21,7 +21,7 @@ class BetaStartupPathPolicyTest {
         assertNull(result.rejection)
         assertEquals(BetaStartupPathPolicy.ResolvedPaths(game, platform), result.paths)
         assertEquals(
-            listOf(platform, "--game=hs_beta", "--gamepath=$game", "-uid", "hs_beta"),
+            listOf(platform, "--game=hs_beta", "--exec=launch WTCG"),
             GameUtil.buildPlatformCommand(platform, true, AppRuntimeChannel.BETA, game),
         )
     }

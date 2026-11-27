@@ -53,7 +53,8 @@ internal object GuardianRunStateReader {
 internal object LiveMissingGameRecoveryPolicy {
     const val MISSING_GAME_GRACE_MS = 120_000L
     const val RETRY_COOLDOWN_MS = 60_000L
-    const val MAX_STARTER_CHAIN_ATTEMPTS = 3
+    /** One restart per verified missing-client generation; later ticks are idempotent. */
+    const val MAX_STARTER_CHAIN_ATTEMPTS = 1
 
     enum class Decision {
         WAIT_UNVERIFIED,
@@ -140,13 +141,13 @@ internal object LiveMissingGameRecoveryPolicy {
         if (evidence.nowMs - missingSince < MISSING_GAME_GRACE_MS) {
             return Evaluation(activeState, Decision.WAIT_MISSING_GAME_GRACE)
         }
-        if (activeState.attempts >= MAX_STARTER_CHAIN_ATTEMPTS) {
-            return Evaluation(activeState, Decision.EXHAUSTED)
-        }
         if (activeState.lastAttemptAtMs > 0L &&
             evidence.nowMs - activeState.lastAttemptAtMs < RETRY_COOLDOWN_MS
         ) {
             return Evaluation(activeState, Decision.WAIT_RETRY_COOLDOWN)
+        }
+        if (activeState.attempts >= MAX_STARTER_CHAIN_ATTEMPTS) {
+            return Evaluation(activeState, Decision.EXHAUSTED)
         }
         return Evaluation(activeState, Decision.START_CONFIGURED_STARTER_CHAIN)
     }
@@ -162,7 +163,13 @@ internal object LiveMissingGameRecoveryPolicy {
 internal object LiveMissingGameRecoveryDispatch {
     enum class Result { NO_ACTION, BLOCKED, STARTER_CHAIN_DISPATCHED }
 
-    fun dispatch(
+    /**
+     * Production missing-client restart boundary. The caller must perform
+     * the exact Beta/guardian/process/pause/queue checks immediately before
+     * invoking this seam; this method only sequences the already-authorized
+     * mode reset and configured starter chain.
+     */
+    fun restartToStartup(
         decision: LiveMissingGameRecoveryPolicy.Decision,
         stillAuthorized: () -> Boolean,
         recoverModeToStartup: () -> Unit,
@@ -177,4 +184,16 @@ internal object LiveMissingGameRecoveryDispatch {
         startConfiguredStarterChain()
         return Result.STARTER_CHAIN_DISPATCHED
     }
+
+    fun dispatch(
+        decision: LiveMissingGameRecoveryPolicy.Decision,
+        stillAuthorized: () -> Boolean,
+        recoverModeToStartup: () -> Unit,
+        startConfiguredStarterChain: () -> Unit,
+    ): Result = restartToStartup(
+        decision = decision,
+        stillAuthorized = stillAuthorized,
+        recoverModeToStartup = recoverModeToStartup,
+        startConfiguredStarterChain = startConfiguredStarterChain,
+    )
 }

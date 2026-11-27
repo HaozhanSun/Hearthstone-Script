@@ -63,6 +63,7 @@ internal object BetaScreenRecoveryService {
     private val candidateRestartGeneration = AtomicLong(0L)
     @Volatile private var startupRecoveryGraceUntil = 0L
     private val startupRecoveryScheduled = AtomicBoolean(false)
+    private val missingGameRecoveryAccountingLock = Any()
     @Volatile private var missingGameRecoveryState = LiveMissingGameRecoveryPolicy.State()
     @Volatile private var missingGameExhaustionNotified = false
     @Volatile private var lastCandidateAuthorizedObservation: ScreenStateRecovery.FreshScreenObservation? = null
@@ -1025,17 +1026,7 @@ internal object BetaScreenRecoveryService {
                     stateAuthorized() && ActionDispatchGate.allowBetaMissingGameRecovery(
                         handoffStillAuthorized = stateAuthorized,
                         onHandoffAccepted = {
-                            missingGameRecoveryState = LiveMissingGameRecoveryPolicy.recordDispatch(
-                                state,
-                                System.currentTimeMillis(),
-                            )
-                            missingGameExhaustionNotified = false
-                            log.warn {
-                                "BETA_MISSING_GAME_RECOVERY_DISPATCH action=START_CONFIGURED_STARTER_CHAIN " +
-                                    "attempt=${missingGameRecoveryState.attempts} " +
-                                    "limit=${LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS} " +
-                                    "acceptance=startup-handoff-gate-accepted"
-                            }
+                            recordMissingGameRecoveryHandoff(System.currentTimeMillis())
                         },
                     )
                 }
@@ -1048,7 +1039,13 @@ internal object BetaScreenRecoveryService {
                     }
                     return@execute
                 }
-                val result = LiveMissingGameRecoveryDispatch.dispatch(
+                log.warn {
+                    "BETA_MISSING_GAME_RECOVERY action=RESTART_CONFIGURED_STARTER_CHAIN " +
+                        "thresholdMs=${LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS} " +
+                        "attempts=${missingGameRecoveryState.attempts} " +
+                        "acceptance=final-gate-authorized"
+                }
+                val result = LiveMissingGameRecoveryDispatch.restartToStartup(
                     decision = LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
                     stillAuthorized = authorized,
                     recoverModeToStartup = {
@@ -1056,13 +1053,49 @@ internal object BetaScreenRecoveryService {
                     },
                     startConfiguredStarterChain = {
                         chainAttempted = true
-                        StarterConfig.starter.start()
+                        val restart = MissingGameRestartDispatch.dispatch(
+                            stillAuthorized = stateAuthorized,
+                            gameAlive = { GameUtil.isAliveOfGame() },
+                            requestRestart = { afterClientTerminated ->
+                                // This is the same serialized close-and-starter
+                                // primitive used by the known-good watchdog path.
+                                // With no Hearthstone PID, killGame is a no-op;
+                                // the important effect is a fresh configured
+                                // startup chain after the final state recheck.
+                                Core.restartFromIdleWatchdog(
+                                    sync = true,
+                                    afterClientTerminated = afterClientTerminated,
+                                )
+                                true
+                            },
+                            onRestartCompleted = {
+                                // Rearm only after the serialized restart
+                                // boundary completes. An intent or permit
+                                // alone must not create a new generation.
+                                markStartupRequested(
+                                    reason = "beta-missing-game-restart",
+                                    now = System.currentTimeMillis(),
+                                )
+                            },
+                        )
+                        if (restart == MissingGameRestartDispatch.Result.RESTART_REQUESTED) {
+                            log.warn {
+                                "BETA_MISSING_GAME_RECOVERY_RESTART_REQUESTED " +
+                                    "action=CORE_IDLE_WATCHDOG_RESTART " +
+                                    "acceptance=awaiting-authoritative-game-process"
+                            }
+                        } else {
+                            log.warn {
+                                "BETA_MISSING_GAME_RECOVERY_RESTART_SUPPRESSED " +
+                                    "reason=state-changed-before-core-restart dispatch=false"
+                            }
+                        }
                     },
                 )
                 when (result) {
                     LiveMissingGameRecoveryDispatch.Result.STARTER_CHAIN_DISPATCHED -> {
                         log.info {
-                            "BETA_MISSING_GAME_RECOVERY_CHAIN_DISPATCHED " +
+                            "BETA_MISSING_GAME_RECOVERY_CHAIN_REQUESTED " +
                                 "attempt=${missingGameRecoveryState.attempts} " +
                                 "acceptance=awaiting-authoritative-game-process"
                         }
@@ -1086,6 +1119,38 @@ internal object BetaScreenRecoveryService {
             log.error(error) { "BETA_MISSING_GAME_RECOVERY_SUBMISSION_FAILED watchdog=RETAINED" }
         }
     }
+
+    /**
+     * Account only at the final startup.handoff gate, and read the current
+     * shared state instead of the tick's stale immutable snapshot. Multiple
+     * launcher lanes can cross the async gate before the next 10-second
+     * monitor tick; accounting must remain monotonic and stop at the policy
+     * budget rather than repeating the same attempt number forever.
+     */
+    private fun recordMissingGameRecoveryHandoff(nowMs: Long): Boolean =
+        synchronized(missingGameRecoveryAccountingLock) {
+            val current = missingGameRecoveryState
+            if (current.attempts >= LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS) {
+                log.warn {
+                    "BETA_MISSING_GAME_RECOVERY_HANDOFF_GATE_REJECTED " +
+                        "attempts=${current.attempts} " +
+                        "limit=${LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS} " +
+                        "acceptance=budget-exhausted dispatch=false"
+                }
+                false
+            } else {
+                missingGameRecoveryState = LiveMissingGameRecoveryPolicy.recordDispatch(current, nowMs)
+                missingGameExhaustionNotified = false
+                log.warn {
+                    "BETA_MISSING_GAME_RECOVERY_HANDOFF_GATE_ACCEPTED " +
+                        "attempt=${missingGameRecoveryState.attempts} " +
+                        "limit=${LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS} " +
+                        "acceptance=final-gate-before-transport " +
+                        "transportConfirmed=false"
+                }
+                true
+            }
+        }
 
     private fun readCurrentGuardianRunState(now: Instant = Instant.now()): GuardianRunStateReader.Snapshot? {
         if (System.getProperty("hs.script.launch.source") != "shortcut") return null
@@ -1280,8 +1345,10 @@ internal object BetaScreenRecoveryService {
 
     fun markStartupRequested(reason: String, now: Long) {
         if (!ScreenRecoveryRuntime.isEnabled()) return
-        missingGameRecoveryState = LiveMissingGameRecoveryPolicy.State()
-        missingGameExhaustionNotified = false
+        synchronized(missingGameRecoveryAccountingLock) {
+            missingGameRecoveryState = LiveMissingGameRecoveryPolicy.State()
+            missingGameExhaustionNotified = false
+        }
         startupHandoffActivity.reset()
         startupRecoveryGraceUntil = now + STARTUP_RECOVERY_GRACE_MS
         LifecycleTrace.mark("startup-recovery-grace reason=$reason until=$startupRecoveryGraceUntil")

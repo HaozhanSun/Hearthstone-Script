@@ -8,6 +8,12 @@ import club.xiaojiawei.hsscript.enums.GameStartupModeEnum
  * observed Hearthstone process/window before it accepts the handoff.
  */
 internal object GameStartupModeSequencePolicy {
+    /** One side-effecting launch request per handoff; wait for process evidence before another. */
+    const val MAX_DISPATCHES_PER_HANDOFF = 1
+
+    fun mayDispatchWithinHandoff(dispatches: Int): Boolean =
+        dispatches < MAX_DISPATCHES_PER_HANDOFF
+
     data class Selection(
         val mode: GameStartupModeEnum,
         val configuredMode: GameStartupModeEnum,

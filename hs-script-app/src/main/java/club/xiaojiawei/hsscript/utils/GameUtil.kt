@@ -112,8 +112,15 @@ object GameUtil {
     ): List<String> {
         require(platformPath.isNotBlank()) { "platformPath must not be blank" }
         return if (launchGame) {
-            if (runtimeChannel == AppRuntimeChannel.BETA || runtimeChannel == AppRuntimeChannel.RELEASE_CANDIDATE) {
+            if (runtimeChannel == AppRuntimeChannel.BETA) {
                 require(gamePath.isNotBlank()) { "gamePath must not be blank for Beta launch" }
+                // Select the registered Beta app, then request the normal
+                // WTCG launch verb. Re-sending --gamepath/-uid performs
+                // Battle.net registration and can stall on .product.db.new
+                // without ever creating Hearthstone.exe.
+                listOf(platformPath, "--game=hs_beta", "--exec=launch WTCG")
+            } else if (runtimeChannel == AppRuntimeChannel.RELEASE_CANDIDATE) {
+                require(gamePath.isNotBlank()) { "gamePath must not be blank for Release Candidate launch" }
                 listOf(platformPath, "--game=hs_beta", "--gamepath=$gamePath", "-uid", "hs_beta")
             } else {
                 listOf(platformPath, "--exec=launch WTCG")

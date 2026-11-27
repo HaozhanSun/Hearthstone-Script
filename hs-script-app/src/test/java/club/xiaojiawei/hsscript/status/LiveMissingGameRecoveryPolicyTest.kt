@@ -138,6 +138,85 @@ class LiveMissingGameRecoveryPolicyTest {
     }
 
     @Test
+    fun `production restart seam is inert at 119999 and runs at 120000`() {
+        val first = LiveMissingGameRecoveryPolicy.evaluate(
+            LiveMissingGameRecoveryPolicy.State(),
+            evidence(),
+        )
+        val events = mutableListOf<String>()
+        val beforeThreshold = LiveMissingGameRecoveryPolicy.evaluate(
+            first.state,
+            evidence(nowMs = now + LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS - 1L),
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.WAIT_MISSING_GAME_GRACE,
+            beforeThreshold.decision,
+        )
+        assertEquals(
+            LiveMissingGameRecoveryDispatch.Result.NO_ACTION,
+            LiveMissingGameRecoveryDispatch.restartToStartup(
+                decision = beforeThreshold.decision,
+                stillAuthorized = { true },
+                recoverModeToStartup = { events += "mode-startup" },
+                startConfiguredStarterChain = { events += "starter-chain" },
+            ),
+        )
+        assertTrue(events.isEmpty(), "the production restart seam must not run before the exact threshold")
+
+        val atThreshold = LiveMissingGameRecoveryPolicy.evaluate(
+            first.state,
+            evidence(nowMs = now + LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS),
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            atThreshold.decision,
+        )
+        assertEquals(
+            LiveMissingGameRecoveryDispatch.Result.STARTER_CHAIN_DISPATCHED,
+            LiveMissingGameRecoveryDispatch.restartToStartup(
+                decision = atThreshold.decision,
+                stillAuthorized = { true },
+                recoverModeToStartup = { events += "mode-startup" },
+                startConfiguredStarterChain = { events += "starter-chain" },
+            ),
+        )
+        assertEquals(listOf("mode-startup", "starter-chain"), events)
+
+        val recorded = LiveMissingGameRecoveryPolicy.recordDispatch(atThreshold.state, now)
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.WAIT_MISSING_GAME_GRACE,
+            LiveMissingGameRecoveryPolicy.evaluate(
+                recorded,
+                evidence(nowMs = now + LiveMissingGameRecoveryPolicy.RETRY_COOLDOWN_MS),
+            ).decision,
+            "the current generation remains quiet while the starter outcome is observed",
+        )
+
+        val newGenerationStart = now + 1L
+        val newGeneration = LiveMissingGameRecoveryPolicy.evaluate(
+            LiveMissingGameRecoveryPolicy.State(),
+            evidence(nowMs = newGenerationStart),
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.WAIT_MISSING_GAME_GRACE,
+            LiveMissingGameRecoveryPolicy.evaluate(
+                newGeneration.state,
+                evidence(nowMs = newGenerationStart +
+                    LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS - 1L),
+            ).decision,
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            LiveMissingGameRecoveryPolicy.evaluate(
+                newGeneration.state,
+                evidence(nowMs = newGenerationStart +
+                    LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS),
+            ).decision,
+            "the restart completion callback must create a fresh 120s generation",
+        )
+    }
+
+    @Test
     fun `stale matchmaking latch cannot hold recovery after absent client grace`() {
         val first = LiveMissingGameRecoveryPolicy.evaluate(
             LiveMissingGameRecoveryPolicy.State(),
@@ -280,6 +359,17 @@ class LiveMissingGameRecoveryPolicyTest {
                 evidence(nowMs = state.lastAttemptAtMs + LiveMissingGameRecoveryPolicy.RETRY_COOLDOWN_MS),
             ).decision,
         )
+        repeat(4) { index ->
+            assertEquals(
+                LiveMissingGameRecoveryPolicy.Decision.EXHAUSTED,
+                LiveMissingGameRecoveryPolicy.evaluate(
+                    state,
+                    evidence(nowMs = state.lastAttemptAtMs +
+                        (index + 2L) * LiveMissingGameRecoveryPolicy.RETRY_COOLDOWN_MS),
+                ).decision,
+                "an exhausted missing-game budget must not re-arm on later monitor ticks",
+            )
+        }
     }
 
     @Test

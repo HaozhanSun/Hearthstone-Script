@@ -97,6 +97,22 @@ class ActionDispatchGateTest {
             starter.contains("ActionDispatchGate.allow(\"startup.handoff\")"),
             "the actual configured starter handoff must remain behind the final gate",
         )
+        assertTrue(
+            service.contains("recordMissingGameRecoveryHandoff") &&
+                service.contains("acceptance=final-gate-before-transport") &&
+                service.contains("LiveMissingGameRecoveryDispatch.restartToStartup(") &&
+                service.contains("action=RESTART_CONFIGURED_STARTER_CHAIN") &&
+                service.contains("Core.restartFromIdleWatchdog(") &&
+                service.contains("afterClientTerminated = {") &&
+                service.contains("reason = \"beta-missing-game-restart\"") &&
+                service.contains("MissingGameRestartDispatch.dispatch("),
+            "missing-game accounting must use current state at the final gate and remain distinct from transport",
+        )
+        assertTrue(
+            starter.contains("GAME_STARTUP_HANDOFF_REQUESTED") &&
+                starter.contains("GAME_STARTUP_HANDOFF_TRANSPORT_RESULT"),
+            "startup diagnostics must distinguish request intent from transport result",
+        )
     }
 
     @Test
@@ -118,7 +134,7 @@ class ActionDispatchGateTest {
                 assertTrue(
                     ActionDispatchGate.allowBetaMissingGameRecovery(
                         handoffStillAuthorized = { true },
-                        onHandoffAccepted = { acceptedHandoffCallbacks++ },
+                        onHandoffAccepted = { acceptedHandoffCallbacks++; true },
                     ),
                 )
                 assertFalse(
@@ -130,16 +146,11 @@ class ActionDispatchGateTest {
                     "the actual final startup.handoff gate must accept the authorized Beta recovery",
                 )
                 assertEquals(1, acceptedHandoffCallbacks, "the accepted final gate must reach the handoff callback")
-                assertTrue(
-                    ActionDispatchGate.allow("startup.handoff"),
-                    "a bounded missing-game recovery may retry the alternate launcher lane",
-                )
-                assertEquals(2, acceptedHandoffCallbacks, "both bounded launcher lanes must reach the handoff callback")
                 assertFalse(
                     ActionDispatchGate.allow("startup.handoff"),
-                    "the bounded missing-game capability must reject a third handoff",
+                    "the missing-game capability must reject a second handoff in the same generation",
                 )
-                assertEquals(2, acceptedHandoffCallbacks, "the handoff budget must not be exceeded")
+                assertEquals(1, acceptedHandoffCallbacks, "the handoff budget must not be exceeded")
                 StartupQuestOverlayRecoveryFence.begin()
                 assertTrue(ActionDispatchGate.allowBetaMissingGameRecovery { true })
                 PauseStatus.setAutomaticPause(true)
@@ -164,14 +175,32 @@ class ActionDispatchGateTest {
                 assertTrue(
                     ActionDispatchGate.allowBetaMissingGameRecovery(
                         handoffStillAuthorized = { false },
-                        onHandoffAccepted = { acceptedHandoffCallbacks++ },
+                        onHandoffAccepted = { acceptedHandoffCallbacks++; true },
                     ),
                 )
                 assertTrue(
                     !ActionDispatchGate.allow("startup.handoff"),
                     "a lost guardian authorization must fail closed at the async handoff",
                 )
-                assertEquals(2, acceptedHandoffCallbacks, "a failed guardian recheck must not invoke a third handoff")
+                assertEquals(1, acceptedHandoffCallbacks, "a failed guardian recheck must not invoke a second handoff")
+
+                StartupQuestOverlayRecoveryFence.begin()
+                var rejectedAccountingCallbacks = 0
+                assertTrue(
+                    ActionDispatchGate.allowBetaMissingGameRecovery(
+                        handoffStillAuthorized = { true },
+                        onHandoffAccepted = { rejectedAccountingCallbacks++; false },
+                    ),
+                )
+                assertFalse(
+                    ActionDispatchGate.allow("startup.handoff"),
+                    "accounting must be able to reject a final gate without dispatching transport",
+                )
+                assertEquals(1, rejectedAccountingCallbacks)
+                assertFalse(
+                    ActionDispatchGate.allow("startup.handoff"),
+                    "a rejected accounting capability must not be replayable",
+                )
             } else {
                 assertFalse(
                     ActionDispatchGate.canBypassStartupQuestForMissingGameRecovery(

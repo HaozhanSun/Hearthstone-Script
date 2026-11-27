@@ -24,6 +24,7 @@ import club.xiaojiawei.hsscript.bean.single.WarEx
 import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.LAUNCH_PROGRAM_THREAD_POOL
 import club.xiaojiawei.hsscriptbase.config.log
+import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
 import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.util.RandomUtil
@@ -115,6 +116,9 @@ class GameStarter : AbstractStarter() {
             }
         }
         var startTime = System.currentTimeMillis()
+        var dispatchesThisHandoff = 0
+        var dispatchBudgetWaitLogged = false
+        val betaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
         addTask(
             LAUNCH_PROGRAM_THREAD_POOL.scheduleWithFixedDelay(
                 {
@@ -270,9 +274,29 @@ class GameStarter : AbstractStarter() {
                                     now = now,
                                     lastLaunchAt = lastGameLaunchAt,
                                 )
-                                if (decision == GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF) {
+                                if (decision == GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF &&
+                                    (!betaChannel || GameStartupModeSequencePolicy.mayDispatchWithinHandoff(dispatchesThisHandoff))
+                                ) {
                                     lastGameLaunchAt = now
-                                    dispatchStartupMode(lane = "secondary")
+                                    if (betaChannel) {
+                                        // Count the side-effecting handoff attempt even when the
+                                        // transport reports false. A failed request must not reopen
+                                        // a tight multi-dispatch loop in the same starter cycle.
+                                        dispatchStartupMode(lane = "secondary")
+                                        dispatchesThisHandoff++
+                                    } else {
+                                        dispatchStartupMode(lane = "secondary")
+                                    }
+                                } else if (betaChannel &&
+                                    decision == GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF &&
+                                    !dispatchBudgetWaitLogged
+                                ) {
+                                    dispatchBudgetWaitLogged = true
+                                    log.info {
+                                        "GAME_STARTUP_HANDOFF_WAIT reason=launch-request-already-issued " +
+                                            "dispatches=$dispatchesThisHandoff max=${GameStartupModeSequencePolicy.MAX_DISPATCHES_PER_HANDOFF} " +
+                                            "acceptance=awaiting-game-process-window"
+                                    }
                                 }
                             } else {
                                 val now = System.currentTimeMillis()
@@ -282,9 +306,29 @@ class GameStarter : AbstractStarter() {
                                     now = now,
                                     lastLaunchAt = lastGameLaunchAt,
                                 )
-                                if (decision == GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF) {
+                                if (decision == GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF &&
+                                    (!betaChannel || GameStartupModeSequencePolicy.mayDispatchWithinHandoff(dispatchesThisHandoff))
+                                ) {
                                     lastGameLaunchAt = now
-                                    dispatchStartupMode(lane = "primary")
+                                    if (betaChannel) {
+                                        // Count the side-effecting handoff attempt even when the
+                                        // transport reports false. A failed request must not reopen
+                                        // a tight multi-dispatch loop in the same starter cycle.
+                                        dispatchStartupMode(lane = "primary")
+                                        dispatchesThisHandoff++
+                                    } else {
+                                        dispatchStartupMode(lane = "primary")
+                                    }
+                                } else if (betaChannel &&
+                                    decision == GameStartupRecoveryPolicy.Decision.RETRY_GAME_HANDOFF &&
+                                    !dispatchBudgetWaitLogged
+                                ) {
+                                    dispatchBudgetWaitLogged = true
+                                    log.info {
+                                        "GAME_STARTUP_HANDOFF_WAIT reason=launch-request-already-issued " +
+                                            "dispatches=$dispatchesThisHandoff max=${GameStartupModeSequencePolicy.MAX_DISPATCHES_PER_HANDOFF} " +
+                                            "acceptance=awaiting-game-process-window"
+                                    }
                                 }
                             }
                             SystemUtil.delay(RandomUtil.getInteractionDelay(500))
@@ -298,13 +342,13 @@ class GameStarter : AbstractStarter() {
         )
     }
 
-    private fun dispatchStartupMode(lane: String) {
+    private fun dispatchStartupMode(lane: String): Boolean {
         if (GameUtil.isAliveOfGame()) {
             log.info {
                 "GAME_STARTUP_HANDOFF_SKIPPED reason=game-process-already-alive " +
                     "lane=$lane action=REATTACH_NO_DUPLICATE_LAUNCH"
             }
-            return
+            return false
         }
         val selection = GameStartupModeSequencePolicy.select(
             configuredModes = ConfigExUtil.getGameStartupMode(),
@@ -320,30 +364,36 @@ class GameStarter : AbstractStarter() {
                 "GAME_STARTUP_HANDOFF_BLOCKED lane=$lane mode=${selection.mode.name} " +
                     "reason=action-dispatch-gate attemptNotRecorded=true"
             }
-            return
+            return false
         }
         startupModeDispatches++
         LifecycleTrace.markStartupHandoffAttempt(
             "lane=$lane attempt=${selection.attempt} mode=${selection.mode.name}",
         )
         log.info {
-            "GAME_STARTUP_HANDOFF_DISPATCH attempt=${selection.attempt} lane=$lane " +
+            "GAME_STARTUP_HANDOFF_REQUESTED attempt=${selection.attempt} lane=$lane " +
                 "configuredMode=${selection.configuredMode.name} mode=${selection.mode.name} " +
-                "fallbackApplied=${selection.fallbackApplied} acceptance=awaiting-game-process-window"
+                "fallbackApplied=${selection.fallbackApplied} acceptance=not-confirmed"
         }
         val dispatch = runCatching { selection.mode.exec() }
         val error = dispatch.exceptionOrNull()
         if (error != null) {
             log.warn(error) {
-                "GAME_STARTUP_HANDOFF_DISPATCH_FAILED attempt=${selection.attempt} " +
+                "GAME_STARTUP_HANDOFF_TRANSPORT_FAILED attempt=${selection.attempt} " +
                     "mode=${selection.mode.name}"
             }
-            return
+            return false
+        }
+        val transportDispatched = dispatch.getOrDefault(false)
+        log.info {
+            "GAME_STARTUP_HANDOFF_TRANSPORT_RESULT attempt=${selection.attempt} " +
+                "lane=$lane mode=${selection.mode.name} transportDispatched=$transportDispatched " +
+                "acceptance=awaiting-authoritative-game-process"
         }
         if (BetaStartupPathPolicy.shouldStopRetry(
                 channel = BuildInfo.RELEASE_CHANNEL,
                 mode = selection.mode.name,
-                dispatchSucceeded = dispatch.getOrDefault(false),
+                dispatchSucceeded = transportDispatched,
             )
         ) {
             log.error {
@@ -353,6 +403,7 @@ class GameStarter : AbstractStarter() {
             }
             stopStageWithoutPausing()
         }
+        return transportDispatched
     }
 
 
