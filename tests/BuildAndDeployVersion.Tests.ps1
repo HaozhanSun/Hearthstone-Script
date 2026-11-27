@@ -124,6 +124,7 @@ $requiredFocusedRegressionTests = @(
     'BetaStartupFailureRecoveryPolicyTest',
     'LiveMissingGameRecoveryPolicyTest',
     'MissingGameRestartDispatchTest',
+    'LifecycleTraceTest',
     'MouseUtilFocusGateTest',
     'BetaCandidateScreenWatchdogTest',
     'IdleWatchdogRestartLaunchIntegrationTest',
