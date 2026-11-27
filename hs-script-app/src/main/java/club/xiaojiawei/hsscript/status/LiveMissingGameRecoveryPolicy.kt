@@ -53,8 +53,10 @@ internal object GuardianRunStateReader {
 internal object LiveMissingGameRecoveryPolicy {
     const val MISSING_GAME_GRACE_MS = 120_000L
     const val RETRY_COOLDOWN_MS = 60_000L
-    /** One restart per verified missing-client generation; later ticks are idempotent. */
-    const val MAX_STARTER_CHAIN_ATTEMPTS = 1
+    /** Existing non-Beta retry budget; preserve it for Release Candidate and other callers. */
+    const val MAX_STARTER_CHAIN_ATTEMPTS = 3
+    /** Beta-only budget: one restart per verified missing-client generation. */
+    const val BETA_MAX_STARTER_CHAIN_ATTEMPTS = 1
 
     enum class Decision {
         WAIT_UNVERIFIED,
@@ -121,7 +123,11 @@ internal object LiveMissingGameRecoveryPolicy {
 
     data class Evaluation(val state: State, val decision: Decision)
 
-    fun evaluate(state: State, evidence: Evidence): Evaluation {
+    fun evaluate(
+        state: State,
+        evidence: Evidence,
+        maxStarterChainAttempts: Int = MAX_STARTER_CHAIN_ATTEMPTS,
+    ): Evaluation {
         if (!evidence.identityMatches || evidence.heartbeatAgeMs !in 0..GuardianRunStateReader.MAX_HEARTBEAT_AGE_MS) {
             return Evaluation(State(), Decision.WAIT_UNVERIFIED)
         }
@@ -146,7 +152,7 @@ internal object LiveMissingGameRecoveryPolicy {
         ) {
             return Evaluation(activeState, Decision.WAIT_RETRY_COOLDOWN)
         }
-        if (activeState.attempts >= MAX_STARTER_CHAIN_ATTEMPTS) {
+        if (activeState.attempts >= maxStarterChainAttempts) {
             return Evaluation(activeState, Decision.EXHAUSTED)
         }
         return Evaluation(activeState, Decision.START_CONFIGURED_STARTER_CHAIN)

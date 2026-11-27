@@ -1028,8 +1028,15 @@ Beta-only, no-client-only, and action-specific. Stable and Release
 Candidate runtimes, live game/queue states, manual pause, stale or ambiguous
 guardian identity, and all other startup actions remain fail-closed. Structured
 logs must distinguish the scoped gate (`ACTION_DISPATCH_SCOPE`) from the actual
-starter-chain dispatch (`BETA_MISSING_GAME_RECOVERY_CHAIN_DISPATCHED`), and the
-retry state advances only after the chain is actually invoked.
+starter-chain request (`BETA_MISSING_GAME_RECOVERY_CHAIN_REQUESTED`), and the
+retry state advances only after the final handoff gate accepts it. For the
+exact `beta` identity, the 120000 ms boundary invokes the serialized
+`Core.restartFromIdleWatchdog` force-close/starter path, permits one handoff per
+missing-client generation, and re-arms a fresh generation only after the
+synchronous restart-completion signal. Beta launches through the registered
+WTCG product path from known-good `8ea73ac2`; Release Candidate retains the
+previous three-attempt starter-chain policy and is never allowed to invoke the
+Beta forced-restart seam.
 
 The same unresolved-quest fence must not block the separate Beta idle-watchdog
 restart after the watchdog has force-closed and verified the exact stale

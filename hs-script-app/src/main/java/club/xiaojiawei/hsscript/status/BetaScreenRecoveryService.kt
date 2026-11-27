@@ -917,6 +917,12 @@ internal object BetaScreenRecoveryService {
         now: Long,
     ) {
         val guardian = readCurrentGuardianRunState(Instant.ofEpochMilli(now))
+        val exactBetaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
+        val maxStarterChainAttempts = if (exactBetaChannel) {
+            LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS
+        } else {
+            LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS
+        }
         val evaluation = LiveMissingGameRecoveryPolicy.evaluate(
             state,
             LiveMissingGameRecoveryPolicy.Evidence(
@@ -935,6 +941,7 @@ internal object BetaScreenRecoveryService {
                 startupChainActive = startupChainActive,
                 nowMs = now,
             ),
+            maxStarterChainAttempts = maxStarterChainAttempts,
         )
         missingGameRecoveryState = evaluation.state
         when (evaluation.decision) {
@@ -944,7 +951,7 @@ internal object BetaScreenRecoveryService {
                 missingGameExhaustionNotified = true
                 log.error {
                     "BETA_MISSING_GAME_RECOVERY_EXHAUSTED attempts=${evaluation.state.attempts} " +
-                        "limit=${LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS} " +
+                        "limit=$maxStarterChainAttempts " +
                         "action=ALERT_AND_KEEP_JAVA_ALIVE"
                 }
                 SystemUtil.notice(
@@ -1026,7 +1033,11 @@ internal object BetaScreenRecoveryService {
                     stateAuthorized() && ActionDispatchGate.allowBetaMissingGameRecovery(
                         handoffStillAuthorized = stateAuthorized,
                         onHandoffAccepted = {
-                            recordMissingGameRecoveryHandoff(System.currentTimeMillis())
+                            if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) != "beta") {
+                                false
+                            } else {
+                                recordMissingGameRecoveryHandoff(System.currentTimeMillis())
+                            }
                         },
                     )
                 }
@@ -1053,41 +1064,58 @@ internal object BetaScreenRecoveryService {
                     },
                     startConfiguredStarterChain = {
                         chainAttempted = true
-                        val restart = MissingGameRestartDispatch.dispatch(
-                            stillAuthorized = stateAuthorized,
-                            gameAlive = { GameUtil.isAliveOfGame() },
-                            requestRestart = { afterClientTerminated ->
-                                // This is the same serialized close-and-starter
-                                // primitive used by the known-good watchdog path.
-                                // With no Hearthstone PID, killGame is a no-op;
-                                // the important effect is a fresh configured
-                                // startup chain after the final state recheck.
-                                Core.restartFromIdleWatchdog(
-                                    sync = true,
-                                    afterClientTerminated = afterClientTerminated,
-                                )
-                                true
-                            },
-                            onRestartCompleted = {
-                                // Rearm only after the serialized restart
-                                // boundary completes. An intent or permit
-                                // alone must not create a new generation.
-                                markStartupRequested(
-                                    reason = "beta-missing-game-restart",
-                                    now = System.currentTimeMillis(),
-                                )
-                            },
-                        )
-                        if (restart == MissingGameRestartDispatch.Result.RESTART_REQUESTED) {
-                            log.warn {
-                                "BETA_MISSING_GAME_RECOVERY_RESTART_REQUESTED " +
-                                    "action=CORE_IDLE_WATCHDOG_RESTART " +
-                                    "acceptance=awaiting-authoritative-game-process"
-                            }
+                        if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) != "beta") {
+                            // Release Candidate keeps the prior starter-chain
+                            // behavior; the forced Core restart is Beta-only.
+                            StarterConfig.starter.start()
                         } else {
-                            log.warn {
-                                "BETA_MISSING_GAME_RECOVERY_RESTART_SUPPRESSED " +
-                                    "reason=state-changed-before-core-restart dispatch=false"
+                            val restart = MissingGameRestartDispatch.dispatch(
+                                channel = BuildInfo.RELEASE_CHANNEL,
+                                stillAuthorized = stateAuthorized,
+                                gameAlive = { GameUtil.isAliveOfGame() },
+                                requestRestart = { afterClientTerminated ->
+                                    // This is the same serialized close-and-starter
+                                    // primitive used by the known-good watchdog path.
+                                    // With no Hearthstone PID, killGame is a no-op;
+                                    // the important effect is a fresh configured
+                                    // startup chain after the final state recheck.
+                                    // Core's API is Unit-returning and can suppress
+                                    // an overlapping restart, so sync=true plus the
+                                    // close callback is the authoritative acceptance
+                                    // signal. Do not re-arm on request intent alone.
+                                    var clientTerminationObserved = false
+                                    Core.restartFromIdleWatchdog(
+                                        sync = true,
+                                        afterClientTerminated = { clientTerminationObserved = true },
+                                    )
+                                    if (!clientTerminationObserved) {
+                                        false
+                                    } else {
+                                        afterClientTerminated()
+                                        true
+                                    }
+                                },
+                                onRestartCompleted = {
+                                    // Rearm only after the serialized restart
+                                    // boundary completes. An intent or permit
+                                    // alone must not create a new generation.
+                                    markStartupRequested(
+                                        reason = "beta-missing-game-restart",
+                                        now = System.currentTimeMillis(),
+                                    )
+                                },
+                            )
+                            if (restart == MissingGameRestartDispatch.Result.RESTART_REQUESTED) {
+                                log.warn {
+                                    "BETA_MISSING_GAME_RECOVERY_RESTART_REQUESTED " +
+                                        "action=CORE_IDLE_WATCHDOG_RESTART " +
+                                        "acceptance=awaiting-authoritative-game-process"
+                                }
+                            } else {
+                                log.warn {
+                                    "BETA_MISSING_GAME_RECOVERY_RESTART_SUPPRESSED " +
+                                        "reason=state-changed-before-core-restart dispatch=false"
+                                }
                             }
                         }
                     },
@@ -1130,11 +1158,11 @@ internal object BetaScreenRecoveryService {
     private fun recordMissingGameRecoveryHandoff(nowMs: Long): Boolean =
         synchronized(missingGameRecoveryAccountingLock) {
             val current = missingGameRecoveryState
-            if (current.attempts >= LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS) {
+            if (current.attempts >= LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS) {
                 log.warn {
                     "BETA_MISSING_GAME_RECOVERY_HANDOFF_GATE_REJECTED " +
                         "attempts=${current.attempts} " +
-                        "limit=${LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS} " +
+                        "limit=${LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS} " +
                         "acceptance=budget-exhausted dispatch=false"
                 }
                 false
@@ -1144,7 +1172,7 @@ internal object BetaScreenRecoveryService {
                 log.warn {
                     "BETA_MISSING_GAME_RECOVERY_HANDOFF_GATE_ACCEPTED " +
                         "attempt=${missingGameRecoveryState.attempts} " +
-                        "limit=${LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS} " +
+                        "limit=${LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS} " +
                         "acceptance=final-gate-before-transport " +
                         "transportConfirmed=false"
                 }

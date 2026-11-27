@@ -105,8 +105,12 @@ class ActionDispatchGateTest {
                 service.contains("Core.restartFromIdleWatchdog(") &&
                 service.contains("afterClientTerminated = {") &&
                 service.contains("reason = \"beta-missing-game-restart\"") &&
-                service.contains("MissingGameRestartDispatch.dispatch("),
-            "missing-game accounting must use current state at the final gate and remain distinct from transport",
+                service.contains("MissingGameRestartDispatch.dispatch(") &&
+                service.contains("channel = BuildInfo.RELEASE_CHANNEL") &&
+                service.contains("BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) != \"beta\"") &&
+                service.contains("var clientTerminationObserved = false") &&
+                service.contains("if (!clientTerminationObserved)"),
+            "missing-game accounting must use current state at the final gate, keep the forced restart Beta-only, and reject Core suppression",
         )
         assertTrue(
             starter.contains("GAME_STARTUP_HANDOFF_REQUESTED") &&

@@ -217,6 +217,44 @@ class LiveMissingGameRecoveryPolicyTest {
     }
 
     @Test
+    fun `Beta gets one attempt while the legacy Release Candidate budget remains three`() {
+        val state = LiveMissingGameRecoveryPolicy.State(
+            missingSinceMs = now - LiveMissingGameRecoveryPolicy.MISSING_GAME_GRACE_MS,
+        )
+        val betaDecision = LiveMissingGameRecoveryPolicy.evaluate(
+            state,
+            evidence(),
+            maxStarterChainAttempts = LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS,
+        )
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+            betaDecision.decision,
+        )
+        val betaRecorded = LiveMissingGameRecoveryPolicy.recordDispatch(betaDecision.state, now)
+        assertEquals(
+            LiveMissingGameRecoveryPolicy.Decision.EXHAUSTED,
+            LiveMissingGameRecoveryPolicy.evaluate(
+                betaRecorded,
+                evidence(nowMs = now + LiveMissingGameRecoveryPolicy.RETRY_COOLDOWN_MS),
+                maxStarterChainAttempts = LiveMissingGameRecoveryPolicy.BETA_MAX_STARTER_CHAIN_ATTEMPTS,
+            ).decision,
+        )
+
+        var releaseCandidateState = state
+        repeat(LiveMissingGameRecoveryPolicy.MAX_STARTER_CHAIN_ATTEMPTS) {
+            val decision = LiveMissingGameRecoveryPolicy.evaluate(
+                releaseCandidateState,
+                evidence(nowMs = now + it * LiveMissingGameRecoveryPolicy.RETRY_COOLDOWN_MS),
+            )
+            assertEquals(
+                LiveMissingGameRecoveryPolicy.Decision.START_CONFIGURED_STARTER_CHAIN,
+                decision.decision,
+            )
+            releaseCandidateState = LiveMissingGameRecoveryPolicy.recordDispatch(decision.state, now)
+        }
+    }
+
+    @Test
     fun `stale matchmaking latch cannot hold recovery after absent client grace`() {
         val first = LiveMissingGameRecoveryPolicy.evaluate(
             LiveMissingGameRecoveryPolicy.State(),
