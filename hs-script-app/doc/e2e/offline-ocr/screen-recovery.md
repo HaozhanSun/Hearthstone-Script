@@ -195,6 +195,15 @@ this deletion boundary.
 - A trigger is not an action. Always inspect `SCREEN_RECOVERY_ACTION_GATE` to
   tell whether safety, state freshness, startup policy, or a missing strategy
   blocked input.
+- Beta missing-client recovery has two separate timing boundaries: the
+  always-on monitor observes the 120-second no-client grace, then its
+  final-gate/serialized restart continuation runs on a dedicated daemon
+  executor rather than the shared OCR/screen-recovery pool. This prevents a
+  saturated capture queue from holding the one-use dispatch flag and silently
+  stretching the recovery interval. The continuation must still recheck
+  exact Beta identity, guardian freshness, pause, active queue/session, and
+  game-process absence; a permit or queued intent is not transport or launch
+  confirmation. RC retains its prior shared-pool behavior.
 - `Mode.currMode == HUB` does not prove the HUB strategy is active. Recovery
   must request strategy re-entry when the visible screen is HOME.
 - A throttled screenshot is an explicit diagnostic outcome, not evidence that

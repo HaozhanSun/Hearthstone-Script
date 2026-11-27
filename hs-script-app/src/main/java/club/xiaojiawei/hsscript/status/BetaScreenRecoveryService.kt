@@ -25,6 +25,9 @@ import club.xiaojiawei.hsscriptbase.enums.ModeEnum
 import club.xiaojiawei.hsscriptbase.enums.WarPhaseEnum
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.Future
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -47,6 +50,17 @@ internal object BetaScreenRecoveryService {
     private val startupHandoffActivity = StartupHandoffActivityTracker()
     private val startupFailurePolicy = BetaStartupFailureRecoveryPolicy()
     private val missingGameRecoveryDispatchInFlight = AtomicBoolean(false)
+    /**
+     * The startup monitor is scheduled on EXTRA_THREAD_POOL, which also runs
+     * OCR and screen-recovery work.  Keep the async final-gate/force-restart
+     * continuation on a separate daemon lane so a busy capture queue cannot
+     * hold the one-use dispatch flag for minutes after the policy has fired.
+     */
+    private val missingGameRecoveryExecutor: ExecutorService by lazy {
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "BetaMissingGameRecovery").apply { isDaemon = true }
+        }
+    }
     private val recoveryCascadeGuard = RecoveryCascadeGuard()
     private val foregroundFailureCount = AtomicInteger(0)
     private val foregroundRecoveryPending = AtomicBoolean(false)
@@ -722,6 +736,16 @@ internal object BetaScreenRecoveryService {
     internal fun startupFailureMonitorScheduledForTest(): Boolean =
         startupFailureMonitor?.let { !it.isDone && !it.isCancelled } == true
 
+    /** The Beta missing-game continuation must not share the OCR/screen pool. */
+    internal fun missingGameRecoveryDispatchExecutorIsolatedForTest(): Boolean =
+        missingGameRecoveryDispatchExecutor() === missingGameRecoveryExecutor
+
+    internal fun missingGameRecoveryDispatchUsesDedicatedExecutorForTest(channel: String): Boolean =
+        missingGameRecoveryDispatchExecutor(channel) === missingGameRecoveryExecutor
+
+    private fun missingGameRecoveryDispatchExecutor(channel: String = BuildInfo.RELEASE_CHANNEL): Executor =
+        if (BuildChannel.identityToken(channel) == "beta") missingGameRecoveryExecutor else EXTRA_THREAD_POOL
+
     private fun detectStartupFailure(recoveryGeneration: Long) {
         if (!isStartupFailureGenerationCurrent(recoveryGeneration) || !WorkTimeListener.working ||
             PauseStatus.isPause || PowerLogListener.replayingExistingLog
@@ -991,7 +1015,7 @@ internal object BetaScreenRecoveryService {
     ) {
         if (!missingGameRecoveryDispatchInFlight.compareAndSet(false, true)) return
         try {
-            EXTRA_THREAD_POOL.execute {
+            missingGameRecoveryDispatchExecutor().execute {
             var chainAttempted = false
             try {
                 val terminalProof = hasCompleteTerminalProofForMissingProcess()

@@ -163,6 +163,18 @@ class LifecycleTraceTest {
     }
 
     @Test
+    fun betaMissingGameFinalDispatchUsesAnExecutorIndependentOfScreenRecoveryPool() {
+        assertTrue(
+            BetaScreenRecoveryService.missingGameRecoveryDispatchExecutorIsolatedForTest(),
+            "the async missing-game final gate must not queue behind OCR/screen-recovery work",
+        )
+        assertFalse(
+            BetaScreenRecoveryService.missingGameRecoveryDispatchUsesDedicatedExecutorForTest("release-candidate"),
+            "Release Candidate must retain the prior shared-pool dispatch behavior",
+        )
+    }
+
+    @Test
     fun hardCapStoppedGuardianStateRequiresMatchingLineageAndDeployment() {
         val processStart = Instant.parse("2026-11-02T16:00:00Z")
         val guardian = """

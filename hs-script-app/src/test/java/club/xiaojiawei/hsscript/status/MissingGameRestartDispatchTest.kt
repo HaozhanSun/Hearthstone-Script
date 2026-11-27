@@ -76,4 +76,13 @@ class MissingGameRestartDispatchTest {
         assertEquals(0, restartRequests, "RC must not invoke the Beta Core restart seam")
         assertEquals(0, rearmed, "RC must not re-arm the Beta missing-client generation")
     }
+
+    @Test
+    fun `release candidate keeps the shared recovery executor`() {
+        assertEquals(
+            false,
+            BetaScreenRecoveryService.missingGameRecoveryDispatchUsesDedicatedExecutorForTest("release-candidate"),
+            "RC must retain the prior shared-pool dispatch behavior",
+        )
+    }
 }
