@@ -746,6 +746,19 @@ internal object BetaScreenRecoveryService {
     private fun missingGameRecoveryDispatchExecutor(channel: String = BuildInfo.RELEASE_CHANNEL): Executor =
         if (BuildChannel.identityToken(channel) == "beta") missingGameRecoveryExecutor else EXTRA_THREAD_POOL
 
+    private fun submitMissingGameRecoveryContinuation(
+        channel: String = BuildInfo.RELEASE_CHANNEL,
+        continuation: () -> Unit,
+    ) {
+        missingGameRecoveryDispatchExecutor(channel).execute(continuation)
+    }
+
+    /** Test seam that delegates through the same production dispatch boundary. */
+    internal fun submitMissingGameRecoveryContinuationForTest(
+        channel: String,
+        continuation: () -> Unit,
+    ) = submitMissingGameRecoveryContinuation(channel, continuation)
+
     private fun detectStartupFailure(recoveryGeneration: Long) {
         if (!isStartupFailureGenerationCurrent(recoveryGeneration) || !WorkTimeListener.working ||
             PauseStatus.isPause || PowerLogListener.replayingExistingLog
@@ -1015,7 +1028,7 @@ internal object BetaScreenRecoveryService {
     ) {
         if (!missingGameRecoveryDispatchInFlight.compareAndSet(false, true)) return
         try {
-            missingGameRecoveryDispatchExecutor().execute {
+            submitMissingGameRecoveryContinuation {
             var chainAttempted = false
             try {
                 val terminalProof = hasCompleteTerminalProofForMissingProcess()
@@ -1036,7 +1049,7 @@ internal object BetaScreenRecoveryService {
                             "dispatch=false pause=${PauseStatus.isPause} gameAlive=${GameUtil.isAliveOfGame()} " +
                             "inWar=${WarEx.inWar}"
                     }
-                    return@execute
+                    return@submitMissingGameRecoveryContinuation
                 }
                 val stateAuthorized = {
                     val latestGuardian = readCurrentGuardianRunState()
@@ -1073,7 +1086,7 @@ internal object BetaScreenRecoveryService {
                             "dispatch=false identityMatches=${latestGuardian?.identityMatches == true} " +
                             "heartbeatAgeMs=${latestGuardian?.heartbeatAgeMs ?: "unknown"}"
                     }
-                    return@execute
+                    return@submitMissingGameRecoveryContinuation
                 }
                 if (BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta" &&
                     !recordMissingGameRecoveryRestart(System.currentTimeMillis())
@@ -1082,7 +1095,7 @@ internal object BetaScreenRecoveryService {
                         "BETA_MISSING_GAME_RECOVERY_RESTART_SUPPRESSED " +
                             "reason=budget-exhausted-before-core-restart dispatch=false"
                     }
-                    return@execute
+                    return@submitMissingGameRecoveryContinuation
                 }
                 log.warn {
                     "BETA_MISSING_GAME_RECOVERY action=RESTART_CONFIGURED_STARTER_CHAIN " +

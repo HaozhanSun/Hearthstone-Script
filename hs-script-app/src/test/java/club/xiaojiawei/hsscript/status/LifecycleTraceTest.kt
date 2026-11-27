@@ -5,11 +5,14 @@ import club.xiaojiawei.hsscript.enums.ConfigEnum
 import club.xiaojiawei.hsscript.utils.ConfigUtil
 import club.xiaojiawei.hsscriptbase.const.BuildChannel
 import club.xiaojiawei.hsscriptbase.const.BuildInfo
+import club.xiaojiawei.hsscriptbase.config.EXTRA_THREAD_POOL
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class LifecycleTraceTest {
 
@@ -171,6 +174,50 @@ class LifecycleTraceTest {
         assertFalse(
             BetaScreenRecoveryService.missingGameRecoveryDispatchUsesDedicatedExecutorForTest("release-candidate"),
             "Release Candidate must retain the prior shared-pool dispatch behavior",
+        )
+    }
+
+    @Test
+    fun betaMissingGameContinuationRunsWhileSharedPoolIsSaturatedButRcRemainsQueued() {
+        val sharedPoolBlockersStarted = CountDownLatch(EXTRA_THREAD_POOL.corePoolSize)
+        val releaseSharedPool = CountDownLatch(1)
+        val betaContinuationReached = CountDownLatch(1)
+        val rcContinuationReached = CountDownLatch(1)
+
+        try {
+            repeat(EXTRA_THREAD_POOL.corePoolSize) {
+                EXTRA_THREAD_POOL.execute {
+                    sharedPoolBlockersStarted.countDown()
+                    releaseSharedPool.await()
+                }
+            }
+            assertTrue(
+                sharedPoolBlockersStarted.await(5, TimeUnit.SECONDS),
+                "the shared OCR/screen-recovery pool must be saturated before dispatch is submitted",
+            )
+
+            BetaScreenRecoveryService.submitMissingGameRecoveryContinuationForTest("beta") {
+                betaContinuationReached.countDown()
+            }
+            BetaScreenRecoveryService.submitMissingGameRecoveryContinuationForTest("release-candidate") {
+                rcContinuationReached.countDown()
+            }
+
+            assertTrue(
+                betaContinuationReached.await(1, TimeUnit.SECONDS),
+                "Beta final-gate continuation must progress independently of shared-pool saturation",
+            )
+            assertFalse(
+                rcContinuationReached.await(100, TimeUnit.MILLISECONDS),
+                "RC continuation must remain queued behind the shared pool",
+            )
+        } finally {
+            releaseSharedPool.countDown()
+        }
+
+        assertTrue(
+            rcContinuationReached.await(2, TimeUnit.SECONDS),
+            "RC continuation must run after the shared pool is released",
         )
     }
 
