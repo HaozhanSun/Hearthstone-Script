@@ -1397,17 +1397,45 @@ internal object BetaScreenRecoveryService {
     }
 
     fun markStartupRequested(reason: String, now: Long) {
-        if (!ScreenRecoveryRuntime.isEnabled()) return
-        synchronized(missingGameRecoveryAccountingLock) {
-            missingGameRecoveryState = BetaMissingGameGenerationAccounting.markStartupRequested(
-                exactBetaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
-            )
-            missingGameExhaustionNotified = false
+        // The Beta startup-failure monitor is always on, while the screen
+        // recovery extensions are an independent user setting.  A completed
+        // Core restart must therefore re-arm missing-game generation
+        // accounting even when the optional screen extensions are disabled;
+        // otherwise the next monitor tick observes the previous generation's
+        // attempt budget and reports EXHAUSTED immediately.
+        val exactBetaChannel = BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta"
+        val optionalExtensionsEnabled = ScreenRecoveryRuntime.isEnabled()
+        if (exactBetaChannel || optionalExtensionsEnabled) {
+            synchronized(missingGameRecoveryAccountingLock) {
+                missingGameRecoveryState = BetaMissingGameGenerationAccounting.markStartupRequested(
+                    exactBetaChannel = exactBetaChannel,
+                )
+                missingGameExhaustionNotified = false
+            }
+        }
+        // Preserve the original optional-extension semantics for RC and other
+        // callers: only exact Beta generation accounting is always-on. The
+        // activity tracker and grace window remain optional.
+        if (!optionalExtensionsEnabled) {
+            if (exactBetaChannel) {
+                LifecycleTrace.mark(
+                    "startup-recovery-generation-rearmed reason=$reason " +
+                        "optionalExtensionsEnabled=false"
+                )
+            }
+            return
         }
         startupHandoffActivity.reset()
         startupRecoveryGraceUntil = now + STARTUP_RECOVERY_GRACE_MS
-        LifecycleTrace.mark("startup-recovery-grace reason=$reason until=$startupRecoveryGraceUntil")
+        LifecycleTrace.mark(
+            "startup-recovery-generation-rearmed reason=$reason " +
+                "until=$startupRecoveryGraceUntil optionalExtensionsEnabled=true"
+        )
     }
+
+    /** Test seam for the always-on startup-generation accounting boundary. */
+    internal fun missingGameRecoveryStateForTest(): LiveMissingGameRecoveryPolicy.State =
+        synchronized(missingGameRecoveryAccountingLock) { missingGameRecoveryState }
 
     fun markStartupHandoffAttempt(reason: String, now: Long) {
         if (!ScreenRecoveryRuntime.isEnabled()) return

@@ -1035,7 +1035,9 @@ exact `beta` identity, the 120000 ms boundary invokes the serialized
 missing-client generation. The initial handoff after that restart is recorded
 as generation setup rather than a second restart attempt; the forced-restart
 budget is recorded before Core is invoked. A fresh generation is re-armed only
-after the synchronous restart-completion signal. Beta launches through the registered
+after the synchronous restart-completion signal, even when the optional screen
+recovery extensions are disabled; that UI toggle must never preserve the prior
+missing-client attempt budget. Beta launches through the registered
 WTCG product path from known-good `8ea73ac2`; Release Candidate retains the
 previous three-attempt starter-chain policy and is never allowed to invoke the
 Beta forced-restart seam.

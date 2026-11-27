@@ -45,7 +45,24 @@ class LifecycleTraceTest {
     }
 
     @Test
-    fun startupRecoveryGraceDefersRecoveryOnlyDuringTheGraceWindow() {
+    fun startupRecoveryGenerationRearmsEvenWhenOptionalExtensionsAreDisabled() {
+        val now = 1_000_000L
+        ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, false, store = false)
+        BetaScreenRecoveryService.onFeatureChanged(false)
+
+        BetaScreenRecoveryService.markStartupRequested("offline-test", now)
+
+        val generation = BetaScreenRecoveryService.missingGameRecoveryStateForTest()
+        assertEquals(0, generation.attempts)
+        assertEquals(
+            BuildChannel.identityToken(BuildInfo.RELEASE_CHANNEL) == "beta",
+            generation.initialHandoffPending,
+            "only exact Beta must re-arm missing-game generation accounting when optional extensions are off",
+        )
+    }
+
+    @Test
+    fun startupRecoveryGraceDefersOptionalRecoveryOnlyDuringTheGraceWindow() {
         val now = 1_000_000L
         ConfigUtil.putBoolean(ConfigEnum.BETA_RECOVERY_EXTENSIONS_ENABLED, true, store = false)
 
