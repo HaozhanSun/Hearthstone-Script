@@ -758,8 +758,17 @@ internal object BetaScreenRecoveryService {
         val activeMatchmakingScreen = pid != null && LifecycleTrace.hasRecentActiveMatchmakingScreen()
         val recentMatchmakingIntent = LifecycleTrace.hasRecentMatchmakingInputIntent()
         val activeOrRecentMatchmaking = activeMatchmakingScreen || recentMatchmakingIntent
-        if (pid == null && StartupQuestOverlayRecoveryFence.reconcileExitedGameForMissingRecovery(
-                gameProcessAlive = false,
+        // A missing diagnostic PID is not proof that the client exited. The
+        // independent process probe must also say "absent"; probe failures
+        // are fail-closed and return before any missing-game handoff.
+        val gameProcessAlive = if (pid == null) {
+            probeGameAliveForMissingRecovery { GameUtil.isAliveOfGame() }
+        } else {
+            true
+        }
+        if (pid == null && !gameProcessAlive &&
+            StartupQuestOverlayRecoveryFence.reconcileExitedGameForMissingRecovery(
+                gameProcessAlive = gameProcessAlive,
                 activeGame = liveMatch,
                 activeMatchmaking = activeOrRecentMatchmaking,
                 terminalState = terminal,
@@ -772,6 +781,13 @@ internal object BetaScreenRecoveryService {
                 "BETA_MISSING_GAME_RECOVERY_QUEST_FENCE_RECONCILED " +
                     "reason=observed-overlay-client-exited exactProcessPresent=false dispatch=CONTINUE"
             }
+        }
+        if (pid == null && gameProcessAlive) {
+            log.info {
+                "BETA_MISSING_GAME_RECOVERY action=WAIT reason=game-alive-probe-not-absent " +
+                    "dispatch=false"
+            }
+            return
         }
         val dialog = WindowsApplicationErrorDialogProbe.detect()?.asPolicyEvidence()
         val hwnd = ScriptStatus.gameHWND
@@ -829,6 +845,7 @@ internal object BetaScreenRecoveryService {
                 terminalState = terminal,
                 authoritativeTerminalProof = authoritativeTerminalPowerLog,
                 recentMatchmakingIntent = recentMatchmakingIntent,
+                gameProcessAlive = gameProcessAlive,
                 now = now,
             )
             return
@@ -876,6 +893,7 @@ internal object BetaScreenRecoveryService {
         terminalState: Boolean,
         authoritativeTerminalProof: Boolean,
         recentMatchmakingIntent: Boolean,
+        gameProcessAlive: Boolean,
         now: Long,
     ) {
         val guardian = readCurrentGuardianRunState(Instant.ofEpochMilli(now))
@@ -888,7 +906,7 @@ internal object BetaScreenRecoveryService {
                 runningIntent = guardian?.intent == "RUNNING",
                 working = WorkTimeListener.working && guardian?.working == true,
                 paused = PauseStatus.isPause || guardian?.paused != false,
-                gameAlive = GameUtil.isAliveOfGame(),
+                gameAlive = gameProcessAlive,
                 activeGame = activeGame,
                 activeMatchmaking = activeMatchmaking,
                 terminalState = terminalState,
@@ -1072,6 +1090,14 @@ internal object BetaScreenRecoveryService {
         startupChainActive: Boolean,
         exactApplicationErrorDialogPresent: Boolean,
     ): Boolean = startupChainActive && !exactApplicationErrorDialogPresent
+
+    internal fun probeGameAliveForMissingRecovery(probe: () -> Boolean): Boolean =
+        runCatching { probe() }.getOrElse { error ->
+            log.warn(error) {
+                "BETA_MISSING_GAME_RECOVERY_GAME_ALIVE_PROBE_FAILED failClosed=true dispatch=false"
+            }
+            true
+        }
 
     private fun logStartupFailureDecision(
         decision: BetaStartupFailureRecoveryPolicy.Decision,

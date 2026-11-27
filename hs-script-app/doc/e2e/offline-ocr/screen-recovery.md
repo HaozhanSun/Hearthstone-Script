@@ -1013,3 +1013,14 @@ PID; ordinary startup and every ambiguous or changed-identity path remain
 quest-fenced. Emit `ACTION_DISPATCH_CAPABILITY_ARMED source=idle-watchdog`
 and consume it only at the actual `startup.handoff` call, never at a logged
 restart request.
+
+Prevention rule: a missing diagnostic PID is not authoritative proof that the
+client exited. Before reconciling an observed PID/HWND quest fence or entering
+the missing-game timer, independently probe `GameUtil.isAliveOfGame()`. A true
+result, or any probe exception, is fail-closed: retain the fence and return
+without entering `startup.missing-game-recovery` or dispatching a starter
+handoff. Keep this rule separate from the positively captured client-screen
+watchdog: both use a 120-second boundary, but the missing-game timer requires
+fresh Beta identity, independent process absence, guardian freshness, and all
+safety vetoes. Regress probe-true and probe-exception cases as well as the
+119999/120000 boundary.
